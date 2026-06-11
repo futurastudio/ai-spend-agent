@@ -1,0 +1,52 @@
+{
+  "name": "ai-spend-agent",
+  "version": "0.1.1",
+  "description": "Your AI spend in one view, in 90 seconds \u2014 local-first CLI for OpenAI, Anthropic, Cursor, Copilot + Claude Code/Codex session logs, with a ranked savings cut list.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "ai-spend-agent": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/*.map"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "keywords": [
+    "ai",
+    "spend",
+    "cost",
+    "finops",
+    "openai",
+    "anthropic",
+    "claude-code",
+    "codex",
+    "copilot",
+    "cursor",
+    "llm",
+    "token",
+    "billing",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@agent-finops/core": "0.1.1",
+    "@agent-finops/report": "0.1.1",
+    "picocolors": "^1.1.1",
+    "yocto-spinner": "^1.2.0"
+  }
+}

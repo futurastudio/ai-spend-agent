@@ -1,0 +1,27 @@
+{
+  "name": "@agent-finops/core",
+  "version": "0.1.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "zod": "^4.1.0"
+  },
+  "files": [
+    "dist",
+    "samples",
+    "!dist/**/*.test.*",
+    "!dist/**/*.map"
+  ],
+  "license": "MIT",
+  "description": "Core engine for ai-spend-agent: provider billing connectors, local agent-log ingestion, attribution, cut list, plan math.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
+    "directory": "packages/core"
+  }
+}

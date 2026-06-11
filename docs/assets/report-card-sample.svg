@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" role="img" aria-label="AI spend report card">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#121a33"/>
+    </linearGradient>
+  </defs>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .label { fill: #7c89b3; font-size: 13px; letter-spacing: 2px; }
+    .big { fill: #e8edff; font-size: 52px; font-weight: 700; }
+    .save { fill: #4ade80; font-size: 30px; font-weight: 700; }
+    .meta { fill: #9aa6d6; font-size: 14px; }
+    .cut { fill: #cdd6f7; font-size: 14px; }
+    .cutSave { fill: #4ade80; font-weight: 700; }
+    .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
+  </style>
+  <rect width="640" height="400" rx="18" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="639" height="399" rx="18" fill="none" stroke="#26304f"/>
+
+  <text x="40" y="58" class="label">AI SPEND REPORT CARD</text>
+
+  <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
+  <text x="40" y="172" class="big">$87.00</text>
+
+  <text x="40" y="212" class="save">~$1213.70/mo</text>
+  <text x="172" y="212" class="meta">in identified savings</text>
+
+  <text x="40" y="244" class="meta">2 providers · 9 calls · detected</text>
+
+      <text x="40" y="274" class="cut">1. Move gpt-4.1 research_summary calls to gpt-4.1-mini<tspan class="cutSave"> ~$376.80/mo</tspan></text>
+      <text x="40" y="304" class="cut">2. Move research_summary calls to the Batch API<tspan class="cutSave"> ~$320.00/mo</tspan></text>
+      <text x="40" y="334" class="cut">3. Trim oversized context on research_summary<tspan class="cutSave"> ~$144.75/mo</tspan></text>
+
+  <text x="40" y="372" class="brand">ai-spend-agent · local-first · npx ai-spend-agent</text>
+</svg>

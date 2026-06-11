@@ -1,0 +1,15 @@
+.DS_Store
+node_modules/
+.next/
+dist/
+build/
+.env*
+!.env.example
+.vercel/
+coverage/
+ai-spend-report/
+
+demo-output/
+.ai-spend-agent/
+.claude/
+*.tsbuildinfo

@@ -1,0 +1,110 @@
+import { describe, expect, it } from "vitest";
+import { generateCutList, totalEstimatedMonthlySavingsUsd } from "./cutList.js";
+import { loadSampleUsageData } from "./sampleData.js";
+import type { UsageRecord } from "./schema.js";
+
+function record(overrides: Partial<UsageRecord>): UsageRecord {
+  return {
+    id: overrides.id ?? "rec-1",
+    timestamp: overrides.timestamp ?? "2026-05-17T10:00:00.000Z",
+    source: overrides.source ?? {
+      id: "openai-sample",
+      name: "OpenAI sample",
+      provider: "openai",
+      confidence: "estimated",
+      observedFrom: "sample_csv"
+    },
+    model: overrides.model ?? "gpt-4.1",
+    inputTokens: overrides.inputTokens ?? 1000,
+    outputTokens: overrides.outputTokens ?? 200,
+    amountUsd: overrides.amountUsd ?? 10,
+    costConfidence: overrides.costConfidence ?? "estimated",
+    clientId: overrides.clientId,
+    projectId: overrides.projectId,
+    agentId: overrides.agentId,
+    userId: overrides.userId,
+    workspaceId: overrides.workspaceId,
+    apiKeyId: overrides.apiKeyId,
+    operation: overrides.operation
+  };
+}
+
+describe("generateCutList", () => {
+  it("produces a model-downgrade action for downgrade-safe operations", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 20 }),
+      record({ id: "b", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 20 })
+    ];
+    const actions = generateCutList(records);
+    const downgrade = actions.find((action) => action.kind === "model_downgrade");
+    expect(downgrade).toBeDefined();
+    expect(downgrade!.title).toContain("gpt-4.1-mini");
+    expect(downgrade!.recordCount).toBe(2);
+    // Same-day window: 40 * 0.8 saved, projected to 30 days.
+    expect(downgrade!.estimatedMonthlySavingsUsd).toBeGreaterThan(0);
+  });
+
+  it("does not downgrade clearly high-stakes operations", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "legal_review", amountUsd: 40 })
+    ];
+    const actions = generateCutList(records);
+    expect(actions.find((action) => action.kind === "model_downgrade")).toBeUndefined();
+  });
+
+  it("flags oversized context as a trim action", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "research", inputTokens: 180_000, amountUsd: 40 })
+    ];
+    const actions = generateCutList(records);
+    expect(actions.some((action) => action.kind === "context_trim")).toBe(true);
+  });
+
+  it("sorts actions by descending monthly savings and sums them", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 50 }),
+      record({ id: "b", model: "claude-sonnet-4", operation: "reply_draft", amountUsd: 8, source: { id: "anthropic-sample", name: "Anthropic", provider: "anthropic", confidence: "detected_unverified", observedFrom: "sample_csv" }, costConfidence: "detected_unverified" })
+    ];
+    const actions = generateCutList(records);
+    for (let i = 1; i < actions.length; i += 1) {
+      expect(actions[i - 1]!.estimatedMonthlySavingsUsd).toBeGreaterThanOrEqual(actions[i]!.estimatedMonthlySavingsUsd);
+    }
+    expect(totalEstimatedMonthlySavingsUsd(actions)).toBeGreaterThan(0);
+  });
+
+  it("flags repeated offline-looking operations for the Batch API", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "nightly_embed", amountUsd: 12 }),
+      record({ id: "b", model: "gpt-4.1", operation: "nightly_embed", amountUsd: 12 }),
+      record({ id: "c", model: "gpt-4.1", operation: "nightly_embed", amountUsd: 12 })
+    ];
+    const actions = generateCutList(records);
+    const batch = actions.find((action) => action.kind === "batch");
+    expect(batch).toBeDefined();
+    expect(batch!.title).toContain("Batch API");
+    expect(batch!.recordCount).toBe(3);
+    // Flat 50% discount on the $36 window, projected to 30 days.
+    expect(batch!.estimatedMonthlySavingsUsd).toBe(540);
+  });
+
+  it("does not suggest batching interactive operations", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "reply_draft", amountUsd: 12 }),
+      record({ id: "b", model: "gpt-4.1", operation: "reply_draft", amountUsd: 12 }),
+      record({ id: "c", model: "gpt-4.1", operation: "reply_draft", amountUsd: 12 })
+    ];
+    const actions = generateCutList(records);
+    expect(actions.find((action) => action.kind === "batch")).toBeUndefined();
+  });
+
+  it("returns deterministic, non-empty actions for the bundled sample", async () => {
+    const records = await loadSampleUsageData();
+    const actions = generateCutList(records);
+    expect(actions.length).toBeGreaterThan(0);
+    // Every action must carry a concrete, copy-pasteable instruction and $ value.
+    for (const action of actions) {
+      expect(action.action.length).toBeGreaterThan(10);
+      expect(action.estimatedMonthlySavingsUsd).toBeGreaterThanOrEqual(0.5);
+    }
+  });
+});
