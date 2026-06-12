@@ -19,6 +19,35 @@ billing in ~2 minutes.
 
 ![Sample report card](docs/assets/report-card-sample.svg)
 
+## Get started in 60 seconds
+
+1. **Run it** — nothing to install, configure, or sign up for:
+   ```bash
+   npx ai-spend-agent
+   ```
+2. **Read your number.** If Claude Code or Codex logs exist on this machine,
+   that's your real usage at API-equivalent rates — by project, by model,
+   with a ranked cut list and the plan check.
+3. **(Optional, ~2 min)** Connect verified billing with an org admin key:
+   `ai-spend-agent connect openai` / `connect anthropic`. Numbers move from
+   *estimated* to *verified*.
+4. **Share the receipt**: `ai-spend-agent report-card` writes a redacted SVG
+   + caption — no client, project, or user names ever leave redacted.
+
+## Who this is for
+
+- **You run a startup or freelance on AI tools** and can't answer "what is
+  AI actually costing me per month?" — because the answer is split across
+  four dashboards and two subscriptions that have no dashboard at all.
+- **You live in Claude Code / Codex** and just got moved onto metered
+  credits (Copilot June 1, Claude agent credits June 15). Your burn rate is
+  invisible until the meter stops you — unless you read your own logs.
+- **You lead a small team** and need to know which project, model, or
+  person the spend goes to before you set budgets — without buying a
+  $500/mo enterprise FinOps seat.
+- **You run an agency** and want per-client AI cost attribution (the
+  `--group-by client` dimension exists for exactly this).
+
 ## Why
 
 AI billing changed in June 2026: Copilot moved to metered AI Credits (June 1),
