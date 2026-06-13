@@ -38,6 +38,7 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
   // OpenAI (codex CLI models first — more specific)
   { match: /^gpt-5(\.\d+)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+  { match: /^gpt-5(\.\d+)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
   { match: /^gpt-5/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4 },
   { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6 },

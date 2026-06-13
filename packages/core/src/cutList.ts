@@ -46,12 +46,17 @@ type DowngradeRule = {
 };
 
 const downgradeRules: DowngradeRule[] = [
+  // Frontier tiers (mid-2026): Fable 5 ($10/$50 per M) -> Opus 4.8 ($5/$25)
+  // retains ~50% of cost; GPT-5.x -> matching mini tier retains ~20%.
+  { match: /^claude-fable-5(?:[.-].*)?$/i, target: "claude-opus-4-8", costRetained: 0.5 },
+  { match: /^gpt-5\.5$/i, target: "gpt-5.5-mini", costRetained: 0.2 },
+  { match: /^gpt-5(\.\d+)?$/i, target: "gpt-5-mini", costRetained: 0.2 },
   { match: /^gpt-4\.1$/i, target: "gpt-4.1-mini", costRetained: 0.2 },
   { match: /^gpt-4o$/i, target: "gpt-4o-mini", costRetained: 0.18 },
   { match: /^gpt-4-turbo$/i, target: "gpt-4o-mini", costRetained: 0.12 },
   { match: /^o3$/i, target: "o4-mini", costRetained: 0.25 },
-  { match: /^claude-sonnet-4(?:[.-].*)?$/i, target: "claude-haiku-4", costRetained: 0.25 },
-  { match: /^claude-opus-4(?:[.-].*)?$/i, target: "claude-sonnet-4", costRetained: 0.3 },
+  { match: /^claude-sonnet-4(?:[.-].*)?$/i, target: "claude-haiku-4-5", costRetained: 0.25 },
+  { match: /^claude-opus-4(?:[.-].*)?$/i, target: "claude-sonnet-4-6", costRetained: 0.3 },
   { match: /^claude-3-5-sonnet.*$/i, target: "claude-3-5-haiku", costRetained: 0.25 }
 ];
 
