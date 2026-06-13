@@ -25,7 +25,7 @@ describe("analyst insights", () => {
       affectedClients: ["client-beta"],
       affectedProjects: ["project-research"],
       affectedAgents: ["agent-analyst"],
-      affectedModels: ["gpt-4.1", "claude-sonnet-4"],
+      affectedModels: ["gpt-5.5", "claude-fable-5"],
       recommendedAction: expect.stringContaining("agent-analyst"),
       verificationNeeded: expect.stringContaining("provider billing export")
     });

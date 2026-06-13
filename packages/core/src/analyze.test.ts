@@ -92,7 +92,7 @@ describe("spend analysis", () => {
   it("preserves confidence labels in summary output", async () => {
     const summary = analyzeSpend(await loadSampleUsageData());
 
-    expect(summary.byModel.find((entry) => entry.key === "claude-sonnet-4")?.confidence).toBe(
+    expect(summary.byModel.find((entry) => entry.key === "claude-fable-5")?.confidence).toBe(
       "detected_unverified"
     );
     expect(summary.recommendations.every((recommendation) => recommendation.confidence)).toBe(true);

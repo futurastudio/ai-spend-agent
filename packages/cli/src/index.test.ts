@@ -466,7 +466,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).toContain("$87.00");
     expect(result.stdout).toContain("tracked across 9 calls");
     expect(result.stdout).toContain("Where to cut");
-    expect(result.stdout).toContain("to gpt-4.1-mini");
+    expect(result.stdout).toContain("to gpt-5.5-mini");
     expect(result.stdout).toMatch(/save ~\$[\d,]+\.\d{2}\/mo/);
     expect(result.stdout).toContain("Spend by model");
     // Human-readable terminal output, not a JSON dump.
@@ -510,7 +510,7 @@ describe("minimal CLI vertical slice", () => {
           capturedAt: "2026-06-01T00:00:00.000Z",
           totalUsd: 40,
           recordCount: 5,
-          byModel: [{ key: "claude-sonnet-4", amountUsd: 10 }]
+          byModel: [{ key: "claude-fable-5", amountUsd: 10 }]
         })
       );
     });
@@ -519,8 +519,8 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Spend is UP $47.00");
-    expect(result.stdout).toContain('New model "gpt-4.1" appeared');
-    expect(result.stdout).toContain('"claude-sonnet-4" jumped from $10.00 to $24.90');
+    expect(result.stdout).toContain('New model "gpt-5.5" appeared');
+    expect(result.stdout).toContain('"claude-fable-5" jumped from $10.00 to $24.90');
   });
 
   it("turns a live provider pull into a plain-English readout end to end", async () => {
