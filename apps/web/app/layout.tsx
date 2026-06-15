@@ -1,7 +1,16 @@
 import type { Metadata } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+
+const geistSans = Geist({
+  subsets: ["latin"],
+  variable: "--font-geist-sans",
+});
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
+});
 
 const title = "ai-spend-agent — your AI spend in one view, in 90 seconds";
 const description =
@@ -42,7 +51,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="min-h-screen bg-bg font-sans antialiased">
         {children}
