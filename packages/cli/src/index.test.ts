@@ -42,7 +42,7 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("agent-analyst");
   });
 
-  it("uses real local agent logs when present (no keys, no sample)", async () => {
+  async function writeClaudeLogFixture() {
     const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
     await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
     const transcript = JSON.stringify({
@@ -54,6 +54,10 @@ describe("zero-key instant demo first run", () => {
       message: { id: "msg-1", model: "claude-opus-4-8", usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }
     });
     await writeFile(join(logsDir, "-Users-jose-myproject", "session.jsonl"), transcript, "utf8");
+  }
+
+  it("uses real local agent logs when present (no keys, no sample)", async () => {
+    await writeClaudeLogFixture();
 
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-logs-"));
     const result = await runCli(["--path", dir, "--no-color"]);
@@ -65,6 +69,21 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("$7.50");
     expect(result.stdout).toContain("Plan check");
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
+  });
+
+  it("uses real local agent logs for report-card before falling back to sample data", async () => {
+    await writeClaudeLogFixture();
+
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-"));
+    const cardPath = join(dir, "card.svg");
+    const result = await runCli(["report-card", "--path", dir, "--out", cardPath]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("$7.50 tracked");
+    expect(result.stdout).not.toContain("$87.00 tracked");
+    const card = await readFile(cardPath, "utf8");
+    expect(card).toContain("$7.50");
+    expect(card).not.toContain("$87.00");
   });
 
   it("uses connected local spend state when present instead of sample", async () => {

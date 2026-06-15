@@ -7,6 +7,13 @@ export const runtime = "nodejs";
 // Pragmatic email check — good enough to reject obvious junk without
 // rejecting valid-but-unusual addresses.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const REF_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeSourceRef(value: unknown): string {
+  if (typeof value !== "string") return "direct";
+  const normalized = value.trim().toLowerCase();
+  return REF_RE.test(normalized) ? normalized : "direct";
+}
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -20,6 +27,11 @@ export async function POST(request: Request) {
     typeof body === "object" && body !== null && "email" in body
       ? String((body as { email: unknown }).email).trim().toLowerCase()
       : "";
+  const sourceRef = normalizeSourceRef(
+    typeof body === "object" && body !== null && "ref" in body
+      ? (body as { ref: unknown }).ref
+      : new URL(request.url).searchParams.get("ref"),
+  );
 
   if (!email || email.length > 254 || !EMAIL_RE.test(email)) {
     return NextResponse.json(
@@ -28,9 +40,9 @@ export async function POST(request: Request) {
     );
   }
 
-  console.log(`[waitlist] new signup: ${email}`);
+  console.log(`[waitlist] new signup: ${email} (${sourceRef})`);
 
-  const stored = await storeInSupabase(email);
+  const stored = await storeInSupabase(email, sourceRef);
   if (stored === "stored" || stored === "duplicate") {
     return NextResponse.json({ ok: true }, { status: 201 });
   }
@@ -45,7 +57,7 @@ export async function POST(request: Request) {
 
   // Supabase not configured (local dev): append to a local file so no
   // signup is lost while developing.
-  const entry = `${new Date().toISOString()}\t${email}\n`;
+  const entry = `${new Date().toISOString()}\t${email}\t${sourceRef}\n`;
   try {
     const dir = join(process.cwd(), ".data");
     await mkdir(dir, { recursive: true });
@@ -62,7 +74,7 @@ export async function POST(request: Request) {
  * Returns "skipped" when env is not configured, "duplicate" when the email
  * already exists (unique index) — both are fine outcomes for the user.
  */
-async function storeInSupabase(email: string): Promise<"stored" | "duplicate" | "error" | "skipped"> {
+async function storeInSupabase(email: string, sourceRef: string): Promise<"stored" | "duplicate" | "error" | "skipped"> {
   const url = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) {
@@ -77,7 +89,7 @@ async function storeInSupabase(email: string): Promise<"stored" | "duplicate" | 
         "Content-Type": "application/json",
         Prefer: "return=minimal",
       },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, source_ref: sourceRef }),
     });
     if (response.ok) {
       return "stored";

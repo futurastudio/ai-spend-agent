@@ -17,10 +17,13 @@ export function WaitlistForm() {
     setMessage("");
 
     try {
+      const ref = typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("ref")
+        : null;
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, ref }),
       });
 
       const data = (await res.json().catch(() => ({}))) as {
