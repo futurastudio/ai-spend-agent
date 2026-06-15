@@ -18,21 +18,31 @@ export function CopyCommand() {
   }
 
   return (
-    <div className="group flex w-full max-w-md items-center justify-between gap-3 rounded-xl border border-border bg-surface/80 px-4 py-3 font-mono text-sm shadow-[0_1px_0_rgba(255,255,255,0.04)_inset] backdrop-blur transition-colors hover:border-white/20">
-      <code className="flex min-w-0 items-center gap-2 truncate text-ink">
-        <span className="select-none text-faint" aria-hidden="true">
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? "Copied command" : "Copy command"}
+      className="group flex w-full max-w-md items-center justify-between gap-4 rounded-xl border border-border bg-well px-5 py-4 font-mono text-sm transition-colors hover:border-border-bright focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/50"
+    >
+      <code className="flex min-w-0 items-center gap-2.5 truncate">
+        <span className="select-none text-green" aria-hidden="true">
           $
         </span>
-        {COMMAND}
+        <span className="text-ink">{COMMAND}</span>
+        <span
+          className="ml-0.5 inline-block h-[1.05em] w-[7px] translate-y-[2px] animate-blink bg-green"
+          aria-hidden="true"
+        />
       </code>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={copied ? "Copied install command" : "Copy install command"}
-        className="shrink-0 rounded-md border border-border bg-bg/60 px-2.5 py-1 text-xs font-medium text-muted transition-colors hover:border-white/20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+      <span
+        className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+          copied
+            ? "border-green/40 text-green"
+            : "border-border text-muted group-hover:border-border-bright group-hover:text-ink"
+        }`}
       >
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
+        {copied ? "Copied ✓" : "Copy"}
+      </span>
+    </button>
   );
 }

@@ -1,36 +1,36 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
-const sans = Inter({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-  display: "swap",
-});
-
-const title = "AI Spend Analyst — See your AI spend in one view in 90 seconds";
+const title = "ai-spend-agent — your AI spend in one view, in 90 seconds";
 const description =
-  "A free, local-first CLI that unifies your OpenAI, Anthropic, Cursor, and Copilot spend in one view — and shows you exactly where to cut. Your data never leaves your machine.";
+  "A free, local-first CLI that unifies your OpenAI, Anthropic, Cursor, and Copilot spend — plus your Claude Code and Codex session logs — into one terminal view, with a ranked list of cuts. Your data never leaves your machine.";
 
 export const metadata: Metadata = {
   title,
   description,
-  metadataBase: new URL("https://aispendanalyst.dev"),
+  metadataBase: new URL("https://ai-spend-agent.vercel.app"),
   openGraph: {
     title,
     description,
     type: "website",
+    url: "https://ai-spend-agent.vercel.app",
+    images: [
+      {
+        url: "https://raw.githubusercontent.com/futurastudio/ai-spend-agent/main/docs/assets/social-preview.png",
+        width: 1280,
+        height: 640,
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title,
     description,
+    images: [
+      "https://raw.githubusercontent.com/futurastudio/ai-spend-agent/main/docs/assets/social-preview.png",
+    ],
   },
 };
 
@@ -40,8 +40,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
-      <body className="min-h-screen font-sans antialiased">{children}</body>
+    <html
+      lang="en"
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
+    >
+      <body className="min-h-screen bg-bg font-sans antialiased">
+        {children}
+      </body>
     </html>
   );
 }

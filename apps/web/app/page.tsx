@@ -1,20 +1,50 @@
 import { CopyCommand } from "@/components/CopyCommand";
 import { WaitlistForm } from "@/components/WaitlistForm";
+import { TerminalDemo } from "@/components/Terminal";
 
-const providers = ["OpenAI", "Anthropic", "Cursor", "Copilot"];
+const sources = [
+  "Claude Code logs",
+  "Codex logs",
+  "OpenAI",
+  "Anthropic",
+  "Cursor",
+  "Copilot",
+];
 
 const features = [
   {
-    title: "Every provider, one view",
-    body: "OpenAI, Anthropic, Cursor, and Copilot spend unified into a single breakdown — no more flipping between four billing dashboards.",
+    title: "Every source, one view",
+    body: "OpenAI, Anthropic, Cursor and Copilot billing — plus the Claude Code and Codex session logs already on your machine — unified into a single breakdown. No more flipping between dashboards.",
   },
   {
-    title: "Find the waste",
-    body: "Surfaces your most expensive models, runaway usage, and the concrete switches that cut the bill — ranked by how much you'd save.",
+    title: "A ranked list of cuts",
+    body: "Surfaces your most expensive models and the concrete switches that lower the bill — move to a cheaper tier, batch offline work, cache repeats — each with an estimated $/mo saving.",
+  },
+  {
+    title: "The plan-vs-API math",
+    body: "Projects your usage at API rates against subscription plan prices, so you can tell whether Pro, Max 5x, or pay-per-token is actually cheapest. The math no provider shows you.",
   },
   {
     title: "Runs entirely locally",
-    body: "A single npx command reads your usage and renders the report in your terminal. No account, no upload, no setup.",
+    body: "One npx command reads your usage and renders the report in your terminal. No account, no upload, no telemetry. Open-source — read every line before you run it.",
+  },
+];
+
+const steps = [
+  {
+    n: "01",
+    title: "Run one command",
+    body: "npx ai-spend-agent — nothing to install, configure, or sign up for.",
+  },
+  {
+    n: "02",
+    title: "It reads what's already there",
+    body: "Your Claude Code and Codex session logs, locally. Optionally connect provider billing with an admin key for verified numbers.",
+  },
+  {
+    n: "03",
+    title: "See spend + what to cut",
+    body: "A headline number, a ranked cut list with dollar savings, and a plan check — in under 90 seconds.",
   },
 ];
 
@@ -22,7 +52,7 @@ export default function Home() {
   return (
     <main className="relative overflow-hidden">
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[680px] grid-fade"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[760px] grid-fade"
         aria-hidden="true"
       />
 
@@ -31,95 +61,95 @@ export default function Home() {
         <div className="flex items-center gap-2.5">
           <span
             aria-hidden="true"
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface font-mono text-xs text-accent"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-well font-mono text-sm text-green"
           >
             $
           </span>
-          <span className="text-sm font-semibold tracking-tight text-ink">
-            AI Spend Analyst
+          <span className="font-mono text-sm font-semibold tracking-tight text-ink">
+            ai-spend-agent
           </span>
         </div>
-        <a
-          href="#beta"
-          className="rounded-lg border border-border bg-surface/60 px-4 py-2 text-sm font-medium text-muted transition-colors hover:border-white/20 hover:text-ink"
-        >
-          Join the beta
-        </a>
+        <nav className="flex items-center gap-2">
+          <a
+            href="https://github.com/futurastudio/ai-spend-agent"
+            target="_blank"
+            rel="noreferrer"
+            className="hidden rounded-lg border border-border bg-surface/60 px-3.5 py-2 text-sm font-medium text-muted transition-colors hover:border-border-bright hover:text-ink sm:inline-flex"
+          >
+            GitHub
+          </a>
+          <a
+            href="#beta"
+            className="rounded-lg border border-border bg-surface/60 px-3.5 py-2 text-sm font-medium text-muted transition-colors hover:border-border-bright hover:text-ink"
+          >
+            Join the beta
+          </a>
+        </nav>
       </header>
 
       {/* Hero */}
-      <section className="relative z-10 mx-auto max-w-content px-6 pb-20 pt-16 text-center sm:pt-24">
-        <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-border bg-surface/60 px-3.5 py-1.5 text-xs text-muted animate-fade-up">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
-          Free &amp; open-source CLI
-        </div>
+      <section className="relative z-10 mx-auto max-w-content px-6 pb-8 pt-14 text-center sm:pt-20">
+        <a
+          href="https://github.com/futurastudio/ai-spend-agent"
+          target="_blank"
+          rel="noreferrer"
+          className="mx-auto inline-flex animate-fade-up items-center gap-2 rounded-full border border-border bg-surface/60 px-3.5 py-1.5 font-mono text-xs text-muted transition-colors hover:border-border-bright hover:text-ink"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
+          Free &amp; open-source · MIT
+        </a>
 
-        <h1 className="mx-auto mt-7 max-w-3xl text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-ink animate-fade-up sm:text-6xl">
-          See your AI spend in one view in{" "}
-          <span className="bg-gradient-to-r from-accent-bright to-accent bg-clip-text text-transparent">
-            90 seconds
-          </span>
+        <h1 className="mx-auto mt-7 max-w-3xl animate-fade-up text-balance font-mono text-[2.1rem] font-semibold leading-[1.1] tracking-tight text-ink sm:text-[3.4rem]">
+          Your AI spend in one view,
+          <br className="hidden sm:block" /> in{" "}
+          <span className="text-green">90 seconds</span>
         </h1>
 
-        <p className="mx-auto mt-6 max-w-xl text-balance text-base leading-relaxed text-muted animate-fade-up sm:text-lg">
-          One command unifies your OpenAI, Anthropic, Cursor, and Copilot bills
-          into a single breakdown — and shows you exactly where to cut. Runs
-          locally. Your data never leaves your machine.
+        <p className="mx-auto mt-6 max-w-xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-lg">
+          One command unifies your OpenAI, Anthropic, Cursor and Copilot bills —
+          plus your Claude Code and Codex logs — into a single breakdown, and
+          shows you exactly where to cut. Runs locally. Your data never leaves
+          your machine.
         </p>
 
-        <div className="mt-9 flex flex-col items-center gap-3 animate-fade-up">
+        <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
           <CopyCommand />
-          <p className="text-xs text-faint">
-            Requires Node. Nothing to install or sign up for.
+          <p className="font-mono text-xs text-faint">
+            Requires Node 22+. Nothing to install or sign up for.
           </p>
         </div>
 
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 animate-fade-up">
-          {providers.map((p) => (
-            <span
-              key={p}
-              className="text-sm font-medium text-faint transition-colors hover:text-muted"
-            >
-              {p}
+        <div className="mt-8 flex animate-fade-up flex-wrap items-center justify-center gap-x-5 gap-y-2">
+          {sources.map((s) => (
+            <span key={s} className="font-mono text-xs text-faint">
+              {s}
             </span>
           ))}
         </div>
 
-        {/* Demo placeholder */}
-        <div className="mx-auto mt-16 max-w-4xl animate-fade-up">
-          <div className="rounded-2xl border border-border bg-surface/50 p-2 shadow-2xl shadow-black/40 backdrop-blur">
-            <div className="flex items-center gap-1.5 px-3 py-2.5">
-              <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-              <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-              <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-              <span className="ml-3 font-mono text-xs text-faint">
-                ai-spend-agent
-              </span>
-            </div>
-            <div className="flex aspect-[16/9] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-bg/60 text-center">
-              <span className="rounded-full border border-border bg-surface px-3 py-1 font-mono text-[11px] uppercase tracking-widest text-faint">
-                Demo
-              </span>
-              <p className="max-w-xs text-sm text-muted">
-                Animated walkthrough of the spend report goes here.
-              </p>
-              <p className="font-mono text-xs text-faint">
-                [ placeholder &mdash; demo.gif ]
-              </p>
-            </div>
+        {/* Real terminal output — the product is the screenshot */}
+        <div className="relative mx-auto mt-14 max-w-terminal animate-fade-up">
+          <div
+            className="accent-glow pointer-events-none absolute inset-x-0 -bottom-10 top-10"
+            aria-hidden="true"
+          />
+          <div className="relative">
+            <TerminalDemo />
           </div>
         </div>
       </section>
 
       {/* What it does */}
-      <section className="relative z-10 mx-auto max-w-content px-6 py-16">
-        <h2 className="text-center text-sm font-medium uppercase tracking-widest text-faint">
+      <section className="relative z-10 mx-auto max-w-content px-6 py-20">
+        <h2 className="text-center font-mono text-xs font-medium uppercase tracking-[0.2em] text-faint">
           What it does
         </h2>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
+        <div className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
           {features.map((f) => (
-            <div key={f.title} className="bg-surface/60 p-7">
-              <h3 className="text-base font-semibold text-ink">{f.title}</h3>
+            <div key={f.title} className="bg-surface p-7">
+              <h3 className="font-mono text-base font-semibold text-ink">
+                {f.title}
+              </h3>
               <p className="mt-2.5 text-sm leading-relaxed text-muted">
                 {f.body}
               </p>
@@ -128,12 +158,35 @@ export default function Home() {
         </div>
       </section>
 
+      {/* How it works */}
+      <section className="relative z-10 mx-auto max-w-content px-6 py-10">
+        <h2 className="text-center font-mono text-xs font-medium uppercase tracking-[0.2em] text-faint">
+          How it works
+        </h2>
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          {steps.map((s) => (
+            <div
+              key={s.n}
+              className="rounded-2xl border border-border bg-surface p-7"
+            >
+              <span className="font-mono text-sm text-green">{s.n}</span>
+              <h3 className="mt-3 text-base font-semibold text-ink">
+                {s.title}
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted">
+                {s.body}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Privacy / trust */}
       <section className="relative z-10 mx-auto max-w-content px-6 py-10">
-        <div className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-gradient-to-b from-surface/80 to-surface/30 px-8 py-10 text-center sm:flex-row sm:text-left">
+        <div className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-surface px-8 py-10 text-center sm:flex-row sm:text-left">
           <span
             aria-hidden="true"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-bg text-accent"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border bg-well text-green"
           >
             <svg
               width="20"
@@ -165,13 +218,14 @@ export default function Home() {
       {/* Beta CTA */}
       <section id="beta" className="relative z-10 mx-auto max-w-content px-6 py-20">
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-balance text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+          <h2 className="text-balance font-mono text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
             Want it running 24/7?
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-balance text-base leading-relaxed text-muted">
-            The hosted version adds continuous monitoring, spend alerts before
-            bills spike, and white-label reports you can send straight to
-            clients. Join the beta and we&apos;ll reach out as spots open.
+            The hosted version adds continuous monitoring, burn-rate alerts
+            before you hit a credit cap, and white-label reports you can send
+            straight to clients. Join the beta and we&apos;ll reach out as spots
+            open.
           </p>
           <div className="mx-auto mt-8 max-w-md text-left">
             <WaitlistForm />
@@ -181,9 +235,27 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="relative z-10 border-t border-border">
-        <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 text-xs text-faint sm:flex-row">
-          <span>AI Spend Analyst — free, local-first, open-source.</span>
-          <span className="font-mono">npx ai-spend-agent</span>
+        <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
+          <span>ai-spend-agent — free, local-first, open-source.</span>
+          <div className="flex items-center gap-5">
+            <a
+              href="https://github.com/futurastudio/ai-spend-agent"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              GitHub
+            </a>
+            <a
+              href="https://www.npmjs.com/package/ai-spend-agent"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              npm
+            </a>
+            <span className="text-green">npx ai-spend-agent</span>
+          </div>
         </div>
       </footer>
     </main>
