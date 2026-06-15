@@ -76,8 +76,8 @@ it in one view and tells you what to cut.
 | --- | --- | --- |
 | Claude Code logs (local) | Real session usage, priced at published API rates | ✅ Reads your machine's transcripts |
 | Codex logs (local) | Real session usage, priced at published API rates | ✅ Reads your machine's rollouts |
-| OpenAI Costs/Usage API | Verified billing, per project/key | ✅ Verified against live billing data |
-| Anthropic Cost Report + Claude Code Analytics | Verified billing, per workspace | ✅ Verified against live billing data |
+| OpenAI Costs/Usage API | Admin-gated billing, per project/key | ✅ Implemented + mocked against live-shaped responses; admin-key reports welcome |
+| Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented + mocked against live-shaped responses; admin-key reports welcome |
 | Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Beta — built to the published API spec; live reports welcome |
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Beta — built to the published API spec; live reports welcome |
 

@@ -155,35 +155,15 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
   };
 }
 
+type InstantReadMode = "demo" | "connected" | "local-logs";
+
+type InstantReadData = {
+  records: UsageRecord[];
+  mode: InstantReadMode;
+};
+
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
-  // Real data beats sample data: (1) connected/synced state, then (2) usage
-  // mined from this machine's agent logs (Claude Code / Codex — the spend no
-  // billing API can see), then (3) the bundled sample so the wow ALWAYS lands.
-  let records: UsageRecord[] = [];
-  let mode: "demo" | "connected" | "local-logs" = "demo";
-
-  const localSpend = await readOptionalLocalSpend(resolve(args.path));
-  if (localSpend && localSpend.length > 0) {
-    records = localSpend;
-    mode = "connected";
-  } else if (!args.sample) {
-    const logs = await loadLocalAgentUsage({
-      // Env overrides keep tests (and unusual installs) isolated from $HOME.
-      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
-    }).catch(() => undefined);
-    if (logs && logs.records.length > 0) {
-      records = logs.records;
-      mode = "local-logs";
-    }
-  }
-  if (records.length === 0) {
-    // loadSampleUsageData resolves the bundled CSVs relative to the installed
-    // package, so this works from ANY directory (true zero-config).
-    records = await loadSampleUsageData();
-    mode = "demo";
-  }
-
+  const { records, mode } = await loadInstantReadData(args);
   const summary = analyzeSpend(records);
   const groupBy = args.groupBy ?? "model";
   const color = args.noColor ? false : undefined;
@@ -233,6 +213,33 @@ async function readOptionalLocalSpend(rootPath: string): Promise<UsageRecord[] |
   } catch {
     return undefined;
   }
+}
+
+async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
+  if (args.sample) {
+    return { records: await loadSampleUsageData(), mode: "demo" };
+  }
+
+  // Real data beats sample data: (1) connected/synced state, then (2) usage
+  // mined from this machine's agent logs (Claude Code / Codex — the spend no
+  // billing API can see), then (3) the bundled sample so the wow ALWAYS lands.
+  const localSpend = await readOptionalLocalSpend(resolve(args.path));
+  if (localSpend && localSpend.length > 0) {
+    return { records: localSpend, mode: "connected" };
+  }
+
+  const logs = await loadLocalAgentUsage({
+    // Env overrides keep tests (and unusual installs) isolated from $HOME.
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+  }).catch(() => undefined);
+  if (logs && logs.records.length > 0) {
+    return { records: logs.records, mode: "local-logs" };
+  }
+
+  // loadSampleUsageData resolves the bundled CSVs relative to the installed
+  // package, so this works from ANY directory (true zero-config).
+  return { records: await loadSampleUsageData(), mode: "demo" };
 }
 
 async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
@@ -838,23 +845,23 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-
-  let records: UsageRecord[];
-  if (args.sample) {
-    records = await loadSampleUsageData();
-  } else {
-    const local = await readOptionalLocalSpend(rootPath);
-    records = local && local.length > 0 ? local : await loadSampleUsageData();
-  }
+  const { records, mode } = await loadInstantReadData(args);
 
   const summary = analyzeSpend(records);
   const outPath = args.out ? resolve(rootPath, args.out) : join(rootPath, "ai-spend-card.svg");
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, generateReportCardSvg({ summary, records }), "utf8");
 
+  const dataLine = mode === "demo"
+    ? "data: DEMO sample data — run without --sample on a machine with Claude Code/Codex logs for your own numbers."
+    : mode === "local-logs"
+      ? "data: local Claude Code/Codex logs priced at API-equivalent rates."
+      : "data: connected local spend state.";
+
   return ok([
     "Shareable AI spend report card written (redacted — no client/project/user names).",
     `card: ${outPath}`,
+    dataLine,
     "",
     "Caption to share:",
     generateReportCardCaption({ summary, records }),

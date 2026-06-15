@@ -371,12 +371,16 @@ function makeColors(useColor: boolean): Colors {
   if (!useColor) {
     return { bold: identity, dim: identity, cyan: identity, green: identity, yellow: identity };
   }
+  // picocolors' default export is bound to process/TTY state at import time.
+  // createColors(true) is the explicit override path for tests and --color-like
+  // callers that need ANSI even when stdout is not a TTY.
+  const forced = pc.createColors(true);
   return {
-    bold: pc.bold,
-    dim: pc.dim,
-    cyan: pc.cyan,
-    green: pc.green,
-    yellow: pc.yellow
+    bold: forced.bold,
+    dim: forced.dim,
+    cyan: forced.cyan,
+    green: forced.green,
+    yellow: forced.yellow
   };
 }
 
