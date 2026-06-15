@@ -1300,6 +1300,17 @@ const invokedAsMain = (() => {
 })();
 
 if (invokedAsMain) {
+  // Fail with a clear message on old Node instead of a cryptic module/syntax
+  // error deep in a dependency. npm warns on engines but never blocks install.
+  const major = Number(process.versions.node.split(".")[0]);
+  if (Number.isFinite(major) && major < 22) {
+    console.error(
+      `ai-spend-agent needs Node 22 or newer (you have ${process.versions.node}).\n` +
+        "Upgrade Node, then run: npx ai-spend-agent"
+    );
+    process.exit(1);
+  }
+
   const argv = process.argv.slice(2);
   const command = argv[0];
   const isInstantDemo = !command || command === "quickstart" || command === "demo";

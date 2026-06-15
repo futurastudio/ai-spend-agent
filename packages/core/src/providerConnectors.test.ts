@@ -282,6 +282,19 @@ describe("real provider connector implementations", () => {
     })).rejects.toThrow(/Missing GitHub Copilot org or enterprise read scopes/);
   });
 
+  it("fails loudly (not silently $0) when Cursor returns an unrecognized shape", async () => {
+    await expect(fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "team-acme",
+      // API answers OK but with fields we don't map — must throw, never report $0.
+      fetcher: async () => ({ ok: true, status: 200, statusText: "OK", json: async () => ({ teamMembers: [{ cents_spent: 4200 }] }) })
+    })).rejects.toThrow(/no spend fields this connector recognizes/);
+  });
+
   it("fetches OpenAI costs grouped by project, api key, and line item without returning the raw token", async () => {
     const calls: Array<{ url: string; headers: Record<string, string> }> = [];
     const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {

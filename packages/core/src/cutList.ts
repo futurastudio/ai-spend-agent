@@ -244,6 +244,15 @@ function windowDays(records: UsageRecord[]): number {
   return Math.max(1, days.size);
 }
 
+/**
+ * Public view of the observed window, so the renderer can caveat monthly
+ * projections honestly: a 30-day figure extrapolated from 1–2 days of data
+ * assumes the pattern repeats, which it may not.
+ */
+export function usageWindowDays(records: UsageRecord[]): number {
+  return windowDays(records);
+}
+
 /** Project a window's savings to a 30-day month. */
 function toMonthly(windowSavings: number, windowDayCount: number): number {
   return (windowSavings / windowDayCount) * 30;

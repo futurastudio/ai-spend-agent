@@ -4,6 +4,7 @@ import {
   computePlanChecks,
   generateCutList,
   totalEstimatedMonthlySavingsUsd,
+  usageWindowDays,
   type CostConfidence,
   type CutAction,
   type SpendBreakdownEntry,
@@ -107,10 +108,24 @@ export function generatePlainEnglishSummary(
     for (const [index, action] of cutList.slice(0, 5).entries()) {
       lines.push(...cutActionLines(action, index + 1, c));
     }
+    const days = usageWindowDays(options.records);
     lines.push("");
     lines.push(
-      `  ${c.green(c.bold(`~${formatUsd(totalMonthlySavings)}/mo`))} ${c.dim("estimated savings (30-day projection from this window) if you apply the moves above")}`
+      `  ${c.green(c.bold(`~${formatUsd(totalMonthlySavings)}/mo`))} ${c.dim(`estimated savings — a 30-day projection from ${days} day${days === 1 ? "" : "s"} of data`)}`
     );
+    // Honest math: short windows extrapolate hard. Flag it rather than let a
+    // 4-hour sample read as a confident monthly number.
+    if (days < 3) {
+      lines.push(
+        `  ${c.dim(`assumes this ${days === 1 ? "day's" : "window's"} pattern repeats; collect more days for a firmer number`)}`
+      );
+    }
+    // Model-downgrade suggestions trade quality for cost — say so once.
+    if (cutList.some((action) => action.kind === "model_downgrade")) {
+      lines.push(
+        `  ${c.dim("downgrades assume the cheaper model holds quality for that workload — verify before switching")}`
+      );
+    }
   }
   lines.push("");
 

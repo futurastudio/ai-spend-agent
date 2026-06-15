@@ -23,6 +23,26 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("/mo");
   });
 
+  it("states the projection window and caveats a short one", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const multiDay = generatePlainEnglishSummary(summary, { records, color: false });
+    // Sample spans multiple days: states the window, no short-window caveat.
+    expect(multiDay).toMatch(/30-day projection from \d+ days of data/);
+    expect(multiDay).not.toContain("pattern repeats");
+
+    // Collapse to a single day -> the honesty caveat must appear.
+    const oneDay = records.map((record) => ({
+      ...record,
+      timestamp: "2026-06-08T10:00:00.000Z",
+    }));
+    const oneDayText = generatePlainEnglishSummary(analyzeSpend(oneDay), {
+      records: oneDay,
+      color: false,
+    });
+    expect(oneDayText).toContain("pattern repeats");
+  });
+
   it("renders without ANSI escapes when color is disabled (pipe-safe)", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);

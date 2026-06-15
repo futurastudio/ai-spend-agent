@@ -471,6 +471,16 @@ async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher
   }, "cursor", "Cursor Admin API spend");
   const page = response.payload;
   const records = normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId });
+  // The Cursor connector is matched to the published spec but not live-verified.
+  // If the API answered with content but no spend fields we recognize, say so
+  // loudly rather than silently report $0 (which reads as "you spent nothing").
+  if (records.length === 0 && isRecord(page) && Object.keys(page).length > 0) {
+    throw new Error(
+      "Cursor returned data but no spend fields this connector recognizes " +
+        `(saw: ${Object.keys(page).slice(0, 8).join(", ")}). The Cursor connector is beta — ` +
+        "please open an issue with this field list so we can map it: https://github.com/futurastudio/ai-spend-agent/issues"
+    );
+  }
   const singleFetch: FetchPagesResult = {
     pages: [page],
     pagination: { label: "Cursor Admin API spend", pagesFetched: 1, stoppedBecause: "complete", maxPages: 1 },
