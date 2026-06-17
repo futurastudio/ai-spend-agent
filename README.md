@@ -68,9 +68,11 @@ it in one view and tells you what to cut.
 - **Where to cut**: ranked, dollar-specific actions (move X calls to a
   cheaper model, batch offline work for the flat 50% discount, cache repeats,
   trim oversized context) with estimated $/mo savings.
-- **Dead context**: the skills, subagents, and MCP tools your agent loads
-  every turn but never actually calls — counted from your real transcripts,
-  with the dead-token volume per month and an honest (cache-aware) dollar cost.
+- **Dead context**: the skills, subagents, and MCP servers your agent loads
+  but never actually calls — counted from your real transcripts, with the
+  utilization %. Where the token weight is measurable (skills/agents), it adds
+  an honest, cache-aware $/mo; MCP servers are counted (schemas aren't readable
+  from config) until you connect to size them.
 - **Plan check**: your projected monthly usage at API rates vs subscription
   plan prices ("~$253/mo at API rates — Max 20x at $200/mo covers it").
 - **Drill-down**: `--group-by source|model|client|project|agent|user|workspace|apiKey`.

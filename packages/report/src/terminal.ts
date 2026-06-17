@@ -115,28 +115,33 @@ export function generatePlainEnglishSummary(
     lines.push("");
   }
 
-  // --- Dead context: tools loaded every turn but never called ------------
+  // --- Dead context: tools configured but never invoked ------------------
+  // Count-led (the defensible, shareable part). A token/$ figure shows ONLY
+  // for items we measured (skills/agents); MCP servers are counted, not priced.
   const dc = options.deadContext;
   if (dc && dc.hasData && dc.deadCount > 0) {
     const pct = Math.round(dc.wastePercent * 100);
-    const header = c.bold("  Dead context") + c.dim("  (loaded every turn, never called)");
+    const header = c.bold("  Dead context") + c.dim("  (configured, never invoked in 30 days)");
     lines.push(dc.isSample ? `${header}  ${c.yellow("SAMPLE")}` : header);
     lines.push("");
     lines.push(
       `  ${c.bold(`${dc.deadCount} of ${dc.loadedCount}`)} ${c.dim(`loaded tools never invoked (${pct}%)`)}`
     );
-    lines.push(
-      `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} dead tokens/mo`))} ${c.dim("loaded into context")}`
-    );
-    if (dc.isSample) {
+    if (dc.measuredDeadCount > 0 && dc.monthlyDeadTokens > 0) {
+      const plural = dc.measuredDeadCount === 1 ? "" : "s";
       lines.push(
-        `  ${c.dim(`illustrative — run in a project with skills/MCP loaded to see yours · ~${formatUsd(dc.monthlyUsd)}/mo honest cost`)}`
+        `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} dead tokens/mo`))} ` +
+          c.dim(`from ${dc.measuredDeadCount} unused skill${plural}/agent${plural} · honest cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
       );
-    } else {
-      const cost =
-        `honest cost ~${formatUsd(dc.monthlyUsd)}/mo across your Claude Code use (cheap because it's cached) · estimated` +
-        (dc.understated ? " · MCP weights understated (likely higher)" : "");
-      lines.push(`  ${c.dim(cost)}`);
+    }
+    if (dc.unmeasuredDeadCount > 0) {
+      const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
+      lines.push(
+        `  ${c.dim(`${dc.unmeasuredDeadCount} unused MCP server${plural} — token weight not measurable from config (run \`connect\` to size it)`)}`
+      );
+    }
+    if (dc.isSample) {
+      lines.push(`  ${c.dim("illustrative — your first run shows your own skills, agents, and MCP")}`);
     }
     lines.push("");
   }

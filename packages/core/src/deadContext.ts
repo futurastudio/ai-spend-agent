@@ -4,25 +4,28 @@ import { loadToolInvocations, type InvocationSummary, type ToolInvocationOptions
 import type { CutAction } from "./cutList.js";
 
 /**
- * Dead-context cost: prices the tools an agent LOADS into context every turn
- * but NEVER actually calls. Compares the local Claude Code inventory (skills,
- * subagents, slash commands, MCP servers/tools — {@link loadAgentInventory})
- * against the tools real transcripts show were invoked
- * ({@link loadToolInvocations}), then values the always-loaded weight of the
- * never-used items at API-equivalent rates.
+ * Dead-context: the tools an agent LOADS into context but NEVER calls. Compares
+ * the local Claude Code inventory (skills, subagents, slash commands, MCP
+ * servers — {@link loadAgentInventory}) against what real transcripts show was
+ * invoked ({@link loadToolInvocations}).
  *
- * HONESTY NOTE: loaded tools sit in the PROMPT-CACHED system/tools context, so
- * the realistic cost is one cache *write* per session plus a cache *read* per
- * subsequent turn — NOT the full input rate every turn. We report that cached
- * figure as the headline and the uncached number only as an upper bound. We
- * never quote the inflated `deadTokens × turns × inputRate` as the result.
+ * ACCURACY CONTRACT (this is the credibility lever — read before changing):
+ *  - The COUNT + utilization % is always defensible and is the headline.
+ *  - A token/$ magnitude is ONLY computed from items whose weight we actually
+ *    MEASURED — skill/subagent/command frontmatter (weightConfidence
+ *    "estimated"). We never price items whose weight we could not measure.
+ *  - MCP servers have NO readable schemas in local config, so their real
+ *    weight is unknown. They are COUNTED as dead but NEVER assigned a $/token
+ *    figure — to size them we'd have to query each server's tools/list. They
+ *    surface as `unmeasuredDeadCount` so the renderer can say "not measurable".
+ *  - Pricing is cache-aware (one cache write/session + a read/turn), never the
+ *    inflated full-input-rate-every-turn number.
  */
 
 const DEFAULT_WINDOW_DAYS = 30;
 /**
- * Representative model for pricing dead context. Claude Code runs Anthropic
- * models; Sonnet rates are a conservative middle (cheaper than Opus) so we do
- * not overstate. Always surfaced as "estimated".
+ * Representative model for pricing measured dead context. Claude Code runs
+ * Anthropic models; Sonnet rates are a conservative middle. Always "estimated".
  */
 const DEFAULT_PRICING_MODEL = "claude-sonnet-4";
 
@@ -34,33 +37,33 @@ export type DeadContextItem = {
 };
 
 export type DeadContextResult = {
-  /** True only when we found both an inventory AND parsed transcripts. */
+  /** True when we found inventory + transcripts AND at least one dead item. */
   hasData: boolean;
   /** True when these are illustrative sample numbers, not the user's real data. */
   isSample?: boolean;
   /** Prunable inventory items considered (built-ins excluded upstream). */
   loadedCount: number;
-  /** Items never invoked across the parsed window. */
+  /** Items never invoked across the parsed window (the defensible headline). */
   deadCount: number;
-  /** Always-loaded tokens summed across the dead items (per turn). */
+  /** Dead items whose token weight we MEASURED (skills/subagents/commands). */
+  measuredDeadCount: number;
+  /** Dead items whose weight we could NOT measure (MCP servers, no schemas). */
+  unmeasuredDeadCount: number;
+  /** Measured-only always-loaded tokens across dead items (per turn). */
   deadTokens: number;
-  /** Dead tokens actually loaded into context over a month (deadTokens × turns,
-   * projected). The screenshot-able "headline" number. */
+  /** Measured-only dead tokens loaded into context over a month (projected). */
   monthlyDeadTokens: number;
   /** deadCount / loadedCount, 0..1. */
   wastePercent: number;
-  /** Honest, cache-aware estimate of monthly waste (the headline number). */
+  /** Cache-aware monthly $, MEASURED items only (0 when only MCP is dead). */
   monthlyUsd: number;
-  /** Upper bound assuming NO prompt caching (full input rate every turn). */
+  /** Upper bound (no prompt caching), measured items only. */
   monthlyUsdUpperBound: number;
-  /** True when any dead item's token weight is understated (e.g. MCP schemas
-   * unavailable) — the real number is likely higher than reported. */
-  understated: boolean;
   /** The never-used items, heaviest first. */
   deadItems: DeadContextItem[];
   sessions: number;
   totalTurns: number;
-  /** Model whose rates priced the estimate. */
+  /** Model whose rates priced the measured estimate. */
   pricingModel: string;
   /** Days the parsed transcripts were assumed to represent. */
   windowDays: number;
@@ -90,8 +93,7 @@ export async function loadDeadContext(options: DeadContextOptions = {}): Promise
 /**
  * Illustrative dead-context numbers for the first-run / demo card, so the
  * feature is always visible even when a user has nothing loaded yet. Clearly
- * flagged isSample so the renderer can label it. Numbers are deliberately
- * round and conservative; the README opener uses the same shape.
+ * flagged isSample. Shows the measured-skills case (count + a small honest $).
  */
 export function sampleDeadContext(): DeadContextResult {
   const loadedCount = 38;
@@ -101,12 +103,13 @@ export function sampleDeadContext(): DeadContextResult {
     isSample: true,
     loadedCount,
     deadCount,
-    deadTokens: 1400,
-    monthlyDeadTokens: 2_100_000,
+    measuredDeadCount: deadCount,
+    unmeasuredDeadCount: 0,
+    deadTokens: 80,
+    monthlyDeadTokens: 120_000,
     wastePercent: deadCount / loadedCount,
-    monthlyUsd: 3.0,
-    monthlyUsdUpperBound: 18.0,
-    understated: true,
+    monthlyUsd: 0.4,
+    monthlyUsdUpperBound: 2.4,
     deadItems: [],
     sessions: 120,
     totalTurns: 1500,
@@ -115,7 +118,7 @@ export function sampleDeadContext(): DeadContextResult {
   };
 }
 
-/** Pure core: compare inventory vs. invocations and price the never-used items. */
+/** Pure core: compare inventory vs. invocations; count all dead, price only measured. */
 export function computeDeadContext(
   items: InventoryItem[],
   invocations: InvocationSummary,
@@ -150,27 +153,31 @@ export function computeDeadContext(
   }
   dead.sort((a, b) => b.alwaysLoadedTokens - a.alwaysLoadedTokens);
 
-  const deadTokens = dead.reduce((total, item) => total + item.alwaysLoadedTokens, 0);
-  const hasData = items.length > 0 && invocations.sessions > 0 && deadTokens > 0;
+  // Only items whose weight we actually measured get a $/token figure. MCP
+  // servers (weight unknown without querying tools/list) are counted, not priced.
+  const measuredDead = dead.filter((item) => item.weightConfidence === "estimated");
+  const unmeasuredDead = dead.filter((item) => item.weightConfidence !== "estimated");
+  const measuredTokens = measuredDead.reduce((total, item) => total + item.alwaysLoadedTokens, 0);
+  const hasData = items.length > 0 && sessions > 0 && dead.length > 0;
 
   const rates = pricingRates(config.pricingModel);
   // Cached: one cache write per session + a cache read on every later turn.
   const cacheReads = Math.max(0, totalTurns - sessions);
-  const windowCachedUsd = (deadTokens * (sessions * rates.write5mPerM + cacheReads * rates.cacheReadPerM)) / 1_000_000;
-  // Uncached upper bound: the full input rate on every turn.
-  const windowUncachedUsd = (deadTokens * totalTurns * rates.inputPerM) / 1_000_000;
+  const windowCachedUsd = (measuredTokens * (sessions * rates.write5mPerM + cacheReads * rates.cacheReadPerM)) / 1_000_000;
+  const windowUncachedUsd = (measuredTokens * totalTurns * rates.inputPerM) / 1_000_000;
   const monthFactor = DEFAULT_WINDOW_DAYS / windowDays;
 
   return {
     hasData,
     loadedCount,
     deadCount: dead.length,
-    deadTokens,
-    monthlyDeadTokens: Math.round(deadTokens * totalTurns * monthFactor),
+    measuredDeadCount: measuredDead.length,
+    unmeasuredDeadCount: unmeasuredDead.length,
+    deadTokens: measuredTokens,
+    monthlyDeadTokens: Math.round(measuredTokens * totalTurns * monthFactor),
     wastePercent: loadedCount > 0 ? dead.length / loadedCount : 0,
     monthlyUsd: roundMoney(windowCachedUsd * monthFactor),
     monthlyUsdUpperBound: roundMoney(windowUncachedUsd * monthFactor),
-    understated: dead.some((item) => item.weightConfidence === "estimated_understated"),
     deadItems: dead,
     sessions,
     totalTurns,
@@ -181,16 +188,17 @@ export function computeDeadContext(
 
 /**
  * Adapt a dead-context result to a {@link CutAction} so it can flow into the
- * ranked cut list / AI Receipt. Returns null when there is nothing to cut.
+ * ranked cut list / AI Receipt. Returns null unless there is MEASURED waste
+ * worth a dollar figure (MCP-only waste is shown as a count, not a cut $).
  */
 export function deadContextCutAction(result: DeadContextResult): CutAction | null {
-  if (!result.hasData || result.deadCount === 0 || result.monthlyUsd < 0.5) {
+  if (!result.hasData || result.measuredDeadCount === 0 || result.monthlyUsd < 0.5) {
     return null;
   }
   const pct = Math.round(result.wastePercent * 100);
   return {
     id: "dead-context",
-    title: `Trim ${result.deadCount} loaded tool${result.deadCount === 1 ? "" : "s"} your agent never calls`,
+    title: `Trim ${result.measuredDeadCount} loaded tool${result.measuredDeadCount === 1 ? "" : "s"} your agent never calls`,
     action:
       `Remove or lazy-load ${result.deadCount} of ${result.loadedCount} loaded item${result.loadedCount === 1 ? "" : "s"} ` +
       `(${pct}% never invoked) to reclaim ~${result.deadTokens.toLocaleString("en-US")} tokens of dead context per turn.`,
