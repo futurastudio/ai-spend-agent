@@ -16,7 +16,7 @@ describe("generateReportCardSvg", () => {
 
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
-    expect(svg).toContain("AI SPEND REPORT CARD");
+    expect(svg).toContain("AI RECEIPT");
     expect(svg).toContain("$87.00");
     expect(svg).toMatch(/~\$[\d,]+\.\d{2}\/mo/);
     expect(svg).toContain("ai-spend-agent");

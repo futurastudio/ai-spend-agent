@@ -10,10 +10,15 @@ describe("zero-key instant demo first run", () => {
   beforeEach(async () => {
     process.env.AI_SPEND_CLAUDE_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-claude-"));
     process.env.AI_SPEND_CODEX_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-"));
+    // Also isolate dead-context inventory from this machine's real config.
+    process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-home-"));
+    process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
   });
   afterEach(() => {
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
+    delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
+    delete process.env.AI_SPEND_CLAUDE_CONFIG;
   });
 
   it("renders the wow with no subcommand and no credentials", async () => {

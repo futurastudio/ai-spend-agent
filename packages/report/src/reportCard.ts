@@ -16,7 +16,7 @@ const CARD_WIDTH = 640;
 const CARD_HEIGHT = 400;
 
 /**
- * A redacted, shareable "AI spend report card" as a standalone SVG.
+ * A redacted, shareable "AI Receipt" as a standalone SVG.
  *
  * This is the growth loop: a screenshot-able artifact a founder can post. It
  * deliberately carries only NON-identifying signal — total spend, estimated
@@ -40,7 +40,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
       ).join("\n")
     : `      <text x="40" y="274" class="cut">No high-confidence cut in this window yet.</text>`;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="AI spend report card">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="AI receipt">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0b1020"/>
@@ -60,7 +60,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   <rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="18" fill="url(#bg)"/>
   <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="#26304f"/>
 
-  <text x="40" y="58" class="label">AI SPEND REPORT CARD</text>
+  <text x="40" y="58" class="label">AI RECEIPT</text>
 
   <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
   <text x="40" y="172" class="big">${escapeXml(formatBigUsd(summary.totalUsd))}</text>
@@ -82,7 +82,7 @@ ${cutLines}
 export function generateReportCardCaption(input: ReportCardInput): string {
   const monthlySavings = totalEstimatedMonthlySavingsUsd(generateCutList(input.records));
   return (
-    `I ran ai-spend-agent on my AI bill: ${formatUsd(input.summary.totalUsd)} tracked, ` +
+    `My AI receipt this month: ${formatUsd(input.summary.totalUsd)} tracked, ` +
     `~${formatUsd(monthlySavings)}/mo in savings I can act on. Local-first, no signup: npx ai-spend-agent`
   );
 }

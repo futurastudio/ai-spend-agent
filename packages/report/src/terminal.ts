@@ -7,6 +7,7 @@ import {
   usageWindowDays,
   type CostConfidence,
   type CutAction,
+  type DeadContextResult,
   type SpendBreakdownEntry,
   type SpendSummary,
   type UsageRecord
@@ -53,6 +54,12 @@ export type PlainEnglishSummaryOptions = {
   mode?: "demo" | "connected" | "local-logs";
   /** Optional next-step CTA lines printed in the footer. */
   nextSteps?: string[];
+  /**
+   * Optional dead-context cost (loaded-but-never-invoked tools), priced from
+   * the local agent inventory vs. real transcript invocations. Rendered only
+   * when it carries real data.
+   */
+  deadContext?: DeadContextResult;
 };
 
 /**
@@ -98,6 +105,41 @@ export function generatePlainEnglishSummary(
     );
   }
   lines.push("");
+
+  // --- Where your money goes: at-a-glance bars (the screenshot) -----------
+  const spendBars = renderSpendBars(summary.bySource, summary.totalUsd, c);
+  if (spendBars.length > 0) {
+    lines.push(c.bold("  Where your money goes") + c.dim("  (by source)"));
+    lines.push("");
+    lines.push(...spendBars);
+    lines.push("");
+  }
+
+  // --- Dead context: tools loaded every turn but never called ------------
+  const dc = options.deadContext;
+  if (dc && dc.hasData && dc.deadCount > 0) {
+    const pct = Math.round(dc.wastePercent * 100);
+    const header = c.bold("  Dead context") + c.dim("  (loaded every turn, never called)");
+    lines.push(dc.isSample ? `${header}  ${c.yellow("SAMPLE")}` : header);
+    lines.push("");
+    lines.push(
+      `  ${c.bold(`${dc.deadCount} of ${dc.loadedCount}`)} ${c.dim(`loaded tools never invoked (${pct}%)`)}`
+    );
+    lines.push(
+      `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} dead tokens/mo`))} ${c.dim("loaded into context")}`
+    );
+    if (dc.isSample) {
+      lines.push(
+        `  ${c.dim(`illustrative — run in a project with skills/MCP loaded to see yours · ~${formatUsd(dc.monthlyUsd)}/mo honest cost`)}`
+      );
+    } else {
+      const cost =
+        `honest cost ~${formatUsd(dc.monthlyUsd)}/mo across your Claude Code use (cheap because it's cached) · estimated` +
+        (dc.understated ? " · MCP weights understated (likely higher)" : "");
+      lines.push(`  ${c.dim(cost)}`);
+    }
+    lines.push("");
+  }
 
   // --- The wow: ranked, actionable cut list ------------------------------
   lines.push(c.bold("  Where to cut") + c.dim("  (ranked by monthly savings)"));
@@ -302,6 +344,33 @@ function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
   ];
 }
 
+/**
+ * The "where your money goes" block: aligned label + proportional bar + dollar
+ * + share. This is the screenshot-able artifact — kept deliberately compact
+ * (top 5 sources) so the terminal stays clean.
+ */
+function renderSpendBars(entries: SpendBreakdownEntry[], total: number, c: Colors): string[] {
+  if (entries.length === 0) return [];
+  const top = entries.slice(0, 5);
+  const labelWidth = Math.min(16, Math.max(...top.map((entry) => labelOf(entry.key).length)));
+  return top.map((entry) => {
+    const share = total > 0 ? entry.amountUsd / total : 0;
+    const label = labelOf(entry.key).slice(0, labelWidth).padEnd(labelWidth);
+    const amount = formatUsd(entry.amountUsd).padStart(9);
+    const pct = `${Math.round(share * 100)}%`.padStart(4);
+    return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
+  });
+}
+
+/** Wider bar for the headline spend block; the dominant source reads bold. */
+function spendBar(ratio: number, c: Colors): string {
+  const slots = 22;
+  const filled = Math.max(ratio > 0 ? 1 : 0, Math.min(slots, Math.round(ratio * slots)));
+  const block = "█".repeat(filled);
+  const colored = ratio >= 0.5 ? c.cyan(c.bold(block)) : c.cyan(block);
+  return `${colored}${c.dim("░".repeat(slots - filled))}`;
+}
+
 /** Unicode bar that degrades to ASCII when color is off. */
 function bar(ratio: number, c: Colors): string {
   const slots = 10;
@@ -332,6 +401,13 @@ function formatUsd(amount: number): string {
 
 function formatPercent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+/** Compact token count: 2,140,000 -> "2.1M", 8,300 -> "8.3K". */
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
+  return String(Math.round(tokens));
 }
 
 function tableChars(): Record<string, string> {

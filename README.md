@@ -2,11 +2,17 @@
 
 [![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
 
-**Your AI spend in one view, in 90 seconds — local-first, no signup.**
+**You don't know what AI cost you this month — and your provider won't tell you until the meter does.**
 
 ```bash
 npx ai-spend-agent
 ```
+
+**Half of what your AI agent loads, you pay for and never use.** One run on a
+normal month surfaced **$253 in agent spend — ~$61/mo of it pure waste**:
+wrong-model calls, uncached repeats, oversized context loaded every turn.
+Numbers are illustrative; run the command to see yours, in 90 seconds,
+local-first, no signup.
 
 If you use **Claude Code or Codex**, that one command reads the session logs
 already on your machine and shows your **real** AI usage — total dollars at
@@ -17,7 +23,7 @@ shows you). Zero keys, zero signup, nothing leaves your laptop.
 No agent logs? You get a full demo on sample data instead, then connect real
 billing in ~2 minutes.
 
-![Sample report card](docs/assets/report-card-sample.svg)
+![Sample AI Receipt](docs/assets/report-card-sample.svg)
 
 ## Get started in 60 seconds
 
@@ -62,10 +68,13 @@ it in one view and tells you what to cut.
 - **Where to cut**: ranked, dollar-specific actions (move X calls to a
   cheaper model, batch offline work for the flat 50% discount, cache repeats,
   trim oversized context) with estimated $/mo savings.
+- **Dead context**: the skills, subagents, and MCP tools your agent loads
+  every turn but never actually calls — counted from your real transcripts,
+  with the dead-token volume per month and an honest (cache-aware) dollar cost.
 - **Plan check**: your projected monthly usage at API rates vs subscription
   plan prices ("~$253/mo at API rates — Max 20x at $200/mo covers it").
 - **Drill-down**: `--group-by source|model|client|project|agent|user|workspace|apiKey`.
-- **Shareable report card**: `report-card` writes a redacted SVG (no client/
+- **Shareable AI Receipt**: `report-card` writes a redacted SVG (no client/
   project/user names) + a paste-ready caption.
 - **Honest confidence labels**: every number is tagged verified / estimated /
   detected so you know how much to trust it.
@@ -105,7 +114,7 @@ env:NAME`) — the tool never stores or prints a raw key.
 | `sync-provider` | Pull verified cost via a local `env:` reference |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
 | `report [--out <name>]` | Generate local Markdown + HTML reports |
-| `report-card [--sample]` | Redacted shareable SVG + caption |
+| `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
 | `scan [--path <dir>]` | Scan a local workspace for AI usage signals |
 | `doctor` | Check local runtime and safety posture |
 

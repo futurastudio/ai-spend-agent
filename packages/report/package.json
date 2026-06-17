@@ -19,7 +19,7 @@
     "!dist/**/*.map"
   ],
   "license": "MIT",
-  "description": "Terminal renderer and shareable report card for ai-spend-agent.",
+  "description": "Terminal renderer and shareable AI Receipt for ai-spend-agent.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/futurastudio/ai-spend-agent.git",

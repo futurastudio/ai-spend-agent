@@ -8,6 +8,8 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   detectLocalCredentials,
+  loadDeadContext,
+  sampleDeadContext,
   loadLocalAgentUsage,
   loadSampleUsageData,
   scanLocalUsageSignals,
@@ -173,12 +175,34 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const detection = await detectLocalCredentials({ cwd: resolve(args.path) });
   const nextSteps = quickstartNextSteps(mode, detection.credentials);
 
+  // Dead-context cost, globalized across the user's whole Claude Code setup
+  // (all projects' MCP + user-scope skills/agents/commands, vs. every
+  // transcript) so it's populated from ANY directory on the first run. Falls
+  // back to an illustrative sample so the feature is always visible on the
+  // first card. Never throws into the readout.
+  let deadContext = args.sample
+    ? undefined
+    : await loadDeadContext({
+        // Env overrides keep tests (and unusual installs) isolated from $HOME.
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        projectDir: resolve(args.path),
+        includeAllProjectMcp: true,
+        sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        windowDays: 30
+      }).catch(() => undefined);
+  if (!deadContext || !deadContext.hasData || deadContext.deadCount === 0) {
+    deadContext = sampleDeadContext();
+  }
+
   const summaryText = generatePlainEnglishSummary(summary, {
     records,
     groupBy,
     color,
     mode,
-    nextSteps
+    nextSteps,
+    deadContext
   });
 
   return ok(summaryText);
@@ -848,7 +872,7 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   const { records, mode } = await loadInstantReadData(args);
 
   const summary = analyzeSpend(records);
-  const outPath = args.out ? resolve(rootPath, args.out) : join(rootPath, "ai-spend-card.svg");
+  const outPath = args.out ? resolve(rootPath, args.out) : join(rootPath, "ai-receipt.svg");
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, generateReportCardSvg({ summary, records }), "utf8");
 
@@ -859,8 +883,8 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
       : "data: connected local spend state.";
 
   return ok([
-    "Shareable AI spend report card written (redacted — no client/project/user names).",
-    `card: ${outPath}`,
+    "Your AI Receipt — a shareable, redacted spend card (no client/project/user names).",
+    `receipt: ${outPath}`,
     dataLine,
     "",
     "Caption to share:",
@@ -1282,7 +1306,7 @@ function helpText(): string {
     "  quickstart [--sample]   Plain-English 90-second readout (alias of the default run)",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: model",
     "  report [--out <name>]   Generate local Markdown and HTML reports",
-    "  report-card [--out f.svg] Write a redacted, shareable SVG spend card + caption",
+    "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  apply-artifact          Generate coding prompt, action plan, policy/config, verification, demo package",
     "",
     "Cron (production watch): add a crontab entry such as:",

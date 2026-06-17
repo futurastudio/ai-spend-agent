@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" role="img" aria-label="AI spend report card">
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" role="img" aria-label="AI receipt">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0b1020"/>
@@ -18,7 +18,7 @@
   <rect width="640" height="400" rx="18" fill="url(#bg)"/>
   <rect x="0.5" y="0.5" width="639" height="399" rx="18" fill="none" stroke="#26304f"/>
 
-  <text x="40" y="58" class="label">AI SPEND REPORT CARD</text>
+  <text x="40" y="58" class="label">AI RECEIPT</text>
 
   <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
   <text x="40" y="172" class="big">$87.00</text>
