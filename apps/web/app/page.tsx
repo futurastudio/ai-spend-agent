@@ -14,7 +14,7 @@ const sources = [
 const features = [
   {
     title: "Every source, one view",
-    body: "OpenAI, Anthropic, Cursor and Copilot billing — plus the Claude Code and Codex session logs already on your machine — unified into a single breakdown. No more flipping between dashboards.",
+    body: "Your Claude Code and Codex session logs (priced locally at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin/owner key — unified into a single breakdown. Cursor and Copilot connectors are in beta. No more flipping between dashboards.",
   },
   {
     title: "A ranked list of cuts",
@@ -39,7 +39,7 @@ const steps = [
   {
     n: "02",
     title: "It reads what's already there",
-    body: "Your Claude Code and Codex session logs, locally. Optionally connect provider billing with an admin key for verified numbers.",
+    body: "Your Claude Code and Codex session logs, locally — priced at API rates as estimates. Connect provider billing with an admin/owner key to reconcile those estimates into verified numbers.",
   },
   {
     n: "03",
@@ -106,10 +106,10 @@ export default function Home() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-lg">
-          One command unifies your OpenAI, Anthropic, Cursor and Copilot bills —
-          plus your Claude Code and Codex logs — into a single breakdown, and
-          shows you exactly where to cut. Runs locally. Your data never leaves
-          your machine.
+          One command unifies your Claude Code and Codex logs — plus your real
+          OpenAI and Anthropic bills when you connect an admin key — into a
+          single breakdown, and shows you exactly where to cut. Runs locally.
+          Your data never leaves your machine.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
@@ -136,6 +136,9 @@ export default function Home() {
           <div className="relative">
             <TerminalDemo />
           </div>
+          <p className="mt-4 text-center font-mono text-xs text-faint">
+            Illustrative sample output — demo data, not real or verified numbers.
+          </p>
         </div>
       </section>
 
@@ -156,6 +159,13 @@ export default function Home() {
             </div>
           ))}
         </div>
+        <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-muted">
+          Every number is labeled. Figures from your local Claude Code and Codex
+          logs are <span className="text-ink">estimated</span> at published API
+          rates — not a bill. Connect a provider with an admin/owner key and
+          those estimates become <span className="text-green">verified</span>{" "}
+          against your real invoices.
+        </p>
       </section>
 
       {/* How it works */}

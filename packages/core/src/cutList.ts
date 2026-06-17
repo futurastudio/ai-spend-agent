@@ -23,7 +23,65 @@ export type CutAction = {
   /** Lowest confidence of the underlying records (drives how we caveat $). */
   confidence: CostConfidence;
   kind: "model_downgrade" | "context_trim" | "cache" | "batch";
+  /**
+   * IDs of the usage records this action's savings are computed from. Used to
+   * deduplicate overlapping recommendations so the same spend is never counted
+   * by two actions (see {@link buildRecommendedPlan}).
+   */
+  recordIds: string[];
 };
+
+/**
+ * A non-overlapping "recommended plan" plus the leftover overlapping
+ * opportunities. The recommended-plan total is the only savings number safe to
+ * present as a single figure: each underlying record is optimized by at most one
+ * action, so the total can never exceed the projected spend it draws from.
+ */
+export type RecommendedPlan = {
+  /** Actions chosen so their underlying records don't overlap. */
+  recommended: CutAction[];
+  /** Actions dropped because they target spend already claimed above. */
+  additional: CutAction[];
+  /** Deduplicated monthly savings — safe to display as one number. */
+  recommendedSavingsUsd: number;
+  /** Savings from the overlapping leftovers — NOT additive with the above. */
+  additionalSavingsUsd: number;
+  /** How the headline number was derived (for honest labeling). */
+  savingsMath: "deduplicated";
+};
+
+/**
+ * Select a non-overlapping subset of cut actions, highest-savings first. An
+ * action is added only if none of its records were already claimed by a
+ * previously selected action; otherwise it falls to {@link RecommendedPlan.additional}.
+ * This guarantees the recommended total never double-counts a dollar of spend.
+ */
+export function buildRecommendedPlan(actions: CutAction[]): RecommendedPlan {
+  const sorted = [...actions].sort(
+    (left, right) =>
+      right.estimatedMonthlySavingsUsd - left.estimatedMonthlySavingsUsd ||
+      left.id.localeCompare(right.id)
+  );
+  const claimed = new Set<string>();
+  const recommended: CutAction[] = [];
+  const additional: CutAction[] = [];
+  for (const action of sorted) {
+    const overlaps = action.recordIds.some((id) => claimed.has(id));
+    if (overlaps) {
+      additional.push(action);
+      continue;
+    }
+    for (const id of action.recordIds) claimed.add(id);
+    recommended.push(action);
+  }
+  return {
+    recommended,
+    additional,
+    recommendedSavingsUsd: roundMoney(recommended.reduce((total, a) => total + a.estimatedMonthlySavingsUsd, 0)),
+    additionalSavingsUsd: roundMoney(additional.reduce((total, a) => total + a.estimatedMonthlySavingsUsd, 0)),
+    savingsMath: "deduplicated"
+  };
+}
 
 const confidenceRank: Record<CostConfidence, number> = {
   verified: 0,
@@ -133,6 +191,7 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "model_downgrade"
     });
@@ -166,6 +225,7 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "context_trim"
     });
@@ -199,6 +259,7 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "cache"
     });
@@ -231,6 +292,7 @@ function batchActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "batch"
     });

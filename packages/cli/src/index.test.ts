@@ -91,7 +91,26 @@ describe("zero-key instant demo first run", () => {
     expect(card).not.toContain("$87.00");
   });
 
-  it("uses connected local spend state when present instead of sample", async () => {
+  it("appends .svg when report-card --out has no extension", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-ext-"));
+    const result = await runCli(["report-card", "--sample", "--out", join(dir, "card"), "--no-color"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`receipt: ${join(dir, "card.svg")}`);
+    const svg = await readFile(join(dir, "card.svg"), "utf8");
+    expect(svg.startsWith("<svg")).toBe(true);
+  });
+
+  it("writes a default .svg filename when report-card --out is a directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-dir-"));
+    const result = await runCli(["report-card", "--sample", "--out", dir, "--no-color"]);
+    expect(result.exitCode).toBe(0);
+    const expected = join(dir, "ai-spend-receipt.svg");
+    expect(result.stdout).toContain(`receipt: ${expected}`);
+    const svg = await readFile(expected, "utf8");
+    expect(svg.startsWith("<svg")).toBe(true);
+  });
+
+  it("shows persisted sample state as DEMO, never as connected/verified", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-quickstart-"));
     await runCli(["scan", "--sample", "--path", dir]);
 
@@ -99,8 +118,41 @@ describe("zero-key instant demo first run", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("$87.00");
-    // Real local data -> no demo banner.
-    expect(result.stdout).not.toContain("DEMO");
+    // Sample state must be labeled demo — never silently served as connected.
+    expect(result.stdout).toContain("DATA MODE: demo sample");
+  });
+
+  it("does not let persisted sample state mask real local logs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-mask-"));
+    // Persist sample state in the project dir.
+    await runCli(["scan", "--sample", "--path", dir]);
+    // Place a real Claude Code transcript in the isolated logs dir.
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    const projDir = join(logsDir, "-tmp-proj");
+    await mkdir(projDir, { recursive: true });
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp/proj",
+      sessionId: "s1",
+      message: { id: "m1", model: "claude-opus-4-8", usage: { input_tokens: 1000, output_tokens: 200 } }
+    });
+    await writeFile(join(projDir, "session.jsonl"), `${line}\n`);
+
+    const result = await runCli(["quickstart", "--path", dir, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATA MODE: your local agent logs");
+    expect(result.stdout).toContain("Ignored persisted sample/legacy state");
+  });
+
+  it("--ignore-state bypasses persisted spend.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-ignore-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const result = await runCli(["quickstart", "--path", dir, "--no-color", "--ignore-state"]);
+    expect(result.exitCode).toBe(0);
+    // No real logs in the isolated env -> falls straight to demo sample.
+    expect(result.stdout).toContain("DATA MODE: demo sample");
   });
 });
 
@@ -148,16 +200,21 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).not.toContain(fakeKey);
   });
 
-  it("prints local mode and redaction policy in doctor", async () => {
+  it("gives launch-grade diagnostics in doctor (no stale prototype language)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-"));
     const result = await runCli(["doctor", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst Agent doctor");
+    expect(result.stdout).toContain("AI Spend Analyst doctor");
     expect(result.stdout).toContain("local-first mode: enabled");
     expect(result.stdout).toContain("redaction policy: secrets are never printed");
     expect(result.stdout).toContain(`path: ${dir}`);
     expect(result.stdout).toContain(`state directory: ${join(dir, ".ai-spend-agent")}`);
+    expect(result.stdout).toContain("state mode: no state");
+    expect(result.stdout).toContain("plan check: available");
+    expect(result.stdout).toContain("data mode you'll get now:");
+    // Stale prototype language must be gone.
+    expect(result.stdout).not.toContain("not wired in this slice");
   });
 
   it("initializes local state with a demo-safe manifest", async () => {
@@ -522,6 +579,27 @@ describe("minimal CLI vertical slice", () => {
     const history = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "watch-history.json"), "utf8"));
     expect(latest.totalUsd).toBe(87);
     expect(history).toHaveLength(2);
+  });
+
+  it("emits the baseline exactly once across a multi-cycle watch (streaming path)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-watch-once-"));
+    const streamed: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((message?: unknown) => {
+      streamed.push(String(message));
+    });
+    const previousEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production"; // exercise the live streaming path
+    try {
+      const result = await runCli(["watch", "--sample", "--cycles", "2", "--interval", "1", "--path", dir, "--no-color"]);
+      expect(result.exitCode).toBe(0);
+      const combined = `${streamed.join("\n")}\n${result.stdout}`;
+      const baselineCount = combined.split("First watch snapshot").length - 1;
+      expect(baselineCount).toBe(1);
+      expect(combined).toContain("No change since the last check");
+    } finally {
+      process.env.NODE_ENV = previousEnv;
+      spy.mockRestore();
+    }
   });
 
   it("flags spend increases and new-model anomalies between watch cycles", async () => {

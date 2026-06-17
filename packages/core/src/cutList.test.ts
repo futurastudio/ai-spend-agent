@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateCutList, totalEstimatedMonthlySavingsUsd } from "./cutList.js";
+import { generateCutList, totalEstimatedMonthlySavingsUsd, buildRecommendedPlan } from "./cutList.js";
 import { loadSampleUsageData } from "./sampleData.js";
 import type { UsageRecord } from "./schema.js";
 
@@ -106,5 +106,57 @@ describe("generateCutList", () => {
       expect(action.action.length).toBeGreaterThan(10);
       expect(action.estimatedMonthlySavingsUsd).toBeGreaterThanOrEqual(0.5);
     }
+  });
+});
+
+describe("buildRecommendedPlan", () => {
+  it("deduplicates overlapping savings so the headline can't exceed the spend it draws from", () => {
+    // One operation that triggers several overlapping cut actions on the SAME
+    // records: downgrade-safe + >=100k input (trim) + repeated (cache) +
+    // batch-safe — all on the same 4 records, same day.
+    const records = Array.from({ length: 4 }, (_unused, index) =>
+      record({
+        id: `r${index}`,
+        model: "gpt-4.1",
+        operation: "research_summary",
+        amountUsd: 30,
+        inputTokens: 150_000,
+        timestamp: "2026-05-17T10:00:00.000Z"
+      })
+    );
+    const projectedMonthlySpend = 4 * 30 * 30; // $120 window, 1-day window, ×30
+
+    const actions = generateCutList(records);
+    expect(actions.length).toBeGreaterThan(1); // overlapping opportunities exist
+
+    const rawSum = totalEstimatedMonthlySavingsUsd(actions);
+    const plan = buildRecommendedPlan(actions);
+
+    expect(plan.savingsMath).toBe("deduplicated");
+    // Overlap is dropped from the recommended plan, so it's strictly smaller
+    // than the naive sum of every opportunity.
+    expect(plan.additional.length).toBeGreaterThan(0);
+    expect(plan.recommendedSavingsUsd).toBeLessThan(rawSum);
+    // The defensible headline can never exceed the projected spend it draws from.
+    expect(plan.recommendedSavingsUsd).toBeLessThanOrEqual(projectedMonthlySpend);
+
+    // Recommended actions cover disjoint record sets.
+    const claimed = new Set<string>();
+    for (const action of plan.recommended) {
+      for (const id of action.recordIds) {
+        expect(claimed.has(id)).toBe(false);
+        claimed.add(id);
+      }
+    }
+  });
+
+  it("treats fully non-overlapping actions as all-recommended, none additional", () => {
+    const records = [
+      record({ id: "a", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 20 }),
+      record({ id: "b", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 20 })
+    ];
+    const plan = buildRecommendedPlan(generateCutList(records));
+    expect(plan.additional).toHaveLength(0);
+    expect(plan.recommendedSavingsUsd).toBe(totalEstimatedMonthlySavingsUsd(plan.recommended));
   });
 });

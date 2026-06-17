@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 const title = "ai-spend-agent — your AI spend in one view, in 90 seconds";
 const description =
-  "A free, local-first CLI that unifies your OpenAI, Anthropic, Cursor, and Copilot spend — plus your Claude Code and Codex session logs — into one terminal view, with a ranked list of cuts. Your data never leaves your machine.";
+  "A free, local-first CLI that unifies your Claude Code and Codex session logs (estimated at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin key — into one terminal view, with a ranked list of cuts. Your data never leaves your machine.";
 
 export const metadata: Metadata = {
   title,

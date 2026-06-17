@@ -15,15 +15,18 @@ Numbers are illustrative; run the command to see yours, in 90 seconds,
 local-first, no signup.
 
 If you use **Claude Code or Codex**, that one command reads the session logs
-already on your machine and shows your **real** AI usage — total dollars at
-API-equivalent rates, where it goes by project, a ranked "where to cut" list,
+already on your machine and shows your real usage — total dollars *estimated*
+at API-equivalent rates, where it goes by project, a ranked "where to cut" list,
 and a **plan check** (subscription vs pay-per-token — the math no provider
-shows you). Zero keys, zero signup, nothing leaves your laptop.
+shows you). Zero keys, zero signup, nothing leaves your laptop. Connect a
+provider's billing to turn those estimates into *verified* numbers.
 
 No agent logs? You get a full demo on sample data instead, then connect real
 billing in ~2 minutes.
 
-![Sample AI Receipt](docs/assets/report-card-sample.svg)
+![Sample AI Receipt — illustrative demo data, not real or verified numbers](docs/assets/report-card-sample.svg)
+
+*Illustrative sample output — demo data, not real or verified spend.*
 
 ## Get started in 60 seconds
 
@@ -32,8 +35,8 @@ billing in ~2 minutes.
    npx ai-spend-agent
    ```
 2. **Read your number.** If Claude Code or Codex logs exist on this machine,
-   that's your real usage at API-equivalent rates — by project, by model,
-   with a ranked cut list and the plan check.
+   that's your real usage *estimated* at API-equivalent rates — by project, by
+   model, with a ranked cut list and the plan check.
 3. **(Optional, ~2 min)** Connect verified billing with an org admin key:
    `ai-spend-agent connect openai` / `connect anthropic`. Numbers move from
    *estimated* to *verified*.
@@ -79,7 +82,24 @@ it in one view and tells you what to cut.
 - **Shareable AI Receipt**: `report-card` writes a redacted SVG (no client/
   project/user names) + a paste-ready caption.
 - **Honest confidence labels**: every number is tagged verified / estimated /
-  detected so you know how much to trust it.
+  detected_unverified / missing so you know how much to trust it.
+
+## Estimated vs verified
+
+Every number carries a confidence label so you never mistake an estimate for a
+bill:
+
+| Label | What it means |
+| --- | --- |
+| `verified` | Real billing from a provider's cost API / export — the bill itself. |
+| `estimated` | Priced from your local logs / token usage at published API rates. Your actual invoice can differ (discounts, subscriptions, rounding). |
+| `detected_unverified` | A local signal was detected but **not** reconciled against billing. |
+| `missing` | Usage exists but there's no cost basis to price it. |
+
+Numbers read from your local **Claude Code / Codex** logs are always
+`estimated` at API-equivalent rates — never `verified`. To get `verified`
+numbers, connect a provider's billing with an admin/owner key (below); the tool
+then reconciles your estimates against your real bills.
 
 ## Data sources
 

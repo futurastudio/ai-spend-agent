@@ -1,6 +1,6 @@
 import {
   generateCutList,
-  totalEstimatedMonthlySavingsUsd,
+  buildRecommendedPlan,
   type CutAction,
   type SpendSummary,
   type UsageRecord
@@ -27,7 +27,8 @@ const CARD_HEIGHT = 400;
 export function generateReportCardSvg(input: ReportCardInput): string {
   const { summary } = input;
   const cutList = generateCutList(input.records);
-  const monthlySavings = totalEstimatedMonthlySavingsUsd(cutList);
+  // Deduplicated recommended-plan savings — never exceeds the spend it draws from.
+  const monthlySavings = buildRecommendedPlan(cutList).recommendedSavingsUsd;
   const providerCount = summary.bySource.length;
   const topCuts = cutList.slice(0, 3);
 
@@ -80,7 +81,7 @@ ${cutLines}
 
 /** A one-line, copy-pasteable caption to share alongside the card. */
 export function generateReportCardCaption(input: ReportCardInput): string {
-  const monthlySavings = totalEstimatedMonthlySavingsUsd(generateCutList(input.records));
+  const monthlySavings = buildRecommendedPlan(generateCutList(input.records)).recommendedSavingsUsd;
   return (
     `My AI receipt this month: ${formatUsd(input.summary.totalUsd)} tracked, ` +
     `~${formatUsd(monthlySavings)}/mo in savings I can act on. Local-first, no signup: npx ai-spend-agent`

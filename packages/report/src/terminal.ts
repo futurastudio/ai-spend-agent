@@ -3,7 +3,7 @@ import pc from "picocolors";
 import {
   computePlanChecks,
   generateCutList,
-  totalEstimatedMonthlySavingsUsd,
+  buildRecommendedPlan,
   usageWindowDays,
   type CostConfidence,
   type CutAction,
@@ -76,7 +76,9 @@ export function generatePlainEnglishSummary(
   const width = options.width ?? 72;
   const groupBy = options.groupBy ?? "model";
   const cutList = generateCutList(options.records);
-  const totalMonthlySavings = totalEstimatedMonthlySavingsUsd(cutList);
+  // Deduplicated so the headline savings can never exceed the spend it draws
+  // from (overlapping recommendations are shown separately, non-additively).
+  const plan = buildRecommendedPlan(cutList);
 
   const lines: string[] = [];
 
@@ -158,8 +160,13 @@ export function generatePlainEnglishSummary(
     const days = usageWindowDays(options.records);
     lines.push("");
     lines.push(
-      `  ${c.green(c.bold(`~${formatUsd(totalMonthlySavings)}/mo`))} ${c.dim(`estimated savings — a 30-day projection from ${days} day${days === 1 ? "" : "s"} of data`)}`
+      `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`recommended-plan savings (deduplicated) — a 30-day projection from ${days} day${days === 1 ? "" : "s"} of data`)}`
     );
+    if (plan.additionalSavingsUsd > 0) {
+      lines.push(
+        `  ${c.dim(`+ ~${formatUsd(plan.additionalSavingsUsd)}/mo more from overlapping opportunities (not additive — they target the same spend)`)}`
+      );
+    }
     // Honest math: short windows extrapolate hard. Flag it rather than let a
     // 4-hour sample read as a confident monthly number.
     if (days < 3) {

@@ -1,5 +1,7 @@
 # @agent-finops/mcp
 
+> `@agent-finops/mcp` is the internal workspace package scope; the published CLI is **`ai-spend-agent`** (`github.com/futurastudio/ai-spend-agent`).
+
 **AI Spend Analyst — MCP server.** See your AI spend in one view, locally. A [Model Context Protocol](https://modelcontextprotocol.io) stdio server that lets Cursor, Claude Desktop, and other MCP clients scan a local folder for AI provider usage (OpenAI, Anthropic, and more), build a spend report, and suggest where to cut. Everything runs on your machine — folders are scanned read-only, secrets are redacted before output, and nothing is uploaded.
 
 ## Install & build
@@ -18,7 +20,7 @@ Add this to Cursor (Settings → MCP, or `~/.cursor/mcp.json`) or Claude Desktop
   "mcpServers": {
     "ai-spend-analyst": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/agent-finops/packages/mcp/dist/server.js"]
+      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
     }
   }
 }

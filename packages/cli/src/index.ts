@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   analyzeSpend,
   attributeUsageRecords,
@@ -81,6 +81,7 @@ type ParsedArgs = {
   interval?: number;
   cycles?: number;
   noColor?: boolean;
+  ignoreState?: boolean;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
@@ -100,6 +101,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
 
   if (args.command === "doctor") {
     return doctorCommand(args);
+  }
+
+  if (args.command === "reset") {
+    return resetCommand(args);
   }
 
   if (args.command === "init") {
@@ -162,10 +167,11 @@ type InstantReadMode = "demo" | "connected" | "local-logs";
 type InstantReadData = {
   records: UsageRecord[];
   mode: InstantReadMode;
+  warnings: string[];
 };
 
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
-  const { records, mode } = await loadInstantReadData(args);
+  const { records, mode, warnings } = await loadInstantReadData(args);
   const summary = analyzeSpend(records);
   const groupBy = args.groupBy ?? "model";
   const color = args.noColor ? false : undefined;
@@ -205,7 +211,8 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     deadContext
   });
 
-  return ok(summaryText);
+  const header = [`  ${dataModeBanner(mode)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
+  return ok(`${header}\n${summaryText}`);
 }
 
 function quickstartNextSteps(
@@ -229,53 +236,146 @@ function quickstartNextSteps(
   return steps;
 }
 
-async function readOptionalLocalSpend(rootPath: string): Promise<UsageRecord[] | undefined> {
+type PersistedSpend = { mode?: PersistedDataMode; records: UsageRecord[] };
+
+async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | undefined> {
   const stateDir = join(rootPath, ".ai-spend-agent");
   try {
-    const spend = await readJson<{ records: UsageRecord[] }>(join(stateDir, "spend.json"));
-    return spend.records;
+    const spend = await readJson<{ mode?: PersistedDataMode; records?: UsageRecord[] }>(join(stateDir, "spend.json"));
+    return { mode: spend.mode, records: spend.records ?? [] };
   } catch {
     return undefined;
   }
 }
 
 async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
+  const warnings: string[] = [];
   if (args.sample) {
-    return { records: await loadSampleUsageData(), mode: "demo" };
+    return { records: await loadSampleUsageData(), mode: "demo", warnings };
   }
 
-  // Real data beats sample data: (1) connected/synced state, then (2) usage
-  // mined from this machine's agent logs (Claude Code / Codex — the spend no
-  // billing API can see), then (3) the bundled sample so the wow ALWAYS lands.
-  const localSpend = await readOptionalLocalSpend(resolve(args.path));
-  if (localSpend && localSpend.length > 0) {
-    return { records: localSpend, mode: "connected" };
+  const persisted = args.ignoreState ? undefined : await readPersistedSpend(resolve(args.path));
+
+  // Only real connected/synced provider state is authoritative enough to serve
+  // directly. Sample or legacy persisted state must NEVER mask real local logs.
+  if (persisted && persisted.records.length > 0 && persisted.mode === "connected_provider") {
+    return { records: persisted.records, mode: "connected", warnings };
   }
 
+  // Real local agent logs (Claude Code / Codex) beat any sample/legacy state.
   const logs = await loadLocalAgentUsage({
     // Env overrides keep tests (and unusual installs) isolated from $HOME.
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
   }).catch(() => undefined);
   if (logs && logs.records.length > 0) {
-    return { records: logs.records, mode: "local-logs" };
+    if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider") {
+      warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `ai-spend-agent reset` to clear it, or pass --ignore-state.");
+    }
+    return { records: logs.records, mode: "local-logs", warnings };
+  }
+
+  // No real logs. Persisted sample/legacy state may still be shown, but only as
+  // DEMO (never as connected), with a warning when its origin is unknown.
+  if (persisted && persisted.records.length > 0) {
+    if (persisted.mode === undefined) {
+      warnings.push("Persisted state in .ai-spend-agent/spend.json is from an older format with no data-mode tag — treating it as demo. Run `ai-spend-agent reset`, then re-scan to refresh.");
+    }
+    return { records: persisted.records, mode: "demo", warnings };
   }
 
   // loadSampleUsageData resolves the bundled CSVs relative to the installed
   // package, so this works from ANY directory (true zero-config).
-  return { records: await loadSampleUsageData(), mode: "demo" };
+  return { records: await loadSampleUsageData(), mode: "demo", warnings };
+}
+
+/** A one-line, unmissable banner telling the user which data they're seeing. */
+function dataModeBanner(mode: InstantReadMode): string {
+  if (mode === "local-logs") return "DATA MODE: your local agent logs (estimated at API-equivalent rates)";
+  if (mode === "connected") return "DATA MODE: connected provider billing";
+  return "DATA MODE: demo sample (illustrative — not your real spend)";
 }
 
 async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
   const stateDir = join(rootPath, ".ai-spend-agent");
-  return ok([
-    "AI Spend Analyst Agent doctor",
+
+  const persisted = await readPersistedSpend(rootPath);
+  const stateMode = persisted ? (persisted.mode ?? "unknown legacy") : "no state";
+
+  const logs = await loadLocalAgentUsage({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+  }).catch(() => undefined);
+  const detected = logs?.agentsDetected ?? [];
+  const claudeFound = detected.includes("claude-code");
+  const codexFound = detected.includes("codex");
+  const hasLogs = claudeFound || codexFound;
+
+  const detection = await detectLocalCredentials({ cwd: rootPath }).catch(() => ({ credentials: [] as DetectedCredential[] }));
+  const providerRefs = detection.credentials.map((credential) => `${credential.provider} (${credential.hint})`);
+
+  const warnings: string[] = [];
+  if (stateMode === "sample") warnings.push("sample state present — it will be shown as DEMO and cannot mask real logs; run `ai-spend-agent reset` to clear it");
+  if (stateMode === "unknown legacy") warnings.push("legacy state with no data-mode tag — run `ai-spend-agent reset`, then re-scan");
+  if (!hasLogs) warnings.push("no real Claude Code / Codex logs found — a first run here will show DEMO sample data");
+  if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic for VERIFIED billing (local logs stay ESTIMATED)");
+
+  const predictedMode = stateMode === "connected_provider"
+    ? "connected provider billing"
+    : hasLogs
+      ? "your local agent logs (estimated at API-equivalent rates)"
+      : "demo sample (illustrative)";
+
+  const lines = [
+    "AI Spend Analyst doctor",
+    `node version: ${process.version}`,
+    `cli version: ${await cliVersion()}`,
+    "local-first mode: enabled (no cloud upload, no telemetry)",
     `path: ${rootPath}`,
-    "local-first mode: enabled",
-    "subscription check: not wired in this slice",
-    "redaction policy: secrets are never printed",
-    `state directory: ${stateDir}`
+    `state directory: ${stateDir}`,
+    `state mode: ${stateMode}`,
+    `Claude Code logs: ${claudeFound ? "found" : "not found"}`,
+    `Codex logs: ${codexFound ? "found" : "not found"}`,
+    `provider env references: ${providerRefs.length > 0 ? providerRefs.join(", ") : "none detected"}`,
+    "redaction policy: secrets are never printed or persisted",
+    "plan check: available (subscription vs API-rate math)",
+    `data mode you'll get now: ${predictedMode}`,
+    warnings.length > 0 ? `launch warnings:\n${warnings.map((warning) => `  - ${warning}`).join("\n")}` : "launch warnings: none"
+  ];
+  return ok(lines.join("\n"));
+}
+
+async function cliVersion(): Promise<string> {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(await readFile(join(here, "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return process.env.npm_package_version ?? "unknown";
+  }
+}
+
+async function resetCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootPath = resolve(args.path);
+  const stateDir = join(rootPath, ".ai-spend-agent");
+  // Clear derived spend state so a prior `scan --sample` (or stale provider
+  // sync) can never mask the next real local-log read. Leaves sources/audit.
+  const targets = ["spend.json", "mappings.json", "provider-records.json", "watch-latest.json", "watch-history.json"];
+  const removed: string[] = [];
+  for (const file of targets) {
+    try {
+      await rm(join(stateDir, file));
+      removed.push(file);
+    } catch {
+      // File not present — nothing to clear for this target.
+    }
+  }
+  return ok([
+    "AI Spend Analyst reset",
+    `path: ${rootPath}`,
+    removed.length > 0 ? `cleared: ${removed.join(", ")}` : "nothing to clear (no persisted spend state found)",
+    "next run will re-read your real local agent logs (or demo sample if none)."
   ].join("\n"));
 }
 
@@ -407,7 +507,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
     const records = await loadSampleUsageData();
     const summary = analyzeSpend(records);
     const mappings = attributeUsageRecords(records);
-    await writeLocalSpendState(stateDir, records, summary, mappings);
+    await writeLocalSpendState(stateDir, records, summary, mappings, "sample");
     lines.push(`sample records: ${records.length}`);
     lines.push(`total spend: $${summary.totalUsd.toFixed(2)}`);
     lines.push(`attribution mappings: ${mappings.length}`);
@@ -458,16 +558,21 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
       deltaHeadline,
       plainEnglish
     ].join("\n");
-    collected.push(stamped);
-
     iteration += 1;
     const moreToGo = unbounded || iteration < cycles;
-    if (moreToGo) {
+    const streaming = process.env.NODE_ENV !== "test";
+    if (moreToGo && streaming) {
+      // Stream interim cycles live, but do NOT also include them in the returned
+      // output — doing both double-printed the baseline before the no-change
+      // cycle. Streamed cycles are shown once here; the final cycle is returned.
       // eslint-disable-next-line no-console
-      if (process.env.NODE_ENV !== "test") {
-        console.log(stamped);
-        console.log(`\n[watch] sleeping ${intervalSeconds}s until next cycle. Press Ctrl+C to stop.\n`);
-      }
+      console.log(stamped);
+      // eslint-disable-next-line no-console
+      console.log(`\n[watch] sleeping ${intervalSeconds}s until next cycle. Press Ctrl+C to stop.\n`);
+    } else {
+      collected.push(stamped);
+    }
+    if (moreToGo) {
       await sleep(intervalSeconds * 1000);
     }
   }
@@ -484,18 +589,23 @@ type WatchSnapshot = {
 
 async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summary: SpendSummary; snapshot: WatchSnapshot; records: UsageRecord[] }> {
   let records: UsageRecord[];
+  let mode: PersistedDataMode;
   if (args.sample) {
     records = await loadSampleUsageData();
+    mode = "sample";
   } else {
     records = await loadLiveRecords(stateDir);
-    if (records.length === 0) {
+    if (records.length > 0) {
+      mode = "connected_provider";
+    } else {
       records = await loadSampleUsageData();
+      mode = "sample";
     }
   }
 
   const summary = analyzeSpend(records);
   const mappings = attributeUsageRecords(records);
-  await writeLocalSpendState(stateDir, records, summary, mappings);
+  await writeLocalSpendState(stateDir, records, summary, mappings, mode);
 
   const snapshot: WatchSnapshot = {
     capturedAt: new Date().toISOString(),
@@ -767,7 +877,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       records: result.records,
       qa: result.qa
     });
-    await writeLocalSpendState(stateDir, result.records, summary, mappings);
+    await writeLocalSpendState(stateDir, result.records, summary, mappings, "connected_provider");
     await appendAuditEvent(stateDir, {
       timestamp: result.fetchedAt,
       action: "source_scanned",
@@ -867,12 +977,25 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
   }
 }
 
+/**
+ * Resolve where the AI Receipt SVG is written so it is always shareable:
+ * no --out -> ai-receipt.svg in cwd; --out a directory -> ai-spend-receipt.svg
+ * inside it; --out with no extension -> append .svg; explicit .svg honored.
+ */
+async function resolveReceiptPath(rootPath: string, out?: string): Promise<string> {
+  if (!out) return join(rootPath, "ai-receipt.svg");
+  const resolved = resolve(rootPath, out);
+  const isDir = await stat(resolved).then((entry) => entry.isDirectory()).catch(() => false);
+  if (isDir) return join(resolved, "ai-spend-receipt.svg");
+  return extname(resolved) ? resolved : `${resolved}.svg`;
+}
+
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
   const { records, mode } = await loadInstantReadData(args);
 
   const summary = analyzeSpend(records);
-  const outPath = args.out ? resolve(rootPath, args.out) : join(rootPath, "ai-receipt.svg");
+  const outPath = await resolveReceiptPath(rootPath, args.out);
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, generateReportCardSvg({ summary, records }), "utf8");
 
@@ -922,7 +1045,7 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function buildReportInput(stateDir: string, rootPath: string) {
   const [spendState, discovery, mappings, sourceRegistry, missingSourcePrompts, confirmedMappings, providerRecordsState] = await Promise.all([
-    readJson<{ summary: SpendSummary }>(join(stateDir, "spend.json")),
+    readJson<{ summary: SpendSummary; records?: UsageRecord[]; mode?: PersistedDataMode }>(join(stateDir, "spend.json")),
     readJson<LocalDiscoveryResult>(join(stateDir, "discovery.json")),
     readJson<AttributionMapping[]>(join(stateDir, "mappings.json")),
     readSourceRegistry(stateDir, rootPath),
@@ -933,6 +1056,10 @@ async function buildReportInput(stateDir: string, rootPath: string) {
 
   return {
     summary: spendState.summary,
+    // Evidence ledger is built from the SAME records as the confidence
+    // breakdown so the two sections can never contradict each other.
+    allRecords: spendState.records ?? [],
+    dataMode: spendState.mode,
     discovery,
     mappings,
     sourceRegistry,
@@ -984,6 +1111,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--no-color") {
       parsed.noColor = true;
+      continue;
+    }
+    if (arg === "--ignore-state") {
+      parsed.ignoreState = true;
       continue;
     }
     if (arg === "--group-by") {
@@ -1209,13 +1340,20 @@ function unsafeScanRootReason(rootPath: string): string | undefined {
   return undefined;
 }
 
+/**
+ * How persisted spend state was produced. Stored in spend.json so a prior
+ * `scan --sample` can never be silently re-served as if it were real/connected.
+ */
+type PersistedDataMode = "sample" | "local_logs" | "connected_provider";
+
 async function writeLocalSpendState(
   stateDir: string,
   records: UsageRecord[],
   summary: SpendSummary,
-  mappings: AttributionMapping[]
+  mappings: AttributionMapping[],
+  mode: PersistedDataMode
 ): Promise<void> {
-  await writeJson(join(stateDir, "spend.json"), { records, summary });
+  await writeJson(join(stateDir, "spend.json"), { mode, records, summary });
   await writeJson(join(stateDir, "mappings.json"), mappings);
 }
 
@@ -1300,7 +1438,9 @@ function helpText(): string {
     "",
     "Other commands:",
     "  init [--path <dir>]     Initialize local state",
-    "  doctor                  Check local runtime and safety posture",
+    "  doctor                  Launch-grade diagnostics: data mode, logs found, provider keys, warnings",
+    "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
+    "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
     "  scan [--path <dir>]     Scan a local workspace for AI usage signals",
     "  scan --sample           Include deterministic sample spend analysis",
     "  quickstart [--sample]   Plain-English 90-second readout (alias of the default run)",

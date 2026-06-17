@@ -32,17 +32,79 @@ export type SpendReportInput = {
   providerRecords?: UsageRecord[];
   providerQa?: ProviderQaSummary[];
   generatedAt?: string;
+  /**
+   * All analyzed usage records. The evidence ledger is built from these so it
+   * agrees with the confidence breakdown (computed over the same set). Falls
+   * back to providerRecords for older callers.
+   */
+  allRecords?: UsageRecord[];
+  /** Where the analyzed data came from. Sample is labeled non-finance-grade. */
+  dataMode?: "sample" | "local_logs" | "connected_provider";
 };
+
+type RecommendationLike = SpendSummary["recommendations"][number];
+
+/**
+ * Deduplicate recommendations by the spend keys they target so the same dollar
+ * isn't counted twice. The recommended-plan total is safe to present as a single
+ * figure; leftovers are overlapping (non-additive).
+ */
+function buildRecommendedRecommendations(recommendations: RecommendationLike[]): {
+  recommended: RecommendationLike[];
+  additional: RecommendationLike[];
+  recommendedImpactUsd: number;
+  additionalImpactUsd: number;
+} {
+  const sorted = [...recommendations].sort(
+    (left, right) => right.estimatedImpactUsd - left.estimatedImpactUsd || left.title.localeCompare(right.title)
+  );
+  const claimed = new Set<string>();
+  const recommended: RecommendationLike[] = [];
+  const additional: RecommendationLike[] = [];
+  for (const recommendation of sorted) {
+    const keys = recommendation.relatedKeys.length > 0 ? recommendation.relatedKeys : [recommendation.id];
+    if (keys.some((key) => claimed.has(key))) {
+      additional.push(recommendation);
+      continue;
+    }
+    for (const key of keys) claimed.add(key);
+    recommended.push(recommendation);
+  }
+  const round = (value: number) => Math.round(value * 100) / 100;
+  return {
+    recommended,
+    additional,
+    recommendedImpactUsd: round(recommended.reduce((total, r) => total + r.estimatedImpactUsd, 0)),
+    additionalImpactUsd: round(additional.reduce((total, r) => total + r.estimatedImpactUsd, 0))
+  };
+}
+
+/** Banner lines shown when the report was built from illustrative sample data. */
+function dataModeBannerLines(dataMode: SpendReportInput["dataMode"]): string[] {
+  if (dataMode === "sample") {
+    return [
+      "> **DEMO / SAMPLE DATA — illustrative only, not finance-grade.** Confidence labels below reflect the bundled sample dataset, not your real billing. Run on real local logs or connect a provider for your own numbers.",
+      ""
+    ];
+  }
+  if (dataMode === "local_logs") {
+    return [
+      "> **Local-log estimates.** Dollar figures are priced from your Claude Code / Codex logs at API-equivalent rates — `estimated`, not `verified`. Connect a provider's billing to verify.",
+      ""
+    ];
+  }
+  return [];
+}
 
 export function generateMarkdownReport(input: SpendReportInput): string {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const mappingQuestions = (input.mappings ?? []).filter((mapping) => mapping.status !== "auto_mapped");
   const recommendations = [...input.summary.recommendations].sort(compareRecommendations);
   const insights = [...(input.summary.insights ?? [])].sort(compareInsights);
-  const totalEstimatedImpactUsd = recommendations.reduce(
-    (total, recommendation) => total + recommendation.estimatedImpactUsd,
-    0
-  );
+  const recommendedPlan = buildRecommendedRecommendations(recommendations);
+  const impactLine = recommendedPlan.additionalImpactUsd > 0
+    ? `${formatUsd(recommendedPlan.recommendedImpactUsd)} (recommended plan, deduplicated) + ${formatUsd(recommendedPlan.additionalImpactUsd)} overlapping (non-additive)`
+    : `${formatUsd(recommendedPlan.recommendedImpactUsd)} (recommended plan, deduplicated)`;
   const lines = [
     "# AI Spend Analyst Report",
     "",
@@ -50,6 +112,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "",
     "> Local-first report. No files, credentials, invoices, or raw spend data were uploaded. Costs are confidence-labeled.",
     "",
+    ...dataModeBannerLines(input.dataMode),
     "## Executive summary",
     "",
     `- Total tracked spend: ${formatUsd(input.summary.totalUsd)}`,
@@ -57,7 +120,8 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     `- Overall confidence: ${input.summary.confidence}`,
     `- Discovery signals: ${input.discovery?.signals.length ?? 0}`,
     `- Mapping questions: ${mappingQuestions.length}`,
-    `- Estimated optimization impact: ${formatUsd(totalEstimatedImpactUsd)}`,
+    `- Optimization impact: ${impactLine}`,
+    "- Savings math: recommendations are deduplicated by the spend they target, so the recommended-plan total never exceeds the spend it draws from; overlapping opportunities are listed separately and are not additive.",
     "",
     "## Diagnose → Recommend → Apply → Verify",
     "",
@@ -69,7 +133,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     `- Current readout: ${formatUsd(input.summary.totalUsd)} tracked across ${input.summary.recordCount} local records with ${input.summary.confidence} confidence.`,
     `- Biggest cost driver: ${topDriverLine(input.summary.byModel)}`,
     `- Attribution risk: ${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"} need confirmation before this becomes finance-grade.`,
-    `- Savings thesis: ${formatUsd(totalEstimatedImpactUsd)} in near-term estimated impact from ${recommendations.length} local recommendations.`,
+    `- Savings thesis: ${formatUsd(recommendedPlan.recommendedImpactUsd)} near-term recommended-plan impact (deduplicated) from ${recommendedPlan.recommended.length} of ${recommendations.length} local recommendations.`,
     "",
     "## Confidence breakdown",
     "",
@@ -77,7 +141,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "",
     "## Evidence quality ledger",
     "",
-    ...evidenceLedgerMarkdownLines(input.providerRecords ?? []),
+    ...evidenceLedgerMarkdownLines(input.allRecords ?? input.providerRecords ?? []),
     "",
     "## Provider-by-provider live QA",
     "",
@@ -366,10 +430,8 @@ export function generateHtmlReport(input: SpendReportInput): string {
   const mappingQuestions = (input.mappings ?? []).filter((mapping) => mapping.status !== "auto_mapped");
   const recommendations = [...input.summary.recommendations].sort(compareRecommendations);
   const insights = [...(input.summary.insights ?? [])].sort(compareInsights);
-  const totalEstimatedImpactUsd = recommendations.reduce(
-    (total, recommendation) => total + recommendation.estimatedImpactUsd,
-    0
-  );
+  const recommendedPlan = buildRecommendedRecommendations(recommendations);
+  const recommendedImpactUsd = recommendedPlan.recommendedImpactUsd;
   const topRecommendation = recommendations[0];
 
   return `<!doctype html>
@@ -401,11 +463,12 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <strong>Local files only. No cloud upload.</strong>
         <span>No credentials, invoices, or raw spend data leave the machine.</span>
       </aside>
+      ${input.dataMode === "sample" ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative numbers, not finance-grade. Confidence labels reflect the sample dataset, not real billing.</span></aside>` : input.dataMode === "local_logs" ? `<aside class="privacy-banner" aria-label="Local estimate notice"><strong>Local-log estimates</strong><span>Priced from your Claude Code / Codex logs at API-equivalent rates — estimated, not verified. Connect a provider to verify.</span></aside>` : ""}
     </section>
 
     <section class="metric-grid" aria-label="Executive metrics">
       ${metricCard("Tracked spend", formatUsd(input.summary.totalUsd), `${input.summary.recordCount} local records`, "primary")}
-      ${metricCard("Optimization impact", formatUsd(totalEstimatedImpactUsd), `${recommendations.length} ranked recommendations`)}
+      ${metricCard("Optimization impact", formatUsd(recommendedImpactUsd), `recommended plan, deduplicated (${recommendedPlan.recommended.length} of ${recommendations.length})`)}
       ${metricCard("Mapping questions", String(mappingQuestions.length), "Need confirmation for finance-grade attribution")}
       ${metricCard("Discovery signals", String(input.discovery?.signals.length ?? 0), "Local source hints found during scan")}
     </section>
@@ -431,7 +494,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <li><span>Current readout</span><strong>${formatUsd(input.summary.totalUsd)} across ${input.summary.recordCount} records</strong></li>
           <li><span>Biggest cost driver</span><strong>${escapeHtml(topDriverLine(input.summary.byModel))}</strong></li>
           <li><span>Attribution risk</span><strong>${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"}</strong></li>
-          <li><span>Savings thesis</span><strong>${formatUsd(totalEstimatedImpactUsd)} near-term estimated impact</strong></li>
+          <li><span>Savings thesis</span><strong>${formatUsd(recommendedImpactUsd)} recommended-plan impact (deduplicated)</strong></li>
         </ul>
       </article>
 
@@ -456,7 +519,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <span class="impact-pill">No silent allocation</span>
       </div>
       <div class="evidence-quality-grid">
-        ${evidenceLedgerHtml(input.providerRecords ?? [])}
+        ${evidenceLedgerHtml(input.allRecords ?? input.providerRecords ?? [])}
       </div>
     </section>
 
@@ -562,7 +625,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <div class="section-label">Priority recommendations</div>
           <h2>What to do next</h2>
         </div>
-        <span class="impact-pill">${formatUsd(totalEstimatedImpactUsd)} estimated impact</span>
+        <span class="impact-pill">${formatUsd(recommendedImpactUsd)} recommended-plan impact</span>
       </div>
       <div class="recommendation-grid">
         ${recommendations.length === 0 ? emptyState("No recommendations generated from the current sample.") : recommendations.map(recommendationCard).join("\n")}

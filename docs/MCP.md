@@ -2,7 +2,7 @@
 
 See your AI spend in one view, locally. This is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) stdio server that lets an MCP client such as **Cursor** or **Claude Desktop** scan a local folder for AI provider usage signals (OpenAI, Anthropic, and more), build a spend report, and suggest where to cut. Everything runs on your machine: folders are scanned read-only, secrets are redacted before anything is returned, and nothing is uploaded to the cloud.
 
-- Package: `@agent-finops/mcp`
+- Package: `@agent-finops/mcp` (internal workspace scope; the published CLI is `ai-spend-agent`)
 - Binary: `ai-spend-mcp`
 - Built entrypoint: `packages/mcp/dist/server.js`
 - Transport: stdio (JSON-RPC)
@@ -48,7 +48,7 @@ Open **Settings → MCP → Add new MCP server** (or edit `~/.cursor/mcp.json`).
   "mcpServers": {
     "ai-spend-analyst": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/agent-finops/packages/mcp/dist/server.js"]
+      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
     }
   }
 }
@@ -80,7 +80,7 @@ Edit `claude_desktop_config.json`:
   "mcpServers": {
     "ai-spend-analyst": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/agent-finops/packages/mcp/dist/server.js"]
+      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
     }
   }
 }
@@ -98,7 +98,7 @@ Edit `claude_desktop_config.json`:
 }
 ```
 
-> Replace `/ABSOLUTE/PATH/TO/agent-finops` with the real path to your checkout. Restart Cursor / Claude Desktop after editing the config, then look for `ai-spend-analyst` and its four tools in the MCP tool list.
+> Replace `/ABSOLUTE/PATH/TO/ai-spend-agent` with the real path to your checkout. Restart Cursor / Claude Desktop after editing the config, then look for `ai-spend-analyst` and its four tools in the MCP tool list.
 
 ---
 
