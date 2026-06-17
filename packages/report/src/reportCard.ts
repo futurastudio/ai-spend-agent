@@ -66,7 +66,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
   <text x="40" y="172" class="big">${escapeXml(formatBigUsd(summary.totalUsd))}</text>
 
-  <text x="40" y="212"><tspan class="save">~${escapeXml(formatUsd(monthlySavings))}/mo</tspan><tspan class="meta" dx="10">in identified savings</tspan></text>
+  <text x="40" y="212"><tspan class="save">~${escapeXml(formatUsd(monthlySavings))}/mo</tspan><tspan class="meta" dx="10">recommended-plan savings (deduplicated)</tspan></text>
 
   <text x="40" y="244" class="meta">${escapeXml(
     `${providerCount} provider${providerCount === 1 ? "" : "s"} · ${summary.recordCount} call${summary.recordCount === 1 ? "" : "s"} · ${confidenceLabel(summary.confidence)}`

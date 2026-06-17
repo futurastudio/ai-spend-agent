@@ -21,8 +21,9 @@ and a **plan check** (subscription vs pay-per-token — the math no provider
 shows you). Zero keys, zero signup, nothing leaves your laptop. Connect a
 provider's billing to turn those estimates into *verified* numbers.
 
-No agent logs? You get a full demo on sample data instead, then connect real
-billing in ~2 minutes.
+No agent logs? You get a full demo on sample data instead. When you're ready,
+connect verified billing with an org admin/owner key (a few minutes, OpenAI /
+Anthropic self-serve).
 
 ![Sample AI Receipt — illustrative demo data, not real or verified numbers](docs/assets/report-card-sample.svg)
 

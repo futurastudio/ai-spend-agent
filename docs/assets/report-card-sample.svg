@@ -23,7 +23,7 @@
   <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
   <text x="40" y="172" class="big">$87.00</text>
 
-  <text x="40" y="212"><tspan class="save">~$1151.45/mo</tspan><tspan class="meta" dx="10">in identified savings</tspan></text>
+  <text x="40" y="212"><tspan class="save">~$539.70/mo</tspan><tspan class="meta" dx="10">recommended-plan savings (deduplicated)</tspan></text>
 
   <text x="40" y="244" class="meta">2 providers · 9 calls · detected</text>
 

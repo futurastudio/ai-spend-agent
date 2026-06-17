@@ -83,8 +83,10 @@ export function TerminalDemo() {
       {"\n"}
       <D>     3 calls over 100k input tokens</D>
       {"\n\n"}
-      <span className="font-semibold text-green">  ~$1,151.45/mo</span>{" "}
-      <D>in identified savings</D>
+      <span className="font-semibold text-green">  ~$539.70/mo</span>{" "}
+      <D>recommended-plan savings (deduplicated)</D>
+      {"\n"}
+      <D>  + ~$611.75/mo more from overlapping opportunities (not additive)</D>
       {"\n\n"}
       <W>  Plan check </W>
       <D>(subscription vs pay-per-token)</D>

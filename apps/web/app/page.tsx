@@ -82,7 +82,7 @@ export default function Home() {
             href="#beta"
             className="rounded-lg border border-border bg-surface/60 px-3.5 py-2 text-sm font-medium text-muted transition-colors hover:border-border-bright hover:text-ink"
           >
-            Join the beta
+            Hosted beta
           </a>
         </nav>
       </header>
