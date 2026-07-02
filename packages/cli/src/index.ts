@@ -223,19 +223,17 @@ function quickstartNextSteps(
   mode: "demo" | "connected" | "local-logs",
   detected: DetectedCredential[]
 ): string[] {
+  // Connect/verify guidance now lives in the readout's APPLY/VERIFY sections;
+  // this footer only carries what those can't know (detected local keys) and
+  // the report/waitlist pointers.
   const steps: string[] = [];
-  if (mode === "local-logs") {
-    steps.push("These numbers are API-equivalent ESTIMATES from your local Claude Code / Codex logs.");
-  }
   if (detected.length > 0) {
     const names = detected.map((credential) => `${credential.provider} (${credential.hint})`).join(", ");
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
     steps.push(`ai-spend-agent connect ${detected[0]!.provider}   use it — note: COST data needs an ADMIN/owner key`);
-  } else if (mode === "demo" || mode === "local-logs") {
-    steps.push("ai-spend-agent connect openai      pull your real OpenAI spend (org-owner admin key, ~2 min)");
-    steps.push("ai-spend-agent connect anthropic   pull your real Anthropic spend (admin key, ~2 min)");
   }
   steps.push("ai-spend-agent report              write a shareable Markdown + HTML report");
+  steps.push("ai-spend-agent --group-by project  see which project burns the most");
   steps.push("Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app");
   return steps;
 }

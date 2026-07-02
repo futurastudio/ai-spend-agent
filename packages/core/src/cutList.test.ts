@@ -25,7 +25,8 @@ function record(overrides: Partial<UsageRecord>): UsageRecord {
     userId: overrides.userId,
     workspaceId: overrides.workspaceId,
     apiKeyId: overrides.apiKeyId,
-    operation: overrides.operation
+    operation: overrides.operation,
+    providerCostType: overrides.providerCostType
   };
 }
 
@@ -158,5 +159,32 @@ describe("buildRecommendedPlan", () => {
     const plan = buildRecommendedPlan(generateCutList(records));
     expect(plan.additional).toHaveLength(0);
     expect(plan.recommendedSavingsUsd).toBe(totalEstimatedMonthlySavingsUsd(plan.recommended));
+  });
+
+  it("never recommends a result cache for local agent session aggregates", () => {
+    // "claude-code sessions" records are day-level aggregates of interactive
+    // sessions, not repeated identical calls — a result cache is not a lever.
+    const records = [
+      record({ id: "a", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", amountUsd: 80 }),
+      record({ id: "b", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", amountUsd: 90 }),
+      record({ id: "c", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", amountUsd: 70 }),
+      record({ id: "d", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", amountUsd: 60 })
+    ];
+    const actions = generateCutList(records);
+    expect(actions.find((action) => action.kind === "cache")).toBeUndefined();
+  });
+
+  it("words context-trim for session aggregates in session-days with coding-agent levers", () => {
+    const records = [
+      record({ id: "a", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", inputTokens: 250_000, amountUsd: 80 }),
+      record({ id: "b", model: "claude-fable-5", operation: "claude-code sessions", providerCostType: "local_agent_logs", inputTokens: 180_000, amountUsd: 90 })
+    ];
+    const actions = generateCutList(records);
+    const trim = actions.find((action) => action.kind === "context_trim");
+    expect(trim).toBeDefined();
+    expect(trim!.recordUnit).toBe("session-days");
+    expect(trim!.action).toContain("session-day");
+    expect(trim!.action).toContain("dead context");
+    expect(trim!.action).not.toContain("large claude-code sessions call");
   });
 });

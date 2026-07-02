@@ -90,7 +90,10 @@ export function generatePlainEnglishSummary(
   );
   lines.push(c.dim(rule(width)));
   lines.push("");
-  lines.push(`  ${c.bold(c.cyan(formatBigUsd(summary.totalUsd)))}  ${c.dim(`tracked across ${summary.recordCount} call${summary.recordCount === 1 ? "" : "s"}`)}`);
+  // Local-log records are day-level session aggregates — calling them "calls"
+  // overstates precision to the audience most likely to check.
+  const recordNoun = options.mode === "local-logs" ? "session-day record" : "call";
+  lines.push(`  ${c.bold(c.cyan(formatBigUsd(summary.totalUsd)))}  ${c.dim(`tracked across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`)}`);
   lines.push(
     `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(coverageLine(summary))}`
   );
@@ -108,7 +111,16 @@ export function generatePlainEnglishSummary(
   }
   lines.push("");
 
-  // --- Where your money goes: at-a-glance bars (the screenshot) -----------
+  // The readout is structured as the loop the product sells: DIAGNOSE what
+  // your coding agents cost -> RECOMMEND cuts -> APPLY them (copy artifact)
+  // -> VERIFY the delta. Sections are numbered so a first-time reader knows
+  // what each block is and what to do next.
+
+  // ══ 1 · DIAGNOSE ════════════════════════════════════════════════════════
+  lines.push(sectionHeader(1, "DIAGNOSE", "what your coding agents actually cost", c));
+  lines.push("");
+
+  // Where your money goes: at-a-glance bars (the screenshot).
   const spendBars = renderSpendBars(summary.bySource, summary.totalUsd, c);
   if (spendBars.length > 0) {
     lines.push(c.bold("  Where your money goes") + c.dim("  (by source)"));
@@ -156,8 +168,29 @@ export function generatePlainEnglishSummary(
     lines.push("");
   }
 
-  // --- The wow: ranked, actionable cut list ------------------------------
-  lines.push(c.bold("  Where to cut") + c.dim("  (ranked by monthly savings)"));
+  // Plan check (subscription vs API arbitrage) — part of the diagnosis.
+  const planChecks = computePlanChecks(options.records);
+  if (planChecks.length > 0) {
+    lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
+    lines.push("");
+    for (const check of planChecks) {
+      lines.push(`  ${c.cyan("›")} ${check.headline}`);
+    }
+    lines.push(
+      `  ${c.dim("compares published list prices — this tool never sees or connects to your subscription account")}`
+    );
+    lines.push("");
+  }
+
+  // Drill-down table — the last diagnostic block.
+  const entries = breakdownFor(summary, groupBy);
+  lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+  lines.push("");
+  lines.push(indentBlock(renderBreakdownTable(entries, summary.totalUsd, c, useColor), "  "));
+  lines.push("");
+
+  // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
+  lines.push(sectionHeader(2, "RECOMMEND", "Where to cut, ranked by est. monthly savings", c));
   lines.push("");
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence cut found in this window. Connect more usage to surface savings."));
@@ -191,22 +224,35 @@ export function generatePlainEnglishSummary(
   }
   lines.push("");
 
-  // --- Plan check (subscription vs API arbitrage) -------------------------
-  const planChecks = computePlanChecks(options.records);
-  if (planChecks.length > 0) {
-    lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
-    lines.push("");
-    for (const check of planChecks) {
-      lines.push(`  ${c.cyan("›")} ${check.headline}`);
-    }
-    lines.push("");
-  }
-
-  // --- Drill-down table --------------------------------------------------
-  const entries = breakdownFor(summary, groupBy);
-  lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+  // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
+  lines.push(sectionHeader(3, "APPLY", "make the cuts (copy, don't retype)", c));
   lines.push("");
-  lines.push(indentBlock(renderBreakdownTable(entries, summary.totalUsd, c, useColor), "  "));
+  lines.push(
+    `  ${c.cyan("›")} ${c.bold("ai-spend-agent apply-artifact")}   ${c.dim("writes a ready-to-paste prompt + action plan for your coding agent")}`
+  );
+  lines.push(
+    `  ${c.dim("    paste .ai-spend-agent/ai-spend-coding-agent-prompt.md into Claude Code / Codex — it bundles the cuts above with guardrails")}`
+  );
+  lines.push("");
+
+  // ══ 4 · VERIFY ══════════════════════════════════════════════════════════
+  lines.push(sectionHeader(4, "VERIFY", "prove the cuts worked before trusting them", c));
+  lines.push("");
+  lines.push(
+    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx ai-spend-agent")} ${c.dim("after a few days and compare — or")} ${c.bold("ai-spend-agent watch")} ${c.dim("to track deltas per cycle")}`
+  );
+  if (options.mode === "local-logs" || options.mode === "demo") {
+    lines.push(
+      `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
+    );
+    lines.push(
+      `  ${c.cyan("›")} ${c.dim("for verified billing:")} ${c.bold("ai-spend-agent connect anthropic|openai")} ${c.dim("(org admin key, ~2 min; estimates stay estimates until then)")}`
+    );
+  } else {
+    lines.push(
+      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("ai-spend-agent sync-provider")} ${c.dim("after applying cuts")}`
+    );
+  }
   lines.push("");
 
   // --- Footer / next steps ----------------------------------------------
@@ -223,11 +269,22 @@ export function generatePlainEnglishSummary(
   return lines.join("\n");
 }
 
+/** Numbered stage banner: `── 2 · RECOMMEND ──  blurb`. */
+function sectionHeader(step: number, name: string, blurb: string, c: Colors): string {
+  return `  ${c.dim("──")} ${c.bold(c.cyan(`${step} · ${name}`))} ${c.dim("──")}  ${c.dim(blurb)}`;
+}
+
 function cutActionLines(action: CutAction, rank: number, c: Colors): string[] {
   const savings = c.green(c.bold(`save ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
   const head = `  ${c.bold(`${rank}.`)} ${c.bold(action.title)}  ${savings}`;
   const detail = `     ${c.dim(action.action)}`;
-  const grounding = `     ${c.dim(`${action.recordCount} call${action.recordCount === 1 ? "" : "s"} · ${formatUsd(action.affectedSpendUsd)} in window · ${confidenceWord(action.confidence)}`)}`;
+  // Honest unit: local-log records are day-level session aggregates, not calls.
+  const unit = action.recordUnit === "session-days"
+    ? `session-day${action.recordCount === 1 ? "" : "s"}`
+    : action.recordUnit === "tools"
+      ? `tool${action.recordCount === 1 ? "" : "s"}`
+      : `call${action.recordCount === 1 ? "" : "s"}`;
+  const grounding = `     ${c.dim(`${action.recordCount} ${unit} · ${formatUsd(action.affectedSpendUsd)} in window · ${confidenceWord(action.confidence)}`)}`;
   return [head, detail, grounding, ""];
 }
 
@@ -416,6 +473,9 @@ function formatBigUsd(amount: number): string {
 }
 
 function formatUsd(amount: number): string {
+  // A real-but-tiny amount rendered as "$0.00" reads as a data bug to a
+  // technical audience; "<$0.01" says what actually happened.
+  if (amount > 0 && amount < 0.005) return "<$0.01";
   return `$${amount.toFixed(2)}`;
 }
 

@@ -81,4 +81,32 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("DEMO");
     expect(text).toContain("connect");
   });
+
+  it("structures the readout as the diagnose/recommend/apply/verify loop, in order", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const text = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs" });
+
+    const positions = [
+      text.indexOf("1 · DIAGNOSE"),
+      text.indexOf("2 · RECOMMEND"),
+      text.indexOf("3 · APPLY"),
+      text.indexOf("4 · VERIFY")
+    ];
+    for (const position of positions) expect(position).toBeGreaterThan(-1);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    // APPLY surfaces the copy artifact; VERIFY surfaces re-run/watch + connect.
+    expect(text).toContain("apply-artifact");
+    expect(text).toContain("watch");
+    expect(text).toContain("no account was connected or authorized");
+  });
+
+  it("labels local-log records as session-day records, not calls", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const local = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs" });
+    expect(local).toMatch(/tracked across \d+ session-day records/);
+    const demo = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
+    expect(demo).toMatch(/tracked across \d+ calls/);
+  });
 });

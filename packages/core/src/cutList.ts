@@ -20,6 +20,12 @@ export type CutAction = {
   affectedSpendUsd: number;
   /** How many usage records this action is grounded in. */
   recordCount: number;
+  /**
+   * What one record represents, for honest grounding lines. Local agent logs
+   * aggregate a day of sessions into one record, so calling those "calls"
+   * overstates precision to the exact audience that will check.
+   */
+  recordUnit: "calls" | "session-days" | "tools";
   /** Lowest confidence of the underlying records (drives how we caveat $). */
   confidence: CostConfidence;
   kind: "model_downgrade" | "context_trim" | "cache" | "batch";
@@ -191,6 +197,7 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordUnit: groupRecords.every(isLocalAgentRecord) ? "session-days" : "calls",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "model_downgrade"
@@ -218,13 +225,22 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
     // input-token cost on these large calls.
     const windowSavings = affectedSpendUsd * 0.25;
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
+    const sessionAggregates = groupRecords.every(isLocalAgentRecord);
+    const count = groupRecords.length;
     actions.push({
       id: `trim-${slug(operation)}`,
-      title: `Trim oversized context on ${operation}`,
-      action: `Cap retrieval/prompt size on ${groupRecords.length} large ${operation} call${groupRecords.length === 1 ? "" : "s"} (>=100k input tokens) before they fan out.`,
+      title: sessionAggregates
+        ? `Trim heavy context in ${operation}`
+        : `Trim oversized context on ${operation}`,
+      // Coding-agent sessions are aggregated per day — the honest levers are
+      // the context loaded every turn, not "prompt size" on a single call.
+      action: sessionAggregates
+        ? `${count} session-day${count === 1 ? "" : "s"} averaged >=100k input tokens per record. Cut dead context first (unused MCP servers/skills — see above), keep CLAUDE.md/AGENTS.md lean, and avoid pulling whole directories into context.`
+        : `Cap retrieval/prompt size on ${count} large ${operation} call${count === 1 ? "" : "s"} (>=100k input tokens) before they fan out.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
-      recordCount: groupRecords.length,
+      recordCount: count,
+      recordUnit: sessionAggregates ? "session-days" : "calls",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "context_trim"
@@ -238,6 +254,13 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
   const counts = new Map<string, UsageRecord[]>();
   for (const record of records) {
     if (!record.operation) {
+      continue;
+    }
+    // Local agent logs aggregate interactive sessions under one operation
+    // label ("claude-code sessions"). Those are NOT repeated identical calls —
+    // a result cache is not a real lever there (prompt caching already applies
+    // and is priced into the estimate), so recommending one would be wrong.
+    if (isLocalAgentRecord(record)) {
       continue;
     }
     counts.set(record.operation, [...(counts.get(record.operation) ?? []), record]);
@@ -259,6 +282,7 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordUnit: "calls",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "cache"
@@ -292,12 +316,18 @@ function batchActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
+      recordUnit: "calls",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "batch"
     });
   }
   return actions;
+}
+
+/** Records ingested from local agent transcripts (day-level session aggregates). */
+function isLocalAgentRecord(record: UsageRecord): boolean {
+  return record.providerCostType === "local_agent_logs";
 }
 
 /** Number of distinct calendar days the records span (min 1). */

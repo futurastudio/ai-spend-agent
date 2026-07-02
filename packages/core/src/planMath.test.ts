@@ -39,6 +39,9 @@ describe("computePlanChecks", () => {
     expect(check.suggestedPlan!.id).toBe("claude-max-20x");
     expect(check.monthlySavingsVsApiUsd).toBe(100);
     expect(check.headline).toContain("Claude Max 20x");
+    // The projection basis must be stated: this divides by ACTIVE days, which
+    // can differ from the calendar window shown elsewhere on the readout.
+    expect(check.headline).toContain("projected from 2 active days");
   });
 
   it("flags light usage as possibly cheaper on pay-as-you-go", () => {

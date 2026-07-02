@@ -193,7 +193,11 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
     });
   }
 
-  const repeatedOperations = repeatedValues(records.map((record) => record.operation).filter(isPresent));
+  // Session aggregates from local agent logs share one operation label per
+  // agent — that's aggregation, not repetition, and a result cache is not a
+  // real lever for interactive coding sessions. Exclude them here.
+  const cacheableRecords = records.filter((record) => record.providerCostType !== "local_agent_logs");
+  const repeatedOperations = repeatedValues(cacheableRecords.map((record) => record.operation).filter(isPresent));
   if (repeatedOperations.length > 0) {
     recommendations.push({
       id: "caching",
@@ -202,8 +206,8 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Repeated AI calls are the easiest spend to defend cutting because they usually do not change the customer experience.",
       nextAction: "Add a local cache or memoization policy for repeated operation labels before expanding this workflow to more clients.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records.filter((record) => repeatedOperations.includes(record.operation ?? ""))) * impactRatios.caching),
-      confidence: combinedConfidence(records.map((record) => record.costConfidence)),
+      estimatedImpactUsd: roundMoney(sumRecords(cacheableRecords.filter((record) => repeatedOperations.includes(record.operation ?? ""))) * impactRatios.caching),
+      confidence: combinedConfidence(cacheableRecords.map((record) => record.costConfidence)),
       relatedKeys: repeatedOperations
     });
   }
