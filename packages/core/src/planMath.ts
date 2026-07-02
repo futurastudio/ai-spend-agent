@@ -76,13 +76,17 @@ export function computePlanChecks(records: UsageRecord[]): PlanCheck[] {
     const suggested = candidates.find((plan) => monthly <= plan.coversUpToUsd) ?? candidates[candidates.length - 1];
     const savings = suggested ? roundMoney(monthly - suggested.monthlyUsd) : undefined;
 
+    // Always state the projection basis: this number divides by ACTIVE days
+    // (days with usage), which can differ from the calendar window shown
+    // elsewhere on the readout — a technical reader will divide and check.
+    const basis = `projected from ${windowDays} active day${windowDays === 1 ? "" : "s"}`;
     let headline: string;
     if (!suggested) {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates.`;
+      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
     } else if (typeof savings === "number" && savings > 0) {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
+      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
     } else {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
+      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
     }
 
     checks.push({

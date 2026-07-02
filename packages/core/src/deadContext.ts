@@ -205,6 +205,7 @@ export function deadContextCutAction(result: DeadContextResult): CutAction | nul
     estimatedMonthlySavingsUsd: result.monthlyUsd,
     affectedSpendUsd: result.monthlyUsd,
     recordCount: result.deadCount,
+    recordUnit: "tools",
     // Dead-context savings come from inventory, not priced usage records, so
     // there are no record IDs to dedupe against the spend-based cut actions.
     recordIds: [],

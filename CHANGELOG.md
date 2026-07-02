@@ -5,7 +5,37 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
-## 0.1.3 — 2026-07-02 (unreleased)
+## 0.1.4 — 2026-07-02
+
+Readability + accuracy release from first real-user field testing. No new
+commands.
+
+### The readout is now the loop the product sells
+- The terminal summary is structured as four numbered stages — **1 · DIAGNOSE**
+  (spend, dead context, plan check, breakdown table) → **2 · RECOMMEND**
+  (ranked cuts) → **3 · APPLY** (`apply-artifact`: a ready-to-paste prompt for
+  your coding agent) → **4 · VERIFY** (re-run / `watch` deltas, then optionally
+  connect verified billing). Apply and Verify existed but were invisible on the
+  first-run path.
+
+### Accuracy for coding-agent data
+- **No more "cache repeated calls" advice for interactive sessions.** Local
+  agent-log records are day-level session aggregates sharing one operation
+  label; that is aggregation, not repetition, so the result-cache cut (and the
+  matching report recommendation) no longer fires on them.
+- **Session aggregates are called what they are.** Headline and cut-list
+  grounding lines say "session-days", not "calls", for local-log data; the
+  context-trim cut for coding agents now names the real levers (dead context,
+  lean CLAUDE.md/AGENTS.md, no whole-directory context pulls).
+- **Every monthly projection states its basis.** Plan-check headlines say
+  "projected from N active days" so they can't be mistaken for the calendar-
+  window projection shown in the cut list.
+- **Subscription transparency.** The plan check now states it compares
+  published list prices and that the tool never sees or connects to your
+  subscription account (subscriptions have no billing API — that's why local
+  logs are the source). Tiny real amounts render as `<$0.01`, not `$0.00`.
+
+## 0.1.3 — 2026-07-02
 
 Launch-hardening release: precision, reliability, and safety fixes ahead of
 the public launch. No new commands.
