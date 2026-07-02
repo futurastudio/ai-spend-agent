@@ -1,6 +1,5 @@
 import { CopyCommand } from "@/components/CopyCommand";
 import { WaitlistForm } from "@/components/WaitlistForm";
-import { TerminalDemo } from "@/components/Terminal";
 
 const sources = [
   "Claude Code logs",
@@ -106,10 +105,10 @@ export default function Home() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-lg">
-          One command unifies your Claude Code and Codex logs — plus your real
-          OpenAI and Anthropic bills when you connect an admin key — into a
-          single breakdown, and shows you exactly where to cut. Runs locally.
-          Your data never leaves your machine.
+          One command unifies your OpenAI, Anthropic, Cursor, and Copilot
+          bills — plus the Claude Code and Codex logs already on your machine
+          — into a single breakdown, and shows you exactly where to cut. Runs
+          locally. Your data never leaves your machine.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
@@ -127,14 +126,33 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Real terminal output — the product is the screenshot */}
+        {/* Real terminal recording — regenerated from the CLI by scripts/record-demo.sh */}
         <div className="relative mx-auto mt-14 max-w-terminal animate-fade-up">
           <div
             className="accent-glow pointer-events-none absolute inset-x-0 -bottom-10 top-10"
             aria-hidden="true"
           />
-          <div className="relative">
-            <TerminalDemo />
+          <div className="relative overflow-hidden rounded-xl border border-border bg-well text-left">
+            <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
+              <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
+              <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
+              <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+              <span className="ml-2 font-mono text-xs text-faint">
+                ai-spend-agent
+              </span>
+            </div>
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              poster="/demo-poster.png"
+              aria-label="Terminal recording of npx ai-spend-agent rendering the spend report"
+              className="block w-full"
+            >
+              <source src="/demo.webm" type="video/webm" />
+              <source src="/demo.mp4" type="video/mp4" />
+            </video>
           </div>
           <p className="mt-4 text-center font-mono text-xs text-faint">
             Illustrative sample output — demo data, not real or verified numbers.

@@ -25,9 +25,10 @@ No agent logs? You get a full demo on sample data instead. When you're ready,
 connect verified billing with an org admin/owner key (a few minutes, OpenAI /
 Anthropic self-serve).
 
-![Sample AI Receipt — illustrative demo data, not real or verified numbers](docs/assets/report-card-sample.svg)
+![Terminal recording of npx ai-spend-agent rendering the spend report on sample data](docs/assets/demo.gif)
 
-*Illustrative sample output — demo data, not real or verified spend.*
+*Illustrative sample output — demo data, not real or verified spend. Regenerated
+from the real CLI by `scripts/record-demo.sh` so it can't drift from the product.*
 
 ## Get started in 60 seconds
 
@@ -84,6 +85,10 @@ it in one view and tells you what to cut.
   project/user names) + a paste-ready caption.
 - **Honest confidence labels**: every number is tagged verified / estimated /
   detected_unverified / missing so you know how much to trust it.
+
+![Sample AI Receipt — illustrative demo data, not real or verified numbers](docs/assets/report-card-sample.svg)
+
+*The shareable AI Receipt (`report-card`) — redacted SVG, demo data shown.*
 
 ## Estimated vs verified
 

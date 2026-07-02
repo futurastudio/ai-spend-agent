@@ -15,7 +15,47 @@ function normalizeSourceRef(value: unknown): string {
   return REF_RE.test(normalized) ? normalized : "direct";
 }
 
+// Never log the full address — signups are PII and server logs stick around.
+function maskEmail(email: string): string {
+  const at = email.indexOf("@");
+  if (at <= 0) return "***";
+  return `${email.slice(0, 2)}***@${email.slice(at + 1)}`;
+}
+
+// Best-effort per-IP rate limit. In-memory, so it is per serverless instance
+// and resets on cold start — enough to blunt naive floods and form spam, not
+// a substitute for edge-level protection.
+const RATE_LIMIT = 5;
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAP_MAX = 10_000;
+const recentByIp = new Map<string, number[]>();
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_WINDOW_MS;
+  const hits = (recentByIp.get(ip) ?? []).filter((t) => t > cutoff);
+  if (hits.length >= RATE_LIMIT) {
+    recentByIp.set(ip, hits);
+    return true;
+  }
+  hits.push(now);
+  if (recentByIp.size >= RATE_MAP_MAX && !recentByIp.has(ip)) {
+    recentByIp.clear();
+  }
+  recentByIp.set(ip, hits);
+  return false;
+}
+
 export async function POST(request: Request) {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  if (isRateLimited(ip)) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again in a minute." },
+      { status: 429 },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -40,7 +80,7 @@ export async function POST(request: Request) {
     );
   }
 
-  console.log(`[waitlist] new signup: ${email} (${sourceRef})`);
+  console.log(`[waitlist] new signup: ${maskEmail(email)} (${sourceRef})`);
 
   const stored = await storeInSupabase(email, sourceRef);
   if (stored === "stored" || stored === "duplicate") {
@@ -55,8 +95,20 @@ export async function POST(request: Request) {
     );
   }
 
-  // Supabase not configured (local dev): append to a local file so no
-  // signup is lost while developing.
+  // Supabase not configured. In production that means signups would go to
+  // ephemeral disk and vanish on the next deploy — fail loudly instead of
+  // pretending the signup was saved.
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[waitlist] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured in production — refusing signup",
+    );
+    return NextResponse.json(
+      { error: "Signups are temporarily unavailable. Please try again soon." },
+      { status: 503 },
+    );
+  }
+
+  // Local dev: append to a local file so no signup is lost while developing.
   const entry = `${new Date().toISOString()}\t${email}\t${sourceRef}\n`;
   try {
     const dir = join(process.cwd(), ".data");
