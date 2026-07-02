@@ -8,6 +8,8 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   detectLocalCredentials,
+  redactSecrets,
+  unsafeScanRootReason,
   loadDeadContext,
   sampleDeadContext,
   loadLocalAgentUsage,
@@ -183,9 +185,8 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
 
   // Dead-context cost, globalized across the user's whole Claude Code setup
   // (all projects' MCP + user-scope skills/agents/commands, vs. every
-  // transcript) so it's populated from ANY directory on the first run. Falls
-  // back to an illustrative sample so the feature is always visible on the
-  // first card. Never throws into the readout.
+  // transcript) so it's populated from ANY directory on the first run.
+  // Never throws into the readout.
   let deadContext = args.sample
     ? undefined
     : await loadDeadContext({
@@ -198,7 +199,10 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
         sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
         windowDays: 30
       }).catch(() => undefined);
-  if (!deadContext || !deadContext.hasData || deadContext.deadCount === 0) {
+  // Sample dead-context is shown ONLY on the demo readout. A real readout
+  // (local logs / connected billing) never gets fabricated waste injected —
+  // a genuinely clean setup earns its congratulation line instead.
+  if (mode === "demo" && (!deadContext || !deadContext.hasData)) {
     deadContext = sampleDeadContext();
   }
 
@@ -502,6 +506,10 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
     `discovery signals: ${discovery.signals.length}`,
     `secrets detected: ${discovery.secretsDetected.length}`
   ];
+
+  if (discovery.unreadablePaths.length > 0) {
+    lines.push(`unreadable paths skipped: ${discovery.unreadablePaths.length} (permissions/broken links — scan continued)`);
+  }
 
   if (args.sample) {
     const records = await loadSampleUsageData();
@@ -1232,7 +1240,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--confidence") {
       const next = rest[index + 1];
       if (next) {
-        parsed.confidence = Number(next);
+        const value = Number(next);
+        // Reject NaN/out-of-range instead of rendering "NaN% confidence".
+        if (Number.isFinite(value) && value >= 0 && value <= 1) {
+          parsed.confidence = value;
+        }
         index += 1;
       }
       continue;
@@ -1293,14 +1305,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
-    if (arg === "--group-by") {
-      const next = rest[index + 1];
-      if (isGroupByDimension(next)) {
-        parsed.groupBy = next;
-        index += 1;
-      }
-      continue;
-    }
     if (arg === "--interval") {
       const next = rest[index + 1];
       if (next) {
@@ -1322,22 +1326,13 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function sanitizeSecretishError(message: string, authReference?: string): string {
-  let sanitized = message.replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]");
+  // Core's redactSecrets covers sk-*/ghp_*/github_pat_*/JWT/AIza/xox/AKIA and
+  // secret-suffixed env assignments; the sk- fallback keeps short keys covered.
+  let sanitized = redactSecrets(message).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]");
   if (authReference && !authReference.startsWith("env:")) {
     sanitized = sanitized.split(authReference).join("[REDACTED]");
   }
   return sanitized;
-}
-
-function unsafeScanRootReason(rootPath: string): string | undefined {
-  const homePath = resolve(homedir());
-  if (rootPath === homePath) {
-    return "the home directory is too broad for V0 approved-source scanning";
-  }
-  if (rootPath === "/") {
-    return "the filesystem root is too broad for V0 approved-source scanning";
-  }
-  return undefined;
 }
 
 /**
@@ -1394,7 +1389,9 @@ async function appendAuditEvent(stateDir: string, event: ScanAuditEvent): Promis
   } catch {
     // Create a fresh local-only audit log if init has not run yet.
   }
-  await writeJson(join(stateDir, "audit-log.json"), createScanAuditLog([...auditLog.events, event]));
+  // Cap like watch-history: an unbounded log under cron watch grows forever
+  // and makes every append an ever-larger rewrite.
+  await writeJson(join(stateDir, "audit-log.json"), createScanAuditLog([...auditLog.events, event].slice(-500)));
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -1501,6 +1498,19 @@ if (invokedAsMain) {
   let result: CliResult;
   try {
     result = await runCli(argv);
+  } catch (error) {
+    // The product's error voice, never a raw stack trace — and never an
+    // un-redacted secret from a provider payload or file path.
+    const message = sanitizeSecretishError(error instanceof Error ? error.message : String(error));
+    result = {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `ai-spend-agent hit an unexpected error: ${message}`,
+        "Nothing was uploaded; local state is unchanged.",
+        "Try `ai-spend-agent doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
+      ].join("\n")
+    };
   } finally {
     spinner?.stop();
   }

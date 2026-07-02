@@ -480,7 +480,10 @@ describe("real provider connector implementations", () => {
     expect(result.qa.rateLimits).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "GitHub Copilot seats", remainingRequests: 4999 })
     ]));
-    expect(result.source).toMatchObject({ provider: "github-copilot", verification: "verified" });
+    // Seat dollars are estimated (plan-price reconciliation), so the result
+    // and source labels must say estimated — never "verified" over estimates.
+    expect(result.completeness).toBe("estimated");
+    expect(result.source).toMatchObject({ provider: "github-copilot", verification: "estimated" });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
@@ -493,7 +496,8 @@ describe("real provider connector implementations", () => {
       expect.objectContaining({
         model: "cursor-team-usage",
         amountUsd: 3.45,
-        costConfidence: "verified",
+        // Cursor connector is spec-built, not live-verified: estimated.
+        costConfidence: "estimated",
         userId: "dev@example.com",
         projectId: "futura-team",
         providerCostType: "cursor_spend"
@@ -529,5 +533,141 @@ describe("real provider connector implementations", () => {
     expect(source.scope).toContain("3 verified records");
     expect(source.scope).toContain("$42.50");
     expect(JSON.stringify(source)).not.toContain(fakeToken);
+  });
+
+  it("retries transient 429s (honoring retry-after) and succeeds", async () => {
+    let costAttempts = 0;
+    const fetcher = async (url: string) => {
+      if (url.includes("/organization/costs")) {
+        costAttempts += 1;
+        if (costAttempts === 1) {
+          return {
+            ok: false,
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: { "retry-after": "0" },
+            json: async () => ({ error: { message: "rate limited" } })
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ start_time: 1761955200, results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }] }] })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    };
+
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher
+    });
+
+    expect(costAttempts).toBe(2);
+    expect(result.records).toHaveLength(1);
+  });
+
+  it("keeps already-fetched pages with a QA note when pagination fails mid-way", async () => {
+    const fetcher = async (url: string) => {
+      if (url.includes("/organization/costs") && !url.includes("page=next")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ start_time: 1761955200, results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }] }], has_more: true, next_page: "next" })
+        };
+      }
+      if (url.includes("page=next")) {
+        return { ok: false, status: 400, statusText: "Bad Request", json: async () => ({ error: { message: "page cursor expired" } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    };
+
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher
+    });
+
+    // Page 1's verified dollars survive; the failure is reported, not fatal.
+    expect(result.records.filter((record) => record.providerCostType === "openai_cost")).toHaveLength(1);
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: "OpenAI costs API",
+        pagesFetched: 1,
+        stoppedBecause: "fetch_error",
+        note: expect.stringContaining("Stopped after 1 page")
+      })
+    ]));
+  });
+
+  it("reports zero response drift for legitimate anthropic fields and derives estimated completeness from claude-code records", async () => {
+    const fetcher = async (url: string) => {
+      if (url.includes("/organizations/cost_report")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ starting_at: "2026-05-01T00:00:00Z", ending_at: "2026-05-02T00:00:00Z", results: [{ amount: "250", currency: "USD", cost_type: "tokens", description: "Output tokens", model: "claude-opus-4-8", workspace_id: "wrk_eng", token_type: "output_tokens" }] }], has_more: false })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ date: "2026-05-01", actor: { email_address: "dev@example.com" }, organization_id: "org_1", core_metrics: { num_sessions: 3, lines_of_code: { added: 10, removed: 2 }, commits_by_claude_code: 1, pull_requests_by_claude_code: 0 }, model_breakdown: [{ model: "claude-sonnet-4-6", tokens: { input: 100, output: 20, cache_read: 5, cache_creation: 2 }, estimated_cost: { currency: "USD", amount: 123 } }] }], has_more: false })
+      };
+    };
+
+    const result = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher
+    });
+
+    expect(result.qa.responseDrift).toEqual([]);
+    // Mixed verified (cost report) + estimated (claude code) records: the
+    // result-level label is the weakest cost-bearing confidence — estimated.
+    expect(result.completeness).toBe("estimated");
+    expect(result.source.verification).toBe("estimated");
+  });
+
+  it("reports zero response drift for legitimate copilot and cursor fields", async () => {
+    const copilotFetcher = async (url: string) => {
+      if (url.includes("/copilot/billing/seats")) {
+        return { ok: true, status: 200, json: async () => ({ total_seats: 1, plan_type: "business", seats: [{ assignee: { login: "alice" }, last_activity_at: "2026-06-30T00:00:00Z", plan_type: "business" }] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ day_totals: [{ day: "2026-05-01", totals_by_model_feature: [{ model: "gpt-4.1", feature: "chat" }], totals_by_cli: { token_usage: { prompt_tokens_sum: 100, output_tokens_sum: 25 } } }] }) };
+    };
+    const copilot = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      fetcher: copilotFetcher
+    });
+    expect(copilot.qa.responseDrift).toEqual([]);
+
+    const cursor = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "team-acme",
+      fetcher: async () => ({ ok: true, status: 200, json: async () => ({ users: [{ email: "dev@example.com", spendCents: 345 }] }) })
+    });
+    expect(cursor.qa.responseDrift).toEqual([]);
+    // Cursor is spec-built, not live-verified: never labeled verified.
+    expect(cursor.completeness).toBe("estimated");
   });
 });

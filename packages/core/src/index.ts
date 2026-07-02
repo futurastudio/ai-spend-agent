@@ -11,6 +11,7 @@ export * from "./localAgentLogs.js";
 export * from "./modelPricing.js";
 export * from "./planMath.js";
 export * from "./sampleData.js";
+export * from "./scanGuard.js";
 export * from "./schema.js";
 export * from "./sourceRegistry.js";
 export * from "./providerConnectors.js";

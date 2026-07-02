@@ -1,6 +1,7 @@
 import type { ApprovedSource } from "./sourceRegistry.js";
 import { createProviderConnectorStub, slugifySourceId } from "./sourceRegistry.js";
-import type { UsageRecord } from "./schema.js";
+import { redactSecrets } from "./discovery.js";
+import type { CostConfidence, UsageRecord } from "./schema.js";
 
 type ProviderResponse = {
   ok: boolean;
@@ -13,9 +14,11 @@ type ProviderResponse = {
 export type ProviderQaPagination = {
   label: string;
   pagesFetched: number;
-  stoppedBecause: "complete" | "missing_cursor" | "max_pages";
+  stoppedBecause: "complete" | "missing_cursor" | "max_pages" | "fetch_error";
   maxPages: number;
   limitPerPage?: number;
+  /** Present when stoppedBecause is "fetch_error": the sanitized reason the fetch stopped early. */
+  note?: string;
 };
 
 export type ProviderQaRateLimit = {
@@ -77,6 +80,8 @@ export type CreateProviderConnectionInput = {
   verifiedRecordCount: number;
   totalUsd: number;
   fetchedAt?: Date;
+  /** Record-derived completeness; the source's verification label mirrors it. */
+  completeness?: ProviderConnectorResult["completeness"];
 };
 
 export type TokenResolver = (reference: string) => string;
@@ -386,12 +391,15 @@ export function normalizeCursorSpendResponse(response: unknown, options: Normali
     return [{
       id: slugifySourceId(["cursor-spend", options.accountId, userId].filter(Boolean).join("-")),
       timestamp,
-      source: { id: options.sourceId, name: "Cursor Admin API", provider: "cursor", confidence: "verified", observedFrom: options.observedFrom },
+      // The Cursor connector is spec-built and not yet live-verified (beta),
+      // so its dollars are labeled estimated until reconciled against a real
+      // team's invoice. Never stamp "verified" on data we haven't verified.
+      source: { id: options.sourceId, name: "Cursor Admin API", provider: "cursor", confidence: "estimated", observedFrom: options.observedFrom },
       model: "cursor-team-usage",
       inputTokens: 0,
       outputTokens: 0,
       amountUsd: cents / 100,
-      costConfidence: "verified" as const,
+      costConfidence: "estimated" as const,
       userId,
       projectId: options.accountId,
       providerCostType: "cursor_spend",
@@ -431,7 +439,7 @@ async function fetchOpenAi(input: ProviderConnectorInput, token: string, fetcher
     ...costFetch.pages.flatMap((page) => normalizeOpenAiCostResponse(page, { sourceId, observedFrom: "OpenAI organization costs API" })),
     ...usageFetch.pages.flatMap((page) => normalizeOpenAiUsageResponse(page, { sourceId, observedFrom: "OpenAI organization usage API" }))
   ];
-  return providerResult("openai", sourceId, input.authReference, records, "verified", qaSummary("openai", [costFetch, usageFetch]));
+  return providerResult("openai", sourceId, input.authReference, records, qaSummary("openai", [costFetch, usageFetch]));
 }
 
 async function fetchAnthropic(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -445,7 +453,7 @@ async function fetchAnthropic(input: ProviderConnectorInput, token: string, fetc
     ...costFetch.pages.flatMap((page) => normalizeAnthropicCostResponse(page, { sourceId, observedFrom: "Anthropic Admin Cost Report" })),
     ...claudeCodeFetches.flatMap((fetchResult) => fetchResult.pages.flatMap((page) => normalizeAnthropicClaudeCodeUsageResponse(page, { sourceId, observedFrom: "Anthropic Claude Code Usage Report", accountId: input.accountId })))
   ];
-  return providerResult("anthropic", sourceId, input.authReference, records, "verified", qaSummary("anthropic", [costFetch, ...claudeCodeFetches]));
+  return providerResult("anthropic", sourceId, input.authReference, records, qaSummary("anthropic", [costFetch, ...claudeCodeFetches]));
 }
 
 async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -459,7 +467,7 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
   const seatFetch = input.org ? await fetchPaginatedJson(fetcher, buildGitHubCopilotSeatsUrl(input.org), request, "github-copilot", "GitHub Copilot seats") : undefined;
   const metricsRecords = metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId }));
   const seatRecords = seatFetch ? seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })) : [];
-  return providerResult("github-copilot", sourceId, input.authReference, [...metricsRecords, ...seatRecords], "verified", qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])]));
+  return providerResult("github-copilot", sourceId, input.authReference, [...metricsRecords, ...seatRecords], qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])]));
 }
 
 async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -487,7 +495,7 @@ async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher
     rateLimits: response.rateLimit ? [response.rateLimit] : [],
     responseDrift: detectResponseDrift(page, "cursor", "Cursor Admin API spend")
   };
-  return providerResult("cursor", sourceId, input.authReference, records, "verified", qaSummary("cursor", [singleFetch]));
+  return providerResult("cursor", sourceId, input.authReference, records, qaSummary("cursor", [singleFetch]));
 }
 
 async function fetchPaginatedJson(
@@ -502,9 +510,22 @@ async function fetchPaginatedJson(
   const responseDrift: ProviderQaDriftIssue[] = [];
   let nextUrl: string | undefined = initialUrl;
   let stoppedBecause: ProviderQaPagination["stoppedBecause"] = "complete";
+  let note: string | undefined;
   const maxPages = 50;
   for (let pageCount = 0; nextUrl && pageCount < maxPages; pageCount += 1) {
-    const response = await fetchJsonOrThrow(fetcher, nextUrl, request, provider, label);
+    let response;
+    try {
+      response = await fetchJsonOrThrow(fetcher, nextUrl, request, provider, label);
+    } catch (error) {
+      // A mid-pagination failure (after retries) must not discard the pages
+      // already fetched — return partial results with an explicit QA note.
+      // A failure on the FIRST page (auth, bad scope) still throws.
+      if (pages.length === 0) throw error;
+      stoppedBecause = "fetch_error";
+      note = `Stopped after ${pages.length} page(s): ${error instanceof Error ? error.message : String(error)}`;
+      nextUrl = undefined;
+      break;
+    }
     const page = response.payload;
     pages.push(page);
     if (response.rateLimit) rateLimits.push(response.rateLimit);
@@ -527,7 +548,7 @@ async function fetchPaginatedJson(
   }
   return {
     pages,
-    pagination: { label, pagesFetched: pages.length, stoppedBecause, maxPages, limitPerPage: limitPerPageFromUrl(initialUrl) },
+    pagination: { label, pagesFetched: pages.length, stoppedBecause, maxPages, limitPerPage: limitPerPageFromUrl(initialUrl), ...(note ? { note } : {}) },
     rateLimits,
     responseDrift
   };
@@ -546,10 +567,35 @@ async function fetchDateRangeJson(
   const daySeconds = 24 * 60 * 60;
   const finalTime = endTime ?? startTime;
   for (let cursor = startTime, count = 0; cursor <= finalTime && count < 370; cursor += daySeconds, count += 1) {
-    results.push(await fetchPaginatedJson(fetcher, buildUrl(cursor), request, provider, label));
+    try {
+      results.push(await fetchPaginatedJson(fetcher, buildUrl(cursor), request, provider, label));
+    } catch (error) {
+      // Persistent failure mid-range: keep the days already fetched and note
+      // where the sync stopped instead of discarding everything. First-day
+      // failures (bad auth/scope) still throw so the user sees the real error.
+      if (results.length === 0) throw error;
+      results.push({
+        pages: [],
+        pagination: {
+          label,
+          pagesFetched: 0,
+          stoppedBecause: "fetch_error",
+          maxPages: 50,
+          note: `Day range stopped early after ${results.length} day(s): ${error instanceof Error ? error.message : String(error)}`
+        },
+        rateLimits: [],
+        responseDrift: []
+      });
+      break;
+    }
   }
   return results;
 }
+
+/** Retries per request on 429/5xx before giving up (initial try + retries). */
+const maxFetchRetries = 2;
+/** Cap on how long a retry-after header can make us wait, per attempt. */
+const maxRetryDelayMs = 30_000;
 
 async function fetchJsonOrThrow(
   fetcher: Fetcher,
@@ -558,12 +604,29 @@ async function fetchJsonOrThrow(
   provider: string,
   label: string
 ): Promise<{ payload: unknown; rateLimit?: ProviderQaRateLimit; headers?: ProviderResponse["headers"] }> {
-  const response = await fetcher(url, request);
-  const payload = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    throw new Error(providerPermissionPrompt(provider, label, response, payload));
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxFetchRetries; attempt += 1) {
+    const response = await fetcher(url, request);
+    const payload = await response.json().catch(() => undefined);
+    if (response.ok) {
+      return { payload, rateLimit: rateLimitFromHeaders(label, response.headers), headers: response.headers };
+    }
+    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    // 429 and 5xx are transient: honor retry-after when present, otherwise
+    // back off briefly and try again. 4xx auth/scope errors fail immediately.
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === maxFetchRetries) {
+      break;
+    }
+    const retryAfterSeconds = headerNumber(response.headers, "retry-after");
+    const delayMs = typeof retryAfterSeconds === "number"
+      ? Math.min(Math.max(retryAfterSeconds, 0) * 1000, maxRetryDelayMs)
+      : 500 * 2 ** attempt;
+    if (delayMs > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    }
   }
-  return { payload, rateLimit: rateLimitFromHeaders(label, response.headers), headers: response.headers };
+  throw lastError ?? new Error(`${label} request failed.`);
 }
 
 function nextPageFromPayload(payload: unknown): string | undefined {
@@ -645,12 +708,30 @@ function walkProviderFields(value: unknown, path: string, visit: (path: string) 
 }
 
 function knownProviderFields(provider: string, label: string): Set<string> {
-  const common = ["data", "data[]", "has_more", "hasMore", "next_page", "nextPage"];
+  // Every provider MUST enumerate the fields its normalizer consumes; a
+  // fall-through to `common` alone flags every legitimate field of every page
+  // as drift, burying real drift signals in thousands of false positives.
+  const common = ["data", "data[]", "has_more", "hasMore", "next_page", "nextPage", "object", "links", "links.next"];
   if (provider === "openai" && label.includes("costs")) {
     return new Set([...common, "data[].object", "data[].start_time", "data[].end_time", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].amount", "data[].results[].amount.value", "data[].results[].amount.currency", "data[].results[].line_item", "data[].results[].project_id", "data[].results[].api_key_id", "data[].results[].quantity"]);
   }
   if (provider === "openai" && label.includes("usage")) {
     return new Set([...common, "data[].object", "data[].start_time", "data[].end_time", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].output_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_audio_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].model"]);
+  }
+  if (provider === "anthropic" && label.toLowerCase().includes("cost")) {
+    return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window"]);
+  }
+  if (provider === "anthropic" && label.toLowerCase().includes("claude code")) {
+    return new Set([...common, "data[].date", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
+  }
+  if (provider === "github-copilot" && label.toLowerCase().includes("metrics")) {
+    return new Set([...common, "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "generated_at"]);
+  }
+  if (provider === "github-copilot" && label.toLowerCase().includes("seats")) {
+    return new Set([...common, "total_seats", "plan_type", "seats", "seats[]", "seats[].created_at", "seats[].updated_at", "seats[].pending_cancellation_date", "seats[].last_activity_at", "seats[].last_activity_editor", "seats[].plan_type", "seats[].login", "seats[].id", "seats[].assignee", "seats[].assignee.login", "seats[].assignee.email", "seats[].assignee.id", "seats[].assignee.node_id", "seats[].assignee.avatar_url", "seats[].assignee.html_url", "seats[].assignee.type", "seats[].assignee.site_admin", "seats[].assigning_team", "seats[].organization"]);
+  }
+  if (provider === "cursor") {
+    return new Set([...common, "users", "users[]", "users[].email", "users[].emailAddress", "users[].userId", "users[].id", "users[].name", "users[].role", "users[].spendCents", "users[].usageBasedCents", "users[].chargedCents", "users[].fastPremiumRequests", "users[].hardLimitOverrideDollars", "data[].email", "data[].emailAddress", "data[].userId", "data[].id", "data[].name", "data[].role", "data[].spendCents", "data[].usageBasedCents", "data[].chargedCents", "subscriptionCycleStart", "totalMembers", "totalPages"]);
   }
   return new Set([...common]);
 }
@@ -721,17 +802,36 @@ function extractProviderMessage(payload: unknown): string {
 }
 
 function sanitizeProviderMessage(message: string): string {
-  return message.replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]").replace(/gh[pousr]_[A-Za-z0-9_]+/g, "[REDACTED]");
+  // One redaction implementation for the whole product (discovery.ts owns it).
+  return redactSecrets(message).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]").replace(/gh[pousr]_[A-Za-z0-9_]+/g, "[REDACTED]");
 }
 
-function providerResult(provider: string, sourceId: string, authReference: string, records: UsageRecord[], fallbackCompleteness: ProviderConnectorResult["completeness"], qa?: ProviderQaSummary): ProviderConnectorResult {
+/**
+ * Result-level completeness is DERIVED from record-level confidence, never
+ * hardcoded: the label on the whole pull is the weakest confidence among the
+ * records that actually carry dollars (worst-wins, matching analyze.ts).
+ * Copilot seats and Cursor spend are estimated, so their results say so.
+ */
+function completenessFromRecords(records: UsageRecord[]): ProviderConnectorResult["completeness"] {
+  const rank: Record<CostConfidence, number> = { verified: 0, estimated: 1, detected_unverified: 2, missing: 3 };
+  const costBearing = records.filter((record) => typeof record.amountUsd === "number");
+  if (costBearing.length === 0) {
+    return "missing";
+  }
+  return costBearing
+    .map((record) => record.costConfidence)
+    .reduce((worst, current) => (rank[current] > rank[worst] ? current : worst));
+}
+
+function providerResult(provider: string, sourceId: string, authReference: string, records: UsageRecord[], qa?: ProviderQaSummary): ProviderConnectorResult {
   const totalUsd = records.reduce((sum, record) => sum + (record.amountUsd ?? 0), 0);
+  const completeness = completenessFromRecords(records);
   return {
     provider,
-    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd }),
+    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd, completeness }),
     records,
     fetchedAt: new Date().toISOString(),
-    completeness: records.length > 0 ? fallbackCompleteness : "missing",
+    completeness,
     qa: qa ?? qaSummary(provider, [])
   };
 }
@@ -739,13 +839,14 @@ function providerResult(provider: string, sourceId: string, authReference: strin
 export function createProviderConnection(input: CreateProviderConnectionInput): ApprovedSource {
   const source = createProviderConnectorStub(input.provider, "provider_api", input.fetchedAt);
   const total = `$${input.totalUsd.toFixed(2)}`;
+  const verification = input.completeness ?? "verified";
   return {
     ...source,
     id: input.sourceId ?? source.id,
-    verification: "verified",
+    verification,
     authReference: input.authReference,
     fieldsMissing: [],
-    scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} verified records totaling ${total}.`
+    scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} ${verification} records totaling ${total}.`
   };
 }
 

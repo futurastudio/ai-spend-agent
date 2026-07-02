@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   analyzeSpend,
+  assertSafeScanRoot,
   attributeUsageRecords,
   createLocalFolderSourceRegistry,
   createScanAuditLog,
@@ -28,6 +29,10 @@ export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
   discovery: LocalDiscoveryResult;
 }> {
   const rootPath = resolve(input.path);
+  // Same unsafe-root policy as the CLI `scan` command (shared core guard):
+  // an MCP client — possibly prompt-injected — must not be able to walk the
+  // home directory, the filesystem root, or system directories.
+  assertSafeScanRoot(rootPath);
   const stateDir = join(rootPath, ".ai-spend-agent");
   await mkdir(stateDir, { recursive: true });
 

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  packages:
+    name: Typecheck, test, build, smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run
+      - run: npm run build
+      # Smoke test the built bin exactly as npm ships it — guards the
+      # stale-dist / broken-bin class of bug that already shipped once.
+      - run: node packages/cli/dist/index.js --help
+      - run: node packages/cli/dist/index.js --sample --no-color
+      # A publish from a dirty tree must still ship a fresh dist (prepack).
+      - run: cd packages/cli && npm pack --dry-run
+
+  web:
+    name: Waitlist app typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+        working-directory: apps/web
+      - run: npx next build
+        working-directory: apps/web
+
+  audit:
+    name: npm audit (high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high

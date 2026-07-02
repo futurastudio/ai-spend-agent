@@ -146,6 +146,14 @@ export function generatePlainEnglishSummary(
       lines.push(`  ${c.dim("illustrative — your first run shows your own skills, agents, and MCP")}`);
     }
     lines.push("");
+  } else if (dc && dc.hasData && dc.deadCount === 0 && !dc.isSample) {
+    // A genuinely clean setup gets congratulated, never shown fabricated waste.
+    lines.push(c.bold("  Dead context") + c.dim("  (configured, never invoked in 30 days)"));
+    lines.push("");
+    lines.push(
+      `  ${c.green("none found")} ${c.dim(`— all ${dc.loadedCount} loaded tool${dc.loadedCount === 1 ? "" : "s"} were invoked in the last ${dc.windowDays} days. Clean setup.`)}`
+    );
+    lines.push("");
   }
 
   // --- The wow: ranked, actionable cut list ------------------------------

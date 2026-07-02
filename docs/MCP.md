@@ -23,13 +23,19 @@ Then point your MCP client at the built server (see [Use it in Cursor / Claude D
 To run the binary by name instead of an absolute path, link or install it globally:
 
 ```bash
-# Option A: link from the workspace (development)
+# Link from the workspace (development)
 cd packages/mcp && npm link
-# Option B: install globally (after publish)
-npm install -g @agent-finops/mcp
 ```
 
+> `@agent-finops/mcp` is not yet published to npm — use the local checkout +
+> `npm link` flow above until it is. This doc will switch to
+> `npm install -g @agent-finops/mcp` when the package is live.
+
 After linking, `ai-spend-mcp` is on your PATH and starts the stdio server.
+
+**Safety:** `scan_ai_spend` enforces the same guard as the CLI — it refuses to
+scan your home directory, the filesystem root, or system directories, and all
+discovered secrets are redacted before anything reaches the MCP client.
 
 ---
 
