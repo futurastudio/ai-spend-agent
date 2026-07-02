@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -95,5 +95,58 @@ describe("redactSecrets", () => {
     expect(redacted).toContain(`${openAiKeyName}=[REDACTED]`);
     expect(redacted).not.toContain(fakeOpenAiKey);
     expect(redacted).not.toContain(fakeAnthropicKey);
+  });
+
+  it("redacts non-sk secrets: GitHub tokens, JWTs, Google keys, Slack, AWS, admin-key env names", () => {
+    const fakeGhp = "ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    const fakeFineGrained = "github_pat_" + "11ABCDEFG0abcdefghijklmnopqrstuvwxyz";
+    const fakeJwt = "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    const fakeGoogle = "AIza" + "SyA1234567890abcdefghijklmnopqrstuv";
+    const fakeSlack = "xoxb-" + "123456789012-abcdefghijklmnop";
+    const fakeAws = "AKIA" + "IOSFODNN7EXAMPLE";
+    const adminKeyName = "OPENAI_ADMIN" + "_KEY";
+    const text = [
+      `token: ${fakeGhp}`,
+      `pat: ${fakeFineGrained}`,
+      `bearer ${fakeJwt}`,
+      `maps: ${fakeGoogle}`,
+      `slack: ${fakeSlack}`,
+      `aws: ${fakeAws}`,
+      `${adminKeyName}=super-secret-value`
+    ].join("\n");
+
+    const redacted = redactSecrets(text);
+
+    for (const secret of [fakeGhp, fakeFineGrained, fakeJwt, fakeGoogle, fakeSlack, fakeAws, "super-secret-value"]) {
+      expect(redacted).not.toContain(secret);
+    }
+    expect(redacted).toContain(`${adminKeyName}=[REDACTED]`);
+  });
+});
+
+describe("hardened discovery walk", () => {
+  it("completes the scan despite dangling symlinks and unreadable directories, reporting skips", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-hardened-"));
+    await writeFile(join(dir, "package.json"), JSON.stringify({ dependencies: { openai: "latest" } }));
+    await symlink(join(dir, "does-not-exist.txt"), join(dir, "dangling-link.md"));
+    const lockedDir = join(dir, "locked");
+    await mkdir(lockedDir);
+    await writeFile(join(lockedDir, "notes.md"), "openai spend notes");
+    await chmod(lockedDir, 0o000);
+
+    try {
+      const result = await scanLocalUsageSignals(dir);
+
+      // The scan must finish and still find the readable signal.
+      expect(result.signals.map((signal) => signal.provider)).toContain("openai");
+      expect(result.unreadablePaths).toContain("dangling-link.md");
+      // chmod 000 has no effect when running as root (CI containers) — only
+      // assert the locked dir shows up when the OS actually enforces it.
+      if (typeof process.getuid === "function" && process.getuid() !== 0) {
+        expect(result.unreadablePaths).toContain("locked");
+      }
+    } finally {
+      await chmod(lockedDir, 0o755);
+    }
   });
 });

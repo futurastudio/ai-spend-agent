@@ -50,7 +50,8 @@ describe("spend analysis", () => {
       workflowKey: "research_summary",
       agentId: "agent-analyst",
       amountUsd: 64,
-      estimatedSavingsUsd: 15.16,
+      // 64 × 0.2 (documented workflowSavings planning ratio in analyze.ts)
+      estimatedSavingsUsd: 12.8,
       suggestedOptimization: expect.stringContaining("Cap context")
     });
     expect(summary.workflowWatch[0]?.shareOfSpend).toBeCloseTo(0.7356, 4);
@@ -83,7 +84,8 @@ describe("spend analysis", () => {
     expect(recommendations[0]).toMatchObject({
       id: "model-downgrade",
       priority: "high",
-      estimatedImpactUsd: 16.8
+      // 51.9 × 0.3 (documented modelDowngrade planning ratio in analyze.ts)
+      estimatedImpactUsd: 15.57
     });
     expect(recommendations.every((recommendation) => recommendation.whyItMatters.length > 20)).toBe(true);
     expect(recommendations.every((recommendation) => recommendation.nextAction.length > 20)).toBe(true);

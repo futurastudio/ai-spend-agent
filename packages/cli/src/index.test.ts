@@ -76,6 +76,20 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
   });
 
+  it("never injects sample dead-context onto a real (local-logs) readout", async () => {
+    await writeClaudeLogFixture();
+
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-clean-"));
+    const result = await runCli(["--path", dir, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("YOUR USAGE");
+    // The illustrative 29-of-38 sample belongs to demo mode only; a real
+    // readout with nothing measured shows no fabricated waste.
+    expect(result.stdout).not.toContain("29 of 38");
+    expect(result.stdout).not.toContain("illustrative — your first run");
+  });
+
   it("uses real local agent logs for report-card before falling back to sample data", async () => {
     await writeClaudeLogFixture();
 
@@ -515,7 +529,7 @@ describe("minimal CLI vertical slice", () => {
     expect(markdown).toContain("## Board action plan");
     expect(markdown).toContain("## Agency margin and workflow watch");
     expect(markdown).toContain("client-beta / project-research / research_summary");
-    expect(markdown).toContain("Estimated savings: $15.16");
+    expect(markdown).toContain("Estimated savings: $12.80");
     expect(markdown).toContain("Copy this into your coding agent");
     expect(applyArtifact).toContain("# AI Spend Apply Artifact");
     expect(applyArtifact).toContain("client-beta / project-research / research_summary");

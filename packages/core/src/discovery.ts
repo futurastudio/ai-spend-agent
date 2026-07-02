@@ -15,6 +15,8 @@ export type LocalDiscoveryResult = {
   rootPath: string;
   scannedFiles: number;
   skippedDirectories: string[];
+  /** Paths that could not be read (permissions, dangling symlinks, non-UTF8) — skipped, never fatal. */
+  unreadablePaths: string[];
   signals: UsageSignal[];
   secretsDetected: string[];
   redactedEvidence: string[];
@@ -50,12 +52,30 @@ const providerRules: Array<{
   { provider: "replit", kind: "invoice", patterns: [/replit/i], confidence: 0.72 }
 ];
 
-const secretAssignmentPattern = /\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD))\s*=\s*([^\s#"']+)/g;
+// Name-based redaction: any UPPER_SNAKE env-style assignment whose name ends
+// in a secret-ish suffix. `KEY` deliberately subsumes API_KEY/ADMIN_KEY/etc —
+// over-redacting a public key is harmless; leaking a private one is not.
+const secretAssignmentPattern = /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH))\s*=\s*([^\s#"']+)/g;
+// Value-based redaction: known secret shapes regardless of how they're named.
 const providerSecretPatterns = [
   /sk-proj-[A-Za-z0-9_-]{20,}/g,
   /sk-ant-api\d{2}-[A-Za-z0-9_-]{20,}/g,
   /sk-[A-Za-z0-9_-]{20,}/g,
-  /helicone_[A-Za-z0-9_-]{16,}/gi
+  /helicone_[A-Za-z0-9_-]{16,}/gi,
+  // GitHub tokens: classic PATs, OAuth, server/user/refresh, fine-grained.
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  // Google API keys.
+  /\bAIza[0-9A-Za-z_-]{30,}\b/g,
+  // JWTs (three base64url segments).
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  // Slack tokens.
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  // AWS access key IDs.
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  // GitLab PATs and npm tokens.
+  /\bglpat-[A-Za-z0-9_-]{16,}\b/g,
+  /\bnpm_[A-Za-z0-9]{30,}\b/g
 ];
 
 export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDiscoveryResult> {
@@ -63,20 +83,36 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
     rootPath,
     scannedFiles: 0,
     skippedDirectories: [],
+    unreadablePaths: [],
     signals: [],
     secretsDetected: [],
     redactedEvidence: []
   };
   const secrets = new Set<string>();
   const skipped = new Set<string>();
+  const unreadable = new Set<string>();
 
   await walk(rootPath, async (path) => {
-    const fileInfo = await stat(path);
+    // A dangling symlink, permission-denied entry, or unreadable file must
+    // never reject the whole scan — real machines are messy. Skip and report.
+    let fileInfo;
+    try {
+      fileInfo = await stat(path);
+    } catch {
+      unreadable.add(path);
+      return;
+    }
     if (fileInfo.size > maxFileBytes || !isInterestingFile(path)) {
       return;
     }
 
-    const raw = await readFile(path, "utf8");
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch {
+      unreadable.add(path);
+      return;
+    }
     const redacted = redactSecrets(raw);
     const relativePath = relative(rootPath, path) || basename(path);
     result.scannedFiles += 1;
@@ -105,9 +141,12 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
         confidence: rule.confidence
       });
     }
-  }, skipped);
+  }, skipped, unreadable);
 
   result.skippedDirectories = Array.from(skipped).sort();
+  result.unreadablePaths = Array.from(unreadable)
+    .map((path) => relative(rootPath, path) || basename(path))
+    .sort();
   result.secretsDetected = Array.from(secrets).sort();
   result.signals = dedupeSignals(result.signals).sort((left, right) => {
     const provider = left.provider.localeCompare(right.provider);
@@ -135,8 +174,20 @@ function detectSecretNames(text: string): string[] {
   return Array.from(names);
 }
 
-async function walk(rootPath: string, visit: (path: string) => Promise<void>, skipped: Set<string>): Promise<void> {
-  const entries = await readdir(rootPath, { withFileTypes: true });
+async function walk(
+  rootPath: string,
+  visit: (path: string) => Promise<void>,
+  skipped: Set<string>,
+  unreadable: Set<string>
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(rootPath, { withFileTypes: true });
+  } catch {
+    // Permission-denied or vanished directory: skip it, keep scanning.
+    unreadable.add(rootPath);
+    return;
+  }
   for (const entry of entries) {
     const path = join(rootPath, entry.name);
     if (entry.isDirectory()) {
@@ -144,11 +195,11 @@ async function walk(rootPath: string, visit: (path: string) => Promise<void>, sk
         skipped.add(entry.name);
         continue;
       }
-      await walk(path, visit, skipped);
+      await walk(path, visit, skipped, unreadable);
       continue;
     }
 
-    if (entry.isFile()) {
+    if (entry.isFile() || entry.isSymbolicLink()) {
       await visit(path);
     }
   }

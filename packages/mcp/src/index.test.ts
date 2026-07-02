@@ -1,6 +1,6 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { listSourcesTool, recommendCutsTool, scanAiSpendTool } from "./index.js";
 
@@ -38,5 +38,11 @@ describe("MCP analyst tools", () => {
 
     expect(result.recommendations[0]).toContain("anthropic");
     expect(result.source).toBe("scanner");
+  });
+
+  it("refuses to scan the home directory and the filesystem root (same guard as the CLI)", async () => {
+    // A prompt-injected MCP client must not be able to walk broad roots.
+    await expect(scanAiSpendTool({ path: homedir() })).rejects.toThrow(/too broad/);
+    await expect(scanAiSpendTool({ path: "/" })).rejects.toThrow(/too broad/);
   });
 });

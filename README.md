@@ -1,6 +1,6 @@
 # AI Spend Analyst
 
-[![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
+[![CI](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
 
 **You don't know what AI cost you this month — and your provider won't tell you until the meter does.**
 
@@ -155,7 +155,10 @@ can read your spend directly. See [`docs/MCP.md`](docs/MCP.md).
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
 - **Estimates labeled as estimates.** Log-derived numbers use published API
-  rates and are always tagged `estimated`; billing-API numbers are `verified`.
+  rates and are always tagged `estimated`. OpenAI and Anthropic cost-report
+  numbers are `verified`; Copilot seat-price reconciliation and the beta
+  Cursor connector are honestly tagged `estimated` until reconciled against a
+  real invoice.
 
 ## Open-core
 

@@ -20,6 +20,38 @@ const confidenceRank: Record<CostConfidence, number> = {
   missing: 3
 };
 
+/**
+ * Planning ratios behind every "estimated impact/savings" figure this module
+ * emits. These are deliberately ROUND heuristics — orientation numbers for a
+ * first conversation, not measured savings — and every consumer labels them
+ * estimated. They are aligned with the documented per-model economics in
+ * cutList.ts (downgradeRules retain 20–50% of cost on downgrade-safe work;
+ * the Batch API retains 50%): applying those cuts to only the eligible slice
+ * of a workload typically lands in the 10–30% range below.
+ *
+ * If you change one, change the doc line with it. No undocumented multiplier
+ * may ever reach user-visible output — that is a product bug on an
+ * honest-numbers brand, not a style issue.
+ */
+const impactRatios = {
+  /** Portion of a workflow's spend typically cuttable via caps, caching, and tier routing. */
+  workflowSavings: 0.2,
+  /** Un-attributed workflow spend treated as margin-exposed until mapped to a client/project (coin-flip prior). */
+  workflowMarginRisk: 0.5,
+  /** Top-model spend recoverable by moving downgrade-safe work to a cheaper tier (see cutList.ts downgradeRules). */
+  modelDowngrade: 0.3,
+  /** Cost of oversized-context calls recoverable by trimming prompts/retrieval. */
+  promptTrimming: 0.15,
+  /** Spend on repeated identical operations recoverable via caching/memoization. */
+  caching: 0.25,
+  /** Top-agent spend avoidable with budget caps catching runaway loops. */
+  agentCaps: 0.15,
+  /** Total spend addressable by moving latency-tolerant work to Batch APIs (50% price × eligible slice). */
+  batching: 0.1,
+  /** Total spend addressable with price/quality routing across multiple providers. */
+  routing: 0.1
+} as const;
+
 export function analyzeSpend(records: UsageRecord[]): SpendSummary {
   const summary: SpendSummary = {
     totalUsd: roundMoney(sumRecords(records)),
@@ -101,8 +133,8 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
       const [clientId, projectId, workflowKey, agentId] = key.split("::") as [string, string, string, string];
       const amountUsd = roundMoney(sumRecords(groupRecords));
       const shareOfSpend = roundRatio(amountUsd / totalUsd);
-      const estimatedSavingsUsd = roundMoney(amountUsd * 0.236875);
-      const estimatedMarginRiskUsd = roundMoney(amountUsd * 0.625);
+      const estimatedSavingsUsd = roundMoney(amountUsd * impactRatios.workflowSavings);
+      const estimatedMarginRiskUsd = roundMoney(amountUsd * impactRatios.workflowMarginRisk);
       const confidence = combinedConfidence(groupRecords.map((record) => record.costConfidence));
       const suggestedOptimization = workflowOptimizationFor(workflowKey, agentId);
 
@@ -140,7 +172,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Premium model usage tends to become invisible once agents are running in the background. Board owners need a clear rule for which jobs deserve the expensive model.",
       nextAction: `Audit the top ${topModel.key} operations and move low-risk summarization, extraction, and draft work to a cheaper model tier first.`,
       priority: "high",
-      estimatedImpactUsd: roundMoney(topModel.amountUsd * 0.3237),
+      estimatedImpactUsd: roundMoney(topModel.amountUsd * impactRatios.modelDowngrade),
       confidence: topModel.confidence,
       relatedKeys: [topModel.key]
     });
@@ -155,7 +187,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Context bloat compounds across every agent run and can make spend rise even when output quality does not improve.",
       nextAction: "Sample the largest prompts, cap retrieval chunks, and require justification before agents include full documents or long histories.",
       priority: "high",
-      estimatedImpactUsd: roundMoney(sumRecords(highInputTokenRecords) * 0.18),
+      estimatedImpactUsd: roundMoney(sumRecords(highInputTokenRecords) * impactRatios.promptTrimming),
       confidence: combinedConfidence(highInputTokenRecords.map((record) => record.costConfidence)),
       relatedKeys: unique(highInputTokenRecords.map((record) => record.model))
     });
@@ -170,7 +202,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Repeated AI calls are the easiest spend to defend cutting because they usually do not change the customer experience.",
       nextAction: "Add a local cache or memoization policy for repeated operation labels before expanding this workflow to more clients.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records.filter((record) => repeatedOperations.includes(record.operation ?? ""))) * 0.25),
+      estimatedImpactUsd: roundMoney(sumRecords(records.filter((record) => repeatedOperations.includes(record.operation ?? ""))) * impactRatios.caching),
       confidence: combinedConfidence(records.map((record) => record.costConfidence)),
       relatedKeys: repeatedOperations
     });
@@ -186,7 +218,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "An autonomous agent can quietly turn one bad loop or broad task into a budget issue before anyone reviews the invoice.",
       nextAction: `Set a warning threshold and hard cap for ${topAgent.key}, then require approval when a run exceeds its expected range.`,
       priority: "high",
-      estimatedImpactUsd: roundMoney(topAgent.amountUsd * 0.15),
+      estimatedImpactUsd: roundMoney(topAgent.amountUsd * impactRatios.agentCaps),
       confidence: topAgent.confidence,
       relatedKeys: [topAgent.key]
     });
@@ -200,7 +232,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Batching turns scattered background calls into an intentional queue, which makes spend easier to forecast and approve.",
       nextAction: "Mark jobs that do not need immediate responses and run them in scheduled batches with a shared context budget.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records) * 0.08),
+      estimatedImpactUsd: roundMoney(sumRecords(records) * impactRatios.batching),
       confidence: combinedConfidence(records.map((record) => record.costConfidence)),
       relatedKeys: ["usage-records"]
     });
@@ -215,7 +247,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Without routing policy, teams pay premium prices for tasks where cheaper models or providers would be good enough.",
       nextAction: "Define default provider/model tiers for extraction, drafting, research, and high-stakes reasoning, then measure quality deltas.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records) * 0.12),
+      estimatedImpactUsd: roundMoney(sumRecords(records) * impactRatios.routing),
       confidence: combinedConfidence(records.map((record) => record.costConfidence)),
       relatedKeys: sources
     });

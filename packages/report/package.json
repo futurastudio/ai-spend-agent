@@ -1,22 +1,24 @@
 {
   "name": "@agent-finops/report",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.1.2",
+    "@agent-finops/core": "0.1.3",
     "cli-table3": "^0.6.5",
     "picocolors": "^1.1.1"
   },
   "files": [
     "dist",
     "!dist/**/*.test.*",
-    "!dist/**/*.map"
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
   ],
   "license": "MIT",
   "description": "Terminal renderer and shareable AI Receipt for ai-spend-agent.",
@@ -24,5 +26,8 @@
     "type": "git",
     "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
     "directory": "packages/report"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
