@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { aggregateCalls, parseClaudeCodeTranscript, parseCodexRollout } from "./localAgentLogs.js";
 import { estimateTokenCostUsd } from "./modelPricing.js";
@@ -38,6 +39,11 @@ describe("parseClaudeCodeTranscript", () => {
       cacheWrite5mTokens: 0,
       cacheWrite1hTokens: 500
     });
+  });
+
+  it("labels sessions launched from the home directory as (home), not the username", () => {
+    const calls = parseClaudeCodeTranscript(claudeLine({ cwd: homedir() }));
+    expect(calls[0]!.project).toBe("(home)");
   });
 
   it("dedupes repeated message id + request id lines (streaming rewrites)", () => {

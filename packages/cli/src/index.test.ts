@@ -80,6 +80,31 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
   });
 
+  it("report and apply-artifact work right after a quickstart (live local-log fallback, never sample)", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-fallback-"));
+
+    // No scan, no persisted state — exactly what a first-run npx user does.
+    const report = await runCli(["report", "--path", dir]);
+    expect(report.exitCode).toBe(0);
+    const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    expect(markdown).toContain("$7.50");
+    expect(markdown).not.toContain("$87.00");
+
+    const artifact = await runCli(["apply-artifact", "--path", dir]);
+    expect(artifact.exitCode).toBe(0);
+    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    expect(prompt).toContain("# AI Spend Apply Artifact");
+  });
+
+  it("report without state or logs explains what to run — and never suggests sample data as the fix for real data", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-empty-"));
+    const result = await runCli(["report", "--path", dir]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("npx ai-spend-agent");
+    expect(result.stderr).not.toMatch(/^Run scan --sample/);
+  });
+
   it("honors --plan as an explicit persona override", async () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-plan-"));

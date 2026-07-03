@@ -5,6 +5,23 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.2.1 — 2026-07-03
+
+Field-testing fixes: the APPLY→VERIFY loop now works end-to-end for quickstart
+users.
+
+- **`report` and `apply-artifact` work right after a first run.** Both fell
+  over with "No local spend state found — run scan --sample" for every npx
+  quickstart user (the quickstart persists nothing, and suggesting sample data
+  to a real-data user was the worst possible advice). They now fall back to
+  the same live local-log read as the quickstart (never sample), persist it as
+  `local_logs` state, and the empty-machine error says what to actually run.
+- **Sub-$1/mo cuts collapse into one summary line** (still counted in plan
+  math and included in the apply artifact) — no more near-duplicate noise.
+- **By-project accuracy polish:** sessions launched from the home directory
+  are labeled `(home)` instead of your username, and the project table states
+  its definition ("project = the folder the session ran in").
+
 ## 0.2.0 — 2026-07-02
 
 **The tool now knows who it's talking to: local plan detection + persona

@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { estimateTokenCostUsd, type TokenUsage } from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
@@ -248,6 +248,9 @@ async function listJsonlFiles(root: string): Promise<string[]> {
 
 function projectFromCwd(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
+  // Sessions launched from the home directory aren't a "project" — labeling
+  // them with the username reads like a data bug on the by-project table.
+  if (resolve(cwd) === resolve(homedir())) return "(home)";
   const name = basename(cwd);
   return name.length > 0 ? name : undefined;
 }

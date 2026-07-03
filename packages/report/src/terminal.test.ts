@@ -133,6 +133,24 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("on your flat-price plan these cuts buy rate-limit headroom");
   });
 
+  it("collapses sub-$1/mo cuts into one summary line", async () => {
+    const records = await sample();
+    // Add a tiny second operation that yields a <$1/mo cut alongside big ones.
+    // Sized so the trim cut lands between the $0.50 cut-list floor and the
+    // $1/mo display threshold: 3×$0.09 × 25% trim / 3-day window × 30 ≈ $0.68.
+    const tiny = records.slice(0, 3).map((record, index) => ({
+      ...record,
+      id: `tiny-${index}`,
+      operation: "tiny leftover op",
+      amountUsd: 0.09,
+      inputTokens: 120_000
+    }));
+    const all = [...records, ...tiny];
+    const text = generatePlainEnglishSummary(analyzeSpend(all), { records: all, color: false });
+    expect(text).toMatch(/\+ \d+ smaller cuts? under \$1\/mo/);
+    expect(text).toContain("included in apply-artifact");
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);
