@@ -5,6 +5,23 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.1.5 — 2026-07-02
+
+Field-testing fixes for the npx-first audience.
+
+- **Every suggested command is `npx`-prefixed.** The APPLY step told npx users
+  to run `ai-spend-agent apply-artifact` — a guaranteed "command not found"
+  for anyone without a global install. All readout commands now work on both
+  install paths (regression-tested: no bare `ai-spend-agent <cmd>` can ship).
+- **Plan check answers "am I getting my money's worth?"** — when a plan covers
+  your usage it now shows the value multiple ("You're getting ~5× the plan
+  price in usage").
+- **Honest savings framing on flat-price plans.** When a subscription covers
+  the usage, the cut list says so: cuts buy rate-limit headroom and faster
+  sessions, not cash — they become cash the day you pay per token.
+- Dead-context MCP hint no longer points at `connect` (which cannot size MCP
+  token weight); the honest lever is removing unused servers from `.mcp.json`.
+
 ## 0.1.4 — 2026-07-02
 
 Readability + accuracy release from first real-user field testing. No new

@@ -100,7 +100,7 @@ export function generatePlainEnglishSummary(
   if (options.mode === "demo") {
     lines.push("");
     lines.push(
-      `  ${c.yellow("DEMO")} ${c.dim("sample data — run")} ${c.bold("ai-spend-agent connect openai")} ${c.dim("for your real numbers")}`
+      `  ${c.yellow("DEMO")} ${c.dim("sample data — run")} ${c.bold("npx ai-spend-agent connect openai")} ${c.dim("for your real numbers")}`
     );
   }
   if (options.mode === "local-logs") {
@@ -150,8 +150,10 @@ export function generatePlainEnglishSummary(
     }
     if (dc.unmeasuredDeadCount > 0) {
       const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
+      // Honest hint: nothing can size MCP token weight from config alone
+      // (definitions load at runtime) — the lever is removing unused servers.
       lines.push(
-        `  ${c.dim(`${dc.unmeasuredDeadCount} unused MCP server${plural} — token weight not measurable from config (run \`connect\` to size it)`)}`
+        `  ${c.dim(`${dc.unmeasuredDeadCount} unused MCP server${plural} — token weight not measurable from config; removing them from .mcp.json still trims every turn's context`)}`
       );
     }
     if (dc.isSample) {
@@ -221,14 +223,26 @@ export function generatePlainEnglishSummary(
         `  ${c.dim("downgrades assume the cheaper model holds quality for that workload — verify before switching")}`
       );
     }
+    // Honest framing for subscription users: when a flat-price plan covers
+    // this usage, trimming doesn't return cash — it returns headroom. Saying
+    // "$224/mo savings" to someone whose marginal cost is $0 is the kind of
+    // overclaim a technical reader will (rightly) call out.
+    if (planChecks.some((check) => typeof check.monthlySavingsVsApiUsd === "number")) {
+      lines.push(
+        `  ${c.dim("on a flat-price plan these cuts buy rate-limit headroom and faster sessions, not cash — they become cash the day you pay per token")}`
+      );
+    }
   }
   lines.push("");
 
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
   lines.push(sectionHeader(3, "APPLY", "make the cuts (copy, don't retype)", c));
   lines.push("");
+  // Every command is npx-prefixed: most users run via `npx ai-spend-agent`
+  // and have NO `ai-spend-agent` on PATH — a bare command is a guaranteed
+  // "command not found" for exactly the person who just got motivated.
   lines.push(
-    `  ${c.cyan("›")} ${c.bold("ai-spend-agent apply-artifact")}   ${c.dim("writes a ready-to-paste prompt + action plan for your coding agent")}`
+    `  ${c.cyan("›")} ${c.bold("npx ai-spend-agent apply-artifact")}   ${c.dim("writes a ready-to-paste prompt + action plan for your coding agent")}`
   );
   lines.push(
     `  ${c.dim("    paste .ai-spend-agent/ai-spend-coding-agent-prompt.md into Claude Code / Codex — it bundles the cuts above with guardrails")}`
@@ -239,18 +253,18 @@ export function generatePlainEnglishSummary(
   lines.push(sectionHeader(4, "VERIFY", "prove the cuts worked before trusting them", c));
   lines.push("");
   lines.push(
-    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx ai-spend-agent")} ${c.dim("after a few days and compare — or")} ${c.bold("ai-spend-agent watch")} ${c.dim("to track deltas per cycle")}`
+    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx ai-spend-agent")} ${c.dim("after a few days and compare — or")} ${c.bold("npx ai-spend-agent watch")} ${c.dim("to track deltas per cycle")}`
   );
   if (options.mode === "local-logs" || options.mode === "demo") {
     lines.push(
       `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("for verified billing:")} ${c.bold("ai-spend-agent connect anthropic|openai")} ${c.dim("(org admin key, ~2 min; estimates stay estimates until then)")}`
+      `  ${c.cyan("›")} ${c.dim("pay for API usage too? verify against real billing:")} ${c.bold("npx ai-spend-agent connect anthropic|openai")} ${c.dim("(org admin key)")}`
     );
   } else {
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("ai-spend-agent sync-provider")} ${c.dim("after applying cuts")}`
+      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("npx ai-spend-agent sync-provider")} ${c.dim("after applying cuts")}`
     );
   }
   lines.push("");
@@ -402,22 +416,21 @@ function labelOf(key: string): string {
 function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
   if (mode === "connected") {
     return [
-      "ai-spend-agent report           write a shareable Markdown + HTML report",
-      "ai-spend-agent --group-by agent drill into another dimension"
+      "npx ai-spend-agent report           write a shareable Markdown + HTML report",
+      "npx ai-spend-agent --group-by agent drill into another dimension"
     ];
   }
   if (mode === "local-logs") {
     return [
-      "ai-spend-agent connect openai    add verified billing data (org-owner admin key)",
-      "ai-spend-agent connect anthropic add verified billing data (admin key)",
-      "ai-spend-agent --group-by project see which project burns the most",
+      "npx ai-spend-agent report              write a shareable Markdown + HTML report",
+      "npx ai-spend-agent --group-by project  see which project burns the most",
       "Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app"
     ];
   }
   return [
-    "ai-spend-agent connect openai    pull your real OpenAI spend (org-owner admin key)",
-    "ai-spend-agent connect anthropic pull your real Anthropic spend (admin key)",
-    "ai-spend-agent report            write a shareable Markdown + HTML report"
+    "npx ai-spend-agent connect openai    pull your real OpenAI spend (org-owner admin key)",
+    "npx ai-spend-agent connect anthropic pull your real Anthropic spend (admin key)",
+    "npx ai-spend-agent report            write a shareable Markdown + HTML report"
   ];
 }
 

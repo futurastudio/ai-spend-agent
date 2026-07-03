@@ -39,6 +39,12 @@ export type PlanCheck = {
   suggestedPlan?: SubscriptionPlan;
   /** apiEquivalentMonthlyUsd - plan price, when positive. */
   monthlySavingsVsApiUsd?: number;
+  /**
+   * API-equivalent usage ÷ plan price — "you're getting N× the plan price in
+   * usage". The number a subscription user actually wants: am I getting my
+   * money's worth? Present only when a plan covers the usage.
+   */
+  valueMultiple?: number;
   /** One-line, render-ready verdict. */
   headline: string;
 };
@@ -80,11 +86,13 @@ export function computePlanChecks(records: UsageRecord[]): PlanCheck[] {
     // (days with usage), which can differ from the calendar window shown
     // elsewhere on the readout — a technical reader will divide and check.
     const basis = `projected from ${windowDays} active day${windowDays === 1 ? "" : "s"}`;
+    const covered = suggested && typeof savings === "number" && savings > 0;
+    const valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
     let headline: string;
     if (!suggested) {
       headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
-    } else if (typeof savings === "number" && savings > 0) {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
+    } else if (covered) {
+      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this. You're getting ~${valueMultiple}× the plan price in usage, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
     } else {
       headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
     }
@@ -94,7 +102,8 @@ export function computePlanChecks(records: UsageRecord[]): PlanCheck[] {
       apiEquivalentMonthlyUsd: monthly,
       windowDays,
       suggestedPlan: suggested,
-      monthlySavingsVsApiUsd: typeof savings === "number" && savings > 0 ? savings : undefined,
+      monthlySavingsVsApiUsd: covered ? savings : undefined,
+      valueMultiple,
       headline
     });
   }

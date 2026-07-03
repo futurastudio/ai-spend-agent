@@ -42,6 +42,9 @@ describe("computePlanChecks", () => {
     // The projection basis must be stated: this divides by ACTIVE days, which
     // can differ from the calendar window shown elsewhere on the readout.
     expect(check.headline).toContain("projected from 2 active days");
+    // $300/mo usage on a $200 plan -> 1.5× the plan price in usage.
+    expect(check.valueMultiple).toBe(1.5);
+    expect(check.headline).toContain("~1.5× the plan price in usage");
   });
 
   it("flags light usage as possibly cheaper on pay-as-you-go", () => {

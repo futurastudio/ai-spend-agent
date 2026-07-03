@@ -230,10 +230,10 @@ function quickstartNextSteps(
   if (detected.length > 0) {
     const names = detected.map((credential) => `${credential.provider} (${credential.hint})`).join(", ");
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
-    steps.push(`ai-spend-agent connect ${detected[0]!.provider}   use it — note: COST data needs an ADMIN/owner key`);
+    steps.push(`npx ai-spend-agent connect ${detected[0]!.provider}   use it — note: COST data needs an ADMIN/owner key`);
   }
-  steps.push("ai-spend-agent report              write a shareable Markdown + HTML report");
-  steps.push("ai-spend-agent --group-by project  see which project burns the most");
+  steps.push("npx ai-spend-agent report              write a shareable Markdown + HTML report");
+  steps.push("npx ai-spend-agent --group-by project  see which project burns the most");
   steps.push("Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app");
   return steps;
 }

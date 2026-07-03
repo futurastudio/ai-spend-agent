@@ -101,6 +101,18 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("no account was connected or authorized");
   });
 
+  it("prefixes every suggested command with npx (bare bins are not on PATH for npx users)", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const text = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs" });
+    expect(text).toContain("npx ai-spend-agent apply-artifact");
+    // No bare `ai-spend-agent <cmd>` may survive without the npx prefix.
+    for (const line of text.split("\n")) {
+      const bare = line.match(/(?<!npx )ai-spend-agent (apply-artifact|watch|connect|report|sync-provider)/);
+      expect(bare, line).toBeNull();
+    }
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);
