@@ -132,8 +132,8 @@ async function storeInSupabase(email: string, sourceRef: string): Promise<"store
   if (!url || !serviceKey) {
     return "skipped";
   }
-  try {
-    const response = await fetch(`${url}/rest/v1/waitlist`, {
+  const insert = (payload: Record<string, string>) =>
+    fetch(`${url}/rest/v1/waitlist`, {
       method: "POST",
       headers: {
         apikey: serviceKey,
@@ -141,8 +141,25 @@ async function storeInSupabase(email: string, sourceRef: string): Promise<"store
         "Content-Type": "application/json",
         Prefer: "return=minimal",
       },
-      body: JSON.stringify({ email, source_ref: sourceRef }),
+      body: JSON.stringify(payload),
     });
+
+  try {
+    let response = await insert({ email, source_ref: sourceRef });
+    if (response.status === 400) {
+      // Older waitlist tables predate the source_ref column (PGRST204).
+      // A signup with lost attribution beats a lost signup — retry bare.
+      const detail = await response.text();
+      if (detail.includes("source_ref")) {
+        console.error(
+          "[waitlist] waitlist table is missing the source_ref column — storing signup without attribution. Run: alter table waitlist add column source_ref text not null default 'direct';",
+        );
+        response = await insert({ email });
+      } else {
+        console.error(`[waitlist] supabase insert failed: 400 ${detail}`);
+        return "error";
+      }
+    }
     if (response.ok) {
       return "stored";
     }
