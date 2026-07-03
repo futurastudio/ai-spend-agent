@@ -78,8 +78,12 @@ it in one view and tells you what to cut.
   utilization %. Where the token weight is measurable (skills/agents), it adds
   an honest, cache-aware $/mo; MCP servers are counted (schemas aren't readable
   from config) until you connect to size them.
-- **Plan check**: your projected monthly usage at API rates vs subscription
-  plan prices ("~$253/mo at API rates — Max 20x at $200/mo covers it").
+- **Plan check with real plan detection**: your projected monthly usage at API
+  rates vs your *actual* subscription — the tool reads the plan your coding
+  agents already know locally (Claude Max tier, ChatGPT plan; read-only,
+  whitelisted fields, no account access) and tells you your value multiple
+  ("you're on Max 5x: ~10× the plan price in usage") plus when usage runs past
+  your tier. Override with `--plan <id>` if detection can't see your setup.
 - **Drill-down**: `--group-by source|model|client|project|agent|user|workspace|apiKey`.
 - **Shareable AI Receipt**: `report-card` writes a redacted SVG (no client/
   project/user names) + a paste-ready caption.

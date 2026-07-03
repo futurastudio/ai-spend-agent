@@ -8,8 +8,11 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   detectLocalCredentials,
+  detectLocalPlans,
   redactSecrets,
+  subscriptionPlans,
   unsafeScanRootReason,
+  type DetectedPlan,
   loadDeadContext,
   sampleDeadContext,
   loadLocalAgentUsage,
@@ -84,6 +87,7 @@ type ParsedArgs = {
   cycles?: number;
   noColor?: boolean;
   ignoreState?: boolean;
+  plan?: string;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
@@ -178,6 +182,27 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const groupBy = args.groupBy ?? "model";
   const color = args.noColor ? false : undefined;
 
+  // Persona: --plan override wins; otherwise read the plans the coding agents
+  // themselves persisted locally (read-only, whitelisted fields, no network).
+  let detectedPlans: DetectedPlan[];
+  if (args.plan) {
+    const override = planOverrideFromFlag(args.plan);
+    if (!override) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+      };
+    }
+    detectedPlans = [override];
+  } else {
+    detectedPlans = await detectLocalPlans({
+      // Env overrides keep tests (and unusual installs) isolated from $HOME.
+      claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+      codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+    }).catch(() => []);
+  }
+
   // Surface auto-detected credentials so the user knows their next 2-min step,
   // without ever printing a raw secret.
   const detection = await detectLocalCredentials({ cwd: resolve(args.path) });
@@ -212,7 +237,8 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     color,
     mode,
     nextSteps,
-    deadContext
+    deadContext,
+    detectedPlans
   });
 
   const header = [`  ${dataModeBanner(mode)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
@@ -317,6 +343,14 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   const detection = await detectLocalCredentials({ cwd: rootPath }).catch(() => ({ credentials: [] as DetectedCredential[] }));
   const providerRefs = detection.credentials.map((credential) => `${credential.provider} (${credential.hint})`);
 
+  const plans = await detectLocalPlans({
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+  }).catch(() => [] as DetectedPlan[]);
+  const planLine = plans.length > 0
+    ? plans.map((plan) => `${plan.planLabel} (${plan.agent}, ${plan.billing === "api_key" ? "pay per token" : plan.billing})`).join(", ")
+    : "none detected (use --plan to declare one)";
+
   const warnings: string[] = [];
   if (stateMode === "sample") warnings.push("sample state present — it will be shown as DEMO and cannot mask real logs; run `ai-spend-agent reset` to clear it");
   if (stateMode === "unknown legacy") warnings.push("legacy state with no data-mode tag — run `ai-spend-agent reset`, then re-scan");
@@ -340,6 +374,7 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
     `Claude Code logs: ${claudeFound ? "found" : "not found"}`,
     `Codex logs: ${codexFound ? "found" : "not found"}`,
     `provider env references: ${providerRefs.length > 0 ? providerRefs.join(", ") : "none detected"}`,
+    `subscription plans: ${planLine}`,
     "redaction policy: secrets are never printed or persisted",
     "plan check: available (subscription vs API-rate math)",
     `data mode you'll get now: ${predictedMode}`,
@@ -845,6 +880,20 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
   return ok(lines.join("\n"));
 }
 
+/** Map a --plan id to a synthetic DetectedPlan (explicit user override). */
+function planOverrideFromFlag(planId: string): DetectedPlan | undefined {
+  const plan = subscriptionPlans.find((candidate) => candidate.id === planId);
+  if (!plan) return undefined;
+  return {
+    agent: plan.agent,
+    provider: plan.provider,
+    planId: plan.id,
+    planLabel: plan.name,
+    billing: "subscription",
+    source: "--plan override"
+  };
+}
+
 function describeOrigin(credential: DetectedCredential): string {
   if (credential.origin === "process_env") return "your shell environment";
   if (credential.origin === "dotenv") return ".env";
@@ -1121,6 +1170,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--ignore-state") {
       parsed.ignoreState = true;
+      continue;
+    }
+    if (arg === "--plan") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.plan = next;
+        index += 1;
+      }
       continue;
     }
     if (arg === "--group-by") {
@@ -1419,6 +1476,7 @@ function helpText(): string {
     "Run with no command for an instant, zero-key demo:",
     "  ai-spend-agent                       Show where your AI money goes (sample/auto-detected data)",
     "  ai-spend-agent --group-by agent      Drill down by source|model|client|project|agent|user|workspace|apiKey",
+    "  ai-spend-agent --plan <id>           Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
     "",
     "Connect your real spend (cost data is ADMIN/owner-gated):",
     "  ai-spend-agent connect openai        Self-serve in ~2 min with an org-owner Admin key",

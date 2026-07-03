@@ -8,6 +8,7 @@ import {
   type CostConfidence,
   type CutAction,
   type DeadContextResult,
+  type DetectedPlan,
   type SpendBreakdownEntry,
   type SpendSummary,
   type UsageRecord
@@ -60,6 +61,12 @@ export type PlainEnglishSummaryOptions = {
    * when it carries real data.
    */
   deadContext?: DeadContextResult;
+  /**
+   * Plans detected from the coding agents' own local config (or a --plan
+   * override). Drives persona framing: subscription users get facts +
+   * headroom language; API payers get dollars.
+   */
+  detectedPlans?: DetectedPlan[];
 };
 
 /**
@@ -107,6 +114,15 @@ export function generatePlainEnglishSummary(
     lines.push("");
     lines.push(
       `  ${c.green("YOUR USAGE")} ${c.dim("found in local agent logs (Claude Code / Codex) — priced at API-equivalent rates")}`
+    );
+  }
+  // Persona line: when the agents' own local config tells us the user's plan,
+  // say so up front — the whole readout reads differently on a flat-price plan.
+  const detectedPlans = options.detectedPlans ?? [];
+  const subscriptionPlansDetected = detectedPlans.filter((plan) => plan.billing === "subscription");
+  if (subscriptionPlansDetected.length > 0 && options.mode !== "demo") {
+    lines.push(
+      `  ${c.green("PLAN")} ${c.dim(`${subscriptionPlansDetected.map((plan) => plan.planLabel).join(" · ")} — detected from your agents' local config (read-only, nothing connected)`)}`
     );
   }
   lines.push("");
@@ -171,15 +187,20 @@ export function generatePlainEnglishSummary(
   }
 
   // Plan check (subscription vs API arbitrage) — part of the diagnosis.
-  const planChecks = computePlanChecks(options.records);
+  const planChecks = computePlanChecks(options.records, detectedPlans);
   if (planChecks.length > 0) {
     lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
     lines.push("");
     for (const check of planChecks) {
       lines.push(`  ${c.cyan("›")} ${check.headline}`);
+      if (check.upgradeHint) {
+        lines.push(`    ${c.yellow("!")} ${c.dim(check.upgradeHint)}`);
+      }
     }
     lines.push(
-      `  ${c.dim("compares published list prices — this tool never sees or connects to your subscription account")}`
+      planChecks.some((check) => check.detectedPlan)
+        ? `  ${c.dim("plan read from your agents' local config (read-only); prices are published list prices — no account was accessed")}`
+        : `  ${c.dim("compares published list prices — this tool never sees or connects to your subscription account")}`
     );
     lines.push("");
   }
@@ -227,9 +248,12 @@ export function generatePlainEnglishSummary(
     // this usage, trimming doesn't return cash — it returns headroom. Saying
     // "$224/mo savings" to someone whose marginal cost is $0 is the kind of
     // overclaim a technical reader will (rightly) call out.
-    if (planChecks.some((check) => typeof check.monthlySavingsVsApiUsd === "number")) {
+    if (
+      subscriptionPlansDetected.length > 0 ||
+      planChecks.some((check) => typeof check.monthlySavingsVsApiUsd === "number")
+    ) {
       lines.push(
-        `  ${c.dim("on a flat-price plan these cuts buy rate-limit headroom and faster sessions, not cash — they become cash the day you pay per token")}`
+        `  ${c.dim(`on ${subscriptionPlansDetected.length > 0 ? "your" : "a"} flat-price plan these cuts buy rate-limit headroom and faster sessions, not cash — they become cash the day you pay per token`)}`
       );
     }
   }

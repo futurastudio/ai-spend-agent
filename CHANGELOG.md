@@ -5,6 +5,29 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.2.0 — 2026-07-02
+
+**The tool now knows who it's talking to: local plan detection + persona
+framing.** Consumer subscriptions have no billing API — but the coding agents
+already did their own OAuth and persist what they learned on disk, next to the
+transcripts we already read.
+
+- **Real plan detection** (`@agent-finops/core` `detectLocalPlans`): Claude
+  Max/Pro tier from `~/.claude.json` (`oauthAccount.organizationRateLimitTier`
+  etc.) and ChatGPT plan from `~/.codex/auth.json` (local id_token claims).
+  Read-only, whitelisted fields only — token values are never read into
+  results; no network, no account access.
+- **Plan check speaks in facts, not guesses**: "you're on Claude Max 5x
+  ($100/mo, detected locally): ~10.6× the plan price in usage" — and warns
+  when projected usage runs past what the detected tier typically covers,
+  with the honest ordering (trim context first, upgrade second).
+- **Persona framing**: a PLAN line up front for subscription users; the
+  headroom-not-cash caveat now keys off the *detected* plan; unknown
+  tiers/plans are named honestly without invented prices.
+- **`--plan <id>` override** for setups detection can't see
+  (claude-max-5x | claude-max-20x | claude-pro | chatgpt-plus | chatgpt-pro);
+  invalid ids list the valid ones. `doctor` reports detected plans.
+
 ## 0.1.5 — 2026-07-02
 
 Field-testing fixes for the npx-first audience.

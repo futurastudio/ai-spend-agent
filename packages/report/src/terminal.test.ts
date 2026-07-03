@@ -113,6 +113,26 @@ describe("generatePlainEnglishSummary", () => {
     }
   });
 
+  it("leads with the detected plan for subscription users (persona framing)", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const text = generatePlainEnglishSummary(summary, {
+      records,
+      color: false,
+      mode: "local-logs",
+      detectedPlans: [{
+        agent: "claude-code",
+        provider: "anthropic",
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        source: "test"
+      }]
+    });
+    expect(text).toContain("PLAN Claude Max 5x — detected from your agents' local config");
+    expect(text).toContain("on your flat-price plan these cuts buy rate-limit headroom");
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);

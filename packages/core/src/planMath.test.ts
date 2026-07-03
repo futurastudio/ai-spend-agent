@@ -47,6 +47,45 @@ describe("computePlanChecks", () => {
     expect(check.headline).toContain("~1.5× the plan price in usage");
   });
 
+  it("speaks in facts when the plan is locally detected, and warns when usage exceeds the tier", () => {
+    const detected = {
+      agent: "claude-code" as const,
+      provider: "anthropic" as const,
+      planId: "claude-max-5x",
+      planLabel: "Claude Max 5x",
+      billing: "subscription" as const,
+      source: "test"
+    };
+    // $20 over 2 days -> $300/mo, well past Max 5x's ~$250 coverage.
+    const checks = computePlanChecks([
+      localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 10 }),
+      localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 10 })
+    ], [detected]);
+
+    const check = checks[0]!;
+    // Detection pins the REAL plan (Max 5x), not the guessed covering tier.
+    expect(check.detectedPlan?.planId).toBe("claude-max-5x");
+    expect(check.suggestedPlan!.id).toBe("claude-max-5x");
+    expect(check.headline).toContain("you're on Claude Max 5x");
+    expect(check.headline).toContain("detected locally");
+    // $300 usage / $100 plan = 3× value multiple.
+    expect(check.valueMultiple).toBe(3);
+    expect(check.upgradeHint).toContain("Claude Max 20x");
+  });
+
+  it("states detected-but-unpriceable plans without inventing numbers", () => {
+    const detected = {
+      agent: "claude-code" as const,
+      provider: "anthropic" as const,
+      planLabel: "Claude Max (tier: default_claude_max_100x)",
+      billing: "subscription" as const,
+      source: "test"
+    };
+    const checks = computePlanChecks([localLogRecord({ amountUsd: 10 })], [detected]);
+    expect(checks[0]!.headline).toContain("price not in our table");
+    expect(checks[0]!.valueMultiple).toBeUndefined();
+  });
+
   it("flags light usage as possibly cheaper on pay-as-you-go", () => {
     // $0.10 on one day -> $3/mo -> within Claude Pro, no positive savings.
     const checks = computePlanChecks([localLogRecord({ amountUsd: 0.1 })]);
