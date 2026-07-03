@@ -208,6 +208,9 @@ export function generatePlainEnglishSummary(
   // Drill-down table — the last diagnostic block.
   const entries = breakdownFor(summary, groupBy);
   lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+  if (groupBy === "project" && options.mode === "local-logs") {
+    lines.push(`  ${c.dim("project = the folder the session ran in; (home) = sessions launched from your home directory")}`);
+  }
   lines.push("");
   lines.push(indentBlock(renderBreakdownTable(entries, summary.totalUsd, c, useColor), "  "));
   lines.push("");
@@ -218,8 +221,21 @@ export function generatePlainEnglishSummary(
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence cut found in this window. Connect more usage to surface savings."));
   } else {
-    for (const [index, action] of cutList.slice(0, 5).entries()) {
+    // Sub-$1/mo cuts are noise on the readout (often near-duplicates of a big
+    // cut) — collapse them into one line. They still count in the plan math
+    // and still ship in the apply-artifact.
+    const visibleCuts = cutList.filter((action) => action.estimatedMonthlySavingsUsd >= 1);
+    const minorCuts = cutList.filter((action) => action.estimatedMonthlySavingsUsd < 1);
+    const shown = visibleCuts.length > 0 ? visibleCuts : cutList;
+    for (const [index, action] of shown.slice(0, 5).entries()) {
       lines.push(...cutActionLines(action, index + 1, c));
+    }
+    if (visibleCuts.length > 0 && minorCuts.length > 0) {
+      const minorTotal = minorCuts.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
+      lines.push(
+        `  ${c.dim(`+ ${minorCuts.length} smaller cut${minorCuts.length === 1 ? "" : "s"} under $1/mo (~${formatUsd(minorTotal)}/mo combined) — included in apply-artifact`)}`
+      );
+      lines.push("");
     }
     const days = usageWindowDays(options.records);
     lines.push("");

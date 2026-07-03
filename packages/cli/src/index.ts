@@ -1027,7 +1027,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `No local spend state found at ${stateDir}. Run scan --sample --path <dir> first. ${error instanceof Error ? error.message : ""}`
+      stderr: `Couldn't build a report: ${error instanceof Error ? error.message : String(error)}`
     };
   }
 }
@@ -1093,16 +1093,43 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `No local spend state found at ${stateDir}. Run scan --sample --path <dir> first. ${error instanceof Error ? error.message : ""}`
+      stderr: `Couldn't build apply artifacts: ${error instanceof Error ? error.message : String(error)}`
     };
   }
 }
 
 async function buildReportInput(stateDir: string, rootPath: string) {
-  const [spendState, discovery, mappings, sourceRegistry, missingSourcePrompts, confirmedMappings, providerRecordsState] = await Promise.all([
-    readJson<{ summary: SpendSummary; records?: UsageRecord[]; mode?: PersistedDataMode }>(join(stateDir, "spend.json")),
-    readJson<LocalDiscoveryResult>(join(stateDir, "discovery.json")),
-    readJson<AttributionMapping[]>(join(stateDir, "mappings.json")),
+  let spendState = await readOptionalJson<{ summary: SpendSummary; records?: UsageRecord[]; mode?: PersistedDataMode } | undefined>(
+    join(stateDir, "spend.json"),
+    undefined
+  );
+  let mappings = await readOptionalJson<AttributionMapping[] | undefined>(join(stateDir, "mappings.json"), undefined);
+
+  // The quickstart intentionally writes nothing — so `report`/`apply-artifact`
+  // right after a first run must fall back to the SAME live local-log read
+  // (never sample data), then persist it so subsequent runs are consistent.
+  if (!spendState?.summary || !spendState.records || spendState.records.length === 0) {
+    const logs = await loadLocalAgentUsage({
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+    }).catch(() => undefined);
+    if (!logs || logs.records.length === 0) {
+      throw new Error(
+        "no persisted spend state and no local Claude Code/Codex logs found. " +
+          "Run `npx ai-spend-agent` first (or `npx ai-spend-agent scan --sample --path <dir>` for a demo-data report)."
+      );
+    }
+    const records = logs.records;
+    const summary = analyzeSpend(records);
+    const liveMappings = attributeUsageRecords(records);
+    await mkdir(stateDir, { recursive: true });
+    await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
+    spendState = { summary, records, mode: "local_logs" };
+    mappings = liveMappings;
+  }
+
+  const [discovery, sourceRegistry, missingSourcePrompts, confirmedMappings, providerRecordsState] = await Promise.all([
+    readOptionalJson<LocalDiscoveryResult>(join(stateDir, "discovery.json"), emptyDiscovery(rootPath)),
     readSourceRegistry(stateDir, rootPath),
     readOptionalJson(join(stateDir, "missing-sources.json"), []),
     readConfirmedMappings(stateDir),
@@ -1116,12 +1143,24 @@ async function buildReportInput(stateDir: string, rootPath: string) {
     allRecords: spendState.records ?? [],
     dataMode: spendState.mode,
     discovery,
-    mappings,
+    mappings: mappings ?? [],
     sourceRegistry,
     missingSourcePrompts,
     confirmedMappings,
     providerRecords: providerRecordsState.records,
     providerQa: providerRecordsState.qa ? [providerRecordsState.qa] : []
+  };
+}
+
+function emptyDiscovery(rootPath: string): LocalDiscoveryResult {
+  return {
+    rootPath,
+    scannedFiles: 0,
+    skippedDirectories: [],
+    unreadablePaths: [],
+    signals: [],
+    secretsDetected: [],
+    redactedEvidence: []
   };
 }
 
