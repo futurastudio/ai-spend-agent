@@ -10,15 +10,19 @@ describe("zero-key instant demo first run", () => {
   beforeEach(async () => {
     process.env.AI_SPEND_CLAUDE_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-claude-"));
     process.env.AI_SPEND_CODEX_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-"));
-    // Also isolate dead-context inventory from this machine's real config.
+    // Also isolate dead-context inventory + plan detection from this
+    // machine's real config (otherwise output depends on the dev machine's
+    // actual Claude/ChatGPT subscription).
     process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-home-"));
     process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
+    process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
   });
   afterEach(() => {
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
+    delete process.env.AI_SPEND_CODEX_AUTH;
   });
 
   it("renders the wow with no subcommand and no credentials", async () => {
@@ -74,6 +78,25 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("$7.50");
     expect(result.stdout).toContain("Plan check");
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
+  });
+
+  it("honors --plan as an explicit persona override", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-plan-"));
+
+    const result = await runCli(["--plan", "claude-max-5x", "--path", dir, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("you're on Claude Max 5x");
+    expect(result.stdout).toContain("PLAN Claude Max 5x");
+  });
+
+  it("rejects an unknown --plan id and lists valid plans", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-badplan-"));
+    const result = await runCli(["--plan", "claude-mega-100x", "--path", dir]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("claude-max-20x");
+    expect(result.stderr).toContain("chatgpt-plus");
   });
 
   it("never injects sample dead-context onto a real (local-logs) readout", async () => {

@@ -9,6 +9,7 @@ export * from "./toolInvocations.js";
 export * from "./insights.js";
 export * from "./localAgentLogs.js";
 export * from "./modelPricing.js";
+export * from "./planDetection.js";
 export * from "./planMath.js";
 export * from "./sampleData.js";
 export * from "./scanGuard.js";

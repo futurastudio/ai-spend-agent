@@ -1,3 +1,4 @@
+import type { DetectedPlan } from "./planDetection.js";
 import type { UsageRecord } from "./schema.js";
 
 /**
@@ -45,6 +46,10 @@ export type PlanCheck = {
    * money's worth? Present only when a plan covers the usage.
    */
   valueMultiple?: number;
+  /** The plan actually detected on this machine (or --plan override), if any. */
+  detectedPlan?: DetectedPlan;
+  /** Set when projected usage exceeds what the detected tier typically covers. */
+  upgradeHint?: string;
   /** One-line, render-ready verdict. */
   headline: string;
 };
@@ -55,8 +60,13 @@ const localLogCostType = "local_agent_logs";
  * Compute per-agent plan checks from usage records. Only records that came
  * from local agent logs participate (billing-API records already have real
  * prices and a real plan behind them).
+ *
+ * When `detectedPlans` carries a locally detected plan (or --plan override)
+ * for an agent, the check speaks in facts ("you're on Claude Max 5x") instead
+ * of guesses ("Max 20x likely covers this") — and warns when projected usage
+ * exceeds what the detected tier typically covers.
  */
-export function computePlanChecks(records: UsageRecord[]): PlanCheck[] {
+export function computePlanChecks(records: UsageRecord[], detectedPlans: DetectedPlan[] = []): PlanCheck[] {
   const localRecords = records.filter(
     (record) =>
       record.providerCostType === localLogCostType &&
@@ -86,24 +96,62 @@ export function computePlanChecks(records: UsageRecord[]): PlanCheck[] {
     // (days with usage), which can differ from the calendar window shown
     // elsewhere on the readout — a technical reader will divide and check.
     const basis = `projected from ${windowDays} active day${windowDays === 1 ? "" : "s"}`;
-    const covered = suggested && typeof savings === "number" && savings > 0;
-    const valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
+    const detected = detectedPlans.find((plan) => plan.agent === agent);
+    const detectedKnown = detected?.planId
+      ? subscriptionPlans.find((plan) => plan.id === detected.planId)
+      : undefined;
+
     let headline: string;
-    if (!suggested) {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
-    } else if (covered) {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this. You're getting ~${valueMultiple}× the plan price in usage, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
+    let valueMultiple: number | undefined;
+    let upgradeHint: string | undefined;
+    let effectiveSavings: number | undefined;
+
+    if (detectedKnown) {
+      // FACT mode: we know the user's actual plan from local agent config.
+      valueMultiple = Math.round((monthly / detectedKnown.monthlyUsd) * 10) / 10;
+      const savingsVsApi = roundMoney(monthly - detectedKnown.monthlyUsd);
+      effectiveSavings = savingsVsApi > 0 ? savingsVsApi : undefined;
+      headline =
+        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — you're on ${detectedKnown.name} ` +
+        `($${detectedKnown.monthlyUsd}/mo, detected locally): ~${valueMultiple}× the plan price in usage` +
+        (effectiveSavings ? `, ~$${effectiveSavings.toFixed(2)}/mo cheaper than paying per token.` : `.`);
+      if (monthly > detectedKnown.coversUpToUsd) {
+        const nextTier = subscriptionPlans.find(
+          (plan) => plan.agent === agent && plan.coversUpToUsd > detectedKnown.coversUpToUsd
+        );
+        upgradeHint = nextTier
+          ? `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo) — if you're hitting rate limits, ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next tier; trimming context (below) buys headroom without upgrading.`
+          : `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo) — trimming context (below) is the main headroom lever.`;
+      }
+    } else if (detected) {
+      // Detected a plan we can't price (e.g. an unrecognized tier): state the
+      // fact, then fall back to suggestion math without pretending certainty.
+      headline =
+        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — you're on ${detected.planLabel} ` +
+        `(detected locally; price not in our table)` +
+        (suggested ? `; closest known plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
     } else {
-      headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
+      const covered = suggested && typeof savings === "number" && savings > 0;
+      valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
+      effectiveSavings = covered ? savings : undefined;
+      if (!suggested) {
+        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
+      } else if (covered) {
+        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this. You're getting ~${valueMultiple}× the plan price in usage, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
+      } else {
+        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
+      }
     }
 
     checks.push({
       agent,
       apiEquivalentMonthlyUsd: monthly,
       windowDays,
-      suggestedPlan: suggested,
-      monthlySavingsVsApiUsd: covered ? savings : undefined,
+      suggestedPlan: detectedKnown ?? suggested,
+      monthlySavingsVsApiUsd: effectiveSavings,
       valueMultiple,
+      detectedPlan: detected,
+      upgradeHint,
       headline
     });
   }
