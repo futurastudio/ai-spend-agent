@@ -107,6 +107,18 @@ describe("local plan detection", () => {
     expect(proLite!.planLabel).toContain("prolite");
   });
 
+  it("surfaces exhausted extra-usage credits as a limit signal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-plan-limit-"));
+    const configPath = join(dir, "claude.json");
+    await writeFile(configPath, JSON.stringify({
+      cachedExtraUsageDisabledReason: "out_of_credits",
+      oauthAccount: { billingType: "stripe_subscription", organizationType: "claude_max", organizationRateLimitTier: "default_claude_max_5x" }
+    }));
+
+    const [plan] = await detectLocalPlans({ claudeConfigPath: configPath, codexAuthPath: join(dir, "missing.json") });
+    expect(plan!.limitSignal).toBe("extra-usage credits exhausted");
+  });
+
   it("returns empty (never throws) when nothing is on disk", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-plan-empty-"));
     const plans = await detectLocalPlans({

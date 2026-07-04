@@ -5,6 +5,25 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.3.0 — 2026-07-04
+
+**Subscription-first.** The launch audience is engineers on Claude Max /
+ChatGPT plans — for them the dollars are counterfactual (they pay flat), so
+the readout now leads with what the plan buys, not what the tokens would cost.
+
+- **Value-led header** for detected subscription users: `COVERED BY Claude
+  Max 5x ($100/mo) — you're getting ~10.6× what you pay`, with DIAGNOSE
+  reframed as "what your subscription actually buys you" and RECOMMEND as
+  "frees up plan headroom".
+- **By-project is the default table for local-log users** — "which project
+  burns my plan" is the flagship question; `--group-by model` still available.
+  Demo/connected modes keep by-model.
+- **Hard limit-pressure evidence**: Claude Code records when extra-usage
+  credits run out (`cachedExtraUsageDisabledReason`); the plan check now
+  surfaces it — "your local config shows extra-usage credits exhausted — you
+  ARE hitting your plan's limits" — turning the upgrade/trim advice from
+  hypothesis into fact.
+
 ## 0.2.2 — 2026-07-04
 
 Field-testing fixes: drill-downs answer one question; artifacts are usable in

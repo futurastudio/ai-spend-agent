@@ -151,6 +151,31 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("included in apply-artifact");
   });
 
+  it("leads with COVERED BY + value multiple for subscription users (value, not counterfactual dollars)", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code" as const
+    }));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      detectedPlans: [{
+        agent: "claude-code",
+        provider: "anthropic",
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        source: "test"
+      }]
+    });
+    expect(text).toContain("COVERED BY Claude Max 5x ($100/mo)");
+    expect(text).toMatch(/~[\d.]+× what you pay/);
+    expect(text).toContain("what your subscription actually buys you");
+    expect(text).toContain("frees up plan headroom");
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);

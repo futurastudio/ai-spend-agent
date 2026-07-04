@@ -73,6 +73,24 @@ describe("computePlanChecks", () => {
     expect(check.upgradeHint).toContain("Claude Max 20x");
   });
 
+  it("upgrades 'might hit limits' to hard evidence when a limit signal is present", () => {
+    const detected = {
+      agent: "claude-code" as const,
+      provider: "anthropic" as const,
+      planId: "claude-max-5x",
+      planLabel: "Claude Max 5x",
+      billing: "subscription" as const,
+      limitSignal: "extra-usage credits exhausted",
+      source: "test"
+    };
+    const checks = computePlanChecks([
+      localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 10 }),
+      localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 10 })
+    ], [detected]);
+    expect(checks[0]!.upgradeHint).toContain("extra-usage credits exhausted");
+    expect(checks[0]!.upgradeHint).toContain("you ARE hitting");
+  });
+
   it("states detected-but-unpriceable plans without inventing numbers", () => {
     const detected = {
       agent: "claude-code" as const,
