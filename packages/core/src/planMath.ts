@@ -119,9 +119,15 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
         const nextTier = subscriptionPlans.find(
           (plan) => plan.agent === agent && plan.coversUpToUsd > detectedKnown.coversUpToUsd
         );
+        // A local limit signal upgrades "might hit limits" to hard evidence.
+        const evidence = detected?.limitSignal
+          ? `your local config shows ${detected.limitSignal} — you ARE hitting your plan's limits`
+          : `if you're hitting rate limits`;
         upgradeHint = nextTier
-          ? `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo) — if you're hitting rate limits, ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next tier; trimming context (below) buys headroom without upgrading.`
+          ? `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo); ${evidence}: ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next tier; trimming context (below) buys headroom without upgrading.`
           : `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo) — trimming context (below) is the main headroom lever.`;
+      } else if (detected?.limitSignal) {
+        upgradeHint = `your local config shows ${detected.limitSignal} — you're hitting your plan's limits; trimming context (below) buys headroom without upgrading.`;
       }
     } else if (detected) {
       // Detected a plan we can't price (e.g. an unrecognized tier): state the

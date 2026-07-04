@@ -179,7 +179,9 @@ type InstantReadData = {
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const { records, mode, warnings } = await loadInstantReadData(args);
   const summary = analyzeSpend(records);
-  const groupBy = args.groupBy ?? "model";
+  // For real local-log users the by-project view is the flagship table
+  // ("which project burns my plan"); demo/connected keep by-model.
+  const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
   const color = args.noColor ? false : undefined;
 
   // Persona: --plan override wins; otherwise read the plans the coding agents

@@ -32,6 +32,12 @@ export type DetectedPlan = {
   /** Human-readable plan label; falls back to the raw local identifier. */
   planLabel: string;
   billing: "subscription" | "api_key" | "unknown";
+  /**
+   * Evidence of plan-limit pressure found in the agent's local config —
+   * e.g. Claude Code records when extra-usage credits ran out. This is the
+   * difference between "you might hit limits" and "you ARE hitting limits".
+   */
+  limitSignal?: string;
   /** Where the detection came from (file or "--plan override"). */
   source: string;
 };
@@ -85,12 +91,21 @@ async function detectClaudePlan(configPath: string): Promise<DetectedPlan | unde
     planLabel = organizationType ?? rateLimitTier ?? "unknown";
   }
 
+  // Claude Code records why extra usage is unavailable; "out_of_credits"
+  // means the user already exhausted their overage pool — hard evidence of
+  // limit pressure, not a guess.
+  const extraUsageReason = isRecord(config) ? stringOf(config.cachedExtraUsageDisabledReason) : undefined;
+  const limitSignal = extraUsageReason === "out_of_credits"
+    ? "extra-usage credits exhausted"
+    : undefined;
+
   return {
     agent: "claude-code",
     provider: "anthropic",
     planId,
     planLabel,
     billing: billingType === "stripe_subscription" ? "subscription" : billingType ? "unknown" : "unknown",
+    limitSignal,
     source: configPath
   };
 }

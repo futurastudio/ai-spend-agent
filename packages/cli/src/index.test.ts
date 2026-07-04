@@ -157,6 +157,16 @@ describe("zero-key instant demo first run", () => {
     expect(result.stderr).toContain("chatgpt-plus");
   });
 
+  it("defaults the table to by-project for local-log users (by-model for demo)", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-defaultgroup-"));
+    const local = await runCli(["--path", dir, "--no-color"]);
+    expect(local.stdout).toContain("Spend by project");
+
+    const demo = await runCli(["--sample", "--path", dir, "--no-color"]);
+    expect(demo.stdout).toContain("Spend by model");
+  });
+
   it("never injects sample dead-context onto a real (local-logs) readout", async () => {
     await writeClaudeLogFixture();
 

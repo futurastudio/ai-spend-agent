@@ -127,9 +127,23 @@ export function generatePlainEnglishSummary(
   // say so up front — the whole readout reads differently on a flat-price plan.
   const detectedPlans = options.detectedPlans ?? [];
   const subscriptionPlansDetected = detectedPlans.filter((plan) => plan.billing === "subscription");
+  const subscriptionPersona = subscriptionPlansDetected.length > 0 && options.mode === "local-logs";
+  // Plan checks are needed up front for the value-led header (and again in
+  // the DIAGNOSE section) — pure computation, so hoisting is free.
+  const planChecks = computePlanChecks(options.records, detectedPlans);
   if (subscriptionPlansDetected.length > 0 && options.mode !== "demo") {
     lines.push(
       `  ${c.green("PLAN")} ${c.dim(`${subscriptionPlansDetected.map((plan) => plan.planLabel).join(" · ")} — detected from your agents' local config (read-only, nothing connected)`)}`
+    );
+  }
+  // Subscription users' headline stat is VALUE, not spend: the dollars above
+  // are counterfactual (they pay a flat price). Lead with what the plan buys.
+  const primaryValueCheck = planChecks.find(
+    (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
+  );
+  if (subscriptionPersona && primaryValueCheck) {
+    lines.push(
+      `  ${c.green(c.bold("COVERED BY"))} ${c.bold(`${primaryValueCheck.suggestedPlan!.name} ($${primaryValueCheck.suggestedPlan!.monthlyUsd}/mo)`)} ${c.dim("— you're getting")} ${c.bold(`~${primaryValueCheck.valueMultiple}×`)} ${c.dim("what you pay")}`
     );
   }
   lines.push("");
@@ -157,7 +171,7 @@ export function generatePlainEnglishSummary(
   // what each block is and what to do next.
 
   // ══ 1 · DIAGNOSE ════════════════════════════════════════════════════════
-  lines.push(sectionHeader(1, "DIAGNOSE", "what your coding agents actually cost", c));
+  lines.push(sectionHeader(1, "DIAGNOSE", subscriptionPersona ? "what your subscription actually buys you" : "what your coding agents actually cost", c));
   lines.push("");
 
   // Where your money goes: at-a-glance bars (the screenshot).
@@ -211,7 +225,6 @@ export function generatePlainEnglishSummary(
   }
 
   // Plan check (subscription vs API arbitrage) — part of the diagnosis.
-  const planChecks = computePlanChecks(options.records, detectedPlans);
   if (planChecks.length > 0) {
     lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
     lines.push("");
@@ -240,7 +253,7 @@ export function generatePlainEnglishSummary(
   lines.push("");
 
   // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
-  lines.push(sectionHeader(2, "RECOMMEND", "Where to cut, ranked by est. monthly savings", c));
+  lines.push(sectionHeader(2, "RECOMMEND", subscriptionPersona ? "Where to cut — frees up plan headroom, ranked by est. monthly value" : "Where to cut, ranked by est. monthly savings", c));
   lines.push("");
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence cut found in this window. Connect more usage to surface savings."));
