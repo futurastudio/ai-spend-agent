@@ -238,7 +238,10 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     mode,
     nextSteps,
     deadContext,
-    detectedPlans
+    detectedPlans,
+    // An explicit --group-by is a drill-down question: answer with just the
+    // table + window instead of repeating the whole readout.
+    view: args.groupBy ? "breakdown" : "full"
   });
 
   const header = [`  ${dataModeBanner(mode)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
@@ -297,7 +300,10 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
   }).catch(() => undefined);
   if (logs && logs.records.length > 0) {
-    if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider") {
+    // Persisted local_logs state (written by report/apply-artifact) is the
+    // same data source we just re-read — superseding it silently is correct,
+    // not worth a scary "sample/legacy" warning.
+    if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider" && persisted.mode !== "local_logs") {
       warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `ai-spend-agent reset` to clear it, or pass --ignore-state.");
     }
     return { records: logs.records, mode: "local-logs", warnings };
@@ -1021,7 +1027,12 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
       `total spend: $${reportInput.summary.totalUsd.toFixed(2)}`,
-      "privacy: local files only; no cloud upload performed"
+      "privacy: local files only; no cloud upload performed",
+      "",
+      "next:",
+      `  open ${htmlPath}       view the full report in your browser`,
+      `  less ${markdownPath}       read it in the terminal`,
+      "  npx ai-spend-agent apply-artifact       print the paste-ready coding-agent prompt"
     ].join("\n"));
   } catch (error) {
     return {
@@ -1079,15 +1090,21 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
   try {
     const reportInput = await buildReportInput(stateDir, rootPath);
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
+    // The prompt IS the product of this command — print it so a terminal
+    // user can copy it right here instead of hunting for a file path.
+    const codingPrompt = await readFile(artifactPaths.codingPrompt, "utf8");
     return ok([
       "AI Spend Analyst Agent apply-artifact",
       `path: ${rootPath}`,
-      `coding prompt: ${artifactPaths.codingPrompt}`,
       `action plan: ${artifactPaths.actionPlan}`,
       `policy/config draft: ${artifactPaths.policyConfigDraft}`,
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
-      "safety: generated artifacts only; no external systems changed"
+      "safety: generated artifacts only; no external systems changed",
+      "",
+      `──── copy everything below into Claude Code / Codex (also saved at ${artifactPaths.codingPrompt}) ────`,
+      "",
+      codingPrompt.trimEnd()
     ].join("\n"));
   } catch (error) {
     return {

@@ -67,6 +67,13 @@ export type PlainEnglishSummaryOptions = {
    * headroom language; API payers get dollars.
    */
   detectedPlans?: DetectedPlan[];
+  /**
+   * "full" renders the complete diagnose→recommend→apply→verify readout.
+   * "breakdown" is the focused drill-down for an explicit --group-by: the
+   * headline, the requested table, its definition, and the data window —
+   * without repeating the whole readout.
+   */
+  view?: "full" | "breakdown";
 };
 
 /**
@@ -126,6 +133,23 @@ export function generatePlainEnglishSummary(
     );
   }
   lines.push("");
+
+  // Focused drill-down: an explicit --group-by asks one question — render
+  // just the answer (table + definition + data window), not the whole loop.
+  if (options.view === "breakdown") {
+    const focusedEntries = breakdownFor(summary, groupBy);
+    lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+    if (groupBy === "project" && options.mode === "local-logs") {
+      lines.push(`  ${c.dim("project = the folder the session ran in; (home) = sessions launched from your home directory")}`);
+    }
+    lines.push(`  ${c.dim(dataWindowLine(options.records))}`);
+    lines.push("");
+    lines.push(indentBlock(renderBreakdownTable(focusedEntries, summary.totalUsd, c, useColor), "  "));
+    lines.push("");
+    lines.push(`  ${c.dim("run")} ${c.bold("npx ai-spend-agent")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
+    lines.push("");
+    return lines.join("\n");
+  }
 
   // The readout is structured as the loop the product sells: DIAGNOSE what
   // your coding agents cost -> RECOMMEND cuts -> APPLY them (copy artifact)
@@ -326,6 +350,14 @@ export function generatePlainEnglishSummary(
 /** Numbered stage banner: `── 2 · RECOMMEND ──  blurb`. */
 function sectionHeader(step: number, name: string, blurb: string, c: Colors): string {
   return `  ${c.dim("──")} ${c.bold(c.cyan(`${step} · ${name}`))} ${c.dim("──")}  ${c.dim(blurb)}`;
+}
+
+/** "window: 14 days of data (2026-06-20 → 2026-07-04)" for drill-down tables. */
+function dataWindowLine(records: UsageRecord[]): string {
+  const days = [...new Set(records.map((record) => record.timestamp.slice(0, 10)))].sort();
+  if (days.length === 0) return "window: no dated records";
+  const span = days.length === 1 ? days[0] : `${days[0]} → ${days[days.length - 1]}`;
+  return `window: ${days.length} day${days.length === 1 ? "" : "s"} of data (${span})`;
 }
 
 function cutActionLines(action: CutAction, rank: number, c: Colors): string[] {

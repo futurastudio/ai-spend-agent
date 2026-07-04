@@ -5,6 +5,23 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.2.2 — 2026-07-04
+
+Field-testing fixes: drill-downs answer one question; artifacts are usable in
+the terminal.
+
+- **Explicit `--group-by` renders a focused view** — headline, the requested
+  table, its definition, and the data window ("window: 14 days of data
+  (2026-05-21 → 2026-07-04)") — instead of repeating the entire four-stage
+  readout around one table.
+- **`apply-artifact` prints the paste-ready prompt inline** ("copy everything
+  below into Claude Code / Codex") instead of only listing file paths;
+  `report` now ends with open/read hints (`open report.html`, `less
+  report.md`).
+- Fixed a 0.2.1 regression: state persisted by `report`/`apply-artifact`
+  (`local_logs` mode) no longer triggers the misleading "Ignored persisted
+  sample/legacy state" warning on the next quickstart run.
+
 ## 0.2.1 — 2026-07-03
 
 Field-testing fixes: the APPLY→VERIFY loop now works end-to-end for quickstart
