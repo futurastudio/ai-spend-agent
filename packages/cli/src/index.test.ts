@@ -51,6 +51,39 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("agent-analyst");
   });
 
+  it("an explicit --group-by renders the focused table view, not the whole readout", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-focused-"));
+    const result = await runCli(["--group-by", "project", "--no-color", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Spend by project");
+    expect(result.stdout).toMatch(/window: \d+ days? of data/);
+    // The drill-down answers one question — the four-stage loop stays out.
+    expect(result.stdout).not.toContain("RECOMMEND");
+    expect(result.stdout).not.toContain("Plan check");
+    expect(result.stdout).toContain("for the full diagnose");
+  });
+
+  it("re-running after report persists local_logs state does not warn about sample/legacy state", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-nowarn-"));
+    await runCli(["report", "--path", dir]);
+
+    const result = await runCli(["--path", dir, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("Ignored persisted sample/legacy state");
+  });
+
+  it("report tells the user how to open the deliverables", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-reporthint-"));
+    const result = await runCli(["report", "--path", dir]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("open ");
+    expect(result.stdout).toContain("apply-artifact");
+  });
+
   async function writeClaudeLogFixture() {
     const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
     await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
@@ -744,11 +777,14 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("AI Spend Analyst Agent apply-artifact");
-    expect(result.stdout).toContain("coding prompt:");
     expect(result.stdout).toContain("action plan:");
     expect(result.stdout).toContain("policy/config draft:");
     expect(result.stdout).toContain("verification plan:");
     expect(result.stdout).toContain("demo package:");
+    // The paste-ready prompt is printed inline — a terminal user should never
+    // have to hunt for a file path to get the deliverable.
+    expect(result.stdout).toContain("copy everything below into Claude Code / Codex");
+    expect(result.stdout).toContain("# AI Spend Apply Artifact");
     expect(await readFile(join(dir, ".ai-spend-agent", "ai-spend-action-plan.md"), "utf8")).toContain("# AI Spend Action Plan");
   });
 });
