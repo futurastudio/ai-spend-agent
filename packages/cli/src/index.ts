@@ -263,8 +263,8 @@ function quickstartNextSteps(
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
     steps.push(`npx ai-spend-agent connect ${detected[0]!.provider}   use it — note: COST data needs an ADMIN/owner key`);
   }
-  steps.push("npx ai-spend-agent report              write a shareable Markdown + HTML report");
-  steps.push("npx ai-spend-agent --group-by project  see which project burns the most");
+  steps.push("npx aibill report              write a shareable Markdown + HTML report");
+  steps.push("npx aibill --group-by project  see which project burns the most");
   steps.push("Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app");
   return steps;
 }
@@ -1034,7 +1034,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
       `  less ${markdownPath}       read it in the terminal`,
-      "  npx ai-spend-agent apply-artifact       print the paste-ready coding-agent prompt"
+      "  npx aibill apply       print the paste-ready coding-agent prompt"
     ].join("\n"));
   } catch (error) {
     return {
@@ -1124,27 +1124,33 @@ async function buildReportInput(stateDir: string, rootPath: string) {
   );
   let mappings = await readOptionalJson<AttributionMapping[] | undefined>(join(stateDir, "mappings.json"), undefined);
 
-  // The quickstart intentionally writes nothing — so `report`/`apply-artifact`
-  // right after a first run must fall back to the SAME live local-log read
-  // (never sample data), then persist it so subsequent runs are consistent.
-  if (!spendState?.summary || !spendState.records || spendState.records.length === 0) {
+  // Local-log state is a CACHE, not a source of truth: the quickstart always
+  // re-reads the logs fresh, so report/apply must too — otherwise yesterday's
+  // persisted snapshot makes the artifact's numbers disagree with the screen.
+  // Persisted state stays authoritative only for connected/sample data.
+  const needsFreshLogs =
+    !spendState?.summary || !spendState.records || spendState.records.length === 0 || spendState.mode === "local_logs";
+  if (needsFreshLogs) {
     const logs = await loadLocalAgentUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
     }).catch(() => undefined);
-    if (!logs || logs.records.length === 0) {
-      throw new Error(
-        "no persisted spend state and no local Claude Code/Codex logs found. " +
-          "Run `npx ai-spend-agent` first (or `npx ai-spend-agent scan --sample --path <dir>` for a demo-data report)."
-      );
+    if (logs && logs.records.length > 0) {
+      const records = logs.records;
+      const summary = analyzeSpend(records);
+      const liveMappings = attributeUsageRecords(records);
+      await mkdir(stateDir, { recursive: true });
+      await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
+      spendState = { summary, records, mode: "local_logs" };
+      mappings = liveMappings;
     }
-    const records = logs.records;
-    const summary = analyzeSpend(records);
-    const liveMappings = attributeUsageRecords(records);
-    await mkdir(stateDir, { recursive: true });
-    await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
-    spendState = { summary, records, mode: "local_logs" };
-    mappings = liveMappings;
+    // else: logs vanished — an existing local_logs snapshot (if any) is used below.
+  }
+  if (!spendState?.summary || !spendState.records || spendState.records.length === 0) {
+    throw new Error(
+      "no persisted spend state and no local Claude Code/Codex logs found. " +
+        "Run `npx aibill` first (or `npx aibill scan --sample --path <dir>` for a demo-data report)."
+    );
   }
 
   const [discovery, sourceRegistry, missingSourcePrompts, confirmedMappings, providerRecordsState] = await Promise.all([

@@ -64,6 +64,28 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("for the full diagnose");
   });
 
+  it("report/apply always re-read local logs fresh — a stale snapshot can never disagree with the readout", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-fresh-"));
+    await runCli(["report", "--path", dir]);
+
+    // Add a NEW transcript after the first report persisted its snapshot.
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "-tmp-late"), { recursive: true });
+    await writeFile(join(logsDir, "-tmp-late", "late.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-06-09T10:00:00.000Z",
+      cwd: "/tmp/late",
+      sessionId: "late-1",
+      requestId: "late-req",
+      message: { id: "late-msg", model: "claude-opus-4-8", usage: { input_tokens: 2_000_000, output_tokens: 200_000 } }
+    }), "utf8");
+
+    const second = await runCli(["report", "--path", dir]);
+    // $7.50 (old fixture) + $15.00 (new one) — the fresh read must include both.
+    expect(second.stdout).toContain("total spend: $22.50");
+  });
+
   it("re-running after report persists local_logs state does not warn about sample/legacy state", async () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-nowarn-"));
@@ -81,7 +103,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["report", "--path", dir]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("open ");
-    expect(result.stdout).toContain("apply-artifact");
+    expect(result.stdout).toContain("aibill apply");
   });
 
   async function writeClaudeLogFixture() {
@@ -134,7 +156,7 @@ describe("zero-key instant demo first run", () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-empty-"));
     const result = await runCli(["report", "--path", dir]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("npx ai-spend-agent");
+    expect(result.stderr).toContain("npx aibill");
     expect(result.stderr).not.toMatch(/^Run scan --sample/);
   });
 

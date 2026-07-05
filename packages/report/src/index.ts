@@ -348,9 +348,10 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
     "Verification: I'll re-run `npx aibill` in a few days — dead context should read \"none found\"."
   );
 
-  const whyLines = cuts.map(
-    (cut) => `- ${cut.title} — ~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo at API-equivalent rates (${cut.recordCount} ${cut.recordUnit}, ${cut.confidence})`
-  );
+  const whyLines = cuts.map((cut) => {
+    const unit = cut.recordCount === 1 ? cut.recordUnit.replace(/s$/, "") : cut.recordUnit;
+    return `- ${cut.title} — ~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo at API-equivalent rates (${cut.recordCount} ${unit}, ${cut.confidence})`;
+  });
   if (dead && dead.hasData && !dead.isSample && dead.deadCount > 0) {
     whyLines.unshift(`- ${dead.deadCount} of ${dead.loadedCount} loaded tools never invoked in ${dead.windowDays} days (${Math.round(dead.wastePercent * 100)}%)`);
   }
