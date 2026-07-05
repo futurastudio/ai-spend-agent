@@ -5,7 +5,7 @@
 **You don't know what AI cost you this month — and your provider won't tell you until the meter does.**
 
 ```bash
-npx ai-spend-agent
+npx aispend        # short form — same CLI as `npx ai-spend-agent` / `npx aireceipt`
 ```
 
 **Half of what your AI agent loads, you pay for and never use.** One run on a

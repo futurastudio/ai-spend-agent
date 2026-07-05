@@ -23,6 +23,9 @@ jobs:
       # stale-dist / broken-bin class of bug that already shipped once.
       - run: node packages/cli/dist/index.js --help
       - run: node packages/cli/dist/index.js --sample --no-color
+      # Alias bins must run the exact same CLI.
+      - run: node packages/aispend/run.js --help
+      - run: node packages/aireceipt/run.js --help
       # A publish from a dirty tree must still ship a fresh dist (prepack).
       - run: cd packages/cli && npm pack --dry-run
 

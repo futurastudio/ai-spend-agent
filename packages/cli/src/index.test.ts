@@ -795,6 +795,11 @@ describe("minimal CLI vertical slice", () => {
     // have to hunt for a file path to get the deliverable.
     expect(result.stdout).toContain("copy everything below into Claude Code / Codex");
     expect(result.stdout).toContain("# AI Spend Apply Artifact");
+
+    // `apply` is the promoted short form of apply-artifact.
+    const short = await runCli(["apply", "--path", dir]);
+    expect(short.exitCode).toBe(0);
+    expect(short.stdout).toContain("# AI Spend Apply Artifact");
     expect(await readFile(join(dir, ".ai-spend-agent", "ai-spend-action-plan.md"), "utf8")).toContain("# AI Spend Action Plan");
   });
 });
