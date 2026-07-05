@@ -165,6 +165,36 @@ export function generatePlainEnglishSummary(
     return lines.join("\n");
   }
 
+  // TL;DR before the detail: an engineer decides in the first five lines
+  // whether the next sixty are worth reading. Three bullets — value, where it
+  // goes, the one action — each traceable to a section below.
+  if (options.mode === "local-logs") {
+    const tldr: string[] = [];
+    if (primaryValueCheck) {
+      const limits = planChecks.some((check) => check.upgradeHint) ? " — and hitting its limits" : "";
+      tldr.push(`you're getting ~${primaryValueCheck.valueMultiple}× your ${primaryValueCheck.suggestedPlan!.name} price in usage${limits}`);
+    }
+    const topProject = summary.byProject.find((entry) => entry.key !== "unmapped");
+    if (topProject && summary.totalUsd > 0) {
+      tldr.push(`${labelOf(topProject.key)} eats ${Math.round((topProject.amountUsd / summary.totalUsd) * 100)}% of it`);
+    }
+    const dcCount = options.deadContext && options.deadContext.hasData && !options.deadContext.isSample ? options.deadContext.deadCount : 0;
+    const topCut = cutList[0];
+    if (topCut || dcCount > 0) {
+      const cutPhrase = topCut?.kind === "context_trim" ? "trim heavy context" : topCut ? topCut.title.toLowerCase() : "";
+      const parts = [
+        dcCount > 0 ? `remove ${dcCount} dead tool${dcCount === 1 ? "" : "s"}` : "",
+        cutPhrase
+      ].filter(Boolean);
+      tldr.push(`one action: ${parts.join(" + ")} — run npx aibill apply`);
+    }
+    if (tldr.length > 0) {
+      lines.push(c.bold("  TL;DR"));
+      for (const line of tldr) lines.push(`  ${c.cyan("›")} ${line}`);
+      lines.push("");
+    }
+  }
+
   // The readout is structured as the loop the product sells: DIAGNOSE what
   // your coding agents cost -> RECOMMEND cuts -> APPLY them (copy artifact)
   // -> VERIFY the delta. Sections are numbered so a first-time reader knows
@@ -229,7 +259,13 @@ export function generatePlainEnglishSummary(
     lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
     lines.push("");
     for (const check of planChecks) {
-      lines.push(`  ${c.cyan("›")} ${check.headline}`);
+      // Headlines are fact-dense; split at the first dash so narrow terminals
+      // get a short lead line + a dim continuation instead of a 200-char wrap.
+      const [head, ...rest] = check.headline.split(" — ");
+      lines.push(`  ${c.cyan("›")} ${head}`);
+      if (rest.length > 0) {
+        lines.push(`    ${c.dim(rest.join(" — "))}`);
+      }
       if (check.upgradeHint) {
         lines.push(`    ${c.yellow("!")} ${c.dim(check.upgradeHint)}`);
       }

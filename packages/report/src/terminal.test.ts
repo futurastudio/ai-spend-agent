@@ -176,6 +176,32 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("frees up plan headroom");
   });
 
+  it("opens with a TL;DR on local-log readouts (value, top burner, one action)", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code" as const
+    }));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      detectedPlans: [{
+        agent: "claude-code",
+        provider: "anthropic",
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        source: "test"
+      }]
+    });
+    expect(text).toContain("TL;DR");
+    expect(text).toMatch(/getting ~[\d.]+× your Claude Max 5x price/);
+    expect(text).toContain("run npx aibill apply");
+    // TL;DR comes before the detail sections.
+    expect(text.indexOf("TL;DR")).toBeLessThan(text.indexOf("1 · DIAGNOSE"));
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);
