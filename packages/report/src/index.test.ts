@@ -360,6 +360,74 @@ describe("board-style report generation", () => {
     expect(artifact).toContain("Do not change user-visible quality thresholds without approval");
   });
 
+  it("builds the local-log apply artifact from the cut list and NAMED dead-context items", () => {
+    const localRecords: UsageRecord[] = [
+      {
+        id: "local-1",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+        model: "claude-fable-5",
+        inputTokens: 250_000,
+        outputTokens: 5_000,
+        amountUsd: 80,
+        costConfidence: "estimated",
+        agentId: "claude-code",
+        providerCostType: "local_agent_logs",
+        operation: "claude-code sessions"
+      },
+      {
+        id: "local-2",
+        timestamp: "2026-07-02T00:00:00.000Z",
+        source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+        model: "claude-fable-5",
+        inputTokens: 180_000,
+        outputTokens: 4_000,
+        amountUsd: 60,
+        costConfidence: "estimated",
+        agentId: "claude-code",
+        providerCostType: "local_agent_logs",
+        operation: "claude-code sessions"
+      }
+    ];
+    const artifact = generateApplyArtifactMarkdown({
+      ...input,
+      dataMode: "local_logs",
+      allRecords: localRecords,
+      deadContext: {
+        hasData: true,
+        loadedCount: 4,
+        deadCount: 3,
+        measuredDeadCount: 0,
+        unmeasuredDeadCount: 3,
+        deadTokens: 0,
+        monthlyDeadTokens: 0,
+        wastePercent: 0.75,
+        monthlyUsd: 0,
+        monthlyUsdUpperBound: 0,
+        deadItems: [
+          { kind: "mcp_server", name: "context7", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json" },
+          { kind: "mcp_server", name: "framer", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json" }
+        ],
+        sessions: 20,
+        totalTurns: 300,
+        pricingModel: "claude-sonnet-4",
+        windowDays: 30
+      }
+    });
+
+    // Concrete, executable, from the same engines as the readout.
+    expect(artifact).toContain('mcp server "context7" (configured in /Users/dev/.claude.json)');
+    expect(artifact).toContain("claude mcp remove");
+    expect(artifact).toContain("Shrink heavy context");
+    expect(artifact).toContain("session-days");
+    expect(artifact).toContain("Rollback");
+    expect(artifact).toContain("npx aibill");
+    // Agency workflow language must NOT leak into the coding-agent persona.
+    expect(artifact).not.toContain("unmapped-client");
+    expect(artifact).not.toContain("Margin at risk");
+    expect(artifact).not.toContain("cache stable inputs");
+  });
+
   it("quotes dynamic YAML values in policy/config drafts", () => {
     const policy = generatePolicyConfigDraftMarkdown({
       ...input,

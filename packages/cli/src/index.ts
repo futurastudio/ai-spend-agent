@@ -1155,8 +1155,23 @@ async function buildReportInput(stateDir: string, rootPath: string) {
     readOptionalJson<{ records: UsageRecord[]; qa?: ProviderQaSummary }>(join(stateDir, "provider-records.json"), { records: [] })
   ]);
 
+  // Named dead-context items feed the apply artifact for local-log users —
+  // the concrete "remove these" list, from the same engine as the readout.
+  const deadContext = spendState.mode === "local_logs"
+    ? await loadDeadContext({
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        projectDir: rootPath,
+        includeAllProjectMcp: true,
+        sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        windowDays: 30
+      }).catch(() => undefined)
+    : undefined;
+
   return {
     summary: spendState.summary,
+    deadContext,
     // Evidence ledger is built from the SAME records as the confidence
     // breakdown so the two sections can never contradict each other.
     allRecords: spendState.records ?? [],

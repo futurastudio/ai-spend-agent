@@ -1,6 +1,8 @@
+import { generateCutList, usageWindowDays } from "@agent-finops/core";
 import type {
   AttributionMapping,
   ConfirmedMapping,
+  DeadContextResult,
   LocalDiscoveryResult,
   MissingSourcePrompt,
   ProviderQaSummary,
@@ -40,6 +42,8 @@ export type SpendReportInput = {
   allRecords?: UsageRecord[];
   /** Where the analyzed data came from. Sample is labeled non-finance-grade. */
   dataMode?: "sample" | "local_logs" | "connected_provider";
+  /** Real dead-context findings (named items + config paths) for the apply artifact. */
+  deadContext?: DeadContextResult;
 };
 
 type RecommendationLike = SpendSummary["recommendations"][number];
@@ -239,6 +243,13 @@ export function generateMarkdownReport(input: SpendReportInput): string {
 }
 
 export function generateApplyArtifactMarkdown(input: SpendReportInput): string {
+  // Local-log users are coding-agent users: their artifact must be built from
+  // the SAME engines as the readout (cut list + named dead-context items) and
+  // contain only changes a coding agent can actually make — config cuts, not
+  // agency workflow advice about clients that don't exist.
+  if (input.dataMode === "local_logs") {
+    return generateLocalAgentApplyArtifact(input);
+  }
   const watch = input.summary.workflowWatch;
   const lines = [
     "# AI Spend Apply Artifact",
@@ -281,6 +292,91 @@ export function generateApplyArtifactMarkdown(input: SpendReportInput): string {
 
   lines.push("", "## Full watchlist", "", ...workflowWatchMarkdownLines(watch), "");
   return lines.join("\n");
+}
+
+/**
+ * Apply artifact for local Claude Code / Codex users: a short, paste-ready
+ * prompt built from the readout's own cut list and the NAMED dead-context
+ * items (with config paths), constrained to low-risk config changes with
+ * explicit rollback. Deliberately compact — the paste target is a coding
+ * agent's context window.
+ */
+function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
+  const records = input.allRecords ?? [];
+  const cuts = generateCutList(records).slice(0, 3);
+  const windowDays = usageWindowDays(records);
+  const dead = input.deadContext;
+  const deadItems = dead && dead.hasData && !dead.isSample ? dead.deadItems : [];
+
+  const promptLines: string[] = [
+    "You are cleaning up my coding-agent setup (Claude Code / Codex) to remove dead context and shrink heavy sessions.",
+    "I'm on a flat-price plan: the goal is rate-limit headroom and faster sessions, not cash savings.",
+    "",
+    `Measured from my local transcripts (last ${dead?.windowDays ?? 30} days):`
+  ];
+
+  let step = 0;
+  if (deadItems.length > 0) {
+    step += 1;
+    promptLines.push(`${step}. Remove tools loaded every turn but never invoked:`);
+    for (const item of deadItems.slice(0, 8)) {
+      const where = item.path ? ` (configured in ${item.path})` : "";
+      promptLines.push(`   - ${item.kind.replace("_", " ")} "${item.name}"${where}`);
+    }
+    promptLines.push(
+      "   Use `claude mcp remove <name>` in the owning project (or edit the config file directly).",
+      "   Show me the exact removals before applying."
+    );
+  }
+  const trimCut = cuts.find((cut) => cut.kind === "context_trim");
+  if (trimCut) {
+    step += 1;
+    promptLines.push(
+      `${step}. Shrink heavy context: ${trimCut.recordCount} ${trimCut.recordUnit} averaged >=100k input tokens.`,
+      "   Check CLAUDE.md / AGENTS.md length in my active projects, flag oversized always-loaded files,",
+      "   and find places where whole directories get pulled into context."
+    );
+  }
+  if (step === 0) {
+    promptLines.push("1. Review my agent config for unused MCP servers, skills, and oversized CLAUDE.md files.");
+  }
+  promptLines.push(
+    "",
+    "Constraints: config/documentation changes only — never application source code; never remove anything",
+    `invoked in the last ${dead?.windowDays ?? 30} days; show a diff before applying; no cloud uploads.`,
+    "Rollback: list the exact re-add command or config block next to every removal.",
+    "Verification: I'll re-run `npx aibill` in a few days — dead context should read \"none found\"."
+  );
+
+  const whyLines = cuts.map(
+    (cut) => `- ${cut.title} — ~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo at API-equivalent rates (${cut.recordCount} ${cut.recordUnit}, ${cut.confidence})`
+  );
+  if (dead && dead.hasData && !dead.isSample && dead.deadCount > 0) {
+    whyLines.unshift(`- ${dead.deadCount} of ${dead.loadedCount} loaded tools never invoked in ${dead.windowDays} days (${Math.round(dead.wastePercent * 100)}%)`);
+  }
+
+  return [
+    "# AI Spend Apply Artifact",
+    "",
+    `> Built from your local transcripts (${windowDays} day${windowDays === 1 ? "" : "s"} of data). Low-risk config cuts only — paste the block below into Claude Code / Codex.`,
+    "",
+    "## Copy this into your coding agent",
+    "",
+    "```text",
+    ...promptLines,
+    "```",
+    "",
+    "## Why these cuts (same engines as the readout)",
+    "",
+    ...(whyLines.length > 0 ? whyLines : ["- No cuts above the reporting threshold in this window."]),
+    "",
+    "## Verify",
+    "",
+    "- Re-run `npx aibill` after a few days of normal use.",
+    "- Dead context should drop; heavy-context session-days should fall.",
+    "- Re-add anything you find you actually miss — every removal above has a rollback.",
+    ""
+  ].join("\n");
 }
 
 export function generateActionPlanMarkdown(input: SpendReportInput): string {
