@@ -366,18 +366,18 @@ export function generatePlainEnglishSummary(
   lines.push(sectionHeader(4, "VERIFY", "prove the cuts worked before trusting them", c));
   lines.push("");
   lines.push(
-    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx ai-spend-agent")} ${c.dim("after a few days and compare — or")} ${c.bold("npx ai-spend-agent watch")} ${c.dim("to track deltas per cycle")}`
+    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx aibill")} ${c.dim("after a few days and compare — or")} ${c.bold("npx aibill watch")} ${c.dim("to track deltas per cycle")}`
   );
   if (options.mode === "local-logs" || options.mode === "demo") {
     lines.push(
       `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("pay for API usage too? verify against real billing:")} ${c.bold("npx ai-spend-agent connect anthropic|openai")} ${c.dim("(org admin key)")}`
+      `  ${c.cyan("›")} ${c.dim("pay for API usage too? verify against real billing:")} ${c.bold("npx aibill connect anthropic|openai")} ${c.dim("(org admin key)")}`
     );
   } else {
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("npx ai-spend-agent sync-provider")} ${c.dim("after applying cuts")}`
+      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("npx aibill sync-provider")} ${c.dim("after applying cuts")}`
     );
   }
   lines.push("");

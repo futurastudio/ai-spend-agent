@@ -5,6 +5,20 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.4.4 — 2026-07-05
+
+One freshness rule everywhere.
+
+- **`report`/`apply` now re-read local logs fresh, always.** They previously
+  preferred the persisted snapshot from a prior run, so the artifact's numbers
+  could lag the readout's (42 vs 47 session-days in field testing). Local-log
+  state is now treated as a cache; persisted state stays authoritative only
+  for connected/sample data. Regression test: a transcript added between two
+  `report` runs must appear in the second.
+- Every suggested command now says `npx aibill` (VERIFY, Next, report hints,
+  error messages) — the long form remains as a footnote in APPLY.
+- "1 session-days" plural bug fixed in the artifact's why-lines.
+
 ## 0.4.3 — 2026-07-05
 
 Digestibility: decide in five lines whether to read sixty.
