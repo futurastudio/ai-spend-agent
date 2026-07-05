@@ -5,18 +5,23 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
-## 0.4.0 — 2026-07-05
+## 0.4.1 — 2026-07-05
 
-**Say it, type it: `npx aispend`.** Two thin alias packages ship alongside the
-CLI — `aispend` (the promoted, speakable command) and `aireceipt` (the brand
-alias for the shareable AI Receipt). Both run the exact same entrypoint
-(`runMain` exported from `ai-spend-agent`); the wrappers are four lines and
-must never grow.
+**The short command is `npx aibill`.** npm's typosquat protection blocked the
+0.4.0 alias names (`aispend`/`aireceipt` are too similar to the pre-existing
+`ai-spend`/`ai-receipt` packages, which are not ours) — and the 0.4.0 readout
+briefly pointed at the unpublished `aispend`. Hotfix:
 
-- **`apply` command** — short form of `apply-artifact`; the readout's APPLY
-  step is now `npx aispend apply` (16 characters from readout to paste-ready
-  prompt).
-- CI smoke-tests both alias bins against the built CLI.
+- **`aibill`** alias package published (both `aibill` and `ai-bill` were
+  free, so the similarity rule cannot bite): a 4-line wrapper over `runMain`.
+  "Check your AI bill: `npx aibill`."
+- Readout APPLY step and README now say `npx aibill apply` / `npx aibill`.
+
+## 0.4.0 — 2026-07-05 (cli/core/report only — alias packages never published)
+
+- **`apply` command** — short form of `apply-artifact`.
+- `runMain()` exported from the CLI so alias bins run the exact same
+  entrypoint. CI smoke-tests the alias bin against the built CLI.
 
 ## 0.3.0 — 2026-07-04
 
