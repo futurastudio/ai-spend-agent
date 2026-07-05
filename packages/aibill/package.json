@@ -1,10 +1,10 @@
 {
-  "name": "aispend",
-  "version": "0.4.0",
-  "description": "Short alias for ai-spend-agent — your AI spend in one view, in 90 seconds. Run: npx aispend",
+  "name": "aibill",
+  "version": "0.4.1",
+  "description": "Check your AI bill — short alias for ai-spend-agent, the local-first AI spend readout. Run: npx aibill",
   "type": "module",
   "bin": {
-    "aispend": "./run.js"
+    "aibill": "./run.js"
   },
   "files": [
     "run.js"
@@ -13,7 +13,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
-    "directory": "packages/aispend"
+    "directory": "packages/aibill"
   },
   "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
   "keywords": [
@@ -29,6 +29,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "ai-spend-agent": "0.4.0"
+    "ai-spend-agent": "0.4.1"
   }
 }
