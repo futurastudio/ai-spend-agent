@@ -137,7 +137,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
     return reportCardCommand(args);
   }
 
-  if (args.command === "apply-artifact") {
+  if (args.command === "apply-artifact" || args.command === "apply") {
     return applyArtifactCommand(args);
   }
 
@@ -1558,7 +1558,8 @@ function helpText(): string {
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: model",
     "  report [--out <name>]   Generate local Markdown and HTML reports",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
-    "  apply-artifact          Generate coding prompt, action plan, policy/config, verification, demo package",
+    "  apply                   Print the paste-ready coding-agent prompt + write action/policy/verification plans",
+    "  apply-artifact          Same as `apply` (long form)",
     "",
     "Cron (production watch): add a crontab entry such as:",
     "  0 * * * * cd /path/to/workspace && ai-spend-agent watch --interval 3600 --cycles 1 >> ai-spend-watch.log 2>&1",
@@ -1581,7 +1582,12 @@ const invokedAsMain = (() => {
   }
 })();
 
-if (invokedAsMain) {
+/**
+ * Full bin entrypoint (node guard, spinner, error voice, exit code).
+ * Exported so the thin alias packages (`aispend`, `aireceipt`) run the EXACT
+ * same path without duplicating it — one CLI, several names.
+ */
+export async function runMain(): Promise<void> {
   // Fail with a clear message on old Node instead of a cryptic module/syntax
   // error deep in a dependency. npm warns on engines but never blocks install.
   const major = Number(process.versions.node.split(".")[0]);
@@ -1636,4 +1642,8 @@ if (invokedAsMain) {
     console.error(result.stderr);
   }
   process.exitCode = result.exitCode;
+}
+
+if (invokedAsMain) {
+  await runMain();
 }

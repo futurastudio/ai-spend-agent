@@ -1,0 +1,35 @@
+{
+  "name": "aireceipt",
+  "version": "0.4.0",
+  "description": "Get your AI Receipt — brand alias for ai-spend-agent, the local-first AI spend readout. Run: npx aireceipt",
+  "type": "module",
+  "bin": {
+    "aireceipt": "./run.js"
+  },
+  "files": [
+    "run.js"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
+    "directory": "packages/aireceipt"
+  },
+  "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "keywords": [
+    "ai",
+    "receipt",
+    "spend",
+    "cost",
+    "finops",
+    "claude-code",
+    "codex",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ai-spend-agent": "0.4.0"
+  }
+}

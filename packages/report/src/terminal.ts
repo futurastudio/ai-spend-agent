@@ -319,10 +319,10 @@ export function generatePlainEnglishSummary(
   // and have NO `ai-spend-agent` on PATH — a bare command is a guaranteed
   // "command not found" for exactly the person who just got motivated.
   lines.push(
-    `  ${c.cyan("›")} ${c.bold("npx ai-spend-agent apply-artifact")}   ${c.dim("writes a ready-to-paste prompt + action plan for your coding agent")}`
+    `  ${c.cyan("›")} ${c.bold("npx aispend apply")}   ${c.dim("prints a ready-to-paste prompt + action plan for your coding agent")}`
   );
   lines.push(
-    `  ${c.dim("    paste .ai-spend-agent/ai-spend-coding-agent-prompt.md into Claude Code / Codex — it bundles the cuts above with guardrails")}`
+    `  ${c.dim("    paste it into Claude Code / Codex — it bundles the cuts above with guardrails (long form: npx ai-spend-agent apply-artifact)")}`
   );
   lines.push("");
 

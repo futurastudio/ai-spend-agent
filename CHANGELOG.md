@@ -5,6 +5,19 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.4.0 — 2026-07-05
+
+**Say it, type it: `npx aispend`.** Two thin alias packages ship alongside the
+CLI — `aispend` (the promoted, speakable command) and `aireceipt` (the brand
+alias for the shareable AI Receipt). Both run the exact same entrypoint
+(`runMain` exported from `ai-spend-agent`); the wrappers are four lines and
+must never grow.
+
+- **`apply` command** — short form of `apply-artifact`; the readout's APPLY
+  step is now `npx aispend apply` (16 characters from readout to paste-ready
+  prompt).
+- CI smoke-tests both alias bins against the built CLI.
+
 ## 0.3.0 — 2026-07-04
 
 **Subscription-first.** The launch audience is engineers on Claude Max /
