@@ -34,6 +34,8 @@ export type DeadContextItem = {
   name: string;
   alwaysLoadedTokens: number;
   weightConfidence: InventoryItem["weightConfidence"];
+  /** Config file the item is loaded from — the place to remove it. */
+  path?: string;
 };
 
 export type DeadContextResult = {
@@ -148,7 +150,8 @@ export function computeDeadContext(
       kind: item.kind,
       name: item.name,
       alwaysLoadedTokens: item.alwaysLoadedTokens,
-      weightConfidence: item.weightConfidence
+      weightConfidence: item.weightConfidence,
+      path: item.path
     });
   }
   dead.sort((a, b) => b.alwaysLoadedTokens - a.alwaysLoadedTokens);
