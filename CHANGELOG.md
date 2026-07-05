@@ -5,6 +5,16 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.4.3 — 2026-07-05
+
+Digestibility: decide in five lines whether to read sixty.
+
+- **TL;DR block** opens every local-log readout: your value multiple (+ limit
+  pressure), the top-burner project, and the one action (`npx aibill apply`) —
+  each traceable to a section below.
+- **Plan-check lines no longer wrap badly**: fact-dense headlines split into a
+  short lead + dim continuation for narrow terminals.
+
 ## 0.4.2 — 2026-07-05
 
 **The apply artifact now says what the readout says.** For local-log users it
