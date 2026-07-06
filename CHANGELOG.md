@@ -5,6 +5,23 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.0 — 2026-07-06
+
+**The HTML report is now actually shareable.** For local-log users it was a
+44KB agency board pack: five copies of retired workflow advice, three
+"unmapped" enterprise-attribution blocks, savings from a third engine that
+disagreed with the readout — and no dead context, no detected plan, no value
+multiple.
+
+- **Compact share-first report** for local-log data (~¼ the size): hero with
+  the value multiple ("Covered by Claude Max 5x — ~11.8× the plan price"),
+  headline metrics, TL;DR, by-project + by-model, dead context with named
+  items, the deduplicated cut list, plan check, and a "reproduce this: `npx
+  aibill`" footer. Every number from the same engines as the terminal readout.
+- The agency board report remains for connected/mapped data.
+- Regression test asserts agency framing (unmapped-client, margin risk,
+  retired workflow advice) can never leak into the shareable report.
+
 ## 0.4.4 — 2026-07-05
 
 One freshness rule everywhere.

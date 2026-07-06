@@ -1175,9 +1175,17 @@ async function buildReportInput(stateDir: string, rootPath: string) {
       }).catch(() => undefined)
     : undefined;
 
+  const detectedPlans = spendState.mode === "local_logs"
+    ? await detectLocalPlans({
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+      }).catch(() => [] as DetectedPlan[])
+    : [];
+
   return {
     summary: spendState.summary,
     deadContext,
+    detectedPlans,
     // Evidence ledger is built from the SAME records as the confidence
     // breakdown so the two sections can never contradict each other.
     allRecords: spendState.records ?? [],
