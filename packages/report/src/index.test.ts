@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { analyzeSpend } from "@agent-finops/core";
 import type { SourceRegistry, UsageRecord } from "@agent-finops/core";
 import type { SpendReportInput } from "./index.js";
 import {
@@ -426,6 +427,69 @@ describe("board-style report generation", () => {
     expect(artifact).not.toContain("unmapped-client");
     expect(artifact).not.toContain("Margin at risk");
     expect(artifact).not.toContain("cache stable inputs");
+  });
+
+  it("renders the compact shareable HTML report for local-log data (no agency framing)", () => {
+    const localRecords: UsageRecord[] = [{
+      id: "local-1",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+      model: "claude-fable-5",
+      inputTokens: 250_000,
+      outputTokens: 5_000,
+      amountUsd: 80,
+      costConfidence: "estimated",
+      agentId: "claude-code",
+      projectId: "my-app",
+      providerCostType: "local_agent_logs",
+      operation: "claude-code sessions"
+    }];
+    const html = generateHtmlReport({
+      ...input,
+      dataMode: "local_logs",
+      allRecords: localRecords,
+      summary: analyzeSpend(localRecords),
+      detectedPlans: [{
+        agent: "claude-code",
+        provider: "anthropic",
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        source: "test"
+      }],
+      deadContext: {
+        hasData: true,
+        loadedCount: 4,
+        deadCount: 4,
+        measuredDeadCount: 0,
+        unmeasuredDeadCount: 4,
+        deadTokens: 0,
+        monthlyDeadTokens: 0,
+        wastePercent: 1,
+        monthlyUsd: 0,
+        monthlyUsdUpperBound: 0,
+        deadItems: [{ kind: "mcp_server", name: "context7", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json" }],
+        sessions: 10,
+        totalTurns: 100,
+        pricingModel: "claude-sonnet-4",
+        windowDays: 30
+      }
+    });
+
+    // Share-first content from the readout's own engines.
+    expect(html).toContain("AI Receipt");
+    expect(html).toContain("Plan value");
+    expect(html).toContain("Claude Max 5x");
+    expect(html).toContain("Dead context");
+    expect(html).toContain("context7");
+    expect(html).toContain("npx aibill");
+    expect(html).toContain("my-app");
+    // Agency board framing must not leak into the shareable report.
+    expect(html).not.toContain("unmapped-client");
+    expect(html).not.toContain("Margin risk");
+    expect(html).not.toContain("Board-ready");
+    expect(html).not.toContain("per-run budget cap");
+    expect(html).not.toContain("Mapping questions");
   });
 
   it("quotes dynamic YAML values in policy/config drafts", () => {

@@ -1,8 +1,9 @@
-import { generateCutList, usageWindowDays } from "@agent-finops/core";
+import { buildRecommendedPlan, computePlanChecks, generateCutList, usageWindowDays } from "@agent-finops/core";
 import type {
   AttributionMapping,
   ConfirmedMapping,
   DeadContextResult,
+  DetectedPlan,
   LocalDiscoveryResult,
   MissingSourcePrompt,
   ProviderQaSummary,
@@ -44,6 +45,8 @@ export type SpendReportInput = {
   dataMode?: "sample" | "local_logs" | "connected_provider";
   /** Real dead-context findings (named items + config paths) for the apply artifact. */
   deadContext?: DeadContextResult;
+  /** Locally detected plans (or --plan override) for persona-aware reporting. */
+  detectedPlans?: DetectedPlan[];
 };
 
 type RecommendationLike = SpendSummary["recommendations"][number];
@@ -523,6 +526,12 @@ function yamlString(value: string): string {
 }
 
 export function generateHtmlReport(input: SpendReportInput): string {
+  // Local-log users get the SHAREABLE report: one screen, built from the same
+  // engines as the terminal readout (cut list, dead context, plan check) —
+  // not the agency board pack, which stays for connected/mapped data.
+  if (input.dataMode === "local_logs") {
+    return generateLocalLogHtmlReport(input);
+  }
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const mappingQuestions = (input.mappings ?? []).filter((mapping) => mapping.status !== "auto_mapped");
   const recommendations = [...input.summary.recommendations].sort(compareRecommendations);
@@ -560,7 +569,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <strong>Local files only. No cloud upload.</strong>
         <span>No credentials, invoices, or raw spend data leave the machine.</span>
       </aside>
-      ${input.dataMode === "sample" ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative numbers, not finance-grade. Confidence labels reflect the sample dataset, not real billing.</span></aside>` : input.dataMode === "local_logs" ? `<aside class="privacy-banner" aria-label="Local estimate notice"><strong>Local-log estimates</strong><span>Priced from your Claude Code / Codex logs at API-equivalent rates — estimated, not verified. Connect a provider to verify.</span></aside>` : ""}
+      ${input.dataMode === "sample" ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative numbers, not finance-grade. Confidence labels reflect the sample dataset, not real billing.</span></aside>` : ""}
     </section>
 
     <section class="metric-grid" aria-label="Executive metrics">
@@ -1166,6 +1175,154 @@ function formatUsd(amount: number): string {
 
 function formatPercent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+/**
+ * The compact, share-first report for local-log users: value multiple up top,
+ * where the usage goes, dead context, the cut list, plan check — one screen,
+ * every number from the same engines as the terminal readout. No agency
+ * framing (clients, margin risk, mapping questions) — those belong to the
+ * connected/mapped report.
+ */
+function generateLocalLogHtmlReport(input: SpendReportInput): string {
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const records = input.allRecords ?? [];
+  const windowDays = usageWindowDays(records);
+  const cutList = generateCutList(records);
+  const plan = buildRecommendedPlan(cutList);
+  const planChecks = computePlanChecks(records, input.detectedPlans ?? []);
+  const valueCheck = planChecks.find(
+    (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
+  );
+  const dead = input.deadContext && input.deadContext.hasData && !input.deadContext.isSample ? input.deadContext : undefined;
+  const summary = input.summary;
+
+  const shareRow = (key: string, amountUsd: number): string => {
+    const share = summary.totalUsd > 0 ? amountUsd / summary.totalUsd : 0;
+    return `<li><span>${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><strong>${formatUsd(amountUsd)} · ${formatPercent(share)}</strong></li>`;
+  };
+
+  const tldr: string[] = [];
+  if (valueCheck) {
+    tldr.push(
+      `Getting ~${valueCheck.valueMultiple}× the ${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage${planChecks.some((check) => check.upgradeHint) ? " — and hitting its limits" : ""}`
+    );
+  }
+  const topProject = summary.byProject.find((entry) => entry.key !== "unmapped");
+  if (topProject && summary.totalUsd > 0) {
+    tldr.push(`${escapeHtml(topProject.key)} eats ${formatPercent(topProject.amountUsd / summary.totalUsd)} of it`);
+  }
+  if (dead && dead.deadCount > 0) {
+    tldr.push(`${dead.deadCount} of ${dead.loadedCount} loaded tools never invoked in ${dead.windowDays} days`);
+  }
+
+  const cutCards = cutList.slice(0, 4).map((cut) => {
+    const unit = cut.recordCount === 1 ? cut.recordUnit.replace(/s$/, "") : cut.recordUnit;
+    return `<li>
+      <span>${escapeHtml(cut.title)}<br /><em>${escapeHtml(cut.action)}</em></span>
+      <strong>~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo<br /><em>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</em></strong>
+    </li>`;
+  });
+
+  const deadList = dead
+    ? dead.deadItems.slice(0, 8).map((item) => `<li><span>${escapeHtml(item.kind.replace("_", " "))} · ${escapeHtml(item.name)}</span><strong>never invoked</strong></li>`)
+    : [];
+
+  const planLines = planChecks.map((check) => {
+    const [head, ...rest] = check.headline.split(" — ");
+    return `<li><span>${escapeHtml(head ?? check.headline)}</span><strong>${escapeHtml(rest.join(" — "))}</strong>${check.upgradeHint ? `<em>${escapeHtml(check.upgradeHint)}</em>` : ""}</li>`;
+  });
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Receipt — what my coding agents actually did</title>
+  <style>${premiumReportCss()}
+  .brief-list li em { display: block; font-style: normal; opacity: 0.65; font-size: 0.82em; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <main class="report-shell" aria-labelledby="report-title">
+    <section class="hero-panel">
+      <div class="report-kicker">AI Receipt · local-first · estimated at API-equivalent rates</div>
+      <div class="hero-grid">
+        <div>
+          <h1 id="report-title">What my coding agents actually did</h1>
+          <p class="hero-copy">${valueCheck ? `Covered by ${escapeHtml(valueCheck.suggestedPlan!.name)} ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — getting ~${valueCheck.valueMultiple}× the plan price in usage.` : "Usage read from local Claude Code / Codex transcripts — estimated at API-equivalent rates."}</p>
+        </div>
+        <div class="hero-meta" aria-label="Report metadata">
+          <span>Generated</span>
+          <strong>${escapeHtml(generatedAt.slice(0, 10))}</strong>
+          <span>Window</span>
+          <strong>${windowDays} day${windowDays === 1 ? "" : "s"} of data</strong>
+        </div>
+      </div>
+      <aside class="privacy-banner" aria-label="Privacy posture">
+        <span class="privacy-dot" aria-hidden="true"></span>
+        <strong>Local files only. No cloud upload, no account access.</strong>
+        <span>Numbers are API-equivalent estimates from this machine's own transcripts.</span>
+      </aside>
+    </section>
+
+    <section class="metric-grid" aria-label="Headline metrics">
+      ${valueCheck ? metricCard("Plan value", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage`, "primary") : metricCard("Tracked usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
+      ${metricCard("API-equivalent usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`)}
+      ${metricCard("Headroom to reclaim", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "deduplicated cut list — headroom on a flat plan, cash on API billing")}
+      ${dead ? metricCard("Dead context", `${dead.deadCount} of ${dead.loadedCount}`, `tools loaded but never invoked (${Math.round(dead.wastePercent * 100)}%)`) : metricCard("Dead context", "none found", "all loaded tools were invoked")}
+    </section>
+
+    ${tldr.length > 0 ? `<section class="artifact-grid"><article class="artifact-card artifact-card--wide">
+      <div class="section-label">TL;DR</div>
+      <ul class="brief-list">${tldr.map((line) => `<li><span>›</span><strong>${line}</strong></li>`).join("")}</ul>
+    </article></section>` : ""}
+
+    <section class="artifact-grid">
+      <article class="artifact-card">
+        <div class="section-label">Where it goes</div>
+        <h2>By project</h2>
+        <ul class="brief-list">${summary.byProject.slice(0, 6).map((entry) => shareRow(entry.key, entry.amountUsd)).join("")}</ul>
+      </article>
+      <article class="artifact-card">
+        <div class="section-label">Where it goes</div>
+        <h2>By model</h2>
+        <ul class="brief-list">${summary.byModel.slice(0, 5).map((entry) => shareRow(entry.key, entry.amountUsd)).join("")}</ul>
+      </article>
+    </section>
+
+    <section class="artifact-grid">
+      <article class="artifact-card">
+        <div class="section-label">Dead context</div>
+        <h2>${dead && dead.deadCount > 0 ? `${dead.deadCount} of ${dead.loadedCount} tools never invoked in ${dead.windowDays} days` : "None found — clean setup"}</h2>
+        ${deadList.length > 0 ? `<ul class="brief-list">${deadList.join("")}</ul><p class="hero-copy">Loaded into context on every turn; removing them trims every session.</p>` : ""}
+      </article>
+      <article class="artifact-card">
+        <div class="section-label">Where to cut</div>
+        <h2>~${formatUsd(plan.recommendedSavingsUsd)}/mo reclaimable</h2>
+        <ul class="brief-list">${cutCards.join("")}</ul>
+        <p class="hero-copy">On a flat-price plan these cuts buy rate-limit headroom and faster sessions — they become cash the day you pay per token.</p>
+      </article>
+    </section>
+
+    ${planLines.length > 0 ? `<section class="artifact-grid"><article class="artifact-card artifact-card--wide">
+      <div class="section-label">Plan check</div>
+      <h2>Subscription vs pay-per-token</h2>
+      <ul class="brief-list">${planLines.join("")}</ul>
+      <p class="hero-copy">Plan read from the agents' local config (read-only); prices are published list prices — no account was accessed.</p>
+    </article></section>` : ""}
+
+    <section class="artifact-grid">
+      <article class="artifact-card artifact-card--wide">
+        <div class="section-label">Reproduce this</div>
+        <h2>npx aibill</h2>
+        <p class="hero-copy">Free, MIT-licensed, local-first. Apply the cuts with <strong>npx aibill apply</strong> — it prints a paste-ready prompt for your coding agent, with rollback. Every figure above is deterministic arithmetic over local transcripts; nothing was uploaded.</p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
+`;
 }
 
 function premiumReportCss(): string {
