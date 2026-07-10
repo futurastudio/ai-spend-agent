@@ -41,6 +41,8 @@ export type InventoryItem = {
   /** "estimated_understated" when an MCP tool schema is unavailable. */
   weightConfidence: "estimated" | "estimated_understated";
   path?: string;
+  /** For project-scoped MCP servers: the project dirs that load this server. */
+  ownerDirs?: string[];
 };
 
 export type AgentInventoryOptions = {
@@ -187,7 +189,7 @@ export async function loadAgentInventory(
   // --- MCP servers (from ~/.claude.json: top-level + per-project map) ---
   const config = await readJson(configPath);
   const serverScopes = collectMcpServers(config, projectDir, options.includeAllProjectMcp ?? false);
-  for (const { id, scope } of serverScopes) {
+  for (const { id, scope, ownerDirs } of serverScopes) {
     scanned.mcpServers += 1;
     // We almost never have tool schemas from config, so we can't measure the
     // real weight (full tool definitions). Use a conservative published-typical
@@ -202,7 +204,8 @@ export async function loadAgentInventory(
       group: id,
       alwaysLoadedTokens: MCP_SERVER_TOKEN_FLOOR,
       weightConfidence: "estimated_understated",
-      path: configPath
+      path: configPath,
+      ownerDirs
     });
   }
 
@@ -217,18 +220,21 @@ function collectMcpServers(
   config: unknown,
   projectDir: string,
   includeAllProjectMcp: boolean
-): Array<{ id: string; scope: "user" | "project" }> {
+): Array<{ id: string; scope: "user" | "project"; ownerDirs: string[] }> {
   if (!isRecord(config)) return [];
-  const out: Array<{ id: string; scope: "user" | "project" }> = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, { id: string; scope: "user" | "project"; ownerDirs: string[] }>();
 
-  const add = (id: string, scope: "user" | "project") => {
+  const add = (id: string, scope: "user" | "project", ownerDir?: string) => {
     // Dedupe by id across all scopes so a server configured in several projects
-    // is counted once in the global view.
+    // is counted once in the global view — but keep EVERY owning project dir,
+    // because that's where `claude mcp remove` has to run.
     const key = includeAllProjectMcp ? id : `${scope}:${id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({ id, scope });
+    const existing = byKey.get(key);
+    if (existing) {
+      if (ownerDir && !existing.ownerDirs.includes(ownerDir)) existing.ownerDirs.push(ownerDir);
+      return;
+    }
+    byKey.set(key, { id, scope, ownerDirs: ownerDir ? [ownerDir] : [] });
   };
 
   // Top-level mcpServers are user-scope (global).
@@ -240,16 +246,16 @@ function collectMcpServers(
   // Global view: collect every project's servers; otherwise just this project's.
   if (isRecord(config.projects)) {
     const entries = includeAllProjectMcp
-      ? Object.values(config.projects)
-      : [config.projects[projectDir]];
-    for (const projectEntry of entries) {
+      ? Object.entries(config.projects)
+      : ([[projectDir, config.projects[projectDir]]] as Array<[string, unknown]>);
+    for (const [dir, projectEntry] of entries) {
       if (isRecord(projectEntry) && isRecord(projectEntry.mcpServers)) {
-        for (const id of Object.keys(projectEntry.mcpServers)) add(id, "project");
+        for (const id of Object.keys(projectEntry.mcpServers)) add(id, "project", dir);
       }
     }
   }
 
-  return out;
+  return [...byKey.values()];
 }
 
 // --------------------------------------------------------------------------

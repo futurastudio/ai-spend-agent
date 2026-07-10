@@ -323,12 +323,15 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
     step += 1;
     promptLines.push(`${step}. Remove tools loaded every turn but never invoked:`);
     for (const item of deadItems.slice(0, 8)) {
-      const where = item.path ? ` (configured in ${item.path})` : "";
-      promptLines.push(`   - ${item.kind.replace("_", " ")} "${item.name}"${where}`);
+      const owners = item.ownerDirs && item.ownerDirs.length > 0
+        ? ` — used by project${item.ownerDirs.length === 1 ? "" : "s"}: ${item.ownerDirs.join(", ")}`
+        : "";
+      const where = item.path ? ` (config: ${item.path})` : "";
+      promptLines.push(`   - ${item.kind.replace("_", " ")} "${item.name}"${owners}${where}`);
     }
     promptLines.push(
-      "   Use `claude mcp remove <name>` in the owning project (or edit the config file directly).",
-      "   Show me the exact removals before applying."
+      "   To remove: run `claude mcp remove <name>` inside each listed project directory,",
+      "   or edit the config file directly (each server sits under projects[<dir>].mcpServers)."
     );
   }
   const trimCut = cuts.find((cut) => cut.kind === "context_trim");
@@ -345,9 +348,13 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
   }
   promptLines.push(
     "",
+    "APPROVAL GATE: do NOT use any file-editing or shell tool until I approve. First present the full",
+    "plan — every removal with its owning project, the exact command or edit, and its rollback — and",
+    "wait for my explicit approval before changing anything.",
+    "",
     "Constraints: config/documentation changes only — never application source code; never remove anything",
-    `invoked in the last ${dead?.windowDays ?? 30} days; show a diff before applying; no cloud uploads.`,
-    "Rollback: list the exact re-add command or config block next to every removal.",
+    `invoked in the last ${dead?.windowDays ?? 30} days; no cloud uploads.`,
+    "Rollback: next to every removal, list the exact re-add command (read the current config block first so it can be restored verbatim).",
     "Verification: I'll re-run `npx aibill` in a few days — dead context should read \"none found\"."
   );
 
