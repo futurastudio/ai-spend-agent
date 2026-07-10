@@ -36,6 +36,8 @@ export type DeadContextItem = {
   weightConfidence: InventoryItem["weightConfidence"];
   /** Config file the item is loaded from — the place to remove it. */
   path?: string;
+  /** Project dirs that load this item (where `claude mcp remove` must run). */
+  ownerDirs?: string[];
 };
 
 export type DeadContextResult = {
@@ -151,7 +153,8 @@ export function computeDeadContext(
       name: item.name,
       alwaysLoadedTokens: item.alwaysLoadedTokens,
       weightConfidence: item.weightConfidence,
-      path: item.path
+      path: item.path,
+      ownerDirs: item.ownerDirs
     });
   }
   dead.sort((a, b) => b.alwaysLoadedTokens - a.alwaysLoadedTokens);

@@ -406,8 +406,8 @@ describe("board-style report generation", () => {
         monthlyUsd: 0,
         monthlyUsdUpperBound: 0,
         deadItems: [
-          { kind: "mcp_server", name: "context7", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json" },
-          { kind: "mcp_server", name: "framer", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json" }
+          { kind: "mcp_server", name: "context7", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json", ownerDirs: ["/Users/dev/site", "/Users/dev"] },
+          { kind: "mcp_server", name: "framer", alwaysLoadedTokens: 700, weightConfidence: "estimated_understated", path: "/Users/dev/.claude.json", ownerDirs: ["/Users/dev/site"] }
         ],
         sessions: 20,
         totalTurns: 300,
@@ -417,8 +417,10 @@ describe("board-style report generation", () => {
     });
 
     // Concrete, executable, from the same engines as the readout.
-    expect(artifact).toContain('mcp server "context7" (configured in /Users/dev/.claude.json)');
+    expect(artifact).toContain('mcp server "context7" — used by projects: /Users/dev/site, /Users/dev (config: /Users/dev/.claude.json)');
     expect(artifact).toContain("claude mcp remove");
+    // Hardened approval gate: forbids acting before approval, not just requests a diff.
+    expect(artifact).toContain("APPROVAL GATE: do NOT use any file-editing or shell tool until I approve");
     expect(artifact).toContain("Shrink heavy context");
     expect(artifact).toContain("session-days");
     expect(artifact).toContain("Rollback");

@@ -5,6 +5,19 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.1 — 2026-07-09
+
+Apply-prompt hardening, pre-validated before the first real coding-agent run.
+
+- **Every dead MCP server now names its owning project(s)** ("used by
+  projects: ~/pitcht.com, ~") so the executing agent knows exactly where
+  `claude mcp remove` must run — no discovery step, no wrong-cwd fumble.
+- **The approval gate forbids instead of requests**: "do NOT use any
+  file-editing or shell tool until I approve" replaces "show me the removals
+  before applying" — prohibition binds agents harder than description.
+- Rollback instruction now tells the agent to read the current config block
+  first so removals can be restored verbatim.
+
 ## 0.5.0 — 2026-07-06
 
 **The HTML report is now actually shareable.** For local-log users it was a
