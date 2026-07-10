@@ -54,6 +54,11 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="min-h-screen bg-bg font-sans antialiased">
+        {/* Scroll-reveal is progressive enhancement — without JS, content
+            must simply be visible. */}
+        <noscript>
+          <style>{`.reveal { opacity: 1 !important; transform: none !important; }`}</style>
+        </noscript>
         {children}
       </body>
     </html>

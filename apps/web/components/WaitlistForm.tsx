@@ -96,12 +96,12 @@ export function WaitlistForm() {
           }}
           aria-invalid={status === "error"}
           aria-describedby={status === "error" ? "email-error" : undefined}
-          className="h-12 flex-1 rounded-xl border border-border bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green/50 focus:outline-none focus:ring-2 focus:ring-green/25"
+          className="glass-well h-12 flex-1 rounded-xl px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green/50 focus:outline-none focus:ring-2 focus:ring-green/25"
         />
         <button
           type="submit"
           disabled={status === "loading"}
-          className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-green px-6 text-sm font-semibold text-bg transition-all hover:bg-green-bright disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-green px-6 text-sm font-semibold text-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_24px_-8px_rgba(89,212,153,0.5)] transition-[background-color,transform,box-shadow] duration-200 ease-out hover:bg-green-bright hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_12px_28px_-8px_rgba(94,242,168,0.55)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           {status === "loading" ? "Joining..." : "Join the hosted beta"}
         </button>
