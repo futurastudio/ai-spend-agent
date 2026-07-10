@@ -23,6 +23,130 @@ body {
 }
 
 @layer utilities {
+  /* ---- Liquid glass material ladder ----------------------------------
+     Translucency + backdrop blur convey hierarchy (heavier material =
+     more structural). Every glass surface gets a 1px specular top edge
+     so light appears to catch it. */
+  .glass {
+    background:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.055),
+        rgba(255, 255, 255, 0.02) 40%,
+        rgba(255, 255, 255, 0.03)
+      );
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.09),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+      0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  }
+
+  /* Nav bar / overlays — heaviest material, most blur. */
+  .glass-heavy {
+    background: rgba(13, 13, 15, 0.55);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 16px 40px -20px rgba(0, 0, 0, 0.7);
+  }
+
+  /* Inset wells (inputs, terminal body) — recessed glass. */
+  .glass-well {
+    background: rgba(4, 5, 7, 0.55);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Interactive glass: lift on hover, sink on press (feedback on
+     pointer-down, not release). Compositor-only properties. */
+  .glass-interactive {
+    transition:
+      transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 0.35s ease,
+      box-shadow 0.35s ease;
+    will-change: transform;
+  }
+  .glass-interactive:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+      0 20px 44px -18px rgba(0, 0, 0, 0.65);
+  }
+  .glass-interactive:active {
+    transform: translateY(0) scale(0.985);
+    transition-duration: 0.12s;
+  }
+
+  /* ---- Ambient aurora -------------------------------------------------
+     Slow-drifting color fields behind the glass give the blur something
+     to refract. transform-only animation, GPU-composited. */
+  .aurora {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(110px);
+    pointer-events: none;
+    will-change: transform;
+  }
+  .aurora-green {
+    background: radial-gradient(
+      circle at 50% 50%,
+      rgba(89, 212, 153, 0.26),
+      transparent 65%
+    );
+    animation: aurora-drift-1 26s ease-in-out infinite alternate;
+  }
+  .aurora-cyan {
+    background: radial-gradient(
+      circle at 50% 50%,
+      rgba(87, 193, 255, 0.18),
+      transparent 65%
+    );
+    animation: aurora-drift-2 32s ease-in-out infinite alternate;
+  }
+
+  @keyframes aurora-drift-1 {
+    from {
+      transform: translate3d(-6%, -4%, 0) scale(1);
+    }
+    to {
+      transform: translate3d(8%, 7%, 0) scale(1.15);
+    }
+  }
+  @keyframes aurora-drift-2 {
+    from {
+      transform: translate3d(7%, 5%, 0) scale(1.1);
+    }
+    to {
+      transform: translate3d(-8%, -6%, 0) scale(0.95);
+    }
+  }
+
+  /* ---- Scroll reveal ---------------------------------------------------
+     Sections rise into place as they enter the viewport. The .reveal
+     element starts hidden and Reveal.tsx flips .is-visible. */
+  .reveal {
+    opacity: 0;
+    transform: translateY(18px) scale(0.995);
+    transition:
+      opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--reveal-delay, 0ms);
+    will-change: transform, opacity;
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+
   /* Faint grid that fades out below the hero. */
   .grid-fade {
     background-image:
@@ -59,5 +183,30 @@ body {
   .card {
     background-color: theme("colors.surface");
     border: 1px solid theme("colors.border");
+  }
+}
+
+/* Reduced motion: cross-fade instead of slide/drift, no elasticity —
+   feedback stays, physics goes. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .aurora-green,
+  .aurora-cyan {
+    animation: none;
+  }
+  .reveal {
+    transform: none;
+    transition: opacity 0.25s ease;
+  }
+  .glass-interactive,
+  .glass-interactive:hover,
+  .glass-interactive:active {
+    transform: none;
+  }
+  .animate-fade-up {
+    animation: none;
+    opacity: 1;
   }
 }
