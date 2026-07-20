@@ -5,6 +5,33 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.3 — 2026-07-20
+
+Field testing caught a state-poisoning bug in `watch` — fixed at the root,
+plus defense in depth and a new invariant test suite so this class can't ship
+again.
+
+- **`watch` no longer mislabels data.** It stamped everything it persisted as
+  `connected_provider`, so after one watch run the quickstart claimed
+  "connected provider billing" over local-log data and `report`/`apply`
+  routed to the agency artifacts (the generic identical per-project
+  recommendations). Watch now follows the same freshness rule as every other
+  command (fresh local-log read; provider records only when they exist) and
+  persists the TRUE mode.
+- **Defense in depth:** persisted `connected_provider` state is only believed
+  if its records are actually provider-sourced; mislabeled local-log records
+  are superseded by a fresh read everywhere (quickstart, report, apply).
+- **Watch cycles are compact now** — delta headline + focused table, not the
+  full four-stage readout repeated every cycle.
+- **`--group-by` without a dimension errors with usage** instead of silently
+  printing the full readout; `sync-provider`'s error shows a complete example
+  command.
+- **New command-sequence invariant suite**: realistic multi-command runs
+  against shared state assert that data-mode labels can never lie, totals
+  agree across back-to-back commands, and agency framing can never leak into
+  local-log artifacts — including a regression test that replays the exact
+  poisoned-state bug.
+
 ## 0.5.2 — 2026-07-19
 
 Model-price coverage beyond Anthropic/OpenAI.
