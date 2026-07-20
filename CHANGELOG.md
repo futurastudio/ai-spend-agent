@@ -5,6 +5,21 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.2 — 2026-07-19
+
+Model-price coverage beyond Anthropic/OpenAI.
+
+- **New pricing rules** (published list prices): Google Gemini 2.5
+  Pro/Flash/Flash-Lite, DeepSeek chat/reasoner (v3/r1), Moonshot Kimi K2,
+  xAI Grok 4/3/3-mini. Local logs that ran these models now price instead of
+  reading `missing`.
+- **Open-weight models stay honestly unpriced**: Llama/Qwen/Mistral/GLM have
+  no canonical price (hosting rates vary several-fold), so they remain
+  `missing` by design — documented in README, one-line PRs invited for new
+  models.
+- README states transcript-parser coverage honestly (Claude Code + Codex
+  today; Cursor/Gemini CLI/Cline/Aider planned, parsers welcome).
+
 ## 0.5.1 — 2026-07-09
 
 Apply-prompt hardening, pre-validated before the first real coding-agent run.

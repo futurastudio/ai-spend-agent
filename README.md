@@ -121,6 +121,14 @@ then reconciles your estimates against your real bills.
 | Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented + mocked against live-shaped responses; admin-key reports welcome |
 | Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Beta — built to the published API spec; live reports welcome |
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Beta — built to the published API spec; live reports welcome |
+| Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | 🔜 Planned — parsers welcome ([open an issue](https://github.com/futurastudio/ai-spend-agent/issues)) |
+
+**Model price coverage:** local-log estimates use published list prices for
+Anthropic, OpenAI, Google (Gemini), DeepSeek, Moonshot (Kimi), and xAI (Grok)
+models. Open-weight models (Llama, Qwen, Mistral, GLM) have no canonical
+price — hosting rates vary several-fold — so those records are honestly
+labeled `missing` rather than guessed. New model out? One pricing rule +
+a PR: `packages/core/src/modelPricing.ts`.
 
 ## Connect verified billing
 
