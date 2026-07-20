@@ -47,6 +47,21 @@ const pricingRules: PricingRule[] = [
   { match: /^gpt-4o/i, inputPerM: 2.5, outputPerM: 10 },
   { match: /^o3$/i, inputPerM: 2, outputPerM: 8 },
   { match: /^o4-mini/i, inputPerM: 1.1, outputPerM: 4.4 },
+  // Google (Gemini API list prices)
+  { match: /^gemini-2\.5-pro/i, inputPerM: 1.25, outputPerM: 10 },
+  { match: /^gemini-2\.5-flash-lite/i, inputPerM: 0.1, outputPerM: 0.4 },
+  { match: /^gemini-2\.5-flash/i, inputPerM: 0.3, outputPerM: 2.5 },
+  // DeepSeek (official API list prices)
+  { match: /^deepseek-chat|^deepseek-v3/i, inputPerM: 0.27, outputPerM: 1.1 },
+  { match: /^deepseek-reasoner|^deepseek-r1/i, inputPerM: 0.55, outputPerM: 2.19 },
+  // Moonshot / Kimi (official API list prices)
+  { match: /^kimi-k2|^moonshot/i, inputPerM: 0.6, outputPerM: 2.5 },
+  // xAI / Grok (official API list prices)
+  { match: /^grok-4|^grok-3$/i, inputPerM: 3, outputPerM: 15 },
+  { match: /^grok-3-mini/i, inputPerM: 0.3, outputPerM: 0.5 },
+  // Open-weight models with NO canonical price (llama, qwen, mistral, glm):
+  // hosting rates vary several-fold by provider, so we deliberately return
+  // undefined -> costConfidence "missing" instead of inventing a number.
   { match: /codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 }
 ];
 
