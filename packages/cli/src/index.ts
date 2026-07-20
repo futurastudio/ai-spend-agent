@@ -83,6 +83,8 @@ type ParsedArgs = {
   enterprise?: string;
   accountId?: string;
   groupBy?: GroupByDimension;
+  /** Set when --group-by was passed with a missing/unknown dimension. */
+  groupByInvalid?: string;
   interval?: number;
   cycles?: number;
   noColor?: boolean;
@@ -96,6 +98,14 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
   }
 
   const args = parseArgs(argv);
+
+  if (args.groupByInvalid) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `--group-by needs a dimension: ${groupByDimensions.join("|")}\nexample: npx aibill --group-by project`
+    };
+  }
 
   // Zero-key instant demo is the DEFAULT first run. Running `ai-spend-agent`
   // with no subcommand (or `npx ai-spend-agent`), or with only flags such as
@@ -291,7 +301,13 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
 
   // Only real connected/synced provider state is authoritative enough to serve
   // directly. Sample or legacy persisted state must NEVER mask real local logs.
-  if (persisted && persisted.records.length > 0 && persisted.mode === "connected_provider") {
+  // Defense in depth: "connected" is only believed if the records actually
+  // came from a provider — local-log records mislabeled connected (a past bug)
+  // must never be served as billing data.
+  const looksConnected = (persisted?.records ?? []).some(
+    (record) => record.providerCostType !== "local_agent_logs"
+  );
+  if (persisted && persisted.records.length > 0 && persisted.mode === "connected_provider" && looksConnected) {
     return { records: persisted.records, mode: "connected", warnings };
   }
 
@@ -595,12 +611,16 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
   let iteration = 0;
   while (unbounded || iteration < cycles) {
     const previous = await readOptionalJson<WatchSnapshot | null>(join(stateDir, "watch-latest.json"), null);
-    const { summary, snapshot, records } = await runWatchCycle(stateDir, args);
+    const { summary, snapshot, records, mode } = await runWatchCycle(stateDir, args);
     const deltaHeadline = buildDeltaHeadline(previous, snapshot);
+    // Watch's job is DELTAS: render the compact breakdown view per cycle, not
+    // the whole diagnose→verify readout again (the quickstart owns that).
     const plainEnglish = generatePlainEnglishSummary(summary, {
       records,
       groupBy: args.groupBy ?? "model",
-      color: args.noColor ? false : undefined
+      color: args.noColor ? false : undefined,
+      mode: mode === "sample" ? "demo" : mode === "connected_provider" ? "connected" : "local-logs",
+      view: "breakdown"
     });
     const stamped = [
       `=== watch cycle @ ${snapshot.capturedAt} ===`,
@@ -636,19 +656,38 @@ type WatchSnapshot = {
   byModel: Array<{ key: string; amountUsd: number }>;
 };
 
-async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summary: SpendSummary; snapshot: WatchSnapshot; records: UsageRecord[] }> {
+async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summary: SpendSummary; snapshot: WatchSnapshot; records: UsageRecord[]; mode: PersistedDataMode }> {
+  // The persisted mode must describe where the records ACTUALLY came from.
+  // A previous version stamped everything "connected_provider", which made
+  // later quickstarts serve stale local-log data as "connected billing" and
+  // routed apply/report to the agency artifacts. Never label by assumption.
   let records: UsageRecord[];
   let mode: PersistedDataMode;
   if (args.sample) {
     records = await loadSampleUsageData();
     mode = "sample";
   } else {
-    records = await loadLiveRecords(stateDir);
-    if (records.length > 0) {
+    const providerState = await readOptionalJson<{ records: UsageRecord[] }>(
+      join(stateDir, "provider-records.json"),
+      { records: [] }
+    );
+    if (providerState.records.length > 0) {
+      records = providerState.records;
       mode = "connected_provider";
     } else {
-      records = await loadSampleUsageData();
-      mode = "sample";
+      // Same freshness rule as quickstart/report: re-read local logs live,
+      // never serve a stale snapshot.
+      const logs = await loadLocalAgentUsage({
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+      }).catch(() => undefined);
+      if (logs && logs.records.length > 0) {
+        records = logs.records;
+        mode = "local_logs";
+      } else {
+        records = await loadSampleUsageData();
+        mode = "sample";
+      }
     }
   }
 
@@ -674,7 +713,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     detail: `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
   });
 
-  return { summary, snapshot, records };
+  return { summary, snapshot, records, mode };
 }
 
 function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapshot): string {
@@ -717,21 +756,6 @@ function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapsh
   }
 
   return lines.join(" ");
-}
-
-async function loadLiveRecords(stateDir: string): Promise<UsageRecord[]> {
-  const providerState = await readOptionalJson<{ records: UsageRecord[] }>(
-    join(stateDir, "provider-records.json"),
-    { records: [] }
-  );
-  if (providerState.records.length > 0) {
-    return providerState.records;
-  }
-  const spendState = await readOptionalJson<{ records?: UsageRecord[] }>(
-    join(stateDir, "spend.json"),
-    {}
-  );
-  return spendState.records ?? [];
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -912,7 +936,15 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
   const stateDir = join(rootPath, ".ai-spend-agent");
   if (!args.provider || !args.authReference || !args.startTime) {
-    return { exitCode: 1, stdout: "", stderr: "sync-provider requires --provider, --auth-reference env:NAME, and --start-time" };
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "sync-provider requires --provider, --auth-reference env:NAME, and --start-time <unix seconds>.",
+        "example:",
+        "  npx aibill sync-provider --provider anthropic --auth-reference env:ANTHROPIC_ADMIN_KEY --start-time 1750000000"
+      ].join("\n")
+    };
   }
 
   try {
@@ -1128,8 +1160,17 @@ async function buildReportInput(stateDir: string, rootPath: string) {
   // re-reads the logs fresh, so report/apply must too — otherwise yesterday's
   // persisted snapshot makes the artifact's numbers disagree with the screen.
   // Persisted state stays authoritative only for connected/sample data.
+  const persistedLooksConnected = (spendState?.records ?? []).some(
+    (record) => record.providerCostType !== "local_agent_logs"
+  );
   const needsFreshLogs =
-    !spendState?.summary || !spendState.records || spendState.records.length === 0 || spendState.mode === "local_logs";
+    !spendState?.summary ||
+    !spendState.records ||
+    spendState.records.length === 0 ||
+    spendState.mode === "local_logs" ||
+    // Mislabeled state (local-log records stamped connected by a past bug)
+    // must be superseded by a fresh read, not trusted.
+    (spendState.mode === "connected_provider" && !persistedLooksConnected);
   if (needsFreshLogs) {
     const logs = await loadLocalAgentUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
@@ -1272,6 +1313,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (isGroupByDimension(next)) {
         parsed.groupBy = next;
         index += 1;
+      } else {
+        // Missing/invalid dimension: surface an error instead of silently
+        // rendering the full readout the user didn't ask for. A following
+        // flag is NOT the dimension — don't consume it.
+        if (next && !next.startsWith("--")) {
+          parsed.groupByInvalid = next;
+          index += 1;
+        } else {
+          parsed.groupByInvalid = "(missing)";
+        }
       }
       continue;
     }
