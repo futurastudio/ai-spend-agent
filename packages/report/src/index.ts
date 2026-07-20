@@ -1185,11 +1185,10 @@ function formatPercent(ratio: number): string {
 }
 
 /**
- * The compact, share-first report for local-log users: value multiple up top,
- * where the usage goes, dead context, the cut list, plan check — one screen,
- * every number from the same engines as the terminal readout. No agency
- * framing (clients, margin risk, mapping questions) — those belong to the
- * connected/mapped report.
+ * The share-first report for local-log users, in the product's own visual
+ * language: a terminal window. Paxel-style card energy, terminal colors,
+ * loop-named sections (what happened / why / fix / verify) — one screen,
+ * every number from the same engines as the CLI readout. No agency framing.
  */
 function generateLocalLogHtmlReport(input: SpendReportInput): string {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
@@ -1203,42 +1202,33 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
   );
   const dead = input.deadContext && input.deadContext.hasData && !input.deadContext.isSample ? input.deadContext : undefined;
   const summary = input.summary;
+  const hittingLimits = planChecks.some((check) => check.upgradeHint);
 
-  const shareRow = (key: string, amountUsd: number): string => {
+  const barRow = (key: string, amountUsd: number): string => {
     const share = summary.totalUsd > 0 ? amountUsd / summary.totalUsd : 0;
-    return `<li><span>${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><strong>${formatUsd(amountUsd)} · ${formatPercent(share)}</strong></li>`;
+    const pct = Math.max(1, Math.round(share * 100));
+    return `<div class="row"><span class="k">${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><span class="bar"><i style="width:${pct}%"></i></span><span class="v">${formatUsd(amountUsd)}<em>${formatPercent(share)}</em></span></div>`;
   };
 
-  const tldr: string[] = [];
-  if (valueCheck) {
-    tldr.push(
-      `Getting ~${valueCheck.valueMultiple}× the ${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage${planChecks.some((check) => check.upgradeHint) ? " — and hitting its limits" : ""}`
-    );
-  }
-  const topProject = summary.byProject.find((entry) => entry.key !== "unmapped");
-  if (topProject && summary.totalUsd > 0) {
-    tldr.push(`${escapeHtml(topProject.key)} eats ${formatPercent(topProject.amountUsd / summary.totalUsd)} of it`);
-  }
-  if (dead && dead.deadCount > 0) {
-    tldr.push(`${dead.deadCount} of ${dead.loadedCount} loaded tools never invoked in ${dead.windowDays} days`);
-  }
+  const statCard = (label: string, value: string, note: string, tone = ""): string =>
+    `<div class="stat ${tone}"><span class="label">${label}</span><strong>${value}</strong><span class="note">${note}</span></div>`;
 
-  const cutCards = cutList.slice(0, 4).map((cut) => {
+  const sectionHead = (name: string, blurb: string): string =>
+    `<div class="sec"><span class="rule"></span><span class="name">${name}</span><span class="rule"></span><span class="blurb">${blurb}</span></div>`;
+
+  const cutRows = cutList.slice(0, 4).map((cut) => {
     const unit = cut.recordCount === 1 ? cut.recordUnit.replace(/s$/, "") : cut.recordUnit;
-    return `<li>
-      <span>${escapeHtml(cut.title)}<br /><em>${escapeHtml(cut.action)}</em></span>
-      <strong>~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo<br /><em>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</em></strong>
-    </li>`;
-  });
+    return `<div class="cut"><div><strong>${escapeHtml(cut.title)}</strong><p>${escapeHtml(cut.action)}</p></div><div class="cut-v"><strong>~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo</strong><span>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</span></div></div>`;
+  }).join("");
 
-  const deadList = dead
-    ? dead.deadItems.slice(0, 8).map((item) => `<li><span>${escapeHtml(item.kind.replace("_", " "))} · ${escapeHtml(item.name)}</span><strong>never invoked</strong></li>`)
-    : [];
+  const deadChips = dead
+    ? dead.deadItems.slice(0, 8).map((item) => `<span class="chip">${escapeHtml(item.kind.replace("_", " "))} · ${escapeHtml(item.name)}</span>`).join("")
+    : "";
 
-  const planLines = planChecks.map((check) => {
+  const planRows = planChecks.map((check) => {
     const [head, ...rest] = check.headline.split(" — ");
-    return `<li><span>${escapeHtml(head ?? check.headline)}</span><strong>${escapeHtml(rest.join(" — "))}</strong>${check.upgradeHint ? `<em>${escapeHtml(check.upgradeHint)}</em>` : ""}</li>`;
-  });
+    return `<div class="plan-row"><strong>${escapeHtml(head ?? check.headline)}</strong>${rest.length > 0 ? `<p>${escapeHtml(rest.join(" — "))}</p>` : ""}${check.upgradeHint ? `<p class="warn">! ${escapeHtml(check.upgradeHint)}</p>` : ""}</div>`;
+  }).join("");
 
   return `<!doctype html>
 <html lang="en">
@@ -1246,90 +1236,115 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Receipt — what my coding agents actually did</title>
-  <style>${premiumReportCss()}
-  .brief-list li em { display: block; font-style: normal; opacity: 0.65; font-size: 0.82em; margin-top: 2px; }
-  </style>
+  <style>${terminalReportCss()}</style>
 </head>
 <body>
-  <main class="report-shell" aria-labelledby="report-title">
-    <section class="hero-panel">
-      <div class="report-kicker">AI Receipt · local-first · estimated at API-equivalent rates</div>
-      <div class="hero-grid">
-        <div>
-          <h1 id="report-title">What my coding agents actually did</h1>
-          <p class="hero-copy">${valueCheck ? `Covered by ${escapeHtml(valueCheck.suggestedPlan!.name)} ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — getting ~${valueCheck.valueMultiple}× the plan price in usage.` : "Usage read from local Claude Code / Codex transcripts — estimated at API-equivalent rates."}</p>
+  <main class="wrap">
+    <div class="term">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">npx aibill — AI Receipt</span></div>
+      <div class="term-body">
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${windowDays} day${windowDays === 1 ? "" : "s"} of data · local-first, nothing uploaded</span></p>
+
+        <div class="hero">
+          ${valueCheck
+            ? `<div class="hero-big g-accent">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COVERED BY <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — getting ~${valueCheck.valueMultiple}× the plan price in usage${hittingLimits ? ` <span class="warn">· hitting its limits</span>` : ""}</div>`
+            : `<div class="hero-big g-accent">${formatUsd(summary.totalUsd)}</div><div class="hero-sub">API-equivalent usage from local Claude Code / Codex transcripts · estimated</div>`}
         </div>
-        <div class="hero-meta" aria-label="Report metadata">
-          <span>Generated</span>
-          <strong>${escapeHtml(generatedAt.slice(0, 10))}</strong>
-          <span>Window</span>
-          <strong>${windowDays} day${windowDays === 1 ? "" : "s"} of data</strong>
+
+        ${sectionHead("WHAT HAPPENED", "measured from this machine's transcripts")}
+        <div class="stats">
+          ${valueCheck ? statCard("Plan value", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage`, "primary") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
+          ${statCard("Usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`)}
+          ${statCard("Headroom", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "reclaimable · deduplicated")}
+          ${dead ? statCard("Dead context", `${dead.deadCount} of ${dead.loadedCount}`, `never invoked in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : statCard("Dead context", "none", "all loaded tools invoked")}
+        </div>
+
+        ${sectionHead("WHY", "where it goes")}
+        <div class="cols">
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry.key, entry.amountUsd)).join("")}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry.key, entry.amountUsd)).join("")}</div>
+        </div>
+        ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Dead context — loaded every turn, invoked never:</span> ${deadChips}</div>` : ""}
+
+        ${sectionHead("FIX", "ranked by est. monthly value")}
+        ${cutRows || `<p class="dim">No cuts above the reporting threshold in this window.</p>`}
+        <p class="dim note-line">On a flat-price plan these cuts buy rate-limit headroom and speed — they become cash the day you pay per token.</p>
+
+        ${sectionHead("VERIFY", "prove it, then trust it")}
+        ${planRows}
+        <p class="dim note-line">Plan read locally from the agents' own config; list prices only — no account accessed. Apply the cuts, then re-run <span class="g-accent">npx aibill</span>: dead context should read none found.</p>
+
+        <div class="footer">
+          <span><span class="g-accent">$</span> npx aibill <span class="dim">· reproduce this</span></span>
+          <span><span class="g-accent">$</span> npx aibill apply <span class="dim">· paste-ready fix, with rollback</span></span>
+          <span class="dim">free · MIT · deterministic arithmetic over local transcripts</span>
         </div>
       </div>
-      <aside class="privacy-banner" aria-label="Privacy posture">
-        <span class="privacy-dot" aria-hidden="true"></span>
-        <strong>Local files only. No cloud upload, no account access.</strong>
-        <span>Numbers are API-equivalent estimates from this machine's own transcripts.</span>
-      </aside>
-    </section>
-
-    <section class="metric-grid" aria-label="Headline metrics">
-      ${valueCheck ? metricCard("Plan value", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage`, "primary") : metricCard("Tracked usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
-      ${metricCard("API-equivalent usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`)}
-      ${metricCard("Headroom to reclaim", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "deduplicated cut list — headroom on a flat plan, cash on API billing")}
-      ${dead ? metricCard("Dead context", `${dead.deadCount} of ${dead.loadedCount}`, `tools loaded but never invoked (${Math.round(dead.wastePercent * 100)}%)`) : metricCard("Dead context", "none found", "all loaded tools were invoked")}
-    </section>
-
-    ${tldr.length > 0 ? `<section class="artifact-grid"><article class="artifact-card artifact-card--wide">
-      <div class="section-label">TL;DR</div>
-      <ul class="brief-list">${tldr.map((line) => `<li><span>›</span><strong>${line}</strong></li>`).join("")}</ul>
-    </article></section>` : ""}
-
-    <section class="artifact-grid">
-      <article class="artifact-card">
-        <div class="section-label">Where it goes</div>
-        <h2>By project</h2>
-        <ul class="brief-list">${summary.byProject.slice(0, 6).map((entry) => shareRow(entry.key, entry.amountUsd)).join("")}</ul>
-      </article>
-      <article class="artifact-card">
-        <div class="section-label">Where it goes</div>
-        <h2>By model</h2>
-        <ul class="brief-list">${summary.byModel.slice(0, 5).map((entry) => shareRow(entry.key, entry.amountUsd)).join("")}</ul>
-      </article>
-    </section>
-
-    <section class="artifact-grid">
-      <article class="artifact-card">
-        <div class="section-label">Dead context</div>
-        <h2>${dead && dead.deadCount > 0 ? `${dead.deadCount} of ${dead.loadedCount} tools never invoked in ${dead.windowDays} days` : "None found — clean setup"}</h2>
-        ${deadList.length > 0 ? `<ul class="brief-list">${deadList.join("")}</ul><p class="hero-copy">Loaded into context on every turn; removing them trims every session.</p>` : ""}
-      </article>
-      <article class="artifact-card">
-        <div class="section-label">Where to cut</div>
-        <h2>~${formatUsd(plan.recommendedSavingsUsd)}/mo reclaimable</h2>
-        <ul class="brief-list">${cutCards.join("")}</ul>
-        <p class="hero-copy">On a flat-price plan these cuts buy rate-limit headroom and faster sessions — they become cash the day you pay per token.</p>
-      </article>
-    </section>
-
-    ${planLines.length > 0 ? `<section class="artifact-grid"><article class="artifact-card artifact-card--wide">
-      <div class="section-label">Plan check</div>
-      <h2>Subscription vs pay-per-token</h2>
-      <ul class="brief-list">${planLines.join("")}</ul>
-      <p class="hero-copy">Plan read from the agents' local config (read-only); prices are published list prices — no account was accessed.</p>
-    </article></section>` : ""}
-
-    <section class="artifact-grid">
-      <article class="artifact-card artifact-card--wide">
-        <div class="section-label">Reproduce this</div>
-        <h2>npx aibill</h2>
-        <p class="hero-copy">Free, MIT-licensed, local-first. Apply the cuts with <strong>npx aibill apply</strong> — it prints a paste-ready prompt for your coding agent, with rollback. Every figure above is deterministic arithmetic over local transcripts; nothing was uploaded.</p>
-      </article>
-    </section>
+    </div>
   </main>
 </body>
 </html>
 `;
+}
+
+/** Terminal-native design system for the shareable local report. */
+function terminalReportCss(): string {
+  return `
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #05080c; color: #d7e0ea; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 24px 12px 48px; }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    .term { background: #0b1017; border: 1px solid #1c2733; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 80px rgba(0,0,0,0.55); }
+    .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; background: #0e1520; border-bottom: 1px solid #1c2733; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+    .term-title { margin-left: 8px; font-size: 12px; color: #8494a6; }
+    .term-body { padding: 26px 28px 22px; }
+    .dim { color: #66788c; }
+    .warn { color: #fbbf24; }
+    .g-accent { color: #4ade80; }
+    .prompt { font-size: 13px; margin-bottom: 22px; }
+    .hero { text-align: center; margin: 6px 0 26px; }
+    .hero-big { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; }
+    .hero-sub { margin-top: 10px; font-size: 13px; color: #aab8c7; }
+    .sec { display: flex; align-items: center; gap: 10px; margin: 26px 0 14px; font-size: 12px; }
+    .sec .rule { height: 1px; width: 26px; background: #24303d; }
+    .sec .name { color: #22d3ee; font-weight: 700; letter-spacing: 2px; }
+    .sec .blurb { color: #66788c; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+    .stat { border: 1px solid #1c2733; border-radius: 10px; padding: 14px; background: #0e141c; display: flex; flex-direction: column; gap: 5px; }
+    .stat.primary { border-color: rgba(74,222,128,0.4); }
+    .stat.warn-card { border-color: rgba(251,191,36,0.4); }
+    .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: #66788c; }
+    .stat strong { font-size: 24px; color: #e8eff6; }
+    .stat.primary strong { color: #4ade80; }
+    .stat.warn-card strong { color: #fbbf24; }
+    .stat .note { font-size: 11px; color: #8494a6; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } .hero-big { font-size: 46px; } }
+    .col h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #66788c; margin-bottom: 9px; }
+    .row { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 12px; }
+    .row .k { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab8c7; }
+    .row .bar { flex: 1; height: 9px; background: #131c26; border-radius: 4px; overflow: hidden; }
+    .row .bar i { display: block; height: 100%; background: linear-gradient(90deg, #22d3ee, #4ade80); }
+    .row .v { flex: 0 0 96px; text-align: right; color: #e8eff6; }
+    .row .v em { font-style: normal; color: #66788c; margin-left: 5px; }
+    .deadbox { margin-top: 14px; border: 1px dashed rgba(251,191,36,0.35); border-radius: 10px; padding: 11px 13px; font-size: 12px; }
+    .deadbox .label { color: #fbbf24; margin-right: 6px; }
+    .chip { display: inline-block; border: 1px solid #24303d; border-radius: 999px; padding: 2px 9px; margin: 3px 3px 0 0; font-size: 11px; color: #aab8c7; }
+    .cut { display: flex; justify-content: space-between; gap: 16px; border: 1px solid #1c2733; border-radius: 10px; padding: 13px 15px; background: #0e141c; margin-bottom: 9px; }
+    .cut strong { font-size: 13px; color: #e8eff6; }
+    .cut p { font-size: 11.5px; color: #8494a6; margin-top: 5px; line-height: 1.5; max-width: 60ch; }
+    .cut-v { text-align: right; flex-shrink: 0; }
+    .cut-v strong { color: #4ade80; font-size: 15px; }
+    .cut-v span { display: block; font-size: 10.5px; color: #66788c; margin-top: 4px; }
+    .plan-row { border-left: 2px solid #24303d; padding: 2px 0 2px 12px; margin-bottom: 11px; font-size: 12px; }
+    .plan-row strong { color: #e8eff6; }
+    .plan-row p { color: #8494a6; margin-top: 4px; line-height: 1.55; }
+    .plan-row .warn { color: #fbbf24; }
+    .note-line { font-size: 11.5px; margin-top: 10px; line-height: 1.55; }
+    .footer { display: flex; flex-wrap: wrap; gap: 8px 22px; border-top: 1px solid #1c2733; margin-top: 24px; padding-top: 15px; font-size: 12px; }
+  `;
 }
 
 function premiumReportCss(): string {
