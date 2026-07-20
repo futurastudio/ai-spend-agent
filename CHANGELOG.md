@@ -5,6 +5,15 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.4 — 2026-07-20
+
+**The shareable report now looks like the product: a terminal.** Its own
+design system replaces the borrowed agency CSS — dark terminal window with
+title-bar chrome, monospace, green/cyan accents, a giant value-multiple hero,
+stat cards, gradient share bars, dead-context chips — and the sections are
+the loop itself: WHAT HAPPENED → WHY → FIX → VERIFY. ~10KB, one screen,
+zero paragraphs of filler.
+
 ## 0.5.3 — 2026-07-20
 
 Field testing caught a state-poisoning bug in `watch` — fixed at the root,
