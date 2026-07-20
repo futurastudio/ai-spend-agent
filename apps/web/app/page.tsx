@@ -261,6 +261,55 @@ export default function Home() {
         </Reveal>
       </section>
 
+      {/* Roadmap: weekly artifacts */}
+      <section id="roadmap" className="relative z-10 mx-auto max-w-content px-6 py-16">
+        <Reveal>
+          <div className="text-center">
+            <h2 className="text-balance font-mono text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+              What&apos;s next
+            </h2>
+            <p className="mx-auto mt-3 max-w-xl text-balance text-base leading-relaxed text-muted">
+              A new artifact every week — free in the CLI, built from the logs
+              already on your machine. Nothing leaves your laptop.
+            </p>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                week: "week 1",
+                cmd: "aibill limits",
+                copy: "Know when you'll hit your rate cap — before it hits you."
+              },
+              {
+                week: "week 2",
+                cmd: "aibill wrapped",
+                copy: "Your month with AI, as a card worth sharing."
+              },
+              {
+                week: "week 3",
+                cmd: "aibill context",
+                copy: "A measured context-health grade, with named culprits."
+              },
+              {
+                week: "week 4",
+                cmd: "aibill secrets",
+                copy: "Find keys leaked into your transcripts — locally."
+              }
+            ].map((item) => (
+              <div key={item.cmd} className="glass rounded-2xl px-5 py-6">
+                <div className="font-mono text-xs uppercase tracking-widest text-green">
+                  {item.week}
+                </div>
+                <div className="mt-2 font-mono text-sm font-semibold text-ink">
+                  npx {item.cmd}
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-muted">{item.copy}</p>
+              </div>
+            ))}
+          </div>
+        </Reveal>
+      </section>
+
       {/* Beta CTA */}
       <section id="beta" className="relative z-10 mx-auto max-w-content px-6 py-20">
         <div
@@ -275,10 +324,11 @@ export default function Home() {
               Want it running 24/7?
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-balance text-base leading-relaxed text-muted">
-              The hosted version adds continuous monitoring, burn-rate alerts
-              before you hit a credit cap, and white-label reports you can send
-              straight to clients. Join the beta and we&apos;ll reach out as
-              spots open.
+              The hosted tier is everything the CLI can&apos;t do alone: your
+              history kept forever, burn-rate alerts while your laptop is off,
+              your receipt and Wrapped at a living share URL, multi-machine
+              merge, and team rollups. Join the beta and we&apos;ll reach out
+              as spots open.
             </p>
             <div className="mx-auto mt-8 max-w-md text-left">
               <WaitlistForm />
