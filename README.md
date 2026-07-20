@@ -50,9 +50,10 @@ from the real CLI by `scripts/record-demo.sh` so it can't drift from the product
 - **You run a startup or freelance on AI tools** and can't answer "what is
   AI actually costing me per month?" — because the answer is split across
   four dashboards and two subscriptions that have no dashboard at all.
-- **You live in Claude Code / Codex** and just got moved onto metered
-  credits (Copilot June 1, Claude agent credits June 15). Your burn rate is
-  invisible until the meter stops you — unless you read your own logs.
+- **You live in Claude Code / Codex** and the meters keep coming — Copilot's
+  AI Credits, Claude's agent credit split, and now Anthropic's move to
+  metered usage credits (July 20, 2026). Your burn rate is invisible until
+  the meter stops you — unless you read your own logs.
 - **You lead a small team** and need to know which project, model, or
   person the spend goes to before you set budgets — without buying a
   $500/mo enterprise FinOps seat.
@@ -61,11 +62,13 @@ from the real CLI by `scripts/record-demo.sh` so it can't drift from the product
 
 ## Why
 
-AI billing changed in June 2026: Copilot moved to metered AI Credits (June 1),
-Claude plans split agent usage into separate credit pools (June 15). Most of
-that spend has **no official API to monitor it** — but it's sitting in logs on
-your machine, and your API spend is one admin key away. This tool puts all of
-it in one view and tells you what to cut.
+Every AI coding tool is metered now. Copilot moved to AI Credits, Claude split
+agent usage into separate credit pools, and Anthropic's plans switch to metered
+usage credits on July 20, 2026. The meters all run in different dashboards, none
+of them shows you the total, and most of that spend has **no official API to
+monitor it** — but it's sitting in logs on your machine, and your API spend is
+one admin key away. This tool puts all of it in one view and tells you what to
+cut.
 
 ## What you get
 

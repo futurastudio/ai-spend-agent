@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const COMMAND = "npx ai-spend-agent";
+const COMMAND = "npx aibill";
 
 export function CopyCommand() {
   const [copied, setCopied] = useState(false);

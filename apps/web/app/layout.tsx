@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { SITE_URL } from "../lib/site";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -12,34 +13,38 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "ai-spend-agent — your AI spend in one view, in 90 seconds";
+const title = "aibill — your AI bill in one view, in 90 seconds";
 const description =
-  "A free, local-first CLI that unifies your Claude Code and Codex session logs (estimated at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin key — into one terminal view, with a ranked list of cuts. Your data never leaves your machine.";
+  "npx aibill: a free, local-first CLI that unifies your Claude Code and Codex session logs (estimated at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin key — into one terminal view, with a ranked list of cuts. Also on npm as ai-spend-agent. Your data never leaves your machine.";
 
 export const metadata: Metadata = {
   title,
   description,
-  metadataBase: new URL("https://ai-spend-agent.vercel.app"),
+  metadataBase: new URL(SITE_URL),
+  alternates: { canonical: "/" },
+  keywords: [
+    "AI cost tracker",
+    "AI bill",
+    "Claude Code cost",
+    "Claude usage credits",
+    "Copilot AI credits",
+    "AI usage tracker",
+    "token cost tracker",
+    "ccusage alternative",
+    "AI spend",
+  ],
   openGraph: {
     title,
     description,
     type: "website",
-    url: "https://ai-spend-agent.vercel.app",
-    images: [
-      {
-        url: "https://raw.githubusercontent.com/futurastudio/ai-spend-agent/main/docs/assets/social-preview.png",
-        width: 1280,
-        height: 640,
-      },
-    ],
+    url: "/",
+    images: [{ url: "/og.png", width: 1280, height: 640 }],
   },
   twitter: {
     card: "summary_large_image",
     title,
     description,
-    images: [
-      "https://raw.githubusercontent.com/futurastudio/ai-spend-agent/main/docs/assets/social-preview.png",
-    ],
+    images: ["/og.png"],
   },
 };
 
