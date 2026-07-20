@@ -34,7 +34,7 @@ const steps = [
   {
     n: "01",
     title: "Run one command",
-    body: "npx ai-spend-agent — nothing to install, configure, or sign up for.",
+    body: "npx aibill — nothing to install, configure, or sign up for. (Also on npm as ai-spend-agent.)",
   },
   {
     n: "02",
@@ -72,7 +72,7 @@ export default function Home() {
               $
             </span>
             <span className="font-mono text-sm font-semibold tracking-tight text-ink">
-              ai-spend-agent
+              aibill
             </span>
           </div>
           <nav className="flex items-center gap-2">
@@ -146,7 +146,7 @@ export default function Home() {
               <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
               <span className="h-3 w-3 rounded-full bg-[#28c840]" />
               <span className="ml-2 font-mono text-xs text-faint">
-                ai-spend-agent
+                aibill
               </span>
             </div>
             <video
@@ -290,7 +290,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="relative z-10 border-t border-white/5">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>ai-spend-agent — free, local-first, open-source.</span>
+          <span>aibill — free, local-first, open-source. Also on npm as ai-spend-agent.</span>
           <div className="flex items-center gap-5">
             <a
               href="https://github.com/futurastudio/ai-spend-agent"
@@ -308,7 +308,7 @@ export default function Home() {
             >
               npm
             </a>
-            <span className="text-green">npx ai-spend-agent</span>
+            <span className="text-green">npx aibill</span>
           </div>
         </div>
       </footer>
