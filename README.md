@@ -164,8 +164,17 @@ Run `ai-spend-agent --help` for the full list.
 
 ## Use it inside Cursor / Claude Desktop (MCP)
 
-The same engine ships as a Model Context Protocol server, so your AI editor
-can read your spend directly. See [`docs/MCP.md`](docs/MCP.md).
+The same engine ships as `@agent-finops/mcp`, so any stdio-compatible MCP
+client can read local Claude Code/Codex estimates or sync verified OpenAI and
+Anthropic billing through reference-only credentials:
+
+```bash
+npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
+```
+
+GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
+accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
+configuration, all six tools, and the safety model.
 
 ## Privacy & trust
 

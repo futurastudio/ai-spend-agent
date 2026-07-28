@@ -131,8 +131,12 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
   return [...groups.entries()]
     .map(([key, groupRecords]) => {
       const [clientId, projectId, workflowKey, agentId] = key.split("::") as [string, string, string, string];
-      const amountUsd = roundMoney(sumRecords(groupRecords));
-      const shareOfSpend = roundRatio(amountUsd / totalUsd);
+      const rawAmountUsd = sumRecords(groupRecords);
+      const amountUsd = roundMoney(rawAmountUsd);
+      // Compute the ratio from unrounded amounts. A tiny single-record total
+      // such as $0.0075 rounds to $0.01 for display; dividing that rounded
+      // value by the raw total produced 1.3333 and failed the [0, 1] schema.
+      const shareOfSpend = roundRatio(Math.min(1, rawAmountUsd / totalUsd));
       const estimatedSavingsUsd = roundMoney(amountUsd * impactRatios.workflowSavings);
       const estimatedMarginRiskUsd = roundMoney(amountUsd * impactRatios.workflowMarginRisk);
       const confidence = combinedConfidence(groupRecords.map((record) => record.costConfidence));

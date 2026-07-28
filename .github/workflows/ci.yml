@@ -25,8 +25,13 @@ jobs:
       - run: node packages/cli/dist/index.js --sample --no-color
       # Alias bin must run the exact same CLI.
       - run: node packages/aibill/run.js --help
+      # Spawn the built MCP server, negotiate the protocol, list all tools,
+      # and verify the broad-root safety guard. Unit coverage separately
+      # exercises npm-style bin symlink resolution.
+      - run: node scripts/smoke-mcp.mjs
       # A publish from a dirty tree must still ship a fresh dist (prepack).
       - run: cd packages/cli && npm pack --dry-run
+      - run: cd packages/mcp && npm pack --dry-run
 
   web:
     name: Waitlist app typecheck + build

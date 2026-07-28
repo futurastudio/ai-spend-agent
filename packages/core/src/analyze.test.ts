@@ -99,4 +99,30 @@ describe("spend analysis", () => {
     );
     expect(summary.recommendations.every((recommendation) => recommendation.confidence)).toBe(true);
   });
+
+  it("keeps workflow share within one when a tiny total rounds up for display", () => {
+    const summary = analyzeSpend([{
+      id: "tiny-local-call",
+      timestamp: "2026-07-28T00:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Local agent session logs",
+        provider: "anthropic",
+        confidence: "estimated",
+        observedFrom: "test transcript"
+      },
+      model: "claude-opus-4-8",
+      inputTokens: 1_000,
+      outputTokens: 100,
+      amountUsd: 0.0075,
+      costConfidence: "estimated",
+      projectId: "mcp-project",
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      operation: "claude-code sessions"
+    }]);
+
+    expect(summary.workflowWatch[0]?.amountUsd).toBe(0.01);
+    expect(summary.workflowWatch[0]?.shareOfSpend).toBe(1);
+  });
 });

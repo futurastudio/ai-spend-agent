@@ -5,6 +5,39 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.6 — Unreleased
+
+MCP provider and local-log hardening.
+
+- `sync_local_agent_spend` now produces real, explicitly estimated reports
+  from local Claude Code and Codex metadata.
+- `sync_provider_spend` exposes the existing read-only OpenAI, Anthropic,
+  GitHub Copilot, and Cursor connectors through strict `env:NAME` references.
+  Raw keys are rejected and never persisted.
+- Provider syncs merge by provider instead of silently replacing the previous
+  provider's records. OpenAI and Anthropic were live-verified through stdio;
+  Copilot and Cursor remain fixture-verified pending account QA.
+- The MCP server reports its actual package version, returns structured tool
+  content, carries accurate safety annotations, refuses broad roots on reads
+  and writes, and no longer starts as a side effect of a library import.
+- Report-backed recommendations replace generic discovery advice when spend
+  data exists.
+- Fixed a shared analyzer edge case where display rounding on a tiny total
+  could produce a workflow share greater than 100%.
+- Added protocol-level initialization, tool-list, safe-error, local-log,
+  multi-provider merge, credential non-persistence, and cold stdio audits.
+
+## 0.5.5 — 2026-07-28
+
+Launch hardening and public web release.
+
+- Fixed legacy persisted-state routing so `apply` refreshes real local logs
+  instead of serving stale or demo-shaped state.
+- Added the liquid-glass aibill landing page, Glance interaction prototype,
+  technical SEO, corrected provider claims, and current comparison pages.
+- Pinned the production dependency tree, added CI/security gates, coordinated
+  package versions, and published all five npm packages.
+
 ## 0.5.4 — 2026-07-20
 
 **The shareable report now looks like the product: a terminal.** Its own

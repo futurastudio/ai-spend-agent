@@ -303,9 +303,41 @@ describe("real provider connector implementations", () => {
         ok: true,
         status: 200,
         json: async () => url.includes("/usage/completions") ? ({
-          data: [{ start_time: 1761955200, results: [{ input_tokens: 100, output_tokens: 25, project_id: "proj_usage", user_id: "user_123", api_key_id: "key_123", model: "gpt-5.1" }] }]
+          data: [{
+            start_time: 1761955200,
+            start_time_iso: "2025-11-01T00:00:00Z",
+            end_time_iso: "2025-11-02T00:00:00Z",
+            results: [{
+              input_tokens: 100,
+              input_uncached_tokens: 80,
+              input_cache_write_tokens: 5,
+              input_cached_text_tokens: 15,
+              output_tokens: 25,
+              output_text_tokens: 25,
+              project_id: "proj_usage",
+              user_id: "user_123",
+              api_key_id: "key_123",
+              model: "gpt-5.1",
+              batch: false,
+              service_tier: "default"
+            }]
+          }]
         }) : ({
-          data: [{ start_time: 1761955200, results: [{ amount: { value: 4.2, currency: "usd" }, line_item: "Responses API", api_key_id: "key_123" }] }]
+          data: [{
+            start_time: 1761955200,
+            start_time_iso: "2025-11-01T00:00:00Z",
+            end_time_iso: "2025-11-02T00:00:00Z",
+            results: [{
+              amount: { value: 4.2, currency: "usd" },
+              line_item: "Responses API",
+              organization_id: "org_123",
+              organization_name: "Example",
+              project_name: "Usage",
+              user_id: "user_123",
+              user_email: "dev@example.com",
+              api_key_id: "key_123"
+            }]
+          }]
         })
       };
     };
@@ -335,6 +367,7 @@ describe("real provider connector implementations", () => {
       expect.objectContaining({ providerCostType: "openai_usage_evidence", userId: "user_123", model: "gpt-5.1", costConfidence: "missing" })
     ]));
     expect(result.source).toMatchObject({ verification: "verified", provider: "openai", authReference: "env:OPENAI_ADMIN_KEY" });
+    expect(result.qa.responseDrift).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
@@ -613,7 +646,7 @@ describe("real provider connector implementations", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: [{ starting_at: "2026-05-01T00:00:00Z", ending_at: "2026-05-02T00:00:00Z", results: [{ amount: "250", currency: "USD", cost_type: "tokens", description: "Output tokens", model: "claude-opus-4-8", workspace_id: "wrk_eng", token_type: "output_tokens" }] }], has_more: false })
+          json: async () => ({ data: [{ starting_at: "2026-05-01T00:00:00Z", ending_at: "2026-05-02T00:00:00Z", results: [{ amount: "250", currency: "USD", cost_type: "tokens", description: "Output tokens", model: "claude-opus-4-8", workspace_id: "wrk_eng", token_type: "output_tokens", inference_geo: "us" }] }], has_more: false })
         };
       }
       return {

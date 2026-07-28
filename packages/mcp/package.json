@@ -1,7 +1,7 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.5.5",
-  "description": "Model Context Protocol server for the AI Spend Analyst: see your AI spend in one view, locally.",
+  "version": "0.5.6",
+  "description": "aibill Model Context Protocol server: local Claude Code/Codex usage and verified AI-provider spend in one view.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,7 +17,7 @@
     }
   },
   "bin": {
-    "ai-spend-mcp": "./dist/server.js"
+    "ai-spend-mcp": "dist/server.js"
   },
   "files": [
     "dist",
@@ -30,7 +30,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.5.5",
+    "@agent-finops/core": "0.5.6",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },

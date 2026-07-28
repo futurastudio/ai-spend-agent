@@ -1,10 +1,10 @@
 {
   "name": "aibill",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Check your AI bill — short alias for ai-spend-agent, the local-first AI spend readout. Run: npx aibill",
   "type": "module",
   "bin": {
-    "aibill": "./run.js"
+    "aibill": "run.js"
   },
   "files": [
     "run.js"
@@ -31,6 +31,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "ai-spend-agent": "0.5.5"
+    "ai-spend-agent": "0.5.6"
   }
 }

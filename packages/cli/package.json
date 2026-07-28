@@ -1,12 +1,12 @@
 {
   "name": "ai-spend-agent",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Your AI spend in one view, in 90 seconds — local-first CLI for OpenAI, Anthropic, Cursor, Copilot + Claude Code/Codex session logs, with a ranked savings cut list, and flags the tools your agent loads but never uses (dead context).",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "ai-spend-agent": "./dist/index.js"
+    "ai-spend-agent": "dist/index.js"
   },
   "files": [
     "dist",
@@ -51,8 +51,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.5.5",
-    "@agent-finops/report": "0.5.5",
+    "@agent-finops/core": "0.5.6",
+    "@agent-finops/report": "0.5.6",
     "yocto-spinner": "^1.2.0"
   }
 }
