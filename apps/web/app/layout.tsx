@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SITE_URL } from "../lib/site";
+import { JsonLd } from "@/components/JsonLd";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -59,6 +60,26 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable}`}
     >
       <body className="min-h-screen bg-bg font-sans antialiased">
+        <JsonLd
+          data={{
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            name: "aibill",
+            alternateName: "AI Spend Agent",
+            description,
+            applicationCategory: "DeveloperApplication",
+            operatingSystem: "macOS, Linux, Windows",
+            url: SITE_URL,
+            downloadUrl: "https://www.npmjs.com/package/aibill",
+            codeRepository: "https://github.com/futurastudio/ai-spend-agent",
+            license: "https://opensource.org/license/mit",
+            offers: {
+              "@type": "Offer",
+              price: "0",
+              priceCurrency: "USD",
+            },
+          }}
+        />
         {/* Scroll-reveal is progressive enhancement — without JS, content
             must simply be visible. */}
         <noscript>

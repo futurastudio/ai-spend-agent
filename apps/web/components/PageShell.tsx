@@ -25,7 +25,7 @@ export function PageShell({
       </div>
 
       <header className="sticky top-4 z-40 mx-auto max-w-content px-4 sm:px-6">
-        <div className="glass-heavy flex items-center justify-between rounded-2xl px-4 py-3">
+        <div className="glass-heavy flex items-center justify-between rounded-full px-4 py-3">
           <Link href="/" className="flex items-center gap-2.5">
             <span
               aria-hidden="true"
@@ -62,7 +62,7 @@ export function PageShell({
       <section className="relative z-10 mx-auto max-w-content px-6 py-16">
         <Reveal>
           <div className="glass mx-auto max-w-3xl rounded-3xl px-6 py-10 text-center sm:px-12">
-            <h2 className="text-balance font-mono text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+            <h2 className="text-balance text-2xl font-semibold tracking-[-0.035em] text-ink sm:text-3xl">
               See your own number, in 90 seconds
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-balance text-sm leading-relaxed text-muted">
@@ -92,7 +92,19 @@ export function PageShell({
       <footer className="relative z-10 border-t border-white/5">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
           <span>aibill — free, local-first, open-source.</span>
-          <div className="flex items-center gap-5">
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <Link
+              href="/blog/claude-code-cost-usage-credits"
+              className="transition-colors hover:text-ink"
+            >
+              Cost guide
+            </Link>
+            <Link href="/vs/ccusage" className="transition-colors hover:text-ink">
+              vs ccusage
+            </Link>
+            <Link href="/vs/tokscale" className="transition-colors hover:text-ink">
+              vs tokscale
+            </Link>
             <a
               href="https://github.com/futurastudio/ai-spend-agent"
               target="_blank"

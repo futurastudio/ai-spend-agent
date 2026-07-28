@@ -13,8 +13,8 @@ const config: Config = {
         border: "#1e2127",
         "border-bright": "#2b2f37",
         ink: "#f4f4f6",
-        muted: "#9aa0ad",
-        faint: "#6a6e78",
+        muted: "#a9afbb",
+        faint: "#7f8591",
         // Terminal syntax accents — saturated colors live only in terminals.
         green: "#59d499",
         "green-bright": "#5ef2a8",

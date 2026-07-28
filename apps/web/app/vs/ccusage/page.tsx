@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { PageShell } from "@/components/PageShell";
 import { Reveal } from "@/components/Reveal";
 
-const title = "aibill vs ccusage — Claude Code cost trackers compared";
+const title = "aibill vs ccusage (2026) — AI usage tools compared";
 const description =
-  "An honest comparison of aibill and ccusage for tracking Claude Code usage and cost: both read your local session logs; aibill adds Codex logs, plan-vs-API math, a ranked cut list, and billing-API reconciliation.";
+  "A current comparison of aibill and ccusage for Claude Code and Codex usage: ccusage excels at detailed local reporting; aibill adds provider-bill reconciliation and an action-oriented cut list.";
 
 export const metadata: Metadata = {
   title,
@@ -13,21 +13,26 @@ export const metadata: Metadata = {
 };
 
 const rows: Array<[string, string, string]> = [
-  ["Reads Claude Code session logs locally", "Yes", "Yes"],
-  ["Codex session logs", "Yes", "Claude Code–focused"],
+  ["Claude Code session logs", "Yes", "Yes"],
+  ["Codex session logs", "Yes", "Yes — documented as beta"],
   ["Estimates usage at API-equivalent rates", "Yes", "Yes"],
+  [
+    "Primary focus",
+    "Spend decisions and recommended cuts",
+    "Detailed local usage and cost reporting",
+  ],
   [
     "Reconciles against real provider bills (OpenAI/Anthropic admin key)",
     "Yes — estimates become verified",
-    "Estimates from logs",
+    "Not a stated focus",
   ],
   [
     "Subscription-vs-API plan math",
     "Yes — projects your usage against plan tiers",
-    "Usage and cost reporting",
+    "Block, quota, and usage reporting",
   ],
   ["Ranked savings cut list with $/mo estimates", "Yes", "—"],
-  ["Dead-context pricing (MCP tools loaded but never called)", "Yes", "—"],
+  ["Dead-context detection and measured estimates", "Yes", "—"],
   ["Local-first, no telemetry", "Yes", "Yes"],
   ["Open source", "MIT", "MIT"],
   ["Install", "npx aibill", "npx ccusage"],
@@ -41,16 +46,16 @@ export default function Page() {
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-faint">
             Comparison
           </p>
-          <h1 className="mt-4 text-balance font-mono text-3xl font-semibold leading-[1.15] tracking-[-0.02em] text-ink sm:text-4xl">
+          <h1 className="mt-4 text-balance text-3xl font-semibold leading-[1.08] tracking-[-0.04em] text-ink sm:text-5xl">
             aibill vs ccusage
           </h1>
           <p className="mt-4 text-base leading-relaxed text-muted">
             First, credit where it&apos;s due:{" "}
             <span className="text-ink">ccusage is excellent.</span> It&apos;s
-            mature, fast, widely used (thousands of GitHub stars), and it
-            popularized the idea that your Claude Code session logs can tell you
-            what your usage would cost at API rates. If you want a focused
-            Claude Code usage readout, it&apos;s a great choice.
+            mature, fast, widely used, and it popularized the idea that local
+            coding-agent logs can tell you what usage would cost at API rates.
+            It now documents both Claude Code and Codex support. If you want a
+            detailed local usage readout, it&apos;s a strong choice.
           </p>
           <p className="mt-4 text-base leading-relaxed text-muted">
             aibill starts from the same insight — read the logs you already have
@@ -59,8 +64,8 @@ export default function Page() {
               okay, that&apos;s the number. Now what?
             </span>{" "}
             It adds the plan-vs-API decision math, a ranked list of cuts with
-            estimated savings, dead-context pricing, and the option to reconcile
-            estimates against your actual provider bills.
+            estimated savings, dead-context detection, and the option to
+            reconcile estimates against actual provider cost reports.
           </p>
         </Reveal>
 
@@ -86,8 +91,8 @@ export default function Page() {
             </table>
           </div>
           <p className="mt-4 text-sm leading-relaxed text-faint">
-            Comparison reflects our understanding of ccusage&apos;s
-            documentation as of July 2026 — check{" "}
+            Reviewed against ccusage&apos;s documentation on July 28, 2026 —
+            check{" "}
             <a
               href="https://ccusage.com/"
               target="_blank"
@@ -106,13 +111,11 @@ export default function Page() {
             Which should you use?
           </h2>
           <p className="mt-4 text-base leading-relaxed text-muted">
-            If you want a clean, focused view of Claude Code usage, use ccusage
-            — it does that job well. Use aibill when you want the decision layer
-            on top: whether your subscription still beats pay-per-token now that
-            plans are metered, which concrete changes would lower your bill and
-            by roughly how much, and — when you connect a billing key — numbers
-            verified against real invoices instead of estimates. Both are free
-            and local-first; running both costs you nothing.
+            Use ccusage when detailed Claude Code or Codex usage reporting is
+            the job. Use aibill when you want the decision layer on top: plan
+            economics, concrete cuts, and — when you connect an admin billing
+            key — reconciliation against provider cost reports. Both are free
+            and local-first; running both is a sensible comparison.
           </p>
         </Reveal>
       </article>

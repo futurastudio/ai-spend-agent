@@ -8,10 +8,10 @@
 npx aibill         # short form — same CLI as `npx ai-spend-agent`
 ```
 
-**Half of what your AI agent loads, you pay for and never use.** One run on a
-normal month surfaced **$253 in agent spend — ~$61/mo of it pure waste**:
-wrong-model calls, uncached repeats, oversized context loaded every turn.
-Numbers are illustrative; run the command to see yours, in 90 seconds,
+**Oversized context and unused tools can consume tokens on every turn.** An
+illustrative sample month surfaces **$253 in API-equivalent agent usage and
+about $61/mo in potential cuts** across wrong-model calls, uncached repeats,
+and heavy context. Run the command to measure yours in 90 seconds,
 local-first, no signup.
 
 If you use **Claude Code or Codex**, that one command reads the session logs
@@ -51,9 +51,9 @@ from the real CLI by `scripts/record-demo.sh` so it can't drift from the product
   AI actually costing me per month?" — because the answer is split across
   four dashboards and two subscriptions that have no dashboard at all.
 - **You live in Claude Code / Codex** and the meters keep coming — Copilot's
-  AI Credits, Claude's agent credit split, and now Anthropic's move to
-  metered usage credits (July 20, 2026). Your burn rate is invisible until
-  the meter stops you — unless you read your own logs.
+  AI Credits plus Claude's mix of plan limits, model-specific usage credits,
+  and optional API overages. Your burn rate is hard to compare until you read
+  your own logs.
 - **You lead a small team** and need to know which project, model, or
   person the spend goes to before you set budgets — without buying a
   $500/mo enterprise FinOps seat.
@@ -62,13 +62,12 @@ from the real CLI by `scripts/record-demo.sh` so it can't drift from the product
 
 ## Why
 
-Every AI coding tool is metered now. Copilot moved to AI Credits, Claude split
-agent usage into separate credit pools, and Anthropic's plans switch to metered
-usage credits on July 20, 2026. The meters all run in different dashboards, none
-of them shows you the total, and most of that spend has **no official API to
-monitor it** — but it's sitting in logs on your machine, and your API spend is
-one admin key away. This tool puts all of it in one view and tells you what to
-cut.
+AI coding cost now mixes several systems. Copilot organization billing moved
+to AI Credits in June 2026; Claude combines shared plan limits with
+model-specific usage credits and optional API overages depending on plan.
+Those meters run in different dashboards, and local coding-agent usage is also
+sitting in logs on your machine. This tool puts the available evidence in one
+view, labels estimates versus verified cost reports, and tells you what to cut.
 
 ## What you get
 

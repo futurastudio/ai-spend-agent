@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { PageShell } from "@/components/PageShell";
 import { Reveal } from "@/components/Reveal";
+import { JsonLd } from "@/components/JsonLd";
+import { SITE_URL } from "@/lib/site";
 
-const title = "What Claude Code actually costs after the usage-credits switch";
+const title = "Claude Code cost in 2026: plans, limits, and usage credits";
 const description =
-  "Anthropic plans are moving to metered usage credits (July 20, 2026). Here's why nobody knows their real Claude Code cost per month — and how to check yours in 90 seconds, locally, with npx aibill.";
+  "Claude Code pricing now mixes plan limits, model-specific usage credits, and optional API overages. Learn what changed by plan and check your own API-equivalent usage locally with npx aibill.";
 
 export const metadata: Metadata = {
   title,
@@ -14,7 +16,7 @@ export const metadata: Metadata = {
 
 function H2({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mt-12 font-mono text-xl font-semibold tracking-tight text-ink sm:text-2xl">
+    <h2 className="mt-12 text-xl font-semibold tracking-[-0.025em] text-ink sm:text-2xl">
       {children}
     </h2>
   );
@@ -29,24 +31,50 @@ function P({ children }: { children: React.ReactNode }) {
 export default function Page() {
   return (
     <PageShell ctaRef="seo-blog">
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "Article",
+          headline: title,
+          description,
+          datePublished: "2026-07-20",
+          dateModified: "2026-07-28",
+          mainEntityOfPage: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
+          author: { "@type": "Organization", name: "Futura Studio" },
+          publisher: { "@type": "Organization", name: "Futura Studio" },
+        }}
+      />
       <article className="relative z-10 mx-auto max-w-3xl px-6 pb-8 pt-14 sm:pt-20">
         <Reveal>
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-faint">
             July 2026 · Guide
           </p>
-          <h1 className="mt-4 text-balance font-mono text-3xl font-semibold leading-[1.15] tracking-[-0.02em] text-ink sm:text-4xl">
-            What Claude Code actually costs after the usage-credits switch
+          <h1 className="mt-4 text-balance text-3xl font-semibold leading-[1.08] tracking-[-0.04em] text-ink sm:text-5xl">
+            Claude Code cost in 2026: plans, limits, and usage credits
           </h1>
           <P>
-            On <span className="text-ink">July 20, 2026</span>, Anthropic began
-            switching Claude plans to metered usage credits. It&apos;s the third
-            metering change of the summer: GitHub Copilot moved to AI Credits in
-            June, and Claude plans split agent usage into separate credit pools
-            two weeks later. The exact terms vary by plan — check Anthropic&apos;s
-            pricing page for yours — but the direction is one-way:{" "}
-            <span className="text-ink">
-              every AI coding tool is metered now.
-            </span>
+            On <span className="text-ink">July 20, 2026</span>, Anthropic changed
+            how Fable 5 access works across paid plans. It remains included
+            within limits for Max and premium Team or Enterprise seats, while
+            Pro and standard seats use pay-as-you-go usage credits for that
+            model. Claude Code itself remains included with Pro and Max plan
+            limits, with optional API-credit usage after those limits.{" "}
+            <a
+              href="https://support.claude.com/en/articles/15424964-claude-fable-5-on-your-plan"
+              target="_blank"
+              rel="noreferrer"
+              className="text-ink underline decoration-white/25 underline-offset-4 hover:decoration-white/60"
+            >
+              Check Anthropic&apos;s current plan guidance
+            </a>{" "}
+            before making a purchase decision.
+          </P>
+          <P>
+            GitHub Copilot also moved organization billing to AI Credits in
+            June. The useful takeaway is narrower than &ldquo;every plan became
+            pay-as-you-go&rdquo;: AI coding cost now mixes subscription
+            allowances, shared limits, model-specific credits, and optional
+            metered overages.
           </P>
         </Reveal>
 
@@ -96,8 +124,9 @@ export default function Page() {
             </li>
             <li className="glass rounded-xl px-5 py-4">
               <span className="text-ink">Dead context</span> — MCP tools your
-              agent loads into context every session but never calls. You pay
-              for those tokens on every turn; aibill prices them.
+              agent loads but never calls. aibill names those entries and
+              estimates overhead where the logs contain enough evidence;
+              config-only MCP entries are clearly marked as unmeasured.
             </li>
           </ul>
         </Reveal>

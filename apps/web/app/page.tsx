@@ -1,6 +1,7 @@
 import { CopyCommand } from "@/components/CopyCommand";
 import { WaitlistForm } from "@/components/WaitlistForm";
 import { Reveal } from "@/components/Reveal";
+import { UsageGlance } from "@/components/UsageGlance";
 
 const sources = [
   "Claude Code logs",
@@ -59,11 +60,12 @@ export default function Home() {
         <div className="grid-fade absolute inset-0" />
         <div className="aurora aurora-green left-[8%] top-[-120px] h-[480px] w-[560px]" />
         <div className="aurora aurora-cyan right-[4%] top-[160px] h-[420px] w-[520px]" />
+        <div className="aurora aurora-violet left-[42%] top-[360px] h-[360px] w-[430px]" />
       </div>
 
       {/* Nav — floating glass island */}
       <header className="sticky top-4 z-40 mx-auto max-w-content px-4 sm:px-6">
-        <div className="glass-heavy flex items-center justify-between rounded-2xl px-4 py-3">
+        <div className="glass-heavy flex items-center justify-between rounded-full px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span
               aria-hidden="true"
@@ -106,17 +108,18 @@ export default function Home() {
           Free &amp; open-source · MIT
         </a>
 
-        <h1 className="mx-auto mt-7 max-w-3xl animate-fade-up text-balance font-mono text-[2.1rem] font-semibold leading-[1.1] tracking-[-0.025em] text-ink sm:text-[3.4rem]">
-          Your AI spend in one view,
-          <br className="hidden sm:block" /> in{" "}
-          <span className="text-green">90 seconds</span>
+        <h1 className="mx-auto mt-7 max-w-4xl animate-fade-up text-balance text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.06em] text-ink sm:text-[5rem]">
+          Your AI bill,
+          <br className="hidden sm:block" /> finally in{" "}
+          <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
+            focus.
+          </span>
         </h1>
 
-        <p className="mx-auto mt-6 max-w-xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-lg">
-          One command unifies your OpenAI, Anthropic, Cursor, and Copilot
-          bills — plus the Claude Code and Codex logs already on your machine
-          — into a single breakdown, and shows you exactly where to cut. Runs
-          locally. Your data never leaves your machine.
+        <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-xl">
+          One local command turns Claude Code and Codex usage into a clear
+          receipt, plan check, and ranked cut list. Connect provider billing
+          only when you want verified invoice numbers.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
@@ -134,13 +137,30 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Real terminal recording — regenerated from the CLI by scripts/record-demo.sh */}
-        <div className="relative mx-auto mt-14 max-w-terminal animate-fade-up">
+        {/* Native-companion direction: the useful CLI signal at a glance. */}
+        <div className="relative mx-auto mt-14 max-w-terminal animate-fade-up text-left">
           <div
             className="accent-glow pointer-events-none absolute inset-x-0 -bottom-10 top-10"
             aria-hidden="true"
           />
-          <div className="glass relative overflow-hidden rounded-2xl text-left">
+          <UsageGlance />
+          <p className="mt-4 text-center text-xs leading-relaxed text-faint">
+            Product concept: <span className="text-muted">aibill Glance</span>,
+            a planned macOS companion that reads the same local state as the
+            CLI. The sample numbers above are illustrative.
+          </p>
+        </div>
+
+        {/* Real terminal recording — regenerated from the CLI by scripts/record-demo.sh */}
+        <div className="relative mx-auto mt-10 max-w-terminal animate-fade-up">
+          <div className="mb-4 flex items-center justify-between px-1 text-left">
+            <div>
+              <p className="text-sm font-semibold text-ink">Need the full receipt?</p>
+              <p className="mt-1 text-xs text-faint">The terminal remains the source of truth.</p>
+            </div>
+            <span className="font-mono text-xs text-green">npx aibill</span>
+          </div>
+          <div className="glass relative overflow-hidden rounded-[1.6rem] text-left">
             <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
               <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
               <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
@@ -171,7 +191,7 @@ export default function Home() {
       {/* What it does */}
       <section className="relative z-10 mx-auto max-w-content px-6 py-20">
         <Reveal>
-          <h2 className="text-center font-mono text-xs font-medium uppercase tracking-[0.2em] text-faint">
+          <h2 className="text-center text-xs font-semibold uppercase tracking-[0.2em] text-faint">
             What it does
           </h2>
         </Reveal>
@@ -204,7 +224,7 @@ export default function Home() {
       {/* How it works */}
       <section className="relative z-10 mx-auto max-w-content px-6 py-10">
         <Reveal>
-          <h2 className="text-center font-mono text-xs font-medium uppercase tracking-[0.2em] text-faint">
+          <h2 className="text-center text-xs font-semibold uppercase tracking-[0.2em] text-faint">
             How it works
           </h2>
         </Reveal>
@@ -265,7 +285,7 @@ export default function Home() {
       <section id="roadmap" className="relative z-10 mx-auto max-w-content px-6 py-16">
         <Reveal>
           <div className="text-center">
-            <h2 className="text-balance font-mono text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
               What&apos;s next
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-balance text-base leading-relaxed text-muted">
@@ -320,7 +340,7 @@ export default function Home() {
         </div>
         <Reveal>
           <div className="glass relative mx-auto max-w-3xl rounded-3xl px-6 py-12 text-center sm:px-12">
-            <h2 className="text-balance font-mono text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
               Want it running 24/7?
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-balance text-base leading-relaxed text-muted">
@@ -341,7 +361,19 @@ export default function Home() {
       <footer className="relative z-10 border-t border-white/5">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
           <span>aibill — free, local-first, open-source. Also on npm as ai-spend-agent.</span>
-          <div className="flex items-center gap-5">
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <a
+              href="/blog/claude-code-cost-usage-credits"
+              className="transition-colors hover:text-ink"
+            >
+              Claude cost guide
+            </a>
+            <a href="/vs/ccusage" className="transition-colors hover:text-ink">
+              vs ccusage
+            </a>
+            <a href="/vs/tokscale" className="transition-colors hover:text-ink">
+              vs tokscale
+            </a>
             <a
               href="https://github.com/futurastudio/ai-spend-agent"
               target="_blank"

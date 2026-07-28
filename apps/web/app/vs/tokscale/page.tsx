@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { PageShell } from "@/components/PageShell";
 import { Reveal } from "@/components/Reveal";
 
-const title = "aibill vs tokscale — AI token cost trackers compared";
+const title = "aibill vs tokscale (2026) — AI usage tools compared";
 const description =
-  "An honest comparison of aibill and tokscale for tracking AI coding-agent token usage and cost: both estimate from local logs; aibill adds plan-vs-API math, a ranked cut list, dead-context pricing, and billing-API reconciliation.";
+  "A current comparison of aibill and tokscale: tokscale offers broad agent coverage, a TUI, quota views, and social graphs; aibill focuses on provider-bill reconciliation and recommended cuts.";
 
 export const metadata: Metadata = {
   title,
@@ -13,22 +13,23 @@ export const metadata: Metadata = {
 };
 
 const rows: Array<[string, string, string]> = [
-  ["Reads local agent session logs", "Claude Code + Codex", "Multi-tool"],
+  ["Local agent coverage", "Claude Code + Codex", "20+ coding-agent clients"],
   ["Estimates usage at API-equivalent rates", "Yes", "Yes"],
+  ["Interactive TUI and contribution graphs", "Terminal receipt + SVG card", "Yes"],
+  [
+    "Live subscription quota views",
+    "Detected plan + projected plan math",
+    "Yes — multiple providers",
+  ],
   [
     "Reconciles against real provider bills (OpenAI/Anthropic admin key)",
     "Yes — estimates become verified",
-    "Estimates from logs",
-  ],
-  [
-    "Subscription-vs-API plan math",
-    "Yes — projects your usage against plan tiers",
-    "Usage and cost reporting",
+    "Quota display; not independently reconciled",
   ],
   ["Ranked savings cut list with $/mo estimates", "Yes", "—"],
-  ["Dead-context pricing (MCP tools loaded but never called)", "Yes", "—"],
-  ["Provider billing connectors (OpenAI, Anthropic; Cursor/Copilot beta)", "Yes", "—"],
-  ["Local-first, no telemetry", "Yes", "Yes"],
+  ["Dead-context detection and measured estimates", "Yes", "—"],
+  ["Optional public leaderboard", "No", "Yes — opt-in submission"],
+  ["Local-first by default", "Yes", "Yes"],
   ["Open source", "MIT", "Yes"],
   ["Install", "npx aibill", "npx tokscale"],
 ];
@@ -41,15 +42,15 @@ export default function Page() {
           <p className="font-mono text-xs uppercase tracking-[0.2em] text-faint">
             Comparison
           </p>
-          <h1 className="mt-4 text-balance font-mono text-3xl font-semibold leading-[1.15] tracking-[-0.02em] text-ink sm:text-4xl">
+          <h1 className="mt-4 text-balance text-3xl font-semibold leading-[1.08] tracking-[-0.04em] text-ink sm:text-5xl">
             aibill vs tokscale
           </h1>
           <p className="mt-4 text-base leading-relaxed text-muted">
-            tokscale is a solid open-source token tracker: it reads the usage
-            your AI coding tools record locally and turns it into a cost
-            estimate at API rates, across multiple tools. If your question is
-            &ldquo;how many tokens am I burning and what would they cost?&rdquo;,
-            it answers it.
+            tokscale is a broad open-source usage product. It supports more
+            than twenty coding-agent clients, an interactive TUI, subscription
+            quota views, contribution graphs, and an optional public
+            leaderboard. If breadth and visualization are the priority, it has
+            the advantage.
           </p>
           <p className="mt-4 text-base leading-relaxed text-muted">
             aibill treats that number as the starting point, not the answer. It
@@ -57,8 +58,8 @@ export default function Page() {
             account — then adds the layers you need to act:{" "}
             <span className="text-ink">
               plan-vs-API math, a ranked cut list with estimated savings,
-              dead-context pricing, and reconciliation against your real
-              provider bills
+              dead-context detection, and reconciliation against provider
+              cost reports
             </span>{" "}
             when you connect an admin key.
           </p>
@@ -86,8 +87,8 @@ export default function Page() {
             </table>
           </div>
           <p className="mt-4 text-sm leading-relaxed text-faint">
-            Comparison reflects our understanding of tokscale&apos;s
-            documentation as of July 2026 — check{" "}
+            Reviewed against tokscale&apos;s documentation on July 28, 2026 —
+            check{" "}
             <a
               href="https://github.com/junhoyeo/tokscale"
               target="_blank"
@@ -106,12 +107,11 @@ export default function Page() {
             Which should you use?
           </h2>
           <p className="mt-4 text-base leading-relaxed text-muted">
-            Use tokscale if you want a lightweight multi-tool token counter. Use
-            aibill when the question behind the question is money: which plan to
-            be on now that everything is metered, what to cut and what it saves,
-            and — with a billing key connected — figures verified against actual
-            invoices rather than estimated from logs. Both are free and run
-            entirely on your machine; trying both takes two npx commands.
+            Use tokscale when you want broad tool coverage, live quota views,
+            a TUI, or social usage graphs. Use aibill when the question behind
+            the number is what to do next: which plan fits, what to cut, and how
+            local estimates compare with provider cost reports. Both are free;
+            trying both takes two npx commands.
           </p>
         </Reveal>
       </article>

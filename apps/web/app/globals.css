@@ -12,6 +12,9 @@ html {
 
 body {
   background-color: theme("colors.bg");
+  background-image:
+    radial-gradient(circle at 16% -8%, rgba(108, 99, 255, 0.11), transparent 31rem),
+    radial-gradient(circle at 86% 8%, rgba(87, 193, 255, 0.08), transparent 30rem);
   color: theme("colors.ink");
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -29,30 +32,37 @@ body {
      so light appears to catch it. */
   .glass {
     background:
+      radial-gradient(
+        120% 100% at 4% 0%,
+        rgba(255, 255, 255, 0.09),
+        transparent 38%
+      ),
       linear-gradient(
         180deg,
-        rgba(255, 255, 255, 0.055),
-        rgba(255, 255, 255, 0.02) 40%,
-        rgba(255, 255, 255, 0.03)
+        rgba(255, 255, 255, 0.065),
+        rgba(255, 255, 255, 0.024) 42%,
+        rgba(255, 255, 255, 0.034)
       );
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
-    backdrop-filter: blur(20px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.105);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.09),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
       inset 0 -1px 0 rgba(0, 0, 0, 0.18),
-      0 12px 32px -16px rgba(0, 0, 0, 0.6);
+      0 20px 60px -28px rgba(0, 0, 0, 0.72);
   }
 
   /* Nav bar / overlays — heaviest material, most blur. */
   .glass-heavy {
-    background: rgba(13, 13, 15, 0.55);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.09);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 60%),
+      rgba(13, 14, 18, 0.64);
+    -webkit-backdrop-filter: blur(30px) saturate(190%);
+    backdrop-filter: blur(30px) saturate(190%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 16px 40px -20px rgba(0, 0, 0, 0.7);
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 20px 56px -26px rgba(0, 0, 0, 0.76);
   }
 
   /* Inset wells (inputs, terminal body) — recessed glass. */
@@ -111,6 +121,14 @@ body {
       transparent 65%
     );
     animation: aurora-drift-2 32s ease-in-out infinite alternate;
+  }
+  .aurora-violet {
+    background: radial-gradient(
+      circle at 50% 50%,
+      rgba(125, 112, 255, 0.2),
+      transparent 66%
+    );
+    animation: aurora-drift-2 29s ease-in-out infinite alternate-reverse;
   }
 
   @keyframes aurora-drift-1 {
@@ -175,6 +193,295 @@ body {
     filter: blur(90px);
   }
 
+  /* ---- aibill Glance --------------------------------------------------
+     A browser-native concept of the planned macOS rendering surface. The
+     compact pill reveals the useful part of the CLI without becoming a
+     dashboard. */
+  .glance-stage {
+    position: relative;
+    min-height: 500px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 42px;
+    background: #0a0c12;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 36px 100px -46px rgba(0, 0, 0, 0.95);
+    isolation: isolate;
+  }
+
+  .glance-wallpaper {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at 16% 20%, rgba(86, 204, 242, 0.7), transparent 31%),
+      radial-gradient(circle at 72% 15%, rgba(137, 104, 255, 0.78), transparent 34%),
+      radial-gradient(circle at 67% 86%, rgba(77, 214, 173, 0.58), transparent 33%),
+      radial-gradient(circle at 22% 82%, rgba(255, 139, 113, 0.3), transparent 28%),
+      linear-gradient(145deg, #151b2c 0%, #0a0b12 56%, #10162a 100%);
+    filter: saturate(112%);
+  }
+
+  .glance-wallpaper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(115deg, rgba(255, 255, 255, 0.07), transparent 30%),
+      radial-gradient(ellipse at 50% 42%, transparent 28%, rgba(3, 4, 8, 0.38) 100%);
+  }
+
+  .glance-menu-bar {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 2;
+    display: flex;
+    height: 31px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 17px;
+    background: rgba(5, 6, 10, 0.3);
+    color: rgba(255, 255, 255, 0.72);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    backdrop-filter: blur(22px) saturate(180%);
+  }
+
+  .glance-menu-copy {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .glance-camera {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 138px;
+    height: 24px;
+    transform: translateX(-50%);
+    border-radius: 0 0 14px 14px;
+    background: #030304;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .usage-glance {
+    position: absolute;
+    z-index: 4;
+    top: 34px;
+    left: 50%;
+    width: 258px;
+    height: 54px;
+    max-width: calc(100% - 28px);
+    overflow: hidden;
+    transform: translateX(-50%);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 27px;
+    outline: none;
+    background:
+      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
+      rgba(11, 13, 18, 0.78);
+    color: rgba(255, 255, 255, 0.96);
+    -webkit-backdrop-filter: blur(34px) saturate(190%);
+    backdrop-filter: blur(34px) saturate(190%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 18px 50px rgba(0, 0, 0, 0.34);
+    cursor: default;
+    transition:
+      width 0.48s cubic-bezier(0.22, 1, 0.36, 1),
+      height 0.52s cubic-bezier(0.22, 1, 0.36, 1),
+      border-radius 0.42s ease,
+      box-shadow 0.42s ease;
+  }
+
+  .usage-glance:hover,
+  .usage-glance:focus-visible,
+  .usage-glance:focus-within {
+    width: 410px;
+    height: 330px;
+    border-radius: 30px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 30px 85px rgba(0, 0, 0, 0.48);
+  }
+
+  .usage-glance:focus-visible {
+    outline: 2px solid rgba(94, 242, 168, 0.55);
+    outline-offset: 3px;
+  }
+
+  .glance-summary {
+    display: flex;
+    height: 54px;
+    align-items: center;
+    gap: 9px;
+    padding: 0 16px;
+  }
+
+  .glance-orb {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: #5ef2a8;
+    box-shadow:
+      0 0 0 4px rgba(94, 242, 168, 0.11),
+      0 0 18px rgba(94, 242, 168, 0.7);
+  }
+
+  .glance-name,
+  .glance-now {
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .glance-now {
+    color: rgba(255, 255, 255, 0.78);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .glance-spacer {
+    flex: 1;
+  }
+
+  .glance-chevron {
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 12px;
+    transition: transform 0.4s ease;
+  }
+
+  .usage-glance:hover .glance-chevron,
+  .usage-glance:focus-visible .glance-chevron,
+  .usage-glance:focus-within .glance-chevron {
+    transform: rotate(180deg);
+  }
+
+  .glance-detail {
+    padding: 6px 20px 20px;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+    transition:
+      opacity 0.24s ease 0.05s,
+      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s;
+  }
+
+  .usage-glance:hover .glance-detail,
+  .usage-glance:focus-visible .glance-detail,
+  .usage-glance:focus-within .glance-detail {
+    opacity: 1;
+    transform: none;
+    transition-delay: 0.12s;
+  }
+
+  .glance-headline {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 12px 2px 17px;
+  }
+
+  .glance-kicker {
+    color: rgba(255, 255, 255, 0.52);
+    font-size: 11px;
+    font-weight: 550;
+  }
+
+  .glance-total {
+    margin-top: 3px;
+    font-size: 34px;
+    font-weight: 660;
+    letter-spacing: -0.055em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .glance-status {
+    border: 1px solid rgba(94, 242, 168, 0.2);
+    border-radius: 999px;
+    background: rgba(94, 242, 168, 0.08);
+    padding: 5px 9px;
+    color: #7cf4b7;
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .glance-meters {
+    display: grid;
+    gap: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 16px;
+  }
+
+  .glance-meter-label {
+    display: flex;
+    justify-content: space-between;
+    color: rgba(255, 255, 255, 0.64);
+    font-size: 11px;
+    font-weight: 550;
+  }
+
+  .glance-meter-track {
+    height: 5px;
+    margin-top: 7px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  .glance-meter-track span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #5ef2a8, #64c8ff);
+    box-shadow: 0 0 18px rgba(94, 242, 168, 0.38);
+  }
+
+  .glance-project {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 15px;
+    background: rgba(255, 255, 255, 0.045);
+    padding: 12px 13px;
+  }
+
+  .glance-project p {
+    color: rgba(255, 255, 255, 0.46);
+    font-size: 10px;
+  }
+
+  .glance-project strong,
+  .glance-project > span {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    font-weight: 620;
+  }
+
+  .glance-project strong {
+    display: block;
+    margin-top: 2px;
+  }
+
+  .glance-desktop-copy {
+    position: absolute;
+    right: 28px;
+    bottom: 26px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    color: rgba(255, 255, 255, 0.58);
+    font-size: 11px;
+  }
+
+  .glance-desktop-copy strong {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    font-weight: 620;
+  }
+
   .text-balance {
     text-wrap: balance;
   }
@@ -193,7 +500,8 @@ body {
     scroll-behavior: auto;
   }
   .aurora-green,
-  .aurora-cyan {
+  .aurora-cyan,
+  .aurora-violet {
     animation: none;
   }
   .reveal {
@@ -208,5 +516,26 @@ body {
   .animate-fade-up {
     animation: none;
     opacity: 1;
+  }
+  .usage-glance,
+  .glance-detail,
+  .glance-chevron {
+    transition-duration: 0.01ms;
+  }
+}
+
+@media (max-width: 640px) {
+  .glance-stage {
+    min-height: 440px;
+    border-radius: 30px;
+  }
+  .usage-glance:hover,
+  .usage-glance:focus-visible,
+  .usage-glance:focus-within {
+    width: calc(100% - 28px);
+  }
+  .glance-desktop-copy {
+    right: 18px;
+    bottom: 18px;
   }
 }
