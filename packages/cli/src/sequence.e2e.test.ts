@@ -117,6 +117,45 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     expect(html).not.toContain("unmapped-client");
   });
 
+  it("legacy state without a mode is refreshed before apply artifacts are generated", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "seq-legacy-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+
+    // Pre-0.5.3 spend state did not carry a data mode. This exact shape used
+    // to make `apply` trust stale records and generate the agency artifact.
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      records: [{
+        id: "legacy-1",
+        timestamp: "2026-06-01T00:00:00.000Z",
+        source: {
+          id: "legacy-cache",
+          name: "Legacy cache",
+          provider: "anthropic",
+          confidence: "estimated",
+          observedFrom: "test"
+        },
+        model: "claude-opus-4-8",
+        inputTokens: 100,
+        outputTokens: 10,
+        amountUsd: 999,
+        costConfidence: "estimated",
+        operation: "legacy cache"
+      }],
+      summary: { totalUsd: 999 }
+    }), "utf8");
+
+    const apply = await runCli(["apply", "--path", dir]);
+    expect(apply.exitCode).toBe(0);
+    expect(apply.stdout).toContain("cleaning up my coding-agent setup");
+    expect(apply.stdout).not.toContain("unmapped-client");
+    expect(apply.stdout).not.toContain("Margin at risk");
+
+    const refreshed = JSON.parse(await readFile(join(stateDir, "spend.json"), "utf8"));
+    expect(refreshed.mode).toBe("local_logs");
+    expect(refreshed.summary.totalUsd).toBe(7.5);
+  });
+
   it("--group-by without a dimension errors with usage instead of dumping the full readout", async () => {
     const dir = await mkdtemp(join(tmpdir(), "seq-groupby-"));
     const result = await runCli(["--group-by", "--path", dir]);

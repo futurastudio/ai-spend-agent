@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@agent-finops/core": "0.5.4",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },
   "engines": {

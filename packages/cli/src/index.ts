@@ -1167,6 +1167,10 @@ async function buildReportInput(stateDir: string, rootPath: string) {
     !spendState?.summary ||
     !spendState.records ||
     spendState.records.length === 0 ||
+    // Pre-0.5.3 state did not persist a mode. Treat it as a cache and
+    // re-detect local logs so report/apply cannot route through the agency
+    // artifact path with stale or demo-shaped records.
+    spendState.mode === undefined ||
     spendState.mode === "local_logs" ||
     // Mislabeled state (local-log records stamped connected by a past bug)
     // must be superseded by a fresh read, not trusted.
