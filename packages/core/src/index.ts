@@ -5,6 +5,7 @@ export * from "./credentialDetection.js";
 export * from "./cutList.js";
 export * from "./deadContext.js";
 export * from "./discovery.js";
+export * from "./glance.js";
 export * from "./toolInvocations.js";
 export * from "./insights.js";
 export * from "./localAgentLogs.js";

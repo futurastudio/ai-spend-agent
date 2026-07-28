@@ -199,7 +199,7 @@ body {
      dashboard. */
   .glance-stage {
     position: relative;
-    min-height: 500px;
+    min-height: 540px;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.13);
     border-radius: 42px;
@@ -269,7 +269,7 @@ body {
     z-index: 4;
     top: 34px;
     left: 50%;
-    width: 258px;
+    width: 374px;
     height: 54px;
     max-width: calc(100% - 28px);
     overflow: hidden;
@@ -294,20 +294,22 @@ body {
       box-shadow 0.42s ease;
   }
 
+  .usage-glance[open],
   .usage-glance:hover,
   .usage-glance:focus-visible,
   .usage-glance:focus-within {
-    width: 410px;
-    height: 330px;
+    width: 452px;
+    height: 436px;
     border-radius: 30px;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       0 30px 85px rgba(0, 0, 0, 0.48);
   }
 
-  .usage-glance:focus-visible {
+  .glance-summary:focus-visible {
     outline: 2px solid rgba(94, 242, 168, 0.55);
-    outline-offset: 3px;
+    outline-offset: -3px;
+    border-radius: 27px;
   }
 
   .glance-summary {
@@ -315,7 +317,13 @@ body {
     height: 54px;
     align-items: center;
     gap: 9px;
-    padding: 0 16px;
+    padding: 0 17px;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .glance-summary::-webkit-details-marker {
+    display: none;
   }
 
   .glance-orb {
@@ -329,14 +337,30 @@ body {
   }
 
   .glance-name,
+  .glance-limit-compact,
   .glance-now {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 650;
     letter-spacing: -0.02em;
   }
 
+  .glance-limit-compact {
+    color: #ffd38a;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .glance-limit-weekly {
+    color: #84e8bc;
+  }
+
+  .glance-summary-divider {
+    width: 1px;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.13);
+  }
+
   .glance-now {
-    color: rgba(255, 255, 255, 0.78);
+    color: rgba(255, 255, 255, 0.68);
     font-variant-numeric: tabular-nums;
   }
 
@@ -350,6 +374,7 @@ body {
     transition: transform 0.4s ease;
   }
 
+  .usage-glance[open] .glance-chevron,
   .usage-glance:hover .glance-chevron,
   .usage-glance:focus-visible .glance-chevron,
   .usage-glance:focus-within .glance-chevron {
@@ -357,7 +382,7 @@ body {
   }
 
   .glance-detail {
-    padding: 6px 20px 20px;
+    padding: 4px 18px 18px;
     opacity: 0;
     transform: translateY(-8px) scale(0.98);
     transition:
@@ -365,6 +390,7 @@ body {
       transform 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s;
   }
 
+  .usage-glance[open] .glance-detail,
   .usage-glance:hover .glance-detail,
   .usage-glance:focus-visible .glance-detail,
   .usage-glance:focus-within .glance-detail {
@@ -377,7 +403,7 @@ body {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    padding: 12px 2px 17px;
+    padding: 9px 2px 13px;
   }
 
   .glance-kicker {
@@ -388,13 +414,35 @@ body {
 
   .glance-total {
     margin-top: 3px;
-    font-size: 34px;
+    font-size: 32px;
     font-weight: 660;
     letter-spacing: -0.055em;
     font-variant-numeric: tabular-nums;
   }
 
+  .glance-current-line {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .glance-current-line > span {
+    color: rgba(255, 255, 255, 0.48);
+    font-size: 10px;
+    font-weight: 550;
+  }
+
+  .glance-current-project {
+    margin-top: 1px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 10px;
+    font-weight: 620;
+  }
+
   .glance-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     border: 1px solid rgba(94, 242, 168, 0.2);
     border-radius: 999px;
     background: rgba(94, 242, 168, 0.08);
@@ -404,63 +452,203 @@ body {
     font-weight: 650;
   }
 
-  .glance-meters {
-    display: grid;
-    gap: 14px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-top: 16px;
+  .glance-status > span {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: #5ef2a8;
+    box-shadow: 0 0 10px rgba(94, 242, 168, 0.72);
   }
 
-  .glance-meter-label {
+  .glance-limit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 14px;
+  }
+
+  .glance-limit-card {
+    border: 1px solid rgba(255, 255, 255, 0.085);
+    border-radius: 16px;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025));
+    padding: 11px 12px 10px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .glance-limit-top {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     color: rgba(255, 255, 255, 0.64);
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 550;
   }
 
+  .glance-limit-top strong {
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 11px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
   .glance-meter-track {
-    height: 5px;
-    margin-top: 7px;
+    height: 4px;
+    margin-top: 9px;
     overflow: hidden;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.09);
   }
 
-  .glance-meter-track span {
+  .glance-meter-fill {
     display: block;
     height: 100%;
     border-radius: inherit;
+  }
+
+  .glance-meter-attention {
+    background: linear-gradient(90deg, #ffbd66, #ffd891);
+    box-shadow: 0 0 16px rgba(255, 189, 102, 0.34);
+  }
+
+  .glance-meter-healthy {
     background: linear-gradient(90deg, #5ef2a8, #64c8ff);
-    box-shadow: 0 0 18px rgba(94, 242, 168, 0.38);
+    box-shadow: 0 0 16px rgba(94, 242, 168, 0.34);
   }
 
-  .glance-project {
+  .glance-limit-card > p {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 15px;
-    background: rgba(255, 255, 255, 0.045);
-    padding: 12px 13px;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 7px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 9px;
+    font-weight: 540;
   }
 
-  .glance-project p {
-    color: rgba(255, 255, 255, 0.46);
-    font-size: 10px;
-  }
-
-  .glance-project strong,
-  .glance-project > span {
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 12px;
+  .glance-limit-card > p strong {
+    color: rgba(255, 255, 255, 0.62);
     font-weight: 620;
   }
 
-  .glance-project strong {
+  .glance-session {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.045);
+    padding: 11px 12px;
+  }
+
+  .glance-session-mark {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9px;
+    background: linear-gradient(145deg, rgba(100, 200, 255, 0.2), rgba(137, 104, 255, 0.16));
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    font-weight: 720;
+  }
+
+  .glance-session > div:nth-child(2) {
+    min-width: 0;
+  }
+
+  .glance-session p {
+    color: rgba(255, 255, 255, 0.46);
+    font-size: 9px;
+  }
+
+  .glance-session strong {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    font-weight: 620;
+  }
+
+  .glance-session > div:nth-child(2) strong {
     display: block;
     margin-top: 2px;
+  }
+
+  .glance-session-value {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .glance-session-value span {
+    margin-top: 1px;
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 9px;
+  }
+
+  .glance-insight {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+    border: 1px solid rgba(255, 189, 102, 0.12);
+    border-radius: 16px;
+    background: rgba(255, 189, 102, 0.055);
+    padding: 10px 11px;
+  }
+
+  .glance-insight-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 999px;
+    background: #ffbd66;
+    box-shadow: 0 0 12px rgba(255, 189, 102, 0.52);
+  }
+
+  .glance-insight > div {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .glance-insight strong {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 10px;
+    font-weight: 630;
+  }
+
+  .glance-insight > div span {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.43);
+    font-size: 9px;
+  }
+
+  .glance-insight kbd {
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.055);
+    padding: 4px 6px;
+    color: rgba(255, 255, 255, 0.48);
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .glance-provenance {
+    margin-top: 8px;
+    color: rgba(255, 255, 255, 0.32);
+    font-size: 8px;
+    font-weight: 540;
+    text-align: center;
   }
 
   .glance-desktop-copy {
@@ -526,13 +714,15 @@ body {
 
 @media (max-width: 640px) {
   .glance-stage {
-    min-height: 440px;
+    min-height: 610px;
     border-radius: 30px;
   }
+  .usage-glance[open],
   .usage-glance:hover,
   .usage-glance:focus-visible,
   .usage-glance:focus-within {
     width: calc(100% - 28px);
+    height: 500px;
   }
   .glance-desktop-copy {
     right: 18px;

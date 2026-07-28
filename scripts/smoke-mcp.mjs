@@ -17,6 +17,7 @@ const expectedTools = [
   "scan_ai_spend",
   "sync_local_agent_spend",
   "sync_provider_spend",
+  "get_usage_glance",
   "list_sources",
   "get_spend_report",
   "recommend_cuts"

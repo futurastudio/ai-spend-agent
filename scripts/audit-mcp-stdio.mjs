@@ -40,6 +40,10 @@ try {
       sinceDays: 30,
       project: "agent-finops"
     }),
+    glance: await callSummary("get_usage_glance", {
+      sinceDays: 30,
+      project: "agent-finops"
+    }),
     providers: []
   };
 
@@ -119,6 +123,32 @@ async function callSummary(name, args) {
       responseDriftFields: Array.from(new Set(
         (data.qa?.responseDrift ?? []).map((issue) => issue.field.replace(/\[\d+\]/g, "[]"))
       )).sort()
+    };
+  }
+  if (name === "get_usage_glance") {
+    return {
+      name,
+      status: "ok",
+      data: {
+        dataMode: data.dataMode,
+        filesParsed: data.coverage?.filesParsed,
+        detectedAgents: data.coverage?.detectedAgents,
+        currentSession: data.currentSession
+          ? {
+              status: data.currentSession.status,
+              agent: data.currentSession.agent,
+              project: data.currentSession.project,
+              model: data.currentSession.model,
+              costConfidence: data.currentSession.costConfidence
+            }
+          : null,
+        reportedLimits: (data.limits ?? []).map((limit) => ({
+          agent: limit.agent,
+          kind: limit.kind,
+          source: limit.source
+        })),
+        anomaly: data.anomaly?.kind ?? null
+      }
     };
   }
   return { name, status: "ok", data };

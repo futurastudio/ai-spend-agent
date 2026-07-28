@@ -1613,7 +1613,7 @@ function ok(stdout: string): CliResult {
 
 function helpText(): string {
   return [
-    "AI Spend Analyst — your AI spend in one view in 90 seconds",
+    "aibill — your AI spend in one view in 90 seconds",
     "",
     "Run with no command for an instant, zero-key demo:",
     "  ai-spend-agent                       Show where your AI money goes (sample/auto-detected data)",

@@ -5,6 +5,7 @@ import {
   analyzeSpend,
   assertSafeScanRoot,
   attributeUsageRecords,
+  buildUsageGlance,
   createLocalFolderSourceRegistry,
   createProviderConnectorStub,
   createScanAuditLog,
@@ -19,6 +20,7 @@ import {
   type SourceRegistry,
   type SpendSummary,
   type TokenResolver,
+  type UsageGlanceSnapshot,
   type UsageRecord
 } from "@agent-finops/core";
 
@@ -42,6 +44,11 @@ export type SyncProviderSpendInput = RegistryPathInput & {
 };
 
 export type SyncLocalAgentSpendInput = RegistryPathInput & {
+  sinceDays?: number;
+  project?: string;
+};
+
+export type GetUsageGlanceInput = {
   sinceDays?: number;
   project?: string;
 };
@@ -315,6 +322,27 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
     ...(input.project ? { projectFilter: input.project } : {}),
     summary
   };
+}
+
+export async function getUsageGlanceTool(
+  input: GetUsageGlanceInput = {}
+): Promise<UsageGlanceSnapshot> {
+  const sinceDays = input.sinceDays ?? 30;
+  const logs = await loadLocalAgentUsage({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString()
+  });
+  const calls = input.project
+    ? logs.calls.filter((call) => call.project === input.project)
+    : logs.calls;
+  return buildUsageGlance(calls, {
+    filesParsed: logs.filesParsed,
+    detectedAgents: logs.agentsDetected,
+    // Plan windows are account-level metadata, so a project filter must not
+    // erase an exact provider-reported reset or remaining percentage.
+    limitCalls: logs.calls
+  });
 }
 
 async function readRegistry(rootPath: string): Promise<SourceRegistry> {

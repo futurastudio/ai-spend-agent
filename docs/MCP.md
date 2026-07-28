@@ -43,14 +43,15 @@ command = "npx"
 args = ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
 ```
 
-Restart the client and confirm that these six tools appear:
+Restart the client and confirm that these seven tools appear:
 
 1. `scan_ai_spend`
 2. `sync_local_agent_spend`
 3. `sync_provider_spend`
-4. `list_sources`
-5. `get_spend_report`
-6. `recommend_cuts`
+4. `get_usage_glance`
+5. `list_sources`
+6. `get_spend_report`
+7. `recommend_cuts`
 
 ## Local development
 
@@ -80,8 +81,10 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 
 ## Data and safety model
 
-- Every tool requires an absolute project `path`.
-- Home, filesystem, and system roots are refused.
+- State tools require an absolute project `path`; home, filesystem, and system
+  roots are refused.
+- `get_usage_glance` is read-only and scans only the known Claude Code and
+  Codex transcript locations (or the documented test-directory overrides).
 - State is written only to `<path>/.ai-spend-agent/`.
 - Local transcript contents are never uploaded.
 - Provider tools are read-only against provider APIs.
@@ -129,6 +132,31 @@ filter matches the aggregated project name exactly.
 
 Returned totals are estimates, not provider invoices or subscription quota
 consumption.
+
+### `get_usage_glance`
+
+Builds the read-only data contract for the planned Glance UI:
+
+- current or latest session spend, duration, project, and model;
+- five-hour, weekly, or custom plan windows only when a transcript reports
+  remaining usage and reset metadata;
+- projected exhaustion time, explicitly labeled as a pace estimate;
+- the heaviest project/model over the recent window; and
+- at most one evidence-backed session anomaly with a concrete next action.
+
+```json
+{
+  "sinceDays": 30,
+  "project": "agent-finops"
+}
+```
+
+Claude Code and Codex session spend is an API-equivalent estimate calculated
+from transcript token metadata. Codex rollouts can contain exact
+provider-reported rate-limit percentages and reset times; Claude Code
+transcripts do not currently contain equivalent plan-headroom fields. The tool
+returns that limit as unavailable instead of guessing. Cursor and GitHub
+Copilot require their provider connections rather than local chat stores.
 
 ### `sync_provider_spend`
 

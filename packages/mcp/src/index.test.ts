@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getUsageGlanceTool,
   getSpendReportTool,
   listSourcesTool,
   recommendCutsTool,
@@ -90,6 +91,7 @@ describe("MCP analyst tools", () => {
     vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
 
     const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30, project });
+    const glance = await getUsageGlanceTool({ sinceDays: 30, project });
     const report = await getSpendReportTool({ path: dir }) as {
       mode: string;
       records: unknown[];
@@ -101,6 +103,21 @@ describe("MCP analyst tools", () => {
     expect(report.mode).toBe("local_logs");
     expect(report.records).toHaveLength(1);
     expect(report.summary.totalUsd).toBeGreaterThan(0);
+    expect(glance).toMatchObject({
+      dataMode: "local_transcripts",
+      currentSession: {
+        status: "active",
+        agent: "claude-code",
+        project,
+        costConfidence: "estimated"
+      },
+      limits: [],
+      coverage: {
+        supportedTranscriptAgents: ["claude-code", "codex"],
+        detectedAgents: ["claude-code"],
+        providerConnectionRequired: ["cursor", "github-copilot"]
+      }
+    });
   });
 
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
@@ -289,6 +306,7 @@ describe("MCP protocol contract", () => {
       "scan_ai_spend",
       "sync_local_agent_spend",
       "sync_provider_spend",
+      "get_usage_glance",
       "list_sources",
       "get_spend_report",
       "recommend_cuts"

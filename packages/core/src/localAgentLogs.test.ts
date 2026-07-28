@@ -67,18 +67,68 @@ describe("parseCodexRollout", () => {
     JSON.stringify({ type: "session_meta", payload: { id: "codex-sess", cwd: "/Users/jose/pitcht-com", timestamp: "2026-06-01T17:25:37.000Z" } }),
     JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.1-codex" } }),
     JSON.stringify({ type: "event_msg", timestamp: "2026-06-01T17:30:00.000Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_000, cached_input_tokens: 4_000, output_tokens: 100 } } } }),
-    JSON.stringify({ type: "event_msg", timestamp: "2026-06-01T17:40:00.000Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 25_035, cached_input_tokens: 5_504, output_tokens: 365 } } } })
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-06-01T17:40:00.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 25_035,
+            cached_input_tokens: 5_504,
+            output_tokens: 365
+          }
+        },
+        rate_limits: {
+          limit_id: "codex",
+          plan_type: "pro",
+          primary: {
+            used_percent: 71,
+            window_minutes: 300,
+            resets_at: Date.parse("2026-06-01T20:00:00.000Z") / 1_000
+          },
+          secondary: {
+            used_percent: 43,
+            window_minutes: 10_080,
+            resets_at: Date.parse("2026-06-08T00:00:00.000Z") / 1_000
+          }
+        }
+      }
+    })
   ].join("\n");
 
-  it("uses only the LAST cumulative token_count and splits cached input", () => {
+  it("uses the latest cumulative usage, timestamp, and provider-reported limits", () => {
     const calls = parseCodexRollout(rollout);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.agent).toBe("codex");
     expect(calls[0]!.model).toBe("gpt-5.1-codex");
     expect(calls[0]!.project).toBe("pitcht-com");
+    expect(calls[0]!.startedAt).toBe("2026-06-01T17:25:37.000Z");
+    expect(calls[0]!.timestamp).toBe("2026-06-01T17:40:00.000Z");
     expect(calls[0]!.usage.inputTokens).toBe(25_035 - 5_504);
     expect(calls[0]!.usage.cacheReadTokens).toBe(5_504);
     expect(calls[0]!.usage.outputTokens).toBe(365);
+    expect(calls[0]!.rateLimits).toEqual({
+      observedAt: "2026-06-01T17:40:00.000Z",
+      limitId: "codex",
+      planType: "pro",
+      windows: [
+        {
+          kind: "five-hour",
+          name: "five-hour",
+          usedPercent: 71,
+          windowMinutes: 300,
+          resetsAt: "2026-06-01T20:00:00.000Z"
+        },
+        {
+          kind: "weekly",
+          name: "weekly",
+          usedPercent: 43,
+          windowMinutes: 10_080,
+          resetsAt: "2026-06-08T00:00:00.000Z"
+        }
+      ]
+    });
   });
 
   it("returns nothing for rollouts without token counts", () => {

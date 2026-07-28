@@ -24,12 +24,31 @@ import type { UsageRecord } from "./schema.js";
 export type LocalAgentCall = {
   agent: "claude-code" | "codex";
   model: string;
-  /** ISO timestamp of the call (or session start for session-level entries). */
+  /** ISO timestamp of this call, or the latest cumulative usage event. */
   timestamp: string;
+  /** ISO session start when the transcript format reports it separately. */
+  startedAt?: string;
   /** Project attribution derived from the session's working directory. */
   project?: string;
   usage: TokenUsage;
   sessionId?: string;
+  /** Provider-reported plan windows embedded in the transcript, when present. */
+  rateLimits?: LocalAgentRateLimitSnapshot;
+};
+
+export type LocalAgentRateLimitWindow = {
+  kind: "five-hour" | "weekly" | "custom";
+  name: string;
+  usedPercent: number;
+  windowMinutes: number;
+  resetsAt: string;
+};
+
+export type LocalAgentRateLimitSnapshot = {
+  observedAt: string;
+  limitId?: string;
+  planType?: string;
+  windows: LocalAgentRateLimitWindow[];
 };
 
 export type LocalAgentLogOptions = {
@@ -47,7 +66,7 @@ export type LocalAgentLogResult = {
   calls: LocalAgentCall[];
   filesParsed: number;
   /** Which agents actually had data on this machine. */
-  agentsDetected: string[];
+  agentsDetected: Array<LocalAgentCall["agent"]>;
 };
 
 /** Parse one Claude Code transcript (JSONL). Exported for tests. */
@@ -100,8 +119,10 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
   let model: string | undefined;
   let cwd: string | undefined;
   let sessionId: string | undefined;
-  let timestamp: string | undefined;
+  let startedAt: string | undefined;
+  let lastActivityAt: string | undefined;
   let lastTotal: Record<string, unknown> | undefined;
+  let lastRateLimits: LocalAgentRateLimitSnapshot | undefined;
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     let entry: unknown;
@@ -115,18 +136,23 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
     if (entry.type === "session_meta" && payload) {
       sessionId = stringOf(payload.id) ?? sessionId;
       cwd = stringOf(payload.cwd) ?? cwd;
-      timestamp = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp)) ?? timestamp;
+      startedAt = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp)) ?? startedAt;
     }
     if (entry.type === "turn_context" && payload) {
       model = stringOf(payload.model) ?? model;
       cwd = stringOf(payload.cwd) ?? cwd;
     }
     if (entry.type === "event_msg" && payload?.type === "token_count") {
+      const eventTimestamp = toIso(stringOf(entry.timestamp)) ?? lastActivityAt ?? startedAt;
       const info = isRecord(payload.info) ? payload.info : undefined;
       const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
       if (total) {
         lastTotal = total;
-        timestamp = timestamp ?? toIso(stringOf(entry.timestamp));
+        lastActivityAt = eventTimestamp;
+      }
+      const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
+      if (rateLimits) {
+        lastRateLimits = rateLimits;
       }
     }
   }
@@ -136,9 +162,11 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
   return [{
     agent: "codex",
     model: model ?? "codex",
-    timestamp: timestamp ?? new Date(0).toISOString(),
+    timestamp: lastActivityAt ?? startedAt ?? new Date(0).toISOString(),
+    startedAt,
     project: projectFromCwd(cwd),
     sessionId,
+    rateLimits: lastRateLimits,
     usage: {
       // Codex input_tokens INCLUDES cached tokens; split them out.
       inputTokens: Math.max(0, input - cached),
@@ -146,6 +174,55 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
       cacheReadTokens: cached
     }
   }];
+}
+
+function parseCodexRateLimits(
+  value: unknown,
+  observedAt: string | undefined
+): LocalAgentRateLimitSnapshot | undefined {
+  if (!isRecord(value) || !observedAt) return undefined;
+  const windows = [value.primary, value.secondary]
+    .map((window) => parseCodexRateLimitWindow(window))
+    .filter((window): window is LocalAgentRateLimitWindow => Boolean(window));
+  if (windows.length === 0) return undefined;
+  return {
+    observedAt,
+    limitId: stringOf(value.limit_id),
+    planType: stringOf(value.plan_type),
+    windows
+  };
+}
+
+function parseCodexRateLimitWindow(value: unknown): LocalAgentRateLimitWindow | undefined {
+  if (!isRecord(value)) return undefined;
+  const usedPercent = numberOf(value.used_percent);
+  const windowMinutes = numberOf(value.window_minutes);
+  const resetsAtSeconds = numberOf(value.resets_at);
+  if (
+    usedPercent === undefined ||
+    windowMinutes === undefined ||
+    windowMinutes <= 0 ||
+    resetsAtSeconds === undefined
+  ) {
+    return undefined;
+  }
+  const resetMs = resetsAtSeconds < 1_000_000_000_000
+    ? resetsAtSeconds * 1_000
+    : resetsAtSeconds;
+  const resetsAt = toIso(new Date(resetMs).toISOString());
+  if (!resetsAt) return undefined;
+  const kind = windowMinutes === 300
+    ? "five-hour"
+    : windowMinutes === 10_080
+      ? "weekly"
+      : "custom";
+  return {
+    kind,
+    name: kind === "custom" ? `${windowMinutes}-minute` : kind,
+    usedPercent: Math.min(100, Math.max(0, usedPercent)),
+    windowMinutes,
+    resetsAt
+  };
 }
 
 /** Scan this machine's agent logs and return aggregated UsageRecords. */

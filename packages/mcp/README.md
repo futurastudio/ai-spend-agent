@@ -39,11 +39,13 @@ rejected and never persisted.
 | `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
 | `sync_local_agent_spend` | Build an estimated API-equivalent report from local Claude Code/Codex metadata. |
 | `sync_provider_spend` | Pull read-only provider billing through an `env:NAME` reference. |
+| `get_usage_glance` | Read current-session, exact reported limit/reset, heaviest-work, and anomaly metrics without guessing missing fields. |
 | `list_sources` | List locally registered sources and verification levels. |
 | `get_spend_report` | Return the active records, data mode, and analyzed summary. |
 | `recommend_cuts` | Return report-backed recommendations, with discovery fallback. |
 
-All tools use an absolute project `path`; broad roots are refused. State is
-written only to `<path>/.ai-spend-agent/`. See
+State tools use an absolute project `path`; broad roots are refused. State is
+written only to `<path>/.ai-spend-agent/`. `get_usage_glance` is read-only and
+reads known Claude Code/Codex transcript metadata. See
 [`docs/MCP.md`](../../docs/MCP.md) for inputs, provider support, development
 configuration, and troubleshooting.

@@ -174,7 +174,7 @@ npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 
 GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
-configuration, all six tools, and the safety model.
+configuration, all seven tools, and the safety model.
 
 ## Privacy & trust
 

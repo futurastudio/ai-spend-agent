@@ -14,6 +14,11 @@ MCP provider and local-log hardening.
 - `sync_provider_spend` exposes the existing read-only OpenAI, Anthropic,
   GitHub Copilot, and Cursor connectors through strict `env:NAME` references.
   Raw keys are rejected and never persisted.
+- `get_usage_glance` now exposes a read-only transcript-derived contract for
+  current-session spend, provider-reported limit/reset windows, the heaviest
+  recent project/model, and one evidence-backed anomaly. Missing plan limits
+  remain unavailable instead of being inferred.
+- The CLI help header now uses the public `aibill` name consistently.
 - Provider syncs merge by provider instead of silently replacing the previous
   provider's records. OpenAI and Anthropic were live-verified through stdio;
   Copilot and Cursor remain fixture-verified pending account QA.

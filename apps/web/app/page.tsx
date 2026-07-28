@@ -146,8 +146,10 @@ export default function Home() {
           <UsageGlance />
           <p className="mt-4 text-center text-xs leading-relaxed text-faint">
             Product concept: <span className="text-muted">aibill Glance</span>,
-            a planned macOS companion that reads the same local state as the
-            CLI. The sample numbers above are illustrative.
+            a planned macOS companion backed by the same local transcript
+            engine as the CLI. Session spend is API-equivalent; plan limits
+            appear only when the agent reports them. The numbers above are
+            illustrative.
           </p>
         </div>
 
