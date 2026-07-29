@@ -35,7 +35,7 @@ struct GlanceView: View {
     .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 30, style: .continuous)
-        .stroke(
+        .strokeBorder(
           LinearGradient(
             colors: [
               Color.white.opacity(0.28),
@@ -48,7 +48,6 @@ struct GlanceView: View {
           lineWidth: 1
         )
     }
-    .shadow(color: .black.opacity(0.48), radius: 38, y: 18)
     .contentShape(Rectangle())
     .task {
       await store.startRefreshLoop()

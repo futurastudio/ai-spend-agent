@@ -36,10 +36,13 @@ final class GlancePanelController: NSObject {
     // rectangular window bounds and can leave a faint box outside the glass.
     configure(detailPanel, title: "aibill Glance", hasShadow: false)
 
-    triggerPanel.contentView = NSHostingView(rootView: GlanceTriggerView())
-    detailPanel.contentView = NSHostingView(
-      rootView: GlanceView(store: store)
-    )
+    let triggerHost = NSHostingView(rootView: GlanceTriggerView())
+    configureHostingView(triggerHost, cornerRadius: Self.triggerSize.height / 2)
+    triggerPanel.contentView = triggerHost
+
+    let detailHost = NSHostingView(rootView: GlanceView(store: store))
+    configureHostingView(detailHost, cornerRadius: 30)
+    detailPanel.contentView = detailHost
     detailPanel.alphaValue = 0
     detailPanel.orderOut(nil)
     triggerPanel.alphaValue = 0
@@ -178,6 +181,18 @@ final class GlancePanelController: NSObject {
       .stationary,
       .ignoresCycle
     ]
+  }
+
+  private func configureHostingView<Content: View>(
+    _ view: NSHostingView<Content>,
+    cornerRadius: CGFloat
+  ) {
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.layer?.isOpaque = false
+    view.layer?.cornerRadius = cornerRadius
+    view.layer?.cornerCurve = .continuous
+    view.layer?.masksToBounds = true
   }
 
   private func configureContextMenu() {

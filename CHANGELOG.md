@@ -39,6 +39,9 @@ MCP provider and local-log hardening.
 - The `aibill` wordmark now stays fully hidden until the pointer reaches the
   top menu-bar strip, keeping it off movies and full-screen video while making
   the same hover target available on demand.
+- Native hosting layers now use the same continuous corner mask as the glass,
+  with an inside-only stroke and no external shadow, eliminating square lines
+  outside the rounded card corners.
 - Subscription users now see their locally detected plan beside session value
   at API rates, making clear that the estimate is not an added charge. Limit
   availability is reported per window, so a missing five-hour gauge explains
