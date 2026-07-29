@@ -199,7 +199,7 @@ download from the website and GitHub Releases. See
 
 The Glance source is MIT-licensed and intentionally editable. Fork it to
 change the panel size, placement, visual treatment, refresh interval, or which
-fields appear in the compact and expanded states. The shared `aibill glance`
+fields appear in the hover card. The shared `aibill glance`
 JSON contract keeps custom interfaces on the same local, evidence-labeled data
 as the CLI and MCP server.
 

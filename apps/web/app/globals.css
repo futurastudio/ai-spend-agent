@@ -198,14 +198,10 @@ body {
      glass wordmark sits left of the camera; its card slides down on hover. */
   .glance-stage {
     position: relative;
-    min-height: 540px;
+    min-height: 500px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.13);
     border-radius: 42px;
     background: #0a0c12;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 36px 100px -46px rgba(0, 0, 0, 0.95);
     isolation: isolate;
   }
 
@@ -324,7 +320,7 @@ body {
     top: 25px;
     left: 50%;
     width: 452px;
-    height: 436px;
+    height: 382px;
     max-width: calc(100% - 28px);
     overflow: hidden;
     border-color: rgba(255, 255, 255, 0.16);
@@ -361,48 +357,8 @@ body {
     transition-delay: 0s;
   }
 
-  .glance-summary {
-    display: flex;
-    height: 54px;
-    align-items: center;
-    gap: 9px;
-    padding: 0 17px;
-    list-style: none;
-  }
-
-  .glance-limit-compact,
-  .glance-now {
-    font-size: 12px;
-    font-weight: 650;
-    letter-spacing: -0.02em;
-  }
-
-  .glance-limit-compact {
-    color: #ffd38a;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-limit-weekly {
-    color: #84e8bc;
-  }
-
-  .glance-summary-divider {
-    width: 1px;
-    height: 14px;
-    background: rgba(255, 255, 255, 0.13);
-  }
-
-  .glance-now {
-    color: rgba(255, 255, 255, 0.68);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-spacer {
-    flex: 1;
-  }
-
   .glance-detail {
-    padding: 4px 18px 18px;
+    padding: 14px 18px 18px;
   }
 
   .glance-headline {
@@ -477,8 +433,6 @@ body {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-top: 14px;
   }
 
   .glance-limit-card {
@@ -654,26 +608,6 @@ body {
     font-size: 9px;
   }
 
-  .glance-insight kbd {
-    border: 1px solid rgba(255, 255, 255, 0.11);
-    border-radius: 7px;
-    background: rgba(255, 255, 255, 0.055);
-    padding: 4px 6px;
-    color: rgba(255, 255, 255, 0.48);
-    font-family: inherit;
-    font-size: 9px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .glance-provenance {
-    margin-top: 8px;
-    color: rgba(255, 255, 255, 0.32);
-    font-size: 8px;
-    font-weight: 540;
-    text-align: center;
-  }
-
   .glance-desktop-copy {
     position: absolute;
     right: 28px;
@@ -735,12 +669,12 @@ body {
 
 @media (max-width: 640px) {
   .glance-stage {
-    min-height: 610px;
+    min-height: 550px;
     border-radius: 30px;
   }
   .glance-panel {
     width: calc(100% - 28px);
-    height: 500px;
+    height: 446px;
   }
   .glance-desktop-copy {
     right: 18px;

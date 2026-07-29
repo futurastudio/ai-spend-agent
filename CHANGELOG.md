@@ -34,6 +34,8 @@ MCP provider and local-log hardening.
   on locally observed human prompts and tool activity—not spend—and can surface
   a task, automation, agent, file, or project as the evidence supports. Raw
   prompt text is not included in the Glance contract.
+- Removed the redundant metric strip below the camera and the duplicate native
+  window/web-preview framing, leaving one clean rounded glass card on hover.
 - Subscription users now see their locally detected plan beside session value
   at API rates, making clear that the estimate is not an added charge. Limit
   availability is reported per window, so a missing five-hour gauge explains

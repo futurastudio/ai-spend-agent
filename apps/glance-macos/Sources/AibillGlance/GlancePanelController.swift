@@ -4,8 +4,7 @@ import SwiftUI
 @MainActor
 final class GlancePanelController: NSObject {
   static let triggerSize = NSSize(width: 58, height: 20)
-  static let compactSize = NSSize(width: 374, height: 54)
-  static let expandedSize = NSSize(width: 452, height: 456)
+  static let expandedSize = NSSize(width: 452, height: 382)
 
   private let store: GlanceStore
   private let triggerPanel: NSPanel
@@ -32,7 +31,9 @@ final class GlancePanelController: NSObject {
     )
     super.init()
     configure(triggerPanel, title: "aibill Glance trigger", hasShadow: false)
-    configure(detailPanel, title: "aibill Glance", hasShadow: true)
+    // The SwiftUI card owns the rounded shadow. An NSPanel shadow follows the
+    // rectangular window bounds and can leave a faint box outside the glass.
+    configure(detailPanel, title: "aibill Glance", hasShadow: false)
 
     triggerPanel.contentView = NSHostingView(rootView: GlanceTriggerView())
     detailPanel.contentView = NSHostingView(

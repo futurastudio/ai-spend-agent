@@ -44,14 +44,6 @@ export function UsageGlance() {
         </button>
 
         <div className="glance-panel">
-          <div className="glance-summary" aria-hidden="true">
-            <span className="glance-now">$4.18 API value</span>
-            <span className="glance-spacer" />
-            <span className="glance-limit-compact">5h 29%</span>
-            <span className="glance-summary-divider" />
-            <span className="glance-limit-compact glance-limit-weekly">wk 57%</span>
-          </div>
-
           <div className="glance-detail">
             <div className="glance-headline">
               <div>
@@ -113,12 +105,7 @@ export function UsageGlance() {
                 <strong>Session spend is 1.8× your Codex median</strong>
                 <span>Start fresh before the next task.</span>
               </div>
-              <kbd aria-label="Keyboard shortcut Command Shift B">⌘⇧B</kbd>
             </div>
-
-            <p className="glance-provenance">
-              Claude Code + Codex transcripts · limits shown only when reported
-            </p>
           </div>
         </div>
       </div>

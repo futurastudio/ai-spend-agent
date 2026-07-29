@@ -13,11 +13,8 @@ struct GlanceView: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      compact
-      expanded
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
+    expanded
+      .transition(.opacity.combined(with: .move(edge: .top)))
     .frame(
       width: GlancePanelController.expandedSize.width,
       height: GlancePanelController.expandedSize.height,
@@ -61,31 +58,8 @@ struct GlanceView: View {
     .accessibilityHint("Move the pointer away to hide the panel.")
   }
 
-  private var compact: some View {
-    HStack(spacing: 10) {
-      metric(label: "API value", value: GlanceFormatting.dollars(session?.apiEquivalentUsd))
-
-      Spacer(minLength: 8)
-
-      metric(label: "5h", value: fiveHour.map { GlanceFormatting.percent($0.remainingPercent) } ?? "—", warning: fiveHour.map { $0.remainingPercent < 35 } ?? false)
-
-      Divider()
-        .frame(height: 16)
-        .overlay(Color.white.opacity(0.12))
-
-      metric(label: "wk", value: weekly.map { GlanceFormatting.percent($0.remainingPercent) } ?? "—", warning: weekly.map { $0.remainingPercent < 35 } ?? false)
-    }
-    .padding(.horizontal, 18)
-    .frame(height: GlancePanelController.compactSize.height)
-    .foregroundStyle(.white.opacity(0.94))
-  }
-
   private var expanded: some View {
     VStack(spacing: 10) {
-      Rectangle()
-        .fill(Color.white.opacity(0.08))
-        .frame(height: 1)
-
       sessionHeader
 
       HStack(spacing: 8) {
@@ -266,16 +240,6 @@ struct GlanceView: View {
       }
 
       Spacer()
-
-      Button {
-        Task { await store.refresh() }
-      } label: {
-        Image(systemName: "arrow.clockwise")
-          .font(.system(size: 10, weight: .semibold))
-      }
-      .buttonStyle(.plain)
-      .foregroundStyle(.white.opacity(0.5))
-      .accessibilityLabel("Refresh Glance")
     }
     .padding(.horizontal, 11)
     .frame(height: 52)
@@ -283,18 +247,6 @@ struct GlanceView: View {
     .overlay {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(Color.orange.opacity(store.snapshot?.anomaly == nil ? 0.07 : 0.14), lineWidth: 1)
-    }
-  }
-
-  private func metric(label: String, value: String, warning: Bool = false) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Text(label)
-        .font(.system(size: 8, weight: .medium, design: .rounded))
-        .foregroundStyle(.white.opacity(0.36))
-      Text(value)
-        .font(.system(size: 11, weight: .semibold, design: .rounded))
-        .foregroundStyle(warning ? Color.orange : .white.opacity(0.88))
-        .monospacedDigit()
     }
   }
 
