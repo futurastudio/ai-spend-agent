@@ -1,9 +1,12 @@
 import {
+  type LocalAgentActivity,
   type LocalAgentCall,
   type LocalAgentLogResult,
   type LocalAgentRateLimitWindow
 } from "./localAgentLogs.js";
 import { estimateTokenCostUsd } from "./modelPricing.js";
+import type { DetectedPlan } from "./planDetection.js";
+import { subscriptionPlans } from "./planMath.js";
 
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -37,18 +40,35 @@ export type GlanceLimit = {
   projectionConfidence: "estimated";
 };
 
-export type GlanceHeavyItem = {
-  name: string;
-  apiEquivalentUsd: number;
-  costConfidence: "estimated";
-};
-
 export type GlanceAnomaly = {
   kind: "session_spend" | "session_tokens";
   ratioToMedian: number;
   summary: string;
   action: string;
   confidence: "derived";
+};
+
+export type GlancePlanContext = {
+  agent: LocalAgentCall["agent"];
+  planId: string | null;
+  planLabel: string;
+  billing: DetectedPlan["billing"];
+  monthlyUsd: number | null;
+  priceConfidence: "published_list" | "missing";
+  source: "locally_detected" | "user_declared";
+};
+
+export type GlanceFocus = {
+  windowDays: number;
+  summary: string;
+  kind: LocalAgentActivity["kind"];
+  project?: string;
+  file?: string;
+  agents: Array<LocalAgentCall["agent"]>;
+  sessions: number;
+  activitySharePercent: number;
+  measure: "observed_prompt_and_tool_activity";
+  confidence: "high" | "medium" | "low";
 };
 
 export type UsageGlanceSnapshot = {
@@ -61,17 +81,14 @@ export type UsageGlanceSnapshot = {
     rateLimitMetadata: Array<{
       agent: LocalAgentCall["agent"];
       status: "reported" | "not_reported_by_transcript" | "not_seen";
+      windowsReported: Array<LocalAgentRateLimitWindow["kind"]>;
     }>;
     providerConnectionRequired: ["cursor", "github-copilot"];
   };
   currentSession: GlanceSession | null;
+  plan: GlancePlanContext | null;
   limits: GlanceLimit[];
-  heaviest: {
-    windowDays: number;
-    project: GlanceHeavyItem | null;
-    model: GlanceHeavyItem | null;
-    projectModel: (GlanceHeavyItem & { project: string; model: string }) | null;
-  };
+  focus: GlanceFocus | null;
   anomaly: GlanceAnomaly | null;
   caveats: string[];
 };
@@ -79,9 +96,11 @@ export type UsageGlanceSnapshot = {
 export type BuildUsageGlanceOptions = {
   now?: Date;
   activeWithinMinutes?: number;
-  heaviestWindowDays?: number;
+  focusWindowDays?: number;
   filesParsed?: number;
   detectedAgents?: Array<LocalAgentCall["agent"]>;
+  /** Locally detected or explicitly declared subscription/API billing modes. */
+  detectedPlans?: DetectedPlan[];
   /** Account-level limit metadata should not be removed by a project filter. */
   limitCalls?: LocalAgentCall[];
 };
@@ -98,6 +117,7 @@ type SessionGroup = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  activity?: LocalAgentActivity;
 };
 
 /**
@@ -113,7 +133,7 @@ export function buildUsageGlance(
 ): UsageGlanceSnapshot {
   const now = options.now ?? new Date();
   const activeWithinMinutes = options.activeWithinMinutes ?? 20;
-  const heaviestWindowDays = options.heaviestWindowDays ?? 7;
+  const focusWindowDays = options.focusWindowDays ?? 7;
   const sessions = groupSessions(calls);
   const latest = sessions
     .slice()
@@ -121,19 +141,31 @@ export function buildUsageGlance(
   const currentSession = latest
     ? toGlanceSession(latest, now, activeWithinMinutes)
     : null;
+  const plan = currentSession
+    ? toGlancePlan(currentSession.agent, options.detectedPlans ?? [])
+    : null;
   const limitCalls = options.limitCalls ?? calls;
   const limits = latestLimits(limitCalls, now).map(({ agent, window, observedAt }) =>
     toGlanceLimit(agent, window, observedAt)
   );
-  const windowStart = now.getTime() - heaviestWindowDays * DAY_MS;
+  const windowStart = now.getTime() - focusWindowDays * DAY_MS;
   const windowCalls = calls.filter((call) => Date.parse(call.timestamp) >= windowStart);
-  const heaviest = buildHeaviest(windowCalls, heaviestWindowDays);
+  const focus = buildMainFocus(groupSessions(windowCalls), focusWindowDays, now);
   const anomaly = latest ? buildAnomaly(latest, sessions) : null;
   const detectedAgents = options.detectedAgents ?? uniqueAgents(calls);
   const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
+  const reportedWindows = (agent: LocalAgentCall["agent"]) => (
+    [...new Set(
+      limits
+        .filter((limit) => limit.agent === agent)
+        .map((limit) => limit.kind)
+    )]
+  );
   const caveats = [
-    "Session spend is an API-equivalent estimate from transcript token counts, not an invoice or subscription charge.",
+    "Session value is an API-equivalent estimate from transcript token counts, not an invoice or subscription charge.",
+    "A detected monthly subscription changes the interpretation, not the token math: the API-equivalent amount is value delivered at list rates, not incremental spend.",
     "Exhaustion time is a pace projection; remaining percentage and reset time are provider-reported only when embedded in a transcript.",
+    "Main focus is a local summary of observed human prompts and tool activity, not elapsed time or spend; raw prompts are not returned.",
     "Claude Code transcripts do not report plan headroom. Missing limits remain unavailable instead of being inferred.",
     "Cursor and GitHub Copilot require their provider connections because their local chat stores are not treated as authoritative billing transcripts."
   ];
@@ -148,20 +180,43 @@ export function buildUsageGlance(
       rateLimitMetadata: [
         {
           agent: "claude-code",
-          status: "not_reported_by_transcript"
+          status: "not_reported_by_transcript",
+          windowsReported: reportedWindows("claude-code")
         },
         {
           agent: "codex",
-          status: agentsWithLimits.has("codex") ? "reported" : "not_seen"
+          status: agentsWithLimits.has("codex") ? "reported" : "not_seen",
+          windowsReported: reportedWindows("codex")
         }
       ],
       providerConnectionRequired: ["cursor", "github-copilot"]
     },
     currentSession,
+    plan,
     limits,
-    heaviest,
+    focus,
     anomaly,
     caveats
+  };
+}
+
+function toGlancePlan(
+  agent: LocalAgentCall["agent"],
+  detectedPlans: DetectedPlan[]
+): GlancePlanContext | null {
+  const detected = detectedPlans.find((plan) => plan.agent === agent);
+  if (!detected) return null;
+  const known = detected.planId
+    ? subscriptionPlans.find((plan) => plan.id === detected.planId)
+    : undefined;
+  return {
+    agent,
+    planId: detected.planId ?? null,
+    planLabel: detected.planLabel,
+    billing: detected.billing,
+    monthlyUsd: known?.monthlyUsd ?? null,
+    priceConfidence: known ? "published_list" : "missing",
+    source: detected.source === "--plan override" ? "user_declared" : "locally_detected"
   };
 }
 
@@ -215,7 +270,11 @@ function groupSessions(calls: LocalAgentCall[]): SessionGroup[] {
         (call.usage.cacheReadTokens ?? 0) +
         (call.usage.cacheWrite5mTokens ?? 0) +
         (call.usage.cacheWrite1hTokens ?? 0)
-      ))
+      )),
+      activity: ordered
+        .slice()
+        .reverse()
+        .find((call) => call.activity)?.activity
     };
   });
 }
@@ -327,48 +386,153 @@ function projectExhaustion(
     : { at: null, beforeReset: false };
 }
 
-function buildHeaviest(
-  calls: LocalAgentCall[],
-  windowDays: number
-): UsageGlanceSnapshot["heaviest"] {
-  const project = heaviestGroup(calls, (call) => call.project ?? "unattributed");
-  const model = heaviestGroup(calls, (call) => call.model);
-  const projectModelGroup = heaviestGroup(
-    calls,
-    (call) => `${call.project ?? "unattributed"}\u0000${call.model}`
+type FocusCandidate = {
+  session: SessionGroup;
+  activity: LocalAgentActivity;
+  score: number;
+};
+
+type FocusCluster = {
+  candidates: FocusCandidate[];
+  tokens: Set<string>;
+  score: number;
+};
+
+function buildMainFocus(
+  sessions: SessionGroup[],
+  windowDays: number,
+  now: Date
+): GlanceFocus | null {
+  const candidates = sessions.map((session): FocusCandidate => {
+    const activity = session.activity ?? fallbackActivity(session);
+    const ageDays = Math.max(0, now.getTime() - Date.parse(session.lastActivityAt)) / DAY_MS;
+    const recency = ageDays <= 1 ? 1.15 : ageDays <= 3 ? 1 : 0.8;
+    const evidence = activity.promptCount * 3 +
+      activity.toolCallCount +
+      Math.min(session.calls.length, 8);
+    const fallbackDiscount = activity.source === "project" ? 0.35 : 1;
+    const subagentDiscount = activity.isSubagent ? 0.35 : 1;
+    return {
+      session,
+      activity,
+      score: Math.max(1, evidence) * recency * fallbackDiscount * subagentDiscount
+    };
+  });
+  if (candidates.length === 0) return null;
+
+  const clusters: FocusCluster[] = [];
+  for (const candidate of candidates.sort((left, right) => right.score - left.score)) {
+    const tokens = focusTokens(candidate.activity.summary);
+    const existing = clusters.find((cluster) => focusSimilarity(cluster.tokens, tokens) >= 0.5);
+    if (existing) {
+      existing.candidates.push(candidate);
+      existing.score += candidate.score;
+      for (const token of tokens) existing.tokens.add(token);
+    } else {
+      clusters.push({ candidates: [candidate], tokens, score: candidate.score });
+    }
+  }
+  clusters.sort((left, right) => right.score - left.score);
+  const selected = clusters[0]!;
+  const totalScore = clusters.reduce((total, cluster) => total + cluster.score, 0);
+  const lead = selected.candidates
+    .slice()
+    .sort((left, right) => right.score - left.score)[0]!;
+  const promptCount = selected.candidates.reduce(
+    (total, candidate) => total + candidate.activity.promptCount,
+    0
   );
-  const projectModel = projectModelGroup
-    ? {
-        ...projectModelGroup,
-        project: projectModelGroup.name.split("\u0000")[0]!,
-        model: projectModelGroup.name.split("\u0000")[1]!
-      }
-    : null;
-  if (projectModel) projectModel.name = `${projectModel.project} · ${projectModel.model}`;
-  return { windowDays, project, model, projectModel };
+  const source = lead.activity.source;
+  const project = mostWeightedValue(
+    selected.candidates,
+    (candidate) => candidate.session.project
+  );
+  const file = mostRelevantFile(selected.candidates, lead.activity.summary);
+  const agents = [...new Set(selected.candidates.map((candidate) => candidate.session.agent))].sort();
+  const share = totalScore > 0 ? Math.round(selected.score / totalScore * 100) : 0;
+  const confidence: GlanceFocus["confidence"] = source === "user_prompts" && promptCount >= 2 && share >= 30
+    ? "high"
+    : source !== "project"
+      ? "medium"
+      : "low";
+
+  return {
+    windowDays,
+    summary: lead.activity.summary,
+    kind: lead.activity.kind,
+    project,
+    file,
+    agents,
+    sessions: selected.candidates.length,
+    activitySharePercent: share,
+    measure: "observed_prompt_and_tool_activity",
+    confidence
+  };
 }
 
-function heaviestGroup(
-  calls: LocalAgentCall[],
-  keyFor: (call: LocalAgentCall) => string
-): GlanceHeavyItem | null {
-  const groups = new Map<string, number>();
-  for (const call of calls) {
-    const cost = callCost(call);
-    if (cost === undefined) continue;
-    const key = keyFor(call);
-    groups.set(key, (groups.get(key) ?? 0) + cost);
+function fallbackActivity(session: SessionGroup): LocalAgentActivity {
+  return {
+    summary: session.project ? `Working in ${session.project}` : "Working with coding agents",
+    kind: session.project ? "project" : "agent",
+    action: "working",
+    source: "project",
+    promptCount: 0,
+    toolCallCount: 0,
+    files: [],
+    isSubagent: false
+  };
+}
+
+function focusTokens(summary: string): Set<string> {
+  const ignored = new Set([
+    "auditing", "building", "configuring", "fixing", "in", "publishing",
+    "refining", "researching", "running", "testing", "the", "working"
+  ]);
+  return new Set(
+    (summary.toLowerCase().match(/[a-z0-9+#.-]+/g) ?? [])
+      .filter((token) => token.length > 1 && !ignored.has(token))
+  );
+}
+
+function focusSimilarity(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+  const intersection = [...left].filter((token) => right.has(token)).length;
+  const union = new Set([...left, ...right]).size;
+  return intersection / union;
+}
+
+function mostWeightedValue(
+  candidates: FocusCandidate[],
+  valueFor: (candidate: FocusCandidate) => string | undefined
+): string | undefined {
+  const scores = new Map<string, number>();
+  for (const candidate of candidates) {
+    const value = valueFor(candidate);
+    if (value) scores.set(value, (scores.get(value) ?? 0) + candidate.score);
   }
-  const heaviest = [...groups.entries()].sort((left, right) => (
-    right[1] - left[1] || left[0].localeCompare(right[0])
-  ))[0];
-  return heaviest
-    ? {
-        name: heaviest[0],
-        apiEquivalentUsd: roundUsd(heaviest[1]) ?? 0,
-        costConfidence: "estimated"
-      }
-    : null;
+  return [...scores.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
+}
+
+function mostRelevantFile(
+  candidates: FocusCandidate[],
+  summary: string
+): string | undefined {
+  const topicTokens = focusTokens(summary);
+  const scores = new Map<string, number>();
+  for (const candidate of candidates) {
+    candidate.activity.files.forEach((file, index) => {
+      const tokens = focusTokens(
+        file.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[._-]+/g, " ")
+      );
+      const overlap = [...tokens].filter((token) => topicTokens.has(token)).length;
+      if (overlap === 0 && candidate.activity.kind !== "file") return;
+      const rankWeight = 1 / (index + 1);
+      scores.set(file, (scores.get(file) ?? 0) + candidate.score * rankWeight * Math.max(1, overlap));
+    });
+  }
+  return [...scores.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
 }
 
 function buildAnomaly(

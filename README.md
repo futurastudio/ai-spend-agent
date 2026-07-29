@@ -1,4 +1,4 @@
-# AI Spend Analyst
+# aibill — AI Spend Analyst
 
 [![CI](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
 
@@ -119,10 +119,10 @@ then reconciles your estimates against your real bills.
 | --- | --- | --- |
 | Claude Code logs (local) | Real session usage, priced at published API rates | ✅ Reads your machine's transcripts |
 | Codex logs (local) | Real session usage, priced at published API rates | ✅ Reads your machine's rollouts |
-| OpenAI Costs/Usage API | Admin-gated billing, per project/key | ✅ Implemented + mocked against live-shaped responses; admin-key reports welcome |
-| Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented + mocked against live-shaped responses; admin-key reports welcome |
-| Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Beta — built to the published API spec; live reports welcome |
-| GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Beta — built to the published API spec; live reports welcome |
+| OpenAI Costs/Usage API | Admin-gated billing, per project/key | ✅ Implemented and live-verified |
+| Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented and live-verified |
+| Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Fixture-verified beta; live account QA pending |
+| GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Fixture-verified beta; live account QA pending |
 | Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | 🔜 Planned — parsers welcome ([open an issue](https://github.com/futurastudio/ai-spend-agent/issues)) |
 
 **Model price coverage:** local-log estimates use published list prices for
@@ -154,6 +154,7 @@ env:NAME`) — the tool never stores or prints a raw key.
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Connect a provider's cost data (admin-gated) |
 | `sync-provider` | Pull verified cost via a local `env:` reference |
+| `glance [--project <name>] [--plan <id>]` | Emit the local machine-readable Glance snapshot |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
 | `report [--out <name>]` | Generate local Markdown + HTML reports |
 | `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
@@ -175,6 +176,32 @@ npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
 configuration, all seven tools, and the safety model.
+
+## Glance for macOS
+
+The native Glance prototype leaves one tiny liquid-glass `aibill` wordmark
+parked to the left of the camera/notch. Hover that fixed target—no click
+required—to slide down current-session value at API rates, available
+five-hour/weekly limits, reset or exhaustion timing, a local transcript-derived
+description of the user's main work focus, and one actionable anomaly; moving
+away hides the panel again.
+
+Glance reads the same local Claude Code and Codex transcript metadata as the
+CLI. A detected monthly subscription is shown beside the API-rate value so it
+cannot be mistaken for incremental spend. Nothing is uploaded, estimates stay
+labeled, and each limit window that an agent did not report remains explicitly
+unavailable. “Main focus” ranks observed prompt/tool activity rather than cost,
+and uses a project, file, automation, or delegated-agent label only when local
+evidence supports it. The current app is a source-built prototype;
+the public install will be a Developer ID-signed and Apple-notarized Mac
+download from the website and GitHub Releases. See
+[`apps/glance-macos/README.md`](apps/glance-macos/README.md) to test it locally.
+
+The Glance source is MIT-licensed and intentionally editable. Fork it to
+change the panel size, placement, visual treatment, refresh interval, or which
+fields appear in the compact and expanded states. The shared `aibill glance`
+JSON contract keeps custom interfaces on the same local, evidence-labeled data
+as the CLI and MCP server.
 
 ## Privacy & trust
 

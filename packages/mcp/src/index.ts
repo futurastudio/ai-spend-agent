@@ -9,6 +9,7 @@ import {
   createLocalFolderSourceRegistry,
   createProviderConnectorStub,
   createScanAuditLog,
+  detectLocalPlans,
   fetchProviderUsageRecords,
   loadLocalAgentUsage,
   loadSampleUsageData,
@@ -336,9 +337,14 @@ export async function getUsageGlanceTool(
   const calls = input.project
     ? logs.calls.filter((call) => call.project === input.project)
     : logs.calls;
+  const detectedPlans = await detectLocalPlans({
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+  }).catch(() => []);
   return buildUsageGlance(calls, {
     filesParsed: logs.filesParsed,
     detectedAgents: logs.agentsDetected,
+    detectedPlans,
     // Plan windows are account-level metadata, so a project filter must not
     // erase an exact provider-reported reset or remaining percentage.
     limitCalls: logs.calls

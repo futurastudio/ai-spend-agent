@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildUsageGlance } from "./glance.js";
-import type { LocalAgentCall } from "./localAgentLogs.js";
+import type { LocalAgentActivity, LocalAgentCall } from "./localAgentLogs.js";
 
 const usage = (inputTokens: number, outputTokens: number) => ({
   inputTokens,
@@ -8,8 +8,25 @@ const usage = (inputTokens: number, outputTokens: number) => ({
   cacheReadTokens: 0
 });
 
+const activity = (
+  summary: string,
+  promptCount: number,
+  toolCallCount: number,
+  overrides: Partial<LocalAgentActivity> = {}
+): LocalAgentActivity => ({
+  summary,
+  kind: "task",
+  action: "refining",
+  source: "user_prompts",
+  promptCount,
+  toolCallCount,
+  files: [],
+  isSubagent: false,
+  ...overrides
+});
+
 describe("buildUsageGlance", () => {
-  it("prioritizes the latest session, reported limits, heaviest work, and one anomaly", () => {
+  it("prioritizes the latest session, reported limits, main focus, and one anomaly", () => {
     const calls: LocalAgentCall[] = [
       {
         agent: "claude-code",
@@ -18,7 +35,11 @@ describe("buildUsageGlance", () => {
         model: "claude-opus-4-8",
         timestamp: "2026-07-27T15:05:00.000Z",
         startedAt: "2026-07-27T15:00:00.000Z",
-        usage: usage(100_000, 10_000)
+        usage: usage(100_000, 10_000),
+        activity: activity("Auditing landing page", 1, 1, {
+          action: "auditing",
+          files: ["page.tsx"]
+        })
       },
       {
         agent: "claude-code",
@@ -27,7 +48,11 @@ describe("buildUsageGlance", () => {
         model: "claude-opus-4-8",
         timestamp: "2026-07-27T16:05:00.000Z",
         startedAt: "2026-07-27T16:00:00.000Z",
-        usage: usage(120_000, 12_000)
+        usage: usage(120_000, 12_000),
+        activity: activity("Auditing landing page", 1, 1, {
+          action: "auditing",
+          files: ["page.tsx"]
+        })
       },
       {
         agent: "claude-code",
@@ -36,7 +61,10 @@ describe("buildUsageGlance", () => {
         model: "claude-opus-4-8",
         timestamp: "2026-07-28T17:52:00.000Z",
         startedAt: "2026-07-28T17:10:00.000Z",
-        usage: usage(600_000, 60_000)
+        usage: usage(600_000, 60_000),
+        activity: activity("Refining Glance hover UI", 6, 8, {
+          files: ["GlanceView.swift"]
+        })
       },
       {
         agent: "codex",
@@ -46,6 +74,9 @@ describe("buildUsageGlance", () => {
         timestamp: "2026-07-28T17:45:00.000Z",
         startedAt: "2026-07-28T17:30:00.000Z",
         usage: usage(50_000, 5_000),
+        activity: activity("Refining Glance hover UI", 3, 4, {
+          files: ["UsageGlance.tsx"]
+        }),
         rateLimits: {
           observedAt: "2026-07-28T17:45:00.000Z",
           limitId: "codex",
@@ -72,7 +103,15 @@ describe("buildUsageGlance", () => {
 
     const snapshot = buildUsageGlance(calls, {
       now: new Date("2026-07-28T18:00:00.000Z"),
-      filesParsed: 4
+      filesParsed: 4,
+      detectedPlans: [{
+        agent: "claude-code",
+        provider: "anthropic",
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        source: "/local/claude/config"
+      }]
     });
 
     expect(snapshot.currentSession).toMatchObject({
@@ -84,6 +123,15 @@ describe("buildUsageGlance", () => {
       costConfidence: "estimated"
     });
     expect(snapshot.currentSession?.apiEquivalentUsd).toBeGreaterThan(0);
+    expect(snapshot.plan).toEqual({
+      agent: "claude-code",
+      planId: "claude-max-5x",
+      planLabel: "Claude Max 5x",
+      billing: "subscription",
+      monthlyUsd: 100,
+      priceConfidence: "published_list",
+      source: "locally_detected"
+    });
     expect(snapshot.limits).toHaveLength(2);
     expect(snapshot.limits[0]).toMatchObject({
       agent: "codex",
@@ -95,11 +143,18 @@ describe("buildUsageGlance", () => {
       projectionConfidence: "estimated"
     });
     expect(snapshot.limits[0]!.projectedToExhaustBeforeReset).toBe(true);
-    expect(snapshot.heaviest.projectModel).toMatchObject({
+    expect(snapshot.focus).toMatchObject({
+      windowDays: 7,
+      summary: "Refining Glance hover UI",
+      kind: "task",
       project: "agent-finops",
-      model: "claude-opus-4-8",
-      costConfidence: "estimated"
+      file: "GlanceView.swift",
+      agents: ["claude-code", "codex"],
+      sessions: 2,
+      measure: "observed_prompt_and_tool_activity",
+      confidence: "high"
     });
+    expect(snapshot.focus!.activitySharePercent).toBeGreaterThan(70);
     expect(snapshot.anomaly).toMatchObject({
       kind: "session_spend",
       confidence: "derived"
@@ -130,12 +185,26 @@ describe("buildUsageGlance", () => {
       apiEquivalentUsd: null,
       costConfidence: "missing"
     });
+    expect(snapshot.plan).toBeNull();
     expect(snapshot.limits).toEqual([]);
-    expect(snapshot.heaviest.project).toBeNull();
+    expect(snapshot.focus).toEqual(expect.objectContaining({
+      summary: "Working in private-project",
+      kind: "project",
+      project: "private-project",
+      confidence: "low"
+    }));
     expect(snapshot.anomaly).toBeNull();
     expect(snapshot.coverage.rateLimitMetadata).toEqual([
-      { agent: "claude-code", status: "not_reported_by_transcript" },
-      { agent: "codex", status: "not_seen" }
+      {
+        agent: "claude-code",
+        status: "not_reported_by_transcript",
+        windowsReported: []
+      },
+      {
+        agent: "codex",
+        status: "not_seen",
+        windowsReported: []
+      }
     ]);
   });
 

@@ -1,7 +1,7 @@
 {
   "name": "ai-spend-agent",
   "version": "0.5.6",
-  "description": "Your AI spend in one view, in 90 seconds — local-first CLI for OpenAI, Anthropic, Cursor, Copilot + Claude Code/Codex session logs, with a ranked savings cut list, and flags the tools your agent loads but never uses (dead context).",
+  "description": "Local-first AI spend CLI and Glance data engine for Claude Code/Codex transcripts and OpenAI, Anthropic, Cursor, and Copilot billing, with ranked cuts and explicit confidence labels.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

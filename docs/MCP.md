@@ -135,13 +135,17 @@ consumption.
 
 ### `get_usage_glance`
 
-Builds the read-only data contract for the planned Glance UI:
+Builds the read-only data contract for the native Glance UI:
 
-- current or latest session spend, duration, project, and model;
+- current or latest session value at API rates, duration, project, and model;
+- locally detected subscription/API billing context, without exposing tokens
+  or config paths;
 - five-hour, weekly, or custom plan windows only when a transcript reports
   remaining usage and reset metadata;
 - projected exhaustion time, explicitly labeled as a pace estimate;
-- the heaviest project/model over the recent window; and
+- the main recent work focus derived from observed local prompt/tool activity,
+  with task, project, file, automation, or delegated-agent context only when
+  supported; and
 - at most one evidence-backed session anomaly with a concrete next action.
 
 ```json
@@ -151,12 +155,15 @@ Builds the read-only data contract for the planned Glance UI:
 }
 ```
 
-Claude Code and Codex session spend is an API-equivalent estimate calculated
+Claude Code and Codex session value is an API-equivalent estimate calculated
 from transcript token metadata. Codex rollouts can contain exact
 provider-reported rate-limit percentages and reset times; Claude Code
 transcripts do not currently contain equivalent plan-headroom fields. The tool
 returns that limit as unavailable instead of guessing. Cursor and GitHub
 Copilot require their provider connections rather than local chat stores.
+“Main focus” is not a time tracker or spend ranking: its percentage is the
+share of observed prompt/tool activity in the focus window. Raw prompts are
+reduced locally to a short summary and are not returned in the snapshot.
 
 ### `sync_provider_spend`
 

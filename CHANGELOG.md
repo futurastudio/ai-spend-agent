@@ -15,9 +15,29 @@ MCP provider and local-log hardening.
   GitHub Copilot, and Cursor connectors through strict `env:NAME` references.
   Raw keys are rejected and never persisted.
 - `get_usage_glance` now exposes a read-only transcript-derived contract for
-  current-session spend, provider-reported limit/reset windows, the heaviest
-  recent project/model, and one evidence-backed anomaly. Missing plan limits
-  remain unavailable instead of being inferred.
+  current-session value at API rates, locally detected billing mode,
+  provider-reported limit/reset windows, a privacy-conscious description of
+  the user's main recent work focus, and one evidence-backed anomaly. Missing
+  plan windows remain unavailable instead of being inferred.
+- Added `aibill glance`, a machine-readable version of that contract for
+  local rendering surfaces.
+- Added an ad-hoc-signed native macOS Glance prototype: one stationary
+  liquid-glass `aibill` wordmark to the left of the camera reveals a
+  session/limit, reset/exhaustion, main-focus, and anomaly panel
+  on hover. Public distribution still requires a universal Developer
+  ID-signed and notarized release bundle.
+- Home-launched Codex sessions now use their dominant explicit tool working
+  directory for project attribution, so Glance can name the project where work
+  actually happened instead of grouping it under `(home)`.
+- Glance uses separate trigger and detail surfaces so its single wordmark
+  never moves while the card slides down. Its seven-day “Main focus” is based
+  on locally observed human prompts and tool activity—not spend—and can surface
+  a task, automation, agent, file, or project as the evidence supports. Raw
+  prompt text is not included in the Glance contract.
+- Subscription users now see their locally detected plan beside session value
+  at API rates, making clear that the estimate is not an added charge. Limit
+  availability is reported per window, so a missing five-hour gauge explains
+  whether only a weekly window was present instead of silently showing a dash.
 - The CLI help header now uses the public `aibill` name consistently.
 - Provider syncs merge by provider instead of silently replacing the previous
   provider's records. OpenAI and Anthropic were live-verified through stdio;

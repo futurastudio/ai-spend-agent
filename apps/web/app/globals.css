@@ -194,9 +194,8 @@ body {
   }
 
   /* ---- aibill Glance --------------------------------------------------
-     A browser-native concept of the planned macOS rendering surface. The
-     compact pill reveals the useful part of the CLI without becoming a
-     dashboard. */
+     Browser preview of the native macOS rendering surface. One stationary
+     glass wordmark sits left of the camera; its card slides down on hover. */
   .glance-stage {
     position: relative;
     min-height: 540px;
@@ -238,7 +237,7 @@ body {
     display: flex;
     height: 31px;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     padding: 0 17px;
     background: rgba(5, 6, 10, 0.3);
     color: rgba(255, 255, 255, 0.72);
@@ -266,50 +265,100 @@ body {
 
   .usage-glance {
     position: absolute;
+    inset: 0;
     z-index: 4;
-    top: 34px;
-    left: 50%;
-    width: 374px;
-    height: 54px;
-    max-width: calc(100% - 28px);
-    overflow: hidden;
-    transform: translateX(-50%);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 27px;
+    outline: none;
+    color: rgba(255, 255, 255, 0.96);
+    pointer-events: none;
+  }
+
+  .glance-trigger {
+    position: absolute;
+    top: 3px;
+    right: calc(50% + 77px);
+    display: grid;
+    width: 58px;
+    height: 20px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
     outline: none;
     background:
-      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
-      rgba(11, 13, 18, 0.78);
+      linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.045)),
+      rgba(13, 16, 22, 0.22);
+    color: rgba(255, 255, 255, 0.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 4px 14px rgba(0, 0, 0, 0.14);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    list-style: none;
+    pointer-events: auto;
+    cursor: default;
+    transition:
+      border-color 0.18s ease,
+      background 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .glance-trigger:hover,
+  .glance-trigger:focus-visible {
+    border-color: rgba(255, 255, 255, 0.32);
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(94, 242, 168, 0.07)),
+      rgba(13, 16, 22, 0.28);
     color: rgba(255, 255, 255, 0.96);
+  }
+
+  .glance-trigger:focus-visible {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 0 0 2px rgba(94, 242, 168, 0.42);
+  }
+
+  .glance-panel {
+    position: absolute;
+    top: 25px;
+    left: 50%;
+    width: 452px;
+    height: 436px;
+    max-width: calc(100% - 28px);
+    overflow: hidden;
+    border-color: rgba(255, 255, 255, 0.16);
+    border-style: solid;
+    border-width: 1px;
+    border-radius: 30px;
+    background:
+      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
+      rgba(11, 13, 18, 0.62);
     -webkit-backdrop-filter: blur(34px) saturate(190%);
     backdrop-filter: blur(34px) saturate(190%);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      0 18px 50px rgba(0, 0, 0, 0.34);
-    cursor: default;
-    transition:
-      width 0.48s cubic-bezier(0.22, 1, 0.36, 1),
-      height 0.52s cubic-bezier(0.22, 1, 0.36, 1),
-      border-radius 0.42s ease,
-      box-shadow 0.42s ease;
-  }
-
-  .usage-glance[open],
-  .usage-glance:hover,
-  .usage-glance:focus-visible,
-  .usage-glance:focus-within {
-    width: 452px;
-    height: 436px;
-    border-radius: 30px;
-    box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       0 30px 85px rgba(0, 0, 0, 0.48);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate(-50%, -12px) scale(0.985);
+    transform-origin: top center;
+    transition:
+      opacity 0.2s ease,
+      visibility 0s linear 0.32s,
+      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .glance-summary:focus-visible {
-    outline: 2px solid rgba(94, 242, 168, 0.55);
-    outline-offset: -3px;
-    border-radius: 27px;
+  .usage-glance:has(.glance-trigger:hover) .glance-panel,
+  .usage-glance:has(.glance-trigger:focus-visible) .glance-panel,
+  .usage-glance:has(.glance-panel:hover) .glance-panel,
+  .usage-glance:focus-within .glance-panel {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
+    transition-delay: 0s;
   }
 
   .glance-summary {
@@ -319,24 +368,8 @@ body {
     gap: 9px;
     padding: 0 17px;
     list-style: none;
-    cursor: pointer;
   }
 
-  .glance-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .glance-orb {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: #5ef2a8;
-    box-shadow:
-      0 0 0 4px rgba(94, 242, 168, 0.11),
-      0 0 18px rgba(94, 242, 168, 0.7);
-  }
-
-  .glance-name,
   .glance-limit-compact,
   .glance-now {
     font-size: 12px;
@@ -368,35 +401,8 @@ body {
     flex: 1;
   }
 
-  .glance-chevron {
-    color: rgba(255, 255, 255, 0.42);
-    font-size: 12px;
-    transition: transform 0.4s ease;
-  }
-
-  .usage-glance[open] .glance-chevron,
-  .usage-glance:hover .glance-chevron,
-  .usage-glance:focus-visible .glance-chevron,
-  .usage-glance:focus-within .glance-chevron {
-    transform: rotate(180deg);
-  }
-
   .glance-detail {
     padding: 4px 18px 18px;
-    opacity: 0;
-    transform: translateY(-8px) scale(0.98);
-    transition:
-      opacity 0.24s ease 0.05s,
-      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s;
-  }
-
-  .usage-glance[open] .glance-detail,
-  .usage-glance:hover .glance-detail,
-  .usage-glance:focus-visible .glance-detail,
-  .usage-glance:focus-within .glance-detail {
-    opacity: 1;
-    transform: none;
-    transition-delay: 0.12s;
   }
 
   .glance-headline {
@@ -437,6 +443,13 @@ body {
     color: rgba(255, 255, 255, 0.72);
     font-size: 10px;
     font-weight: 620;
+  }
+
+  .glance-current-plan {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.44);
+    font-size: 9px;
+    font-weight: 540;
   }
 
   .glance-status {
@@ -577,6 +590,16 @@ body {
     margin-top: 2px;
   }
 
+  .glance-session > div:nth-child(2) > span {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .glance-session-value {
     display: flex;
     flex: 1;
@@ -705,9 +728,7 @@ body {
     animation: none;
     opacity: 1;
   }
-  .usage-glance,
-  .glance-detail,
-  .glance-chevron {
+  .glance-panel {
     transition-duration: 0.01ms;
   }
 }
@@ -717,10 +738,7 @@ body {
     min-height: 610px;
     border-radius: 30px;
   }
-  .usage-glance[open],
-  .usage-glance:hover,
-  .usage-glance:focus-visible,
-  .usage-glance:focus-within {
+  .glance-panel {
     width: calc(100% - 28px);
     height: 500px;
   }

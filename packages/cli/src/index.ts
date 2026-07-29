@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   analyzeSpend,
   attributeUsageRecords,
+  buildUsageGlance,
   detectLocalCredentials,
   detectLocalPlans,
   redactSecrets,
@@ -90,6 +91,7 @@ type ParsedArgs = {
   noColor?: boolean;
   ignoreState?: boolean;
   plan?: string;
+  sinceDays?: number;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
@@ -145,6 +147,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
 
   if (args.command === "report-card") {
     return reportCardCommand(args);
+  }
+
+  if (args.command === "glance") {
+    return glanceCommand(args);
   }
 
   if (args.command === "apply-artifact" || args.command === "apply") {
@@ -258,6 +264,49 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
 
   const header = [`  ${dataModeBanner(mode)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
   return ok(`${header}\n${summaryText}`);
+}
+
+async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
+  const sinceDays = args.sinceDays ?? 30;
+  if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "--since-days must be a whole number between 1 and 365"
+    };
+  }
+  const logs = await loadLocalAgentUsage({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString()
+  });
+  const calls = args.project
+    ? logs.calls.filter((call) => call.project === args.project)
+    : logs.calls;
+  let detectedPlans: DetectedPlan[];
+  if (args.plan) {
+    const override = planOverrideFromFlag(args.plan);
+    if (!override) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+      };
+    }
+    detectedPlans = [override];
+  } else {
+    detectedPlans = await detectLocalPlans({
+      claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+      codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+    }).catch(() => []);
+  }
+  const snapshot = buildUsageGlance(calls, {
+    filesParsed: logs.filesParsed,
+    detectedAgents: logs.agentsDetected,
+    detectedPlans,
+    limitCalls: logs.calls
+  });
+  return ok(JSON.stringify(snapshot));
 }
 
 function quickstartNextSteps(
@@ -1312,6 +1361,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
+    if (arg === "--since-days") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.sinceDays = Number(next);
+        index += 1;
+      }
+      continue;
+    }
     if (arg === "--group-by") {
       const next = rest[index + 1];
       if (isGroupByDimension(next)) {
@@ -1642,6 +1699,7 @@ function helpText(): string {
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: model",
     "  report [--out <name>]   Generate local Markdown and HTML reports",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
+    "  glance [--project <name>] [--plan <id>] Emit the local, machine-readable Glance snapshot JSON",
     "  apply                   Print the paste-ready coding-agent prompt + write action/policy/verification plans",
     "  apply-artifact          Same as `apply` (long form)",
     "",

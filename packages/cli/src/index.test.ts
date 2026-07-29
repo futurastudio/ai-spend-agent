@@ -135,6 +135,51 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
   });
 
+  it("emits the native Glance data contract as machine-readable JSON", async () => {
+    await writeClaudeLogFixture();
+
+    const result = await runCli([
+      "glance",
+      "--since-days",
+      "365",
+      "--project",
+      "myproject",
+      "--plan",
+      "claude-max-5x"
+    ]);
+    const snapshot = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(snapshot).toMatchObject({
+      dataMode: "local_transcripts",
+      currentSession: {
+        agent: "claude-code",
+        project: "myproject",
+        model: "claude-opus-4-8",
+        costConfidence: "estimated"
+      },
+      plan: {
+        planId: "claude-max-5x",
+        planLabel: "Claude Max 5x",
+        billing: "subscription",
+        monthlyUsd: 100,
+        source: "user_declared"
+      },
+      limits: [],
+      coverage: {
+        supportedTranscriptAgents: ["claude-code", "codex"],
+        detectedAgents: ["claude-code"],
+        providerConnectionRequired: ["cursor", "github-copilot"]
+      }
+    });
+  });
+
+  it("rejects an invalid Glance history window", async () => {
+    const result = await runCli(["glance", "--since-days", "0"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("between 1 and 365");
+  });
+
   it("report and apply-artifact work right after a quickstart (live local-log fallback, never sample)", async () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-fallback-"));

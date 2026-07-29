@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { aggregateCalls, parseClaudeCodeTranscript, parseCodexRollout } from "./localAgentLogs.js";
 import { estimateTokenCostUsd } from "./modelPricing.js";
@@ -59,6 +60,41 @@ describe("parseClaudeCodeTranscript", () => {
   it("skips synthetic placeholder messages (not real API calls)", () => {
     const synthetic = claudeLine({ requestId: "req-3", message: { id: "msg-3", model: "<synthetic>", usage: { input_tokens: 1, output_tokens: 1 } } });
     expect(parseClaudeCodeTranscript(synthetic)).toHaveLength(0);
+  });
+
+  it("derives a task-level focus from human prompts without retaining raw prompt text", () => {
+    const content = [
+      JSON.stringify({
+        type: "user",
+        message: { content: "Please edit the hover glance UI to make it more transparent." }
+      }),
+      JSON.stringify({
+        type: "user",
+        message: { content: "Change the Glance hover UI so the focus description is clearer." }
+      }),
+      claudeLine({
+        message: {
+          id: "msg-focus",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 10, output_tokens: 20 },
+          content: [{
+            type: "tool_use",
+            input: { file_path: "/Users/jose/agent-finops/apps/glance-macos/GlanceView.swift" }
+          }]
+        }
+      })
+    ].join("\n");
+
+    const activity = parseClaudeCodeTranscript(content)[0]?.activity;
+    expect(activity).toMatchObject({
+      summary: "Refining Glance hover UI",
+      kind: "task",
+      source: "user_prompts",
+      promptCount: 2,
+      toolCallCount: 1,
+      files: ["GlanceView.swift"]
+    });
+    expect(JSON.stringify(activity)).not.toContain("make it more transparent");
   });
 });
 
@@ -128,6 +164,120 @@ describe("parseCodexRollout", () => {
           resetsAt: "2026-06-08T00:00:00.000Z"
         }
       ]
+    });
+  });
+
+  it("attributes a home-launched Codex session to its dominant tool workdir", () => {
+    const projectRoot = join(homedir(), "agent-finops");
+    const homeLaunched = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-home",
+          cwd: homedir(),
+          timestamp: "2026-07-28T16:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: "npm test", workdir: projectRoot })
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: JSON.stringify({
+            cmd: "npm run build",
+            workdir: join(projectRoot, "apps", "web")
+          })
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-07-28T16:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 5_000,
+              output_tokens: 1_000
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(homeLaunched)[0]?.project).toBe("agent-finops");
+  });
+
+  it("summarizes Codex prompts and marks delegated sessions", () => {
+    const delegated = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-subagent",
+          cwd: "/Users/jose/agent-finops",
+          timestamp: "2026-07-28T16:00:00.000Z",
+          thread_source: "subagent",
+          parent_thread_id: "codex-parent",
+          source: { subagent: { other: "worker" } }
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Test the MCP feature with multiple AI providers." }]
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Please verify the MCP feature provider tests." }]
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Update File: /Users/jose/agent-finops/packages/mcp/src/index.test.ts\n*** End Patch\n"
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-07-28T16:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 5_000,
+              output_tokens: 1_000
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(delegated)[0]?.activity).toMatchObject({
+      summary: "Testing MCP feature",
+      kind: "agent",
+      source: "user_prompts",
+      promptCount: 2,
+      toolCallCount: 1,
+      files: ["index.test.ts"],
+      isSubagent: true,
+      parentSessionId: "codex-parent"
     });
   });
 
