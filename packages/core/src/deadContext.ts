@@ -5,7 +5,7 @@ import type { CutAction } from "./cutList.js";
 
 /**
  * Dead-context: the tools an agent LOADS into context but NEVER calls. Compares
- * the local Claude Code inventory (skills, subagents, slash commands, MCP
+ * the local agent inventory (skills, subagents, slash commands, MCP
  * servers — {@link loadAgentInventory}) against what real transcripts show was
  * invoked ({@link loadToolInvocations}).
  *
@@ -20,6 +20,8 @@ import type { CutAction } from "./cutList.js";
  *    surface as `unmeasuredDeadCount` so the renderer can say "not measurable".
  *  - Pricing is cache-aware (one cache write/session + a read/turn), never the
  *    inflated full-input-rate-every-turn number.
+ *  - Items whose host transcript does not expose matchable invocation evidence
+ *    are excluded instead of being falsely classified as dead.
  */
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -144,6 +146,10 @@ export function computeDeadContext(
   const dead: DeadContextItem[] = [];
   let loadedCount = 0;
   for (const item of items) {
+    // Lifecycle hooks are activation evidence, not prunable inventory. Their
+    // runtime output cannot be inferred from config and they cannot be called
+    // like a skill/tool, so classifying them as "never invoked" would be false.
+    if (item.kind === "hook" || item.invocationTracking === "not_observable") continue;
     loadedCount += 1;
     if (!isDead(item, { usedSkills, usedSubagents, usedCommands, usedMcpTools, usedMcpServers })) {
       continue;
@@ -241,6 +247,8 @@ function isDead(
       return !used.usedMcpTools.has(item.name);
     case "mcp_server":
       return !used.usedMcpServers.has(item.name);
+    case "hook":
+      return false;
     default:
       return false;
   }

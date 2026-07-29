@@ -67,7 +67,7 @@ struct GlanceView: View {
       }
 
       focusRow
-      anomalyRow
+      contextHealthRow
 
       HStack(spacing: 6) {
         Image(systemName: "lock.shield")
@@ -226,19 +226,21 @@ struct GlanceView: View {
     .help(focusSourceHelp)
   }
 
-  private var anomalyRow: some View {
-    HStack(spacing: 10) {
+  private var contextHealthRow: some View {
+    let health = store.snapshot?.sessionHealth
+    let color = contextHealthColor(health?.status)
+    return HStack(spacing: 10) {
       Circle()
-        .fill(store.snapshot?.anomaly == nil ? Color.green : Color.orange)
+        .fill(color)
         .frame(width: 7, height: 7)
-        .shadow(color: (store.snapshot?.anomaly == nil ? Color.green : Color.orange).opacity(0.7), radius: 6)
+        .shadow(color: color.opacity(0.7), radius: 6)
 
       VStack(alignment: .leading, spacing: 2) {
-        Text(store.snapshot?.anomaly?.summary ?? "No actionable session anomaly")
+        Text(health?.headline ?? store.snapshot?.anomaly?.summary ?? "Collecting local context history")
           .font(.system(size: 10, weight: .semibold, design: .rounded))
           .foregroundStyle(.white.opacity(0.87))
           .lineLimit(1)
-        Text(store.snapshot?.anomaly?.action ?? "Keep the current session while its context remains useful.")
+        Text(health?.action ?? store.snapshot?.anomaly?.action ?? "Keep using your coding agents; Glance will compare local sessions.")
           .font(.system(size: 9, weight: .medium, design: .rounded))
           .foregroundStyle(.white.opacity(0.4))
           .lineLimit(1)
@@ -248,12 +250,23 @@ struct GlanceView: View {
     }
     .padding(.horizontal, 11)
     .frame(height: 52)
-    .background(Color.orange.opacity(store.snapshot?.anomaly == nil ? 0.018 : 0.04), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+    .background(color.opacity(health?.status == "healthy" ? 0.018 : 0.04), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
-        .stroke(Color.orange.opacity(store.snapshot?.anomaly == nil ? 0.07 : 0.14), lineWidth: 1)
+        .stroke(color.opacity(health?.status == "healthy" ? 0.07 : 0.14), lineWidth: 1)
     }
-    .help(anomalySourceHelp)
+    .help(contextHealthSourceHelp)
+  }
+
+  private func contextHealthColor(_ status: String?) -> Color {
+    switch status {
+    case "healthy":
+      return .green
+    case "start_fresh", "watch":
+      return .orange
+    default:
+      return .white.opacity(0.45)
+    }
   }
 
   private func limitColor(_ limit: UsageGlanceSnapshot.Limit?) -> Color {
@@ -347,8 +360,11 @@ struct GlanceView: View {
     return "Derived locally from observed prompt and tool activity across \(sessions) session\(sessions == 1 ? "" : "s"). Raw prompt text is not returned by the Glance contract or uploaded."
   }
 
-  private var anomalySourceHelp: String {
-    "Calculated locally by comparing this session with prior sessions from the same coding agent. It is not a provider alert."
+  private var contextHealthSourceHelp: String {
+    guard let health = store.snapshot?.sessionHealth else {
+      return "Calculated locally by comparing this session with prior sessions from the same coding agent. It is not a provider alert."
+    }
+    return "The same aibill Context Health result used by the terminal and MCP. Session evidence comes from local transcripts; inventory comes from local agent configuration. Hook commands are not run and hook payload size is not inferred. Confidence: \(health.confidence)."
   }
 
   private var footerSourceHelp: String {

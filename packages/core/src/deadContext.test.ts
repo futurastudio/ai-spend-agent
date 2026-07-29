@@ -6,6 +6,12 @@ import type { InvocationSummary } from "./toolInvocations.js";
 function item(partial: Partial<InventoryItem> & Pick<InventoryItem, "kind" | "name">): InventoryItem {
   return {
     scope: "user",
+    activation: partial.kind === "mcp_server" || partial.kind === "mcp_tool"
+      ? "mcp_schema_loaded"
+      : partial.kind === "hook"
+        ? "hook_injected"
+        : "discoverable",
+    invocationTracking: "observable",
     alwaysLoadedTokens: 100,
     weightConfidence: "estimated",
     ...partial

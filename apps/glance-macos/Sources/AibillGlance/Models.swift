@@ -10,6 +10,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
   let limits: [Limit]
   let focus: Focus?
   let anomaly: Anomaly?
+  let sessionHealth: ContextHealth?
 
   struct Coverage: Decodable, Sendable {
     let filesParsed: Int
@@ -30,6 +31,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let limits: LimitSource
     let focus: FocusSource
     let anomaly: AnomalySource
+    let contextHealth: ContextHealthSource?
     let network: NetworkSource
 
     struct SessionSource: Decodable, Sendable {
@@ -66,6 +68,11 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     struct AnomalySource: Decodable, Sendable {
       let source: String
       let comparison: String
+    }
+
+    struct ContextHealthSource: Decodable, Sendable {
+      let source: String
+      let hookPayload: String
     }
 
     struct NetworkSource: Decodable, Sendable {
@@ -130,6 +137,35 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let summary: String
     let action: String
     let confidence: String
+  }
+
+  struct ContextHealth: Decodable, Sendable {
+    let schemaVersion: Int
+    let status: String
+    let recommendation: String
+    let headline: String
+    let action: String
+    let confidence: String
+    let activation: Activation
+    let provenance: ContextProvenance
+
+    struct Activation: Decodable, Sendable {
+      let discoverableItems: Int
+      let explicitlyInvokedItems: Int
+      let hookInjectedItems: Int
+      let lifecycleHooks: Int
+      let mcpSchemaLoadedItems: Int
+      let unmeasuredItems: Int
+      let invocationUnobservableItems: Int?
+    }
+
+    struct ContextProvenance: Decodable, Sendable {
+      let inventory: String
+      let invocations: String
+      let session: String
+      let hookPayload: String
+      let uploaded: Bool
+    }
   }
 }
 

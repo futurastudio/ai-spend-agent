@@ -52,6 +52,12 @@ The Main focus row summarizes what occupied the user across observed prompts
 and tool calls; its percentage is activity share, not elapsed time or spend.
 Raw prompts never enter the Glance JSON contract.
 
+The final compact row renders the canonical hook-aware Context Health result
+used by `aibill context --json` and MCP `get_context_health`. A “start fresh”
+decision comes from this user's same-agent transcript-token median. Installed
+hook metadata can instead produce a review action, but Glance never executes a
+hook command or invents the hook's runtime token payload.
+
 The visible card keeps provenance beside the metric: session value says local
 tokens × API list rates; limit rows distinguish coding-agent-reported reset
 data from the local exhaustion estimate; Main focus says local activity; and
@@ -62,7 +68,9 @@ adding another crowded row.
 The JSON snapshot also includes a `provenance` object for every renderer. It
 identifies the user-specific agent sources, the published-price table date,
 reported limit windows, local focus/anomaly derivations, and
-`network.uploaded: false`.
+`network.uploaded: false`. Its `sessionHealth` object is the full shared
+contract; custom renderers should consume it rather than recomputing a
+different recommendation.
 
 ## Customize or fork it
 
@@ -92,6 +100,8 @@ Keep these trust invariants in customized versions:
   charge.
 - Keep Main focus activity-derived and keep raw prompt text out of the UI
   contract.
+- Render `sessionHealth` from the shared contract; do not invent a second
+  session threshold or hook-cost estimate in the UI.
 - Render missing limits as unavailable instead of guessing.
 - Do not upload transcripts or invoke the data command through a shell.
 

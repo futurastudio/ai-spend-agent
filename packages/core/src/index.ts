@@ -2,6 +2,7 @@ export * from "./analyze.js";
 export * from "./agentInventory.js";
 export * from "./attribution.js";
 export * from "./credentialDetection.js";
+export * from "./contextHealth.js";
 export * from "./cutList.js";
 export * from "./deadContext.js";
 export * from "./discovery.js";

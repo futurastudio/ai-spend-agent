@@ -43,15 +43,32 @@ command = "npx"
 args = ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
 ```
 
-Restart the client and confirm that these seven tools appear:
+Restart the client and confirm that these eight tools appear:
 
 1. `scan_ai_spend`
 2. `sync_local_agent_spend`
 3. `sync_provider_spend`
 4. `get_usage_glance`
-5. `list_sources`
-6. `get_spend_report`
-7. `recommend_cuts`
+5. `get_context_health`
+6. `list_sources`
+7. `get_spend_report`
+8. `recommend_cuts`
+
+## Optional on-demand Codex plugin
+
+The repo also contains [`plugins/aibill`](../plugins/aibill), a thin plugin
+that pins this MCP package and adds three explicit-only skills. It has no
+lifecycle hooks or always-on prompt injection.
+
+From a clone:
+
+```bash
+codex plugin marketplace add /absolute/path/to/ai-spend-agent
+codex plugin add aibill@aibill
+```
+
+Start a new Codex task, then explicitly invoke `$aibill-check`,
+`$aibill-explain`, or `$aibill-help`.
 
 ## Local development
 
@@ -86,7 +103,9 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 - `get_usage_glance` is read-only and scans only the known Claude Code and
   Codex transcript locations (or the documented test-directory overrides).
 - State is written only to `<path>/.ai-spend-agent/`.
-- Local transcript contents are never uploaded.
+- aibill itself does not upload local transcript contents or send telemetry.
+  An MCP tool's selected structured result is returned to the invoking AI
+  client and follows that client's data-handling policy.
 - Provider tools are read-only against provider APIs.
 - Provider credentials must be inherited environment variables referenced as
   `env:NAME`; raw keys are rejected before any network request.
@@ -146,10 +165,11 @@ Builds the read-only data contract for the native Glance UI:
 - the main recent work focus derived from observed local prompt/tool activity,
   with task, project, file, automation, or delegated-agent context only when
   supported; and
-- at most one evidence-backed session anomaly with a concrete next action.
+- one canonical Context Health decision with a concrete next action.
 
 ```json
 {
+  "path": "/Users/you/projects/agent-finops",
   "sinceDays": 30,
   "project": "agent-finops"
 }
@@ -176,7 +196,43 @@ machine-readable for every custom client:
 - limits: transcript-reported windows, with exhaustion labeled as a separate
   local pace estimate;
 - focus and anomaly: local activity/history derivations; and
+- Context Health: the canonical CLI/MCP/Glance result, with hook payload
+  explicitly marked `not_executed_or_inferred`; and
 - network: `uploaded: false`.
+
+### `get_context_health`
+
+Returns the same hook-aware decision contract used by
+`aibill context --json` and `get_usage_glance.sessionHealth`.
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "sinceDays": 30,
+  "project": "agent-finops"
+}
+```
+
+It distinguishes:
+
+- discoverable skills, commands, and subagents;
+- items explicitly invoked where the local Claude Code or Codex transcript
+  exposes a matchable event;
+- MCP schema-loaded items;
+- context-injecting lifecycle events such as `SessionStart`,
+  `UserPromptSubmit`, and `SubagentStart`; and
+- other lifecycle hooks that are configured but not treated as prompt
+  injection.
+
+Installed hook configuration is read as metadata only. aibill never executes a
+hook command, never reads its runtime stdout, and never assigns it a token or
+dollar value. The recommendation precedence is deterministic: a large
+same-agent session can recommend starting fresh; otherwise hook review,
+never-invoked inventory, a healthy continue decision, or insufficient history
+is returned with evidence and caveats.
+Configured items whose host transcript does not expose explicit invocation
+evidence are counted as `invocationUnobservableItems` and excluded from
+never-invoked totals.
 
 ### `sync_provider_spend`
 
@@ -256,6 +312,12 @@ Full stdio audit through a spawned MCP server:
 
 ```bash
 node scripts/audit-mcp-stdio.mjs
+```
+
+Deterministic Context Health classification and safety benchmark:
+
+```bash
+npm run benchmark:context
 ```
 
 ## Troubleshooting

@@ -80,6 +80,13 @@ view, labels estimates versus verified cost reports, and tells you what to cut.
   utilization %. Where the token weight is measurable (skills/agents), it adds
   an honest, cache-aware $/mo; MCP servers are counted (schemas aren't readable
   from config) until you connect to size them.
+- **Hook-aware Context Health**: `npx aibill context` distinguishes context
+  that is merely discoverable, explicitly invoked, MCP-schema-loaded, or
+  injected by an installed lifecycle hook. Hook commands are never executed
+  and their runtime payload stays `unmeasured`; the session action is based on
+  this user's same-agent transcript history, not a generic threshold. Items
+  whose host transcript does not expose an invocation event are labeled
+  invocation-unobservable and excluded from “never invoked.”
 - **Plan check with real plan detection**: your projected monthly usage at API
   rates vs your *actual* subscription — the tool reads the plan your coding
   agents already know locally (Claude Max tier, ChatGPT plan; read-only,
@@ -156,6 +163,7 @@ env:NAME`) — the tool never stores or prints a raw key.
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Connect a provider's cost data (admin-gated) |
 | `sync-provider` | Pull verified cost via a local `env:` reference |
+| `context [--project <name>] [--since-days N]` | Human-readable hook-aware Context Health (`--json` emits the canonical contract) |
 | `glance [--project <name>] [--plan <id>]` | Emit the local machine-readable Glance snapshot |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
 | `report [--out <name>]` | Generate local Markdown + HTML reports |
@@ -165,7 +173,21 @@ env:NAME`) — the tool never stores or prints a raw key.
 
 Run `ai-spend-agent --help` for the full list.
 
-## Use it inside Cursor / Claude Desktop (MCP)
+## Choose your interface
+
+All three interfaces consume the same core data and Context Health contract:
+
+| Interface | Best for | Command / install |
+| --- | --- | --- |
+| Terminal | Private, scriptable inspection with no AI-client handoff | `npx aibill` and `npx aibill context` |
+| MCP/plugin | Asking an AI client to explain the same structured result on demand | Install the optional aibill plugin or configure `@agent-finops/mcp` |
+| macOS Glance | A hover-only view of session value, reported limits, focus, and one action | Build the current prototype from `apps/glance-macos` |
+
+Contract tests compare terminal JSON, MCP, and Glance decision fields. Custom
+interfaces should render `aibill glance` or `aibill context --json` instead of
+adding another transcript parser.
+
+## Use it inside an AI client (MCP or optional plugin)
 
 The same engine ships as `@agent-finops/mcp`, so any stdio-compatible MCP
 client can read local Claude Code/Codex estimates or sync verified OpenAI and
@@ -177,7 +199,12 @@ npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 
 GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
-configuration, all seven tools, and the safety model.
+configuration, all eight tools, and the safety model.
+
+Codex users can instead install the thin, explicit-only plugin in
+[`plugins/aibill`](plugins/aibill). It exposes the same MCP plus
+`$aibill-check`, `$aibill-explain`, and `$aibill-help`. The plugin adds no
+lifecycle hooks and no always-on instructions.
 
 ## Glance for macOS
 
@@ -187,7 +214,8 @@ menu bar, one tiny liquid-glass `aibill` wordmark appears to the left of the
 camera/notch. Hover that fixed target—no click required—to slide down
 current-session value at API rates, available
 five-hour/weekly limits, reset or exhaustion timing, a local transcript-derived
-description of the user's main work focus, and one actionable anomaly; moving
+description of the user's main work focus, and one actionable Context Health
+decision; moving
 away hides the panel again.
 
 Glance reads the same local Claude Code and Codex transcript metadata as the
@@ -212,7 +240,7 @@ Each Glance field carries its own provenance instead of inheriting one vague
 | Five-hour/weekly headroom | Rate-limit metadata embedded by the coding agent in its local transcript | Reports only windows actually present |
 | Exhaustion time | Reported headroom + reset time | Calculates a separate local pace estimate |
 | Main focus | Local prompt/tool activity | Returns a short activity summary, never raw prompt text |
-| Anomaly | This user's prior local sessions for the same agent | Compares with the local session median |
+| Context Health | This user's prior same-agent sessions + local skill/MCP/plugin configuration and transcript invocations | Reuses the canonical CLI/MCP decision; hook commands are not run and hook payload size is not inferred |
 
 The machine-readable snapshot includes the same mapping under `provenance`,
 including the price-table date and `uploaded: false`, so custom UIs do not
@@ -226,8 +254,12 @@ as the CLI and MCP server.
 
 ## Privacy & trust
 
-- **Local-first.** Analysis happens on your machine; nothing is uploaded.
-  No telemetry, ever.
+- **Local-first.** CLI and Glance analysis happens on your machine. aibill
+  sends no telemetry and makes no upload request.
+- **Explicit MCP boundary.** When you invoke an MCP tool or plugin skill, its
+  selected structured result is returned to that AI client and follows the
+  client's data policy. The aibill process itself makes no telemetry/upload
+  request.
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
 - **Estimates labeled as estimates.** Log-derived numbers use published API

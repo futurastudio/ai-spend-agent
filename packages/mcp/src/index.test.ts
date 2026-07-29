@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getContextHealthTool,
   getUsageGlanceTool,
   getSpendReportTool,
   listSourcesTool,
@@ -69,6 +70,8 @@ describe("MCP analyst tools", () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-"));
     const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-claude-"));
     const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-codex-"));
+    const claudeHome = await mkdtemp(join(tmpdir(), "ai-spend-mcp-claude-home-"));
+    const codexHome = await mkdtemp(join(tmpdir(), "ai-spend-mcp-codex-home-"));
     const project = "mcp-project";
     await writeFile(join(claudeDir, "session.jsonl"), JSON.stringify({
       type: "assistant",
@@ -89,9 +92,13 @@ describe("MCP analyst tools", () => {
     }));
     vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
     vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_CLAUDE_HOME_DIR", claudeHome);
+    vi.stubEnv("AI_SPEND_CODEX_HOME_DIR", codexHome);
+    vi.stubEnv("AI_SPEND_CLAUDE_CONFIG", join(claudeHome, "missing.json"));
 
     const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30, project });
-    const glance = await getUsageGlanceTool({ sinceDays: 30, project });
+    const glance = await getUsageGlanceTool({ path: dir, sinceDays: 30, project });
+    const contextHealth = await getContextHealthTool({ path: dir, sinceDays: 30, project });
     const report = await getSpendReportTool({ path: dir }) as {
       mode: string;
       records: unknown[];
@@ -118,6 +125,11 @@ describe("MCP analyst tools", () => {
         providerConnectionRequired: ["cursor", "github-copilot"]
       }
     });
+    const { generatedAt: glanceGeneratedAt, ...glanceContract } = glance.sessionHealth;
+    const { generatedAt: contextGeneratedAt, ...contextContract } = contextHealth;
+    expect(glanceGeneratedAt).toEqual(expect.any(String));
+    expect(contextGeneratedAt).toEqual(expect.any(String));
+    expect(glanceContract).toEqual(contextContract);
   });
 
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
@@ -271,6 +283,7 @@ describe("MCP analyst tools", () => {
     // A prompt-injected MCP client must not be able to walk broad roots.
     await expect(scanAiSpendTool({ path: homedir() })).rejects.toThrow(/too broad/);
     await expect(scanAiSpendTool({ path: "/" })).rejects.toThrow(/too broad/);
+    await expect(getContextHealthTool({ path: homedir() })).rejects.toThrow(/too broad/);
   });
 });
 
@@ -307,6 +320,7 @@ describe("MCP protocol contract", () => {
       "sync_local_agent_spend",
       "sync_provider_spend",
       "get_usage_glance",
+      "get_context_health",
       "list_sources",
       "get_spend_report",
       "recommend_cuts"

@@ -14,6 +14,7 @@ describe("zero-key instant demo first run", () => {
     // machine's real config (otherwise output depends on the dev machine's
     // actual Claude/ChatGPT subscription).
     process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-home-"));
+    process.env.AI_SPEND_CODEX_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-home-"));
     process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
     process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
   });
@@ -21,6 +22,7 @@ describe("zero-key instant demo first run", () => {
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
+    delete process.env.AI_SPEND_CODEX_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
     delete process.env.AI_SPEND_CODEX_AUTH;
   });
@@ -178,6 +180,58 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["glance", "--since-days", "0"]);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("between 1 and 365");
+  });
+
+  it("keeps terminal JSON and Glance on the same Context Health contract", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-context-"));
+    const terminal = await runCli([
+      "context",
+      "--json",
+      "--since-days",
+      "365",
+      "--project",
+      "myproject",
+      "--path",
+      dir
+    ]);
+    const glance = await runCli([
+      "glance",
+      "--since-days",
+      "365",
+      "--project",
+      "myproject",
+      "--path",
+      dir
+    ]);
+    const terminalHealth = JSON.parse(terminal.stdout);
+    const glanceHealth = JSON.parse(glance.stdout).sessionHealth;
+
+    expect(terminal.exitCode).toBe(0);
+    expect(terminalHealth).toMatchObject({
+      schemaVersion: 1,
+      provenance: {
+        inventory: "local_agent_configuration",
+        invocations: "local_claude_code_and_codex_transcripts",
+        uploaded: false
+      }
+    });
+    // generatedAt can differ by milliseconds; every decision/data field must match.
+    const { generatedAt: terminalGeneratedAt, ...terminalContract } = terminalHealth;
+    const { generatedAt: glanceGeneratedAt, ...glanceContract } = glanceHealth;
+    expect(terminalGeneratedAt).toEqual(expect.any(String));
+    expect(glanceGeneratedAt).toEqual(expect.any(String));
+    expect(glanceContract).toEqual(terminalContract);
+  });
+
+  it("renders Context Health as a readable terminal decision", async () => {
+    await writeClaudeLogFixture();
+    const result = await runCli(["context", "--since-days", "365"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("CONTEXT HEALTH");
+    expect(result.stdout).toContain("Action:");
+    expect(result.stdout).toContain("Activation");
+    expect(result.stdout).toContain("hook commands were not run");
   });
 
   it("report and apply-artifact work right after a quickstart (live local-log fallback, never sample)", async () => {

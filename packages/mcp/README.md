@@ -39,7 +39,8 @@ rejected and never persisted.
 | `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
 | `sync_local_agent_spend` | Build an estimated API-equivalent report from local Claude Code/Codex metadata. |
 | `sync_provider_spend` | Pull read-only provider billing through an `env:NAME` reference. |
-| `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main-focus, and anomaly metrics without guessing missing fields. |
+| `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and the canonical Context Health decision without guessing missing fields. |
+| `get_context_health` | Distinguish discoverable, invoked, MCP-schema-loaded, hook-injected, and invocation-unobservable context without running hook commands. |
 | `list_sources` | List locally registered sources and verification levels. |
 | `get_spend_report` | Return the active records, data mode, and analyzed summary. |
 | `recommend_cuts` | Return report-backed recommendations, with discovery fallback. |
@@ -49,3 +50,7 @@ written only to `<path>/.ai-spend-agent/`. `get_usage_glance` is read-only and
 reads known Claude Code/Codex transcript metadata. See
 [`docs/MCP.md`](../../docs/MCP.md) for inputs, provider support, development
 configuration, and troubleshooting.
+
+aibill makes no telemetry or upload request. An MCP tool result is returned to
+the AI client that invoked it and follows that client's data-handling policy.
+The optional repo plugin is explicit-only and adds no lifecycle hooks.

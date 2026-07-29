@@ -122,6 +122,7 @@ describe("buildUsageGlance", () => {
       durationMinutes: 42,
       costConfidence: "estimated"
     });
+    expect(snapshot.sessionHealth.generatedAt).toBe(snapshot.generatedAt);
     expect(snapshot.currentSession?.apiEquivalentUsd).toBeGreaterThan(0);
     expect(snapshot.provenance).toEqual({
       session: {
@@ -153,6 +154,10 @@ describe("buildUsageGlance", () => {
       anomaly: {
         source: "local_session_history",
         comparison: "same_agent_session_median"
+      },
+      contextHealth: {
+        source: "canonical_context_health_contract",
+        hookPayload: "not_executed_or_inferred"
       },
       network: {
         uploaded: false
@@ -191,8 +196,8 @@ describe("buildUsageGlance", () => {
     });
     expect(snapshot.focus!.activitySharePercent).toBeGreaterThan(70);
     expect(snapshot.anomaly).toMatchObject({
-      kind: "session_spend",
-      summary: expect.stringContaining("API-rate session value"),
+      kind: "session_tokens",
+      summary: expect.stringContaining("same-agent token median"),
       confidence: "derived"
     });
     expect(snapshot.anomaly!.ratioToMedian).toBeGreaterThan(1.5);
@@ -243,6 +248,9 @@ describe("buildUsageGlance", () => {
       },
       anomaly: {
         source: "not_available"
+      },
+      contextHealth: {
+        source: "canonical_context_health_contract"
       },
       network: {
         uploaded: false

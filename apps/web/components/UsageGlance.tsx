@@ -102,8 +102,8 @@ export function UsageGlance() {
             <div className="glance-insight">
               <span className="glance-insight-dot" aria-hidden="true" />
               <div>
-                <strong>API-rate session value is 1.8× your local Codex median</strong>
-                <span>Start fresh before the next task.</span>
+                <strong>This session is 1.8× your same-agent token median</strong>
+                <span>Start fresh before a new task.</span>
               </div>
             </div>
 

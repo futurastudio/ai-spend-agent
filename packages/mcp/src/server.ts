@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  getContextHealthTool,
   getUsageGlanceTool,
   getSpendReportTool,
   listSourcesTool,
@@ -155,7 +156,8 @@ export function createServer(): McpServer {
         "Build a read-only Glance snapshot from local Claude Code and Codex transcript metadata: current or latest session value, exact transcript-reported plan windows when available, a privacy-conscious summary of the main recent work focus, and at most one evidence-backed anomaly. Cursor and GitHub Copilot require provider connections; missing plan limits are never inferred.",
       inputSchema: {
         sinceDays: z.number().int().min(1).max(365).optional().describe("History used for baselines; defaults to 30 days."),
-        project: z.string().min(1).optional().describe("Optional exact project filter for session, focus, and anomaly metrics. Account-level limit metadata remains visible.")
+        project: z.string().min(1).optional().describe("Optional exact project filter for session, focus, and anomaly metrics. Account-level limit metadata remains visible."),
+        path: absolutePath.optional().describe("Optional project root for project-scoped Context Health inventory.")
       },
       annotations: {
         readOnlyHint: true,
@@ -164,8 +166,30 @@ export function createServer(): McpServer {
         openWorldHint: false
       }
     },
-    async ({ sinceDays, project }) =>
-      executeTool(() => getUsageGlanceTool({ sinceDays, project }))
+    async ({ sinceDays, project, path }) =>
+      executeTool(() => getUsageGlanceTool({ sinceDays, project, path }))
+  );
+
+  server.registerTool(
+    "get_context_health",
+    {
+      title: "Get hook-aware Context Health",
+      description:
+        "Return the canonical read-only Context Health result shared by aibill CLI, MCP, and Glance. Distinguishes discoverable, explicitly invoked, MCP schema-loaded, hook-injected, and other lifecycle context. Hook commands are never run and runtime payload tokens are never inferred.",
+      inputSchema: {
+        path: absolutePath.describe("Absolute project root for project-scoped inventory."),
+        sinceDays: z.number().int().min(1).max(365).optional().describe("Local transcript history window; defaults to 30 days."),
+        project: z.string().min(1).optional().describe("Optional exact project filter for session metrics.")
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ path, sinceDays, project }) =>
+      executeTool(() => getContextHealthTool({ path, sinceDays, project }))
   );
 
   server.registerTool(

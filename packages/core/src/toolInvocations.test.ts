@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   loadToolInvocations,
-  parseClaudeCodeInvocations
+  parseClaudeCodeInvocations,
+  parseCodexInvocations
 } from "./toolInvocations.js";
 
 /** Build one assistant JSONL line with the given tool_use blocks. */
@@ -95,6 +96,61 @@ describe("parseClaudeCodeInvocations", () => {
   });
 });
 
+describe("parseCodexInvocations", () => {
+  it("tracks Codex turns, MCP, skills, subagents, and slash commands", () => {
+    const rollout = [
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-06-16T12:00:00.000Z",
+        payload: { model: "gpt-5.6-codex" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-16T12:00:01.000Z",
+        payload: {
+          type: "function_call",
+          name: "mcp__github__get_issue",
+          arguments: "{}"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-16T12:00:02.000Z",
+        payload: {
+          type: "function_call",
+          name: "Skill",
+          arguments: JSON.stringify({ skill: "aibill-check" })
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-16T12:00:03.000Z",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ task_name: "reviewer" })
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-16T12:00:04.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "/aibill-check now" }]
+        }
+      })
+    ].join("\n");
+
+    const parsed = parseCodexInvocations(rollout);
+    expect(parsed.assistantTurns).toBe(1);
+    expect(parsed.invokedMcpTools).toEqual(["mcp__github__get_issue"]);
+    expect(parsed.invokedSkills).toEqual(["aibill-check"]);
+    expect(parsed.invokedSubagents).toEqual(["reviewer"]);
+    expect(parsed.invokedCommands).toEqual(["aibill-check"]);
+  });
+});
+
 describe("loadToolInvocations", () => {
   let dir: string;
 
@@ -123,7 +179,10 @@ describe("loadToolInvocations", () => {
   });
 
   it("aggregates two transcript files", async () => {
-    const summary = await loadToolInvocations({ claudeProjectsDir: dir });
+    const summary = await loadToolInvocations({
+      claudeProjectsDir: dir,
+      codexSessionsDir: join(dir, "no-codex")
+    });
     expect(summary.sessions).toBe(2);
     expect(summary.totalAssistantTurns).toBe(3); // 2 turns in A + 1 in B
     expect(summary.sessionTurnCounts.slice().sort()).toEqual([1, 2]);
@@ -132,10 +191,14 @@ describe("loadToolInvocations", () => {
     expect(byName.Edit).toBe(1);
     expect(byName.Skill).toBe(1);
     expect(summary.invokedSkills).toEqual(["verify"]);
+    expect(summary.sourceSessions).toEqual({ claudeCode: 2, codex: 0 });
   });
 
   it("returns an empty summary for a missing dir without throwing", async () => {
-    const summary = await loadToolInvocations({ claudeProjectsDir: join(dir, "does-not-exist") });
+    const summary = await loadToolInvocations({
+      claudeProjectsDir: join(dir, "does-not-exist"),
+      codexSessionsDir: join(dir, "does-not-exist-either")
+    });
     expect(summary).toEqual({
       invocations: [],
       invokedMcpTools: [],
@@ -144,7 +207,8 @@ describe("loadToolInvocations", () => {
       invokedCommands: [],
       sessions: 0,
       totalAssistantTurns: 0,
-      sessionTurnCounts: []
+      sessionTurnCounts: [],
+      sourceSessions: { claudeCode: 0, codex: 0 }
     });
   });
 });

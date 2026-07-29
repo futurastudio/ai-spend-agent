@@ -8,6 +8,7 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   buildUsageGlance,
+  loadContextHealth,
   detectLocalCredentials,
   detectLocalPlans,
   redactSecrets,
@@ -36,7 +37,8 @@ import {
   type SourceType,
   type SpendSummary,
   type UsageRecord,
-  type ProviderQaSummary
+  type ProviderQaSummary,
+  type ContextHealthResult
 } from "@agent-finops/core";
 import {
   generateActionPlanMarkdown,
@@ -92,6 +94,7 @@ type ParsedArgs = {
   ignoreState?: boolean;
   plan?: string;
   sinceDays?: number;
+  json?: boolean;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
@@ -151,6 +154,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
 
   if (args.command === "glance") {
     return glanceCommand(args);
+  }
+
+  if (args.command === "context" || args.command === "context-health") {
+    return contextHealthCommand(args);
   }
 
   if (args.command === "apply-artifact" || args.command === "apply") {
@@ -235,8 +242,11 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     : await loadDeadContext({
         // Env overrides keep tests (and unusual installs) isolated from $HOME.
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
         claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
         projectDir: resolve(args.path),
         includeAllProjectMcp: true,
         sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -300,13 +310,102 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
       codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
     }).catch(() => []);
   }
+  const contextHealth = await loadContextHealth(calls, {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+    codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+    projectDir: resolve(args.path),
+    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
+    windowDays: sinceDays
+  });
   const snapshot = buildUsageGlance(calls, {
     filesParsed: logs.filesParsed,
     detectedAgents: logs.agentsDetected,
     detectedPlans,
-    limitCalls: logs.calls
+    limitCalls: logs.calls,
+    contextHealth
   });
   return ok(JSON.stringify(snapshot));
+}
+
+async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
+  const sinceDays = args.sinceDays ?? 30;
+  if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "--since-days must be a whole number between 1 and 365"
+    };
+  }
+  const sinceIso = new Date(
+    Date.now() - sinceDays * 24 * 60 * 60 * 1_000
+  ).toISOString();
+  const logs = await loadLocalAgentUsage({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso
+  });
+  const calls = args.project
+    ? logs.calls.filter((call) => call.project === args.project)
+    : logs.calls;
+  const health = await loadContextHealth(calls, {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+    codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+    projectDir: resolve(args.path),
+    sinceIso,
+    windowDays: sinceDays
+  });
+  return ok(args.json ? JSON.stringify(health) : renderContextHealth(health));
+}
+
+function renderContextHealth(health: ContextHealthResult): string {
+  const status = health.status.replace("_", " ").toUpperCase();
+  const activation = health.activation;
+  const dead = health.deadContext;
+  const lines = [
+    `CONTEXT HEALTH  ${status}`,
+    health.headline,
+    "",
+    `Action: ${health.action}`,
+    `Confidence: ${health.confidence}`,
+    "",
+    "Activation",
+    `  Discoverable: ${activation.discoverableItems}  Invoked: ${activation.explicitlyInvokedItems}  MCP schema-loaded: ${activation.mcpSchemaLoadedItems}`,
+    `  Hook-injected: ${activation.hookInjectedItems}  Other lifecycle hooks: ${activation.lifecycleHooks}  Unmeasured weight: ${activation.unmeasuredItems}`,
+    `  Invocation-unobservable: ${activation.invocationUnobservableItems}`,
+    "",
+    `Never invoked among observable inventory (${dead.windowDays}d): ${dead.neverInvokedItems}/${dead.loadedItems} ` +
+      `(${dead.measuredNeverInvokedItems} measured, ${dead.unmeasuredNeverInvokedItems} unmeasured)`
+  ];
+  if (health.currentSession) {
+    const session = health.currentSession;
+    lines.push(
+      `Session: ${session.agent}${session.project ? ` · ${session.project}` : ""} · ` +
+      `${session.totalTokens.toLocaleString("en-US")} tokens · ` +
+      (session.ratioToMedian === null
+        ? "no same-agent baseline"
+        : `${session.ratioToMedian}× median (${session.comparisonSessions} prior)`)
+    );
+  }
+  if (health.evidence.length > 0) {
+    lines.push("", "Evidence");
+    for (const evidence of health.evidence) {
+      lines.push(`  - ${evidence.summary} [${evidence.confidence}; ${evidence.source}]`);
+    }
+  }
+  lines.push(
+    "",
+    "Data: local agent configuration + local Claude Code/Codex transcripts; hook commands were not run.",
+    "Privacy: this CLI run uploads nothing."
+  );
+  return lines.join("\n");
 }
 
 function quickstartNextSteps(
@@ -1260,8 +1359,11 @@ async function buildReportInput(stateDir: string, rootPath: string) {
   const deadContext = spendState.mode === "local_logs"
     ? await loadDeadContext({
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
         claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
         projectDir: rootPath,
         includeAllProjectMcp: true,
         sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -1347,6 +1449,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--no-color") {
       parsed.noColor = true;
+      continue;
+    }
+    if (arg === "--json") {
+      parsed.json = true;
       continue;
     }
     if (arg === "--ignore-state") {
@@ -1700,6 +1806,8 @@ function helpText(): string {
     "  report [--out <name>]   Generate local Markdown and HTML reports",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  glance [--project <name>] [--plan <id>] Emit the local, machine-readable Glance snapshot JSON",
+    "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",
+    "    [--json]              Emit the same canonical Context Health object used by MCP and Glance",
     "  apply                   Print the paste-ready coding-agent prompt + write action/policy/verification plans",
     "  apply-artifact          Same as `apply` (long form)",
     "",

@@ -11,7 +11,10 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run typecheck",
     "test": "vitest run",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "check:adapters": "node scripts/check-plugin-adapters.mjs",
+    "check:public-boundary": "node scripts/check-public-boundary.mjs",
+    "benchmark:context": "npm run build && node scripts/benchmark-context-health.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -12,6 +12,17 @@ API-equivalent rates*, where the money goes, a ranked "where to cut" list, a
 subscription-vs-API **plan check**, and the **dead context** you pay for but
 never use (tools/skills/MCP servers loaded on every turn and never invoked).
 
+For a hook-aware session decision:
+
+```bash
+npx aibill context
+npx aibill context --json
+```
+
+Context Health distinguishes discoverable, explicitly invoked,
+MCP-schema-loaded, hook-injected, and invocation-unobservable items. It never
+runs lifecycle hook commands or invents their runtime token payload.
+
 No logs? You get an instant, clearly-labeled demo on sample data.
 
 ## Connect real billing (optional, ~2 min)

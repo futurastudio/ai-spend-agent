@@ -41,6 +41,12 @@ try {
       project: "agent-finops"
     }),
     glance: await callSummary("get_usage_glance", {
+      path: projectRoot,
+      sinceDays: 30,
+      project: "agent-finops"
+    }),
+    contextHealth: await callSummary("get_context_health", {
+      path: projectRoot,
       sinceDays: 30,
       project: "agent-finops"
     }),
@@ -147,7 +153,21 @@ async function callSummary(name, args) {
           kind: limit.kind,
           source: limit.source
         })),
-        anomaly: data.anomaly?.kind ?? null
+        anomaly: data.anomaly?.kind ?? null,
+        contextRecommendation: data.sessionHealth?.recommendation ?? null
+      }
+    };
+  }
+  if (name === "get_context_health") {
+    return {
+      name,
+      status: "ok",
+      data: {
+        status: data.status,
+        recommendation: data.recommendation,
+        confidence: data.confidence,
+        activation: data.activation,
+        uploaded: data.provenance?.uploaded
       }
     };
   }

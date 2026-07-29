@@ -11,6 +11,7 @@ import {
   createScanAuditLog,
   detectLocalPlans,
   fetchProviderUsageRecords,
+  loadContextHealth,
   loadLocalAgentUsage,
   loadSampleUsageData,
   scanLocalUsageSignals,
@@ -22,6 +23,7 @@ import {
   type SpendSummary,
   type TokenResolver,
   type UsageGlanceSnapshot,
+  type ContextHealthResult,
   type UsageRecord
 } from "@agent-finops/core";
 
@@ -50,6 +52,14 @@ export type SyncLocalAgentSpendInput = RegistryPathInput & {
 };
 
 export type GetUsageGlanceInput = {
+  sinceDays?: number;
+  project?: string;
+  /** Optional project root for project-scoped inventory/context metadata. */
+  path?: string;
+};
+
+export type GetContextHealthInput = {
+  path: string;
   sinceDays?: number;
   project?: string;
 };
@@ -328,6 +338,7 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
 export async function getUsageGlanceTool(
   input: GetUsageGlanceInput = {}
 ): Promise<UsageGlanceSnapshot> {
+  if (input.path) assertSafeScanRoot(resolve(input.path));
   const sinceDays = input.sinceDays ?? 30;
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
@@ -337,6 +348,17 @@ export async function getUsageGlanceTool(
   const calls = input.project
     ? logs.calls.filter((call) => call.project === input.project)
     : logs.calls;
+  const contextHealth = await loadContextHealth(calls, {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+    codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+    projectDir: input.path ? resolve(input.path) : process.cwd(),
+    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
+    windowDays: sinceDays
+  });
   const detectedPlans = await detectLocalPlans({
     claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
     codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
@@ -347,7 +369,38 @@ export async function getUsageGlanceTool(
     detectedPlans,
     // Plan windows are account-level metadata, so a project filter must not
     // erase an exact provider-reported reset or remaining percentage.
-    limitCalls: logs.calls
+    limitCalls: logs.calls,
+    contextHealth
+  });
+}
+
+export async function getContextHealthTool(
+  input: GetContextHealthInput
+): Promise<ContextHealthResult> {
+  const rootPath = resolve(input.path);
+  assertSafeScanRoot(rootPath);
+  const sinceDays = input.sinceDays ?? 30;
+  const sinceIso = new Date(
+    Date.now() - sinceDays * 24 * 60 * 60 * 1_000
+  ).toISOString();
+  const logs = await loadLocalAgentUsage({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso
+  });
+  const calls = input.project
+    ? logs.calls.filter((call) => call.project === input.project)
+    : logs.calls;
+  return loadContextHealth(calls, {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+    codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+    projectDir: rootPath,
+    sinceIso,
+    windowDays: sinceDays
   });
 }
 

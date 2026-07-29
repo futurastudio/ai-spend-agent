@@ -9,6 +9,24 @@ git.
 
 MCP provider and local-log hardening.
 
+- Added one canonical, hook-aware Context Health contract shared by
+  `aibill context`, the `get_context_health` MCP tool, `get_usage_glance`, and
+  the native Glance card. The decision is based on same-agent session token
+  history, observed activation metadata, and observable invocations—not API
+  value or subscription price.
+- Context Health inventories installed Claude Code and enabled Codex skills,
+  MCP servers, subagents, commands, and hook metadata. It never executes hooks
+  or guesses their payload size, and it keeps invocation-unobservable items out
+  of “never invoked” findings.
+- Added a thin, explicit-only aibill Codex plugin with `check`, `explain`, and
+  `help` skills. It delegates calculations to the version-pinned MCP server,
+  adds no hooks, and returns the same canonical data as CLI and Glance.
+- Added deterministic Context Health fixtures, adapter-drift checks, and a
+  public-boundary CI check that blocks internal roadmap, audit, research, GTM,
+  environment, and developer-home files from the public repository.
+- Added a Context Health methodology/SEO page and documentation for all three
+  delivery surfaces, their shared provenance, known limitations, and the
+  difference between local computation and an MCP client's transport boundary.
 - `sync_local_agent_spend` now produces real, explicitly estimated reports
   from local Claude Code and Codex metadata.
 - `sync_provider_spend` exposes the existing read-only OpenAI, Anthropic,

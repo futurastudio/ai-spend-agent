@@ -29,6 +29,10 @@ const features = [
     title: "Runs entirely locally",
     body: "One npx command reads your usage and renders the report in your terminal. No account, no upload, no telemetry. Open-source — read every line before you run it.",
   },
+  {
+    title: "Hook-aware Context Health",
+    body: "Separates discoverable, invoked, MCP-schema-loaded, and hook-injected context, then gives one evidence-backed session action. Hook commands are never run and unknown payloads stay unmeasured.",
+  },
 ];
 
 const steps = [
@@ -153,7 +157,8 @@ export default function Home() {
             panel. Session value is estimated at API rates—not treated as
             an added subscription charge—plan limits appear only when the agent
             reports each window, and Main focus describes the dominant local
-            workstream rather than its spend. The numbers above are
+            workstream rather than its spend. Its Context Health row is the
+            same decision returned by the terminal and MCP. The numbers above are
             illustrative; a signed public download is not available yet.
           </p>
         </div>
@@ -278,51 +283,53 @@ export default function Home() {
             </span>
             <div>
               <h2 className="text-lg font-semibold text-ink">
-                Your data never leaves your machine
+                Local by default, explicit when shared
               </h2>
               <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted">
                 The CLI reads usage locally and renders the report in your
                 terminal. No telemetry, no cloud, no keys shipped off-box.
-                It&apos;s open-source — read every line before you run it.
+                Glance stays local too. If you explicitly ask an MCP-backed AI
+                client, only the structured tool result is returned to that
+                client and follows its data policy.
               </p>
             </div>
           </div>
         </Reveal>
       </section>
 
-      {/* Roadmap: weekly artifacts */}
+      {/* Delivery surfaces */}
       <section id="roadmap" className="relative z-10 mx-auto max-w-content px-6 py-16">
         <Reveal>
           <div className="text-center">
             <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
-              What&apos;s next
+              Three surfaces, one answer
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-balance text-base leading-relaxed text-muted">
-              A new artifact every week — free in the CLI, built from the logs
-              already on your machine. Nothing leaves your laptop.
+              Choose the terminal, an on-demand AI skill, or the macOS hover.
+              Every surface consumes the same evidence and Context Health contract.
             </p>
           </div>
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
               {
-                week: "week 1",
-                cmd: "aibill limits",
-                copy: "Know when you'll hit your rate cap — before it hits you."
+                week: "available",
+                cmd: "npx aibill context",
+                copy: "Hook-aware Context Health in human-readable or canonical JSON form."
               },
               {
-                week: "week 2",
-                cmd: "aibill wrapped",
+                week: "available",
+                cmd: "$aibill-check",
+                copy: "An explicit-only plugin skill backed by the local aibill MCP."
+              },
+              {
+                week: "prototype",
+                cmd: "aibill Glance",
+                copy: "A hidden-until-hover macOS view of runway, focus, and one action."
+              },
+              {
+                week: "next",
+                cmd: "npx aibill wrapped",
                 copy: "Your month with AI, as a card worth sharing."
-              },
-              {
-                week: "week 3",
-                cmd: "aibill context",
-                copy: "A measured context-health grade, with named culprits."
-              },
-              {
-                week: "week 4",
-                cmd: "aibill secrets",
-                copy: "Find keys leaked into your transcripts — locally."
               }
             ].map((item) => (
               <div key={item.cmd} className="glass rounded-2xl px-5 py-6">
@@ -330,7 +337,7 @@ export default function Home() {
                   {item.week}
                 </div>
                 <div className="mt-2 font-mono text-sm font-semibold text-ink">
-                  npx {item.cmd}
+                  {item.cmd}
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-muted">{item.copy}</p>
               </div>
@@ -371,6 +378,12 @@ export default function Home() {
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
           <span>aibill — free, local-first, open-source. Also on npm as ai-spend-agent.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <a
+              href="/blog/ai-coding-context-health"
+              className="transition-colors hover:text-ink"
+            >
+              Context health
+            </a>
             <a
               href="/blog/claude-code-cost-usage-credits"
               className="transition-colors hover:text-ink"

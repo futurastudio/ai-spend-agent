@@ -7,6 +7,7 @@ import {
 import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { subscriptionPlans } from "./planMath.js";
+import { buildContextHealth, type ContextHealthResult } from "./contextHealth.js";
 
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -102,6 +103,10 @@ export type GlanceProvenance = {
     source: "local_session_history" | "not_available";
     comparison: "same_agent_session_median";
   };
+  contextHealth: {
+    source: "canonical_context_health_contract";
+    hookPayload: "not_executed_or_inferred";
+  };
   network: {
     uploaded: false;
   };
@@ -127,6 +132,7 @@ export type UsageGlanceSnapshot = {
   limits: GlanceLimit[];
   focus: GlanceFocus | null;
   anomaly: GlanceAnomaly | null;
+  sessionHealth: ContextHealthResult;
   caveats: string[];
 };
 
@@ -140,6 +146,8 @@ export type BuildUsageGlanceOptions = {
   detectedPlans?: DetectedPlan[];
   /** Account-level limit metadata should not be removed by a project filter. */
   limitCalls?: LocalAgentCall[];
+  /** Canonical result shared with CLI/MCP. Falls back to session-only health. */
+  contextHealth?: ContextHealthResult;
 };
 
 type SessionGroup = {
@@ -168,7 +176,13 @@ export function buildUsageGlance(
   calls: LocalAgentCall[],
   options: BuildUsageGlanceOptions = {}
 ): UsageGlanceSnapshot {
-  const now = options.now ?? new Date();
+  const contextGeneratedAt = options.contextHealth
+    ? new Date(options.contextHealth.generatedAt)
+    : undefined;
+  const now = options.now ??
+    (contextGeneratedAt && Number.isFinite(contextGeneratedAt.getTime())
+      ? contextGeneratedAt
+      : new Date());
   const activeWithinMinutes = options.activeWithinMinutes ?? 20;
   const focusWindowDays = options.focusWindowDays ?? 7;
   const sessions = groupSessions(calls);
@@ -188,7 +202,8 @@ export function buildUsageGlance(
   const windowStart = now.getTime() - focusWindowDays * DAY_MS;
   const windowCalls = calls.filter((call) => Date.parse(call.timestamp) >= windowStart);
   const focus = buildMainFocus(groupSessions(windowCalls), focusWindowDays, now);
-  const anomaly = latest ? buildAnomaly(latest, sessions) : null;
+  const sessionHealth = options.contextHealth ?? buildContextHealth({ calls, now });
+  const anomaly = anomalyFromContextHealth(sessionHealth);
   const detectedAgents = options.detectedAgents ?? uniqueAgents(calls);
   const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
   const limitAgents = uniqueAgents(limitCalls.filter((call) => call.rateLimits));
@@ -264,6 +279,10 @@ export function buildUsageGlance(
         source: anomaly ? "local_session_history" : "not_available",
         comparison: "same_agent_session_median"
       },
+      contextHealth: {
+        source: "canonical_context_health_contract",
+        hookPayload: "not_executed_or_inferred"
+      },
       network: {
         uploaded: false
       }
@@ -273,6 +292,7 @@ export function buildUsageGlance(
     limits,
     focus,
     anomaly,
+    sessionHealth,
     caveats
   };
 }
@@ -612,54 +632,18 @@ function mostRelevantFile(
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
 }
 
-function buildAnomaly(
-  current: SessionGroup,
-  sessions: SessionGroup[]
-): GlanceAnomaly | null {
-  const comparisons = sessions.filter((session) => (
-    session.key !== current.key &&
-    session.agent === current.agent
-  ));
-  const spendBaseline = median(
-    comparisons
-      .map((session) => session.apiEquivalentUsd)
-      .filter((value): value is number => typeof value === "number" && value > 0)
-  );
-  if (
-    current.apiEquivalentUsd !== null &&
-    spendBaseline !== null &&
-    spendBaseline > 0
-  ) {
-    const ratio = current.apiEquivalentUsd / spendBaseline;
-    if (ratio >= 1.5) {
-      const roundedRatio = roundRatio(ratio);
-      return {
-        kind: "session_spend",
-        ratioToMedian: roundedRatio,
-        summary: `API-rate session value is ${roundedRatio}× your local ${agentDisplayName(current.agent)} median.`,
-        action: "Start a fresh session before the next task; keep this one only if its context is still essential.",
-        confidence: "derived"
-      };
-    }
+function anomalyFromContextHealth(health: ContextHealthResult): GlanceAnomaly | null {
+  const ratio = health.currentSession?.ratioToMedian;
+  if (health.recommendation !== "start_fresh" || ratio === null || ratio === undefined) {
+    return null;
   }
-
-  const tokenBaseline = median(
-    comparisons.map((session) => session.totalTokens).filter((value) => value > 0)
-  );
-  if (tokenBaseline !== null && tokenBaseline > 0) {
-    const ratio = current.totalTokens / tokenBaseline;
-    if (ratio >= 1.5) {
-      const roundedRatio = roundRatio(ratio);
-      return {
-        kind: "session_tokens",
-        ratioToMedian: roundedRatio,
-        summary: `Current session token volume is ${roundedRatio}× your local ${agentDisplayName(current.agent)} median.`,
-        action: "Start a fresh session before the next task to avoid carrying unnecessary context.",
-        confidence: "derived"
-      };
-    }
-  }
-  return null;
+  return {
+    kind: "session_tokens",
+    ratioToMedian: ratio,
+    summary: health.headline,
+    action: health.action,
+    confidence: "derived"
+  };
 }
 
 function callCost(call: LocalAgentCall): number | undefined {
@@ -668,19 +652,6 @@ function callCost(call: LocalAgentCall): number | undefined {
 
 function uniqueAgents(calls: LocalAgentCall[]): Array<LocalAgentCall["agent"]> {
   return [...new Set(calls.map((call) => call.agent))].sort();
-}
-
-function agentDisplayName(agent: LocalAgentCall["agent"]): string {
-  return agent === "claude-code" ? "Claude Code" : "Codex";
-}
-
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = values.slice().sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1]! + sorted[middle]!) / 2
-    : sorted[middle]!;
 }
 
 function sum(calls: LocalAgentCall[], pick: (call: LocalAgentCall) => number): number {
@@ -692,9 +663,5 @@ function roundUsd(value: number | null): number | null {
 }
 
 function roundPercent(value: number): number {
-  return Math.round(value * 10) / 10;
-}
-
-function roundRatio(value: number): number {
   return Math.round(value * 10) / 10;
 }

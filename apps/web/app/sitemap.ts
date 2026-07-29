@@ -1,13 +1,18 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "../lib/site";
 
-const LAST_MODIFIED = new Date("2026-07-28");
+const LAST_MODIFIED = new Date("2026-07-29");
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: `${SITE_URL}/`, lastModified: LAST_MODIFIED, priority: 1 },
     {
       url: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
+      lastModified: LAST_MODIFIED,
+      priority: 0.8,
+    },
+    {
+      url: `${SITE_URL}/blog/ai-coding-context-health`,
       lastModified: LAST_MODIFIED,
       priority: 0.8,
     },
