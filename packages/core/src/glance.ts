@@ -4,7 +4,7 @@ import {
   type LocalAgentLogResult,
   type LocalAgentRateLimitWindow
 } from "./localAgentLogs.js";
-import { estimateTokenCostUsd } from "./modelPricing.js";
+import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { subscriptionPlans } from "./planMath.js";
 
@@ -71,6 +71,42 @@ export type GlanceFocus = {
   confidence: "high" | "medium" | "low";
 };
 
+export type GlanceProvenance = {
+  session: {
+    source: "local_transcript_metadata";
+    agents: Array<LocalAgentCall["agent"]>;
+    filesParsed: number;
+  };
+  sessionValue: {
+    source: "local_calculation";
+    basis: "transcript_tokens_at_public_api_rates";
+    confidence: GlanceSession["costConfidence"];
+    pricingAsOf: string;
+  };
+  plan: {
+    source: "local_agent_account_metadata" | "user_declared" | "not_available";
+    agent?: LocalAgentCall["agent"];
+  };
+  limits: {
+    source: "transcript_reported" | "not_available";
+    agents: Array<LocalAgentCall["agent"]>;
+    windows: Array<LocalAgentRateLimitWindow["kind"]>;
+    projection: "local_pace_estimate";
+  };
+  focus: {
+    source: "local_prompt_and_tool_activity" | "not_available";
+    agents: Array<LocalAgentCall["agent"]>;
+    rawPromptTextReturned: false;
+  };
+  anomaly: {
+    source: "local_session_history" | "not_available";
+    comparison: "same_agent_session_median";
+  };
+  network: {
+    uploaded: false;
+  };
+};
+
 export type UsageGlanceSnapshot = {
   dataMode: "local_transcripts";
   generatedAt: string;
@@ -85,6 +121,7 @@ export type UsageGlanceSnapshot = {
     }>;
     providerConnectionRequired: ["cursor", "github-copilot"];
   };
+  provenance: GlanceProvenance;
   currentSession: GlanceSession | null;
   plan: GlancePlanContext | null;
   limits: GlanceLimit[];
@@ -154,6 +191,7 @@ export function buildUsageGlance(
   const anomaly = latest ? buildAnomaly(latest, sessions) : null;
   const detectedAgents = options.detectedAgents ?? uniqueAgents(calls);
   const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
+  const limitAgents = uniqueAgents(limitCalls.filter((call) => call.rateLimits));
   const reportedWindows = (agent: LocalAgentCall["agent"]) => (
     [...new Set(
       limits
@@ -190,6 +228,45 @@ export function buildUsageGlance(
         }
       ],
       providerConnectionRequired: ["cursor", "github-copilot"]
+    },
+    provenance: {
+      session: {
+        source: "local_transcript_metadata",
+        agents: currentSession ? [currentSession.agent] : [],
+        filesParsed: options.filesParsed ?? 0
+      },
+      sessionValue: {
+        source: "local_calculation",
+        basis: "transcript_tokens_at_public_api_rates",
+        confidence: currentSession?.costConfidence ?? "missing",
+        pricingAsOf: PRICING_TABLE_AS_OF
+      },
+      plan: {
+        source: plan
+          ? plan.source === "user_declared"
+            ? "user_declared"
+            : "local_agent_account_metadata"
+          : "not_available",
+        ...(plan ? { agent: plan.agent } : {})
+      },
+      limits: {
+        source: limits.length > 0 ? "transcript_reported" : "not_available",
+        agents: limitAgents,
+        windows: limits.map((limit) => limit.kind),
+        projection: "local_pace_estimate"
+      },
+      focus: {
+        source: focus ? "local_prompt_and_tool_activity" : "not_available",
+        agents: focus?.agents ?? [],
+        rawPromptTextReturned: false
+      },
+      anomaly: {
+        source: anomaly ? "local_session_history" : "not_available",
+        comparison: "same_agent_session_median"
+      },
+      network: {
+        uploaded: false
+      }
     },
     currentSession,
     plan,
@@ -559,7 +636,7 @@ function buildAnomaly(
       return {
         kind: "session_spend",
         ratioToMedian: roundedRatio,
-        summary: `Current session spend is ${roundedRatio}× the ${current.agent} median.`,
+        summary: `API-rate session value is ${roundedRatio}× your local ${agentDisplayName(current.agent)} median.`,
         action: "Start a fresh session before the next task; keep this one only if its context is still essential.",
         confidence: "derived"
       };
@@ -576,7 +653,7 @@ function buildAnomaly(
       return {
         kind: "session_tokens",
         ratioToMedian: roundedRatio,
-        summary: `Current session token throughput is ${roundedRatio}× the ${current.agent} median.`,
+        summary: `Current session token volume is ${roundedRatio}× your local ${agentDisplayName(current.agent)} median.`,
         action: "Start a fresh session before the next task to avoid carrying unnecessary context.",
         confidence: "derived"
       };
@@ -591,6 +668,10 @@ function callCost(call: LocalAgentCall): number | undefined {
 
 function uniqueAgents(calls: LocalAgentCall[]): Array<LocalAgentCall["agent"]> {
   return [...new Set(calls.map((call) => call.agent))].sort();
+}
+
+function agentDisplayName(agent: LocalAgentCall["agent"]): string {
+  return agent === "claude-code" ? "Claude Code" : "Codex";
 }
 
 function median(values: number[]): number | null {

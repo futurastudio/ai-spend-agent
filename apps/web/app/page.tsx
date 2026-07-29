@@ -220,8 +220,10 @@ export default function Home() {
           <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-muted">
             Every number is labeled. Figures from your local Claude Code and
             Codex logs are <span className="text-ink">estimated</span> at
-            published API rates — not a bill. Connect a provider with an
-            admin/owner key and those estimates become{" "}
+            published API rates — not a bill. Glance separately labels local
+            transcript facts, local calculations, locally detected plans, and
+            coding-agent-reported limits. Connect a provider with an
+            admin/owner key and aggregate spend can be{" "}
             <span className="text-green">verified</span> against your real
             invoices.
           </p>

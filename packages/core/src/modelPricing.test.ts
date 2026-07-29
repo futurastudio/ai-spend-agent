@@ -25,8 +25,16 @@ describe("model pricing coverage", () => {
     }
   });
 
-  it("keeps codex fallback below the specific families (rule order)", () => {
-    // "codex" substring must not shadow specific model matches.
-    expect(estimateTokenCostUsd("gpt-5.5-codex", usage)!).toBeCloseTo(2.25, 2);
+  it("uses current published prices for recent GPT families before fallbacks", () => {
+    expect(estimateTokenCostUsd("gpt-5.6-sol", usage)!).toBeCloseTo(8, 2);
+    expect(estimateTokenCostUsd("gpt-5.6-terra", usage)!).toBeCloseTo(4, 2);
+    expect(estimateTokenCostUsd("gpt-5.6-luna", usage)!).toBeCloseTo(1.6, 2);
+    expect(estimateTokenCostUsd("gpt-5.5-codex", usage)!).toBeCloseTo(8, 2);
+    expect(estimateTokenCostUsd("gpt-5.4", usage)!).toBeCloseTo(4, 2);
+    expect(estimateTokenCostUsd("gpt-5.4-mini", usage)!).toBeCloseTo(1.2, 2);
+    expect(estimateTokenCostUsd("gpt-5.4-nano", usage)!).toBeCloseTo(0.325, 3);
+    expect(estimateTokenCostUsd("gpt-5.3-codex", usage)!).toBeCloseTo(3.15, 2);
+    expect(estimateTokenCostUsd("gpt-5.2-codex", usage)!).toBeCloseTo(3.15, 2);
+    expect(estimateTokenCostUsd("gpt-5.1-codex", usage)!).toBeCloseTo(2.25, 2);
   });
 });

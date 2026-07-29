@@ -383,7 +383,7 @@ body {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    padding: 9px 2px 13px;
+    padding: 5px 2px 6px;
   }
 
   .glance-kicker {
@@ -396,6 +396,7 @@ body {
     margin-top: 3px;
     font-size: 32px;
     font-weight: 660;
+    line-height: 1;
     letter-spacing: -0.055em;
     font-variant-numeric: tabular-nums;
   }
@@ -624,6 +625,31 @@ body {
     margin-top: 2px;
     color: rgba(255, 255, 255, 0.43);
     font-size: 9px;
+  }
+
+  .glance-source-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 9px;
+    padding: 0 3px;
+    color: rgba(255, 255, 255, 0.38);
+    font-size: 9px;
+    font-weight: 540;
+  }
+
+  .glance-source-row p {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .glance-source-row strong {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.34);
+    font-weight: 560;
   }
 
   .glance-desktop-copy {

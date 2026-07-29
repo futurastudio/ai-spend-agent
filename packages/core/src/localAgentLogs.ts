@@ -491,10 +491,10 @@ type ActivityInput = {
 };
 
 const FOCUS_STOP_WORDS = new Set([
-  "about", "after", "again", "also", "and", "are", "been", "being", "but",
+  "about", "after", "again", "also", "and", "are", "at", "been", "being", "but",
   "can", "check", "could", "did", "does", "doing", "dont", "every", "from",
-  "have", "here", "how", "into", "its", "just", "like", "make", "more",
-  "need", "not", "now", "only", "other", "our", "please", "really", "should",
+  "for", "have", "here", "how", "into", "its", "just", "like", "make", "more",
+  "need", "not", "now", "on", "only", "other", "our", "please", "really", "should",
   "something", "than", "that", "the", "their", "them", "then", "there",
   "these", "they", "thing", "think", "this", "through", "too", "use", "user",
   "users", "want", "was", "way", "what", "when", "where", "which", "while",
@@ -569,7 +569,7 @@ function focusTopic(prompts: string[]): string | undefined {
   const pairScores = new Map<string, number>();
   recent.forEach((prompt, index) => {
     const weight = 1 + index / Math.max(1, recent.length - 1);
-    const tokens = promptTokens(prompt).filter((token) => !FOCUS_STOP_WORDS.has(token));
+    const tokens = topicTokens(prompt).filter((token) => !FOCUS_STOP_WORDS.has(token));
     const unique = [...new Set(tokens)];
     for (const token of unique) {
       tokenScores.set(token, (tokenScores.get(token) ?? 0) + weight);
@@ -599,6 +599,9 @@ function focusTopic(prompts: string[]): string | undefined {
   const tokens = [...candidateTokens].slice(0, 3);
   if (tokens.includes("glance") && tokens.includes("hover")) {
     return tokens.includes("ui") ? "Glance hover UI" : "Glance hover";
+  }
+  if (tokens.includes("hover")) {
+    return tokens.includes("ui") ? "hover UI" : "hover interaction";
   }
   if (tokens.includes("landing") && tokens.includes("page")) return "landing page";
   if (tokens.includes("mcp")) return tokens.includes("feature") ? "MCP feature" : "MCP";
@@ -682,7 +685,18 @@ function displayToken(token: string): string {
 function promptTokens(value: string): string[] {
   return (value.toLowerCase().match(/[a-z][a-z0-9+#.-]*/g) ?? [])
     .map((token) => token.replace(/^[.-]+|[.-]+$/g, ""))
-    .filter((token) => token.length >= 2 && !/^\d+$/.test(token));
+    .filter((token) => token.length >= 2 && token !== "cz" && !/^\d+$/.test(token));
+}
+
+function topicTokens(value: string): string[] {
+  // Absolute paths often appear in attached-image metadata and tool-oriented
+  // prompts. They are machine context, not the user's work topic, and can
+  // otherwise outrank meaningful words when only one recent prompt exists.
+  const withoutAbsolutePaths = value.replace(
+    /(^|[\s("'=:])(?:file:\/\/)?\/[^\s)"']+/g,
+    "$1"
+  );
+  return promptTokens(withoutAbsolutePaths);
 }
 
 function isHumanPrompt(value: string): boolean {

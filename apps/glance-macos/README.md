@@ -52,6 +52,18 @@ The Main focus row summarizes what occupied the user across observed prompts
 and tool calls; its percentage is activity share, not elapsed time or spend.
 Raw prompts never enter the Glance JSON contract.
 
+The visible card keeps provenance beside the metric: session value says local
+tokens × API list rates; limit rows distinguish coding-agent-reported reset
+data from the local exhaustion estimate; Main focus says local activity; and
+the footer names the detected local agents, parsed-file count, and upload
+status. Hovering a section provides a longer source explanation without
+adding another crowded row.
+
+The JSON snapshot also includes a `provenance` object for every renderer. It
+identifies the user-specific agent sources, the published-price table date,
+reported limit windows, local focus/anomaly derivations, and
+`network.uploaded: false`.
+
 ## Customize or fork it
 
 Glance is MIT-licensed. You can use the native panel as-is, restyle it, or

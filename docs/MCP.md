@@ -165,6 +165,19 @@ Copilot require their provider connections rather than local chat stores.
 share of observed prompt/tool activity in the focus window. Raw prompts are
 reduced locally to a short summary and are not returned in the snapshot.
 
+The response includes a `provenance` object that makes these distinctions
+machine-readable for every custom client:
+
+- session/model/project: local transcript metadata;
+- session value: local token calculation at published API list rates, with
+  the bundled price-table date;
+- plan: locally detected account metadata, user-declared override, or
+  unavailable;
+- limits: transcript-reported windows, with exhaustion labeled as a separate
+  local pace estimate;
+- focus and anomaly: local activity/history derivations; and
+- network: `uploaded: false`.
+
 ### `sync_provider_spend`
 
 Pulls provider billing/usage with an inherited reference-only credential.

@@ -130,7 +130,9 @@ Anthropic, OpenAI, Google (Gemini), DeepSeek, Moonshot (Kimi), and xAI (Grok)
 models. Open-weight models (Llama, Qwen, Mistral, GLM) have no canonical
 price — hosting rates vary several-fold — so those records are honestly
 labeled `missing` rather than guessed. New model out? One pricing rule +
-a PR: `packages/core/src/modelPricing.ts`.
+a PR: `packages/core/src/modelPricing.ts`. The bundled table exposes its
+`pricingAsOf` date in the Glance provenance contract; GPT-5.2 through GPT-5.6
+rates were checked against the official OpenAI model pages on 2026-07-28.
 
 ## Connect verified billing
 
@@ -198,6 +200,23 @@ evidence supports it. The current app is a source-built prototype;
 the public install will be a Developer ID-signed and Apple-notarized Mac
 download from the website and GitHub Releases. See
 [`apps/glance-macos/README.md`](apps/glance-macos/README.md) to test it locally.
+
+Each Glance field carries its own provenance instead of inheriting one vague
+“local” label:
+
+| Glance field | User-specific source | What Glance does |
+| --- | --- | --- |
+| Session/model/project | Local Claude Code transcript or Codex rollout metadata | Reports the latest observed session |
+| API-rate value | Local transcript token counts + published provider list prices | Calculates an estimate locally; never calls it a bill |
+| Subscription context | Whitelisted plan claims in the agent's local account metadata, or an explicit `--plan` override | Labels whether the plan was detected or user-declared |
+| Five-hour/weekly headroom | Rate-limit metadata embedded by the coding agent in its local transcript | Reports only windows actually present |
+| Exhaustion time | Reported headroom + reset time | Calculates a separate local pace estimate |
+| Main focus | Local prompt/tool activity | Returns a short activity summary, never raw prompt text |
+| Anomaly | This user's prior local sessions for the same agent | Compares with the local session median |
+
+The machine-readable snapshot includes the same mapping under `provenance`,
+including the price-table date and `uploaded: false`, so custom UIs do not
+have to infer trust from display copy.
 
 The Glance source is MIT-licensed and intentionally editable. Fork it to
 change the panel size, placement, visual treatment, refresh interval, or which

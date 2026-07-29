@@ -44,6 +44,14 @@ MCP provider and local-log hardening.
   outside the rounded card corners.
 - Balanced the native card's top and bottom insets so session text no longer
   crowds the upper rounded edge.
+- Added per-field Glance provenance to the JSON contract and visible card:
+  local transcript facts, local API-rate calculations, locally detected plan
+  context, coding-agent-reported limits, local activity/history derivations,
+  the bundled pricing date, and an explicit no-upload flag.
+- Updated GPT-5.2 through GPT-5.6 API-rate rules to current published prices;
+  GPT-5.6 Sol no longer falls through to the older generic GPT-5 rate.
+- Filtered temporary screenshot-path noise from Main focus summaries so local
+  folder fragments do not displace the actual hover/UI topic.
 - Subscription users now see their locally detected plan beside session value
   at API rates, making clear that the estimate is not an added charge. Limit
   availability is reported per window, so a missing five-hour gauge explains

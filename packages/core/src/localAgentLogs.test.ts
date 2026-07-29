@@ -281,6 +281,48 @@ describe("parseCodexRollout", () => {
     });
   });
 
+  it("keeps temporary screenshot paths out of the user-facing focus summary", () => {
+    const rollout = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-hover",
+          cwd: "/Users/jose/agent-finops",
+          timestamp: "2026-07-28T16:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: "Please refine the hover using /var/folders/cz_5fv/codex-clipboard.png."
+          }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-07-28T16:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 5_000,
+              output_tokens: 1_000
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(rollout)[0]?.activity?.summary).toBe(
+      "Refining hover interaction"
+    );
+  });
+
   it("returns nothing for rollouts without token counts", () => {
     expect(parseCodexRollout(JSON.stringify({ type: "session_meta", payload: {} }))).toHaveLength(0);
   });

@@ -1,5 +1,5 @@
 /**
- * Published per-token API prices (mid-2026) used to estimate the
+ * Published per-token API prices used to estimate the
  * API-equivalent dollar value of locally observed usage (e.g. Claude Code /
  * Codex session logs, where the provider never reports a price).
  *
@@ -7,6 +7,8 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
+export const PRICING_TABLE_AS_OF = "2026-07-28";
+
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
   inputTokens: number;
@@ -36,9 +38,18 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
-  // OpenAI (codex CLI models first — more specific)
-  { match: /^gpt-5(\.\d+)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
-  { match: /^gpt-5(\.\d+)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
+  // OpenAI (newer and more specific families must precede the GPT-5 fallback)
+  { match: /^gpt-5\.6(?:-sol)?$/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
+  { match: /^gpt-5\.6-terra/i, inputPerM: 2.5, outputPerM: 15, cacheReadPerM: 0.25 },
+  { match: /^gpt-5\.6-luna/i, inputPerM: 1, outputPerM: 6, cacheReadPerM: 0.1 },
+  { match: /^gpt-5\.5(?:-codex)?/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
+  { match: /^gpt-5\.4-mini/i, inputPerM: 0.75, outputPerM: 4.5, cacheReadPerM: 0.075 },
+  { match: /^gpt-5\.4-nano/i, inputPerM: 0.2, outputPerM: 1.25, cacheReadPerM: 0.02 },
+  { match: /^gpt-5\.4/i, inputPerM: 2.5, outputPerM: 15, cacheReadPerM: 0.25 },
+  { match: /^gpt-5\.3-codex/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
+  { match: /^gpt-5\.2(?:-codex)?/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
+  { match: /^gpt-5(?:\.1)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+  { match: /^gpt-5(?:\.1)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
   { match: /^gpt-5/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4 },
   { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6 },

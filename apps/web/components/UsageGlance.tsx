@@ -2,16 +2,16 @@ const limits = [
   {
     label: "5-hour limit",
     value: "29% left",
-    projection: "Exhausts ~1h 05m",
-    reset: "Resets in 2h 18m",
+    projection: "Local estimate · Exhausts ~1h",
+    reset: "Codex reported · Resets in 2h",
     width: "29%",
     tone: "attention",
   },
   {
     label: "Weekly limit",
     value: "57% left",
-    projection: "On pace to stay below cap",
-    reset: "Resets Monday",
+    projection: "Local estimate · Below cap",
+    reset: "Codex reported · Resets Monday",
     width: "57%",
     tone: "healthy",
   },
@@ -47,14 +47,14 @@ export function UsageGlance() {
           <div className="glance-detail">
             <div className="glance-headline">
               <div>
-                <p className="glance-kicker">Current session · value at API rates</p>
+                <p className="glance-kicker">Current session · local tokens × API list rates</p>
                 <div className="glance-current-line">
                   <p className="glance-total">$4.18</p>
                   <span>Codex · GPT-5.6</span>
                 </div>
                 <p className="glance-current-project">agent-finops</p>
                 <p className="glance-current-plan">
-                  ChatGPT Pro · $200/mo subscription · value, not added spend
+                  ChatGPT Pro · $200/mo · detected locally · API value ≠ added spend
                 </p>
               </div>
               <span className="glance-status">
@@ -89,7 +89,7 @@ export function UsageGlance() {
                 F
               </span>
               <div>
-                <p>Main focus · 7d</p>
+                <p>Main focus · 7d · local activity</p>
                 <strong>Refining Glance hover UI</strong>
                 <span>Task · agent-finops · GlanceView.swift</span>
               </div>
@@ -102,9 +102,15 @@ export function UsageGlance() {
             <div className="glance-insight">
               <span className="glance-insight-dot" aria-hidden="true" />
               <div>
-                <strong>Session spend is 1.8× your Codex median</strong>
+                <strong>API-rate session value is 1.8× your local Codex median</strong>
                 <span>Start fresh before the next task.</span>
               </div>
+            </div>
+
+            <div className="glance-source-row">
+              <span aria-hidden="true">◇</span>
+              <p>Local: Claude Code + Codex · 60 files · nothing uploaded</p>
+              <strong>30s refresh</strong>
             </div>
           </div>
         </div>

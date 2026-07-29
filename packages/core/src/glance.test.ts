@@ -123,6 +123,41 @@ describe("buildUsageGlance", () => {
       costConfidence: "estimated"
     });
     expect(snapshot.currentSession?.apiEquivalentUsd).toBeGreaterThan(0);
+    expect(snapshot.provenance).toEqual({
+      session: {
+        source: "local_transcript_metadata",
+        agents: ["claude-code"],
+        filesParsed: 4
+      },
+      sessionValue: {
+        source: "local_calculation",
+        basis: "transcript_tokens_at_public_api_rates",
+        confidence: "estimated",
+        pricingAsOf: "2026-07-28"
+      },
+      plan: {
+        source: "local_agent_account_metadata",
+        agent: "claude-code"
+      },
+      limits: {
+        source: "transcript_reported",
+        agents: ["codex"],
+        windows: ["five-hour", "weekly"],
+        projection: "local_pace_estimate"
+      },
+      focus: {
+        source: "local_prompt_and_tool_activity",
+        agents: ["claude-code", "codex"],
+        rawPromptTextReturned: false
+      },
+      anomaly: {
+        source: "local_session_history",
+        comparison: "same_agent_session_median"
+      },
+      network: {
+        uploaded: false
+      }
+    });
     expect(snapshot.plan).toEqual({
       agent: "claude-code",
       planId: "claude-max-5x",
@@ -157,6 +192,7 @@ describe("buildUsageGlance", () => {
     expect(snapshot.focus!.activitySharePercent).toBeGreaterThan(70);
     expect(snapshot.anomaly).toMatchObject({
       kind: "session_spend",
+      summary: expect.stringContaining("API-rate session value"),
       confidence: "derived"
     });
     expect(snapshot.anomaly!.ratioToMedian).toBeGreaterThan(1.5);
@@ -194,6 +230,24 @@ describe("buildUsageGlance", () => {
       confidence: "low"
     }));
     expect(snapshot.anomaly).toBeNull();
+    expect(snapshot.provenance).toMatchObject({
+      sessionValue: {
+        confidence: "missing"
+      },
+      plan: {
+        source: "not_available"
+      },
+      limits: {
+        source: "not_available",
+        windows: []
+      },
+      anomaly: {
+        source: "not_available"
+      },
+      network: {
+        uploaded: false
+      }
+    });
     expect(snapshot.coverage.rateLimitMetadata).toEqual([
       {
         agent: "claude-code",

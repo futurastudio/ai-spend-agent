@@ -73,6 +73,7 @@ struct GlanceView: View {
         Image(systemName: "lock.shield")
         Text(footerText)
           .lineLimit(1)
+          .minimumScaleFactor(0.82)
         Spacer()
         if store.isRefreshing {
           ProgressView()
@@ -84,6 +85,7 @@ struct GlanceView: View {
       .font(.system(size: 9, weight: .medium, design: .rounded))
       .foregroundStyle(.white.opacity(0.36))
       .padding(.horizontal, 3)
+      .help(footerSourceHelp)
     }
     .padding(.horizontal, 18)
     .padding(.top, 18)
@@ -93,7 +95,7 @@ struct GlanceView: View {
   private var sessionHeader: some View {
     HStack(alignment: .top) {
       VStack(alignment: .leading, spacing: 3) {
-        Text(session?.status == "active" ? "CURRENT SESSION · VALUE AT API RATES" : "LATEST SESSION · VALUE AT API RATES")
+        Text(session?.status == "active" ? "CURRENT SESSION · LOCAL TOKENS × API LIST RATES" : "LATEST SESSION · LOCAL TOKENS × API LIST RATES")
           .font(.system(size: 9, weight: .semibold, design: .rounded))
           .foregroundStyle(.white.opacity(0.48))
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -133,6 +135,7 @@ struct GlanceView: View {
     }
     .frame(height: 88)
     .padding(.horizontal, 2)
+    .help(sessionSourceHelp)
   }
 
   private func limitCard(
@@ -162,11 +165,11 @@ struct GlanceView: View {
       }
       .frame(height: 4)
 
-      Text(limit.map(GlanceFormatting.exhaustionLabel) ?? missing.primary)
+      Text(limit.map(limitProjectionLabel) ?? missing.primary)
         .font(.system(size: 9, weight: .semibold, design: .rounded))
         .foregroundStyle(.white.opacity(0.62))
         .lineLimit(1)
-      Text(limit.map { GlanceFormatting.resetLabel($0.resetsAt) } ?? missing.secondary)
+      Text(limit.map(limitReportedLabel) ?? missing.secondary)
         .font(.system(size: 9, weight: .medium, design: .rounded))
         .foregroundStyle(.white.opacity(0.34))
         .lineLimit(1)
@@ -178,6 +181,7 @@ struct GlanceView: View {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
         .stroke(Color.white.opacity(0.075), lineWidth: 1)
     }
+    .help(limitSourceHelp(kind: kind, limit: limit))
   }
 
   private var focusRow: some View {
@@ -189,7 +193,7 @@ struct GlanceView: View {
         .background(Color.cyan.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
 
       VStack(alignment: .leading, spacing: 2) {
-        Text("MAIN FOCUS · \(store.snapshot?.focus?.windowDays ?? 7)D")
+        Text("MAIN FOCUS · \(store.snapshot?.focus?.windowDays ?? 7)D · LOCAL ACTIVITY")
           .font(.system(size: 8, weight: .semibold, design: .rounded))
           .foregroundStyle(.white.opacity(0.36))
         Text(store.snapshot?.focus?.summary ?? "Waiting for local agent activity")
@@ -219,6 +223,7 @@ struct GlanceView: View {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(Color.white.opacity(0.07), lineWidth: 1)
     }
+    .help(focusSourceHelp)
   }
 
   private var anomalyRow: some View {
@@ -248,6 +253,7 @@ struct GlanceView: View {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(Color.orange.opacity(store.snapshot?.anomaly == nil ? 0.07 : 0.14), lineWidth: 1)
     }
+    .help(anomalySourceHelp)
   }
 
   private func limitColor(_ limit: UsageGlanceSnapshot.Limit?) -> Color {
@@ -272,18 +278,26 @@ struct GlanceView: View {
 
   private var planSummary: String {
     guard let plan = store.snapshot?.plan else {
-      return "Billing mode not detected · API value is not a verified charge"
+      return "Plan not detected · API value is not a verified charge"
     }
     if plan.billing == "subscription" {
       if let monthlyUsd = plan.monthlyUsd {
-        return "\(plan.planLabel) · \(GlanceFormatting.dollars(monthlyUsd))/mo subscription · value, not added spend"
+        return "\(plan.planLabel) · \(GlanceFormatting.dollars(monthlyUsd))/mo · detected locally · API value ≠ added spend"
       }
-      return "\(plan.planLabel) · subscription · plan price not mapped"
+      return "\(plan.planLabel) · subscription detected locally · API value ≠ added spend"
     }
     if plan.billing == "api_key" {
-      return "Pay per token · estimated at public API rates"
+      return "API-key mode detected locally · estimated at public API rates"
     }
-    return "\(plan.planLabel) · billing mode unverified"
+    return "\(plan.planLabel) · local billing signal · unverified"
+  }
+
+  private func limitProjectionLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
+    "Local estimate · \(GlanceFormatting.exhaustionLabel(limit))"
+  }
+
+  private func limitReportedLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
+    "\(GlanceFormatting.agentName(limit.agent)) reported · \(GlanceFormatting.resetLabel(limit.resetsAt))"
   }
 
   private func missingLimitMessage(_ kind: String) -> (primary: String, secondary: String) {
@@ -309,7 +323,36 @@ struct GlanceView: View {
     let agents = store.snapshot?.coverage.detectedAgents
       .map(GlanceFormatting.agentName)
       .joined(separator: " + ") ?? "Local transcripts"
-    return "\(agents) · \(files) files · nothing uploaded"
+    return "Local: \(agents) · \(files) files · nothing uploaded"
+  }
+
+  private var sessionSourceHelp: String {
+    let agent = session.map { GlanceFormatting.agentName($0.agent) } ?? "coding-agent"
+    let date = store.snapshot?.provenance?.sessionValue.pricingAsOf ?? "the bundled rate-table date"
+    return "Token counts, model, project, and timing come from this Mac's \(agent) transcript. The dollar value is calculated locally using published API list rates checked \(date); it is not a provider bill or subscription charge."
+  }
+
+  private func limitSourceHelp(
+    kind: String,
+    limit: UsageGlanceSnapshot.Limit?
+  ) -> String {
+    guard let limit else {
+      return "No \(kind) percentage was present in the local transcript, so Glance does not infer one."
+    }
+    return "\(GlanceFormatting.agentName(limit.agent)) reported the remaining percentage and reset time in its local transcript. The exhaustion time is a separate local pace estimate."
+  }
+
+  private var focusSourceHelp: String {
+    let sessions = store.snapshot?.focus?.sessions ?? 0
+    return "Derived locally from observed prompt and tool activity across \(sessions) session\(sessions == 1 ? "" : "s"). Raw prompt text is not returned by the Glance contract or uploaded."
+  }
+
+  private var anomalySourceHelp: String {
+    "Calculated locally by comparing this session with prior sessions from the same coding agent. It is not a provider alert."
+  }
+
+  private var footerSourceHelp: String {
+    "Glance reads Claude Code and Codex files already stored on this Mac. The refresh runs locally and uploads nothing."
   }
 
 }

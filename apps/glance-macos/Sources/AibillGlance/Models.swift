@@ -4,6 +4,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
   let dataMode: String
   let generatedAt: String
   let coverage: Coverage
+  let provenance: Provenance?
   let currentSession: Session?
   let plan: Plan?
   let limits: [Limit]
@@ -20,6 +21,56 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let agent: String
     let status: String
     let windowsReported: [String]
+  }
+
+  struct Provenance: Decodable, Sendable {
+    let session: SessionSource
+    let sessionValue: SessionValueSource
+    let plan: PlanSource
+    let limits: LimitSource
+    let focus: FocusSource
+    let anomaly: AnomalySource
+    let network: NetworkSource
+
+    struct SessionSource: Decodable, Sendable {
+      let source: String
+      let agents: [String]
+      let filesParsed: Int
+    }
+
+    struct SessionValueSource: Decodable, Sendable {
+      let source: String
+      let basis: String
+      let confidence: String
+      let pricingAsOf: String
+    }
+
+    struct PlanSource: Decodable, Sendable {
+      let source: String
+      let agent: String?
+    }
+
+    struct LimitSource: Decodable, Sendable {
+      let source: String
+      let agents: [String]
+      let windows: [String]
+      let projection: String
+    }
+
+    struct FocusSource: Decodable, Sendable {
+      let source: String
+      let agents: [String]
+      let rawPromptTextReturned: Bool
+    }
+
+    struct AnomalySource: Decodable, Sendable {
+      let source: String
+      let comparison: String
+    }
+
+    struct NetworkSource: Decodable, Sendable {
+      let uploaded: Bool
+    }
   }
 
   struct Session: Decodable, Sendable {
