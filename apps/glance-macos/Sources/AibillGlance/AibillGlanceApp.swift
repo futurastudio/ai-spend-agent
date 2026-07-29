@@ -15,11 +15,12 @@ struct AibillGlanceApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private let store = GlanceStore()
+  private let updater = GlanceUpdaterController()
   private var panelController: GlancePanelController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
-    panelController = GlancePanelController(store: store)
+    panelController = GlancePanelController(store: store, updater: updater)
     panelController?.show()
   }
 }

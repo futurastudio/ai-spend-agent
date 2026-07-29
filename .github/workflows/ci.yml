@@ -51,6 +51,15 @@ jobs:
       - run: npx next build
         working-directory: apps/web
 
+  glance-macos:
+    name: Glance macOS tests + ad-hoc bundle
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path apps/glance-macos
+      - run: ./apps/glance-macos/scripts/build-app.sh
+      - run: codesign --verify --deep --strict --verbose=2 "apps/glance-macos/dist/aibill Glance.app"
+
   audit:
     name: npm audit (high+)
     runs-on: ubuntu-latest

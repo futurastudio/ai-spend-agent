@@ -86,6 +86,125 @@ describe("buildContextHealth", () => {
     });
   });
 
+  it("recommends a fresh session after two explicit compactions", () => {
+    const health = buildContextHealth({
+      now: new Date("2026-07-29T12:00:00.000Z"),
+      calls: [
+        call("old-1", "2026-07-28T10:00:00.000Z", 100),
+        call("current", "2026-07-29T11:55:00.000Z", 110)
+      ],
+      invocations: invocationSummary({
+        sessionSignals: [{
+          agent: "codex",
+          sessionId: "current",
+          compactionEvents: 2,
+          fileReads: [],
+          repeatedFileReads: [],
+          isSubagent: false,
+          readCoverage: "explicit_read_tools_only"
+        }]
+      })
+    });
+
+    expect(health).toMatchObject({
+      status: "start_fresh",
+      recommendation: "start_fresh",
+      headline: "This session has compacted 2 times.",
+      contextChurn: {
+        currentSessionEvidence: "matched",
+        compactionEvents: 2,
+        currentSessionScope: "parent",
+        observedParentSessions: 1,
+        observedSubagentSessions: 0
+      }
+    });
+    expect(health.evidence).toContainEqual(expect.objectContaining({
+      kind: "context_churn",
+      confidence: "observed"
+    }));
+  });
+
+  it("reports repeated explicit reads as basename-only evidence", () => {
+    const health = buildContextHealth({
+      now: new Date("2026-07-29T12:00:00.000Z"),
+      calls: [call("current", "2026-07-29T11:55:00.000Z", 110)],
+      invocations: invocationSummary({
+        sessionSignals: [
+          {
+            agent: "codex",
+            sessionId: "current",
+            compactionEvents: 0,
+            fileReads: [
+              { name: "roadmap.md", count: 3 },
+              { name: "package.json", count: 1 }
+            ],
+            repeatedFileReads: [{ name: "roadmap.md", count: 3 }],
+            isSubagent: false,
+            readCoverage: "explicit_read_tools_only"
+          },
+          {
+            agent: "claude-code",
+            sessionId: "child",
+            compactionEvents: 0,
+            fileReads: [],
+            repeatedFileReads: [],
+            isSubagent: true,
+            parentSessionId: "parent",
+            readCoverage: "explicit_read_tools_only"
+          }
+        ]
+      })
+    });
+
+    expect(health.contextChurn).toEqual({
+      currentSessionEvidence: "matched",
+      compactionEvents: 0,
+      explicitFileReads: 4,
+      repeatedReadEvents: 2,
+      repeatedFiles: [{ file: "roadmap.md", readCount: 3 }],
+      readCoverage: "explicit_read_tools_only",
+      currentSessionScope: "parent",
+      observedParentSessions: 1,
+      observedSubagentSessions: 1
+    });
+    const serialized = JSON.stringify(health);
+    expect(serialized).toContain("roadmap.md");
+    expect(serialized).not.toContain("/private/");
+  });
+
+  it("derives cache-write churn only against prior same-agent sessions with data", () => {
+    const cachedCall = (
+      sessionId: string,
+      timestamp: string,
+      cacheWriteTokens: number
+    ): LocalAgentCall => ({
+      ...call(sessionId, timestamp, 10),
+      usage: {
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWrite5mTokens: cacheWriteTokens
+      }
+    });
+    const health = buildContextHealth({
+      now: new Date("2026-07-29T12:00:00.000Z"),
+      calls: [
+        cachedCall("old-1", "2026-07-28T10:00:00.000Z", 100),
+        cachedCall("old-2", "2026-07-28T11:00:00.000Z", 120),
+        cachedCall("current", "2026-07-29T11:55:00.000Z", 330)
+      ]
+    });
+
+    expect(health.currentSession).toMatchObject({
+      cacheWriteTokens: 330,
+      cacheWriteRatioToMedian: 3
+    });
+    expect(health.evidence).toContainEqual(expect.objectContaining({
+      kind: "context_churn",
+      summary: expect.stringContaining("cache-write tokens")
+    }));
+  });
+
   it("detects hook-injected context but never assigns its payload tokens", () => {
     const items: InventoryItem[] = [
       item({
@@ -197,6 +316,7 @@ describe("buildContextHealth", () => {
       "activation",
       "caveats",
       "confidence",
+      "contextChurn",
       "currentSession",
       "deadContext",
       "evidence",

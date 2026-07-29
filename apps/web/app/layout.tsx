@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "aibill — your AI bill in one view, in 90 seconds";
+const title = "aibill — local AI runway for Claude Code and Codex";
 const description =
-  "npx aibill: a free, local-first CLI that unifies your Claude Code and Codex session logs (estimated at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin key — into one terminal view, with a ranked list of cuts. Also on npm as ai-spend-agent. Your data never leaves your machine.";
+  "Know what Claude Code and Codex are working on, whether reported limits will last, and what to do next. Run npx aibill, query the same local data through MCP, or customize the macOS Glance hover UI. Optional provider billing stays separate from API-rate estimates.";
 
 export const metadata: Metadata = {
   title,
@@ -27,6 +27,10 @@ export const metadata: Metadata = {
     "AI cost tracker",
     "AI bill",
     "Claude Code cost",
+    "Claude Code usage limit",
+    "Codex usage limit",
+    "AI coding runway",
+    "AI coding context health",
     "Claude usage credits",
     "Copilot AI credits",
     "AI usage tracker",

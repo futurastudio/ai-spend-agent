@@ -118,6 +118,11 @@ describe("MCP analyst tools", () => {
         project,
         costConfidence: "estimated"
       },
+      primaryAction: {
+        project,
+        execution: "copy_prompt",
+        requiresUserConfirmation: true
+      },
       limits: [],
       coverage: {
         supportedTranscriptAgents: ["claude-code", "codex"],

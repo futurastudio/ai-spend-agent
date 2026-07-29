@@ -493,11 +493,11 @@ type ActivityInput = {
 const FOCUS_STOP_WORDS = new Set([
   "about", "after", "again", "also", "and", "are", "at", "been", "being", "but",
   "can", "check", "could", "did", "does", "doing", "dont", "every", "from",
-  "for", "have", "here", "how", "into", "its", "just", "like", "make", "more",
+  "for", "have", "here", "how", "in", "into", "its", "just", "like", "make", "more",
   "need", "not", "now", "on", "only", "other", "our", "please", "really", "should",
-  "something", "than", "that", "the", "their", "them", "then", "there",
-  "these", "they", "thing", "think", "this", "through", "too", "use", "user",
-  "users", "want", "was", "way", "what", "when", "where", "which", "while",
+  "something", "sure", "than", "that", "the", "their", "them", "then", "there",
+  "these", "they", "thing", "think", "this", "through", "to", "too", "use", "user",
+  "users", "want", "was", "way", "we", "what", "when", "where", "which", "while",
   "who", "why", "will", "with", "work", "working", "would", "you", "your"
 ]);
 
@@ -513,7 +513,7 @@ const ACTION_WORDS: Array<{
   { action: "configuring", words: new Set(["configure", "connect", "setup"]) },
   { action: "publishing", words: new Set(["deploy", "launch", "publish", "release"]) },
   { action: "running", words: new Set(["automation", "monitor", "run", "schedule"]) },
-  { action: "building", words: new Set(["add", "build", "create", "develop", "implement"]) }
+  { action: "building", words: new Set(["add", "build", "create", "develop", "implement", "include"]) }
 ];
 
 function buildLocalAgentActivity(input: ActivityInput): LocalAgentActivity | undefined {
@@ -565,6 +565,11 @@ function buildLocalAgentActivity(input: ActivityInput): LocalAgentActivity | und
 function focusTopic(prompts: string[]): string | undefined {
   if (prompts.length === 0) return undefined;
   const recent = prompts.slice(-12);
+  const observedTopicTokens = new Set(
+    recent.flatMap((prompt) => (
+      topicTokens(prompt).filter((token) => !FOCUS_STOP_WORDS.has(token))
+    ))
+  );
   const tokenScores = new Map<string, number>();
   const pairScores = new Map<string, number>();
   recent.forEach((prompt, index) => {
@@ -599,6 +604,12 @@ function focusTopic(prompts: string[]): string | undefined {
   const tokens = [...candidateTokens].slice(0, 3);
   if (tokens.includes("glance") && tokens.includes("hover")) {
     return tokens.includes("ui") ? "Glance hover UI" : "Glance hover";
+  }
+  if (
+    observedTopicTokens.has("glance") &&
+    ["action", "agent", "handoff", "prompt"].some((token) => observedTopicTokens.has(token))
+  ) {
+    return "Glance agent handoff";
   }
   if (tokens.includes("hover")) {
     return tokens.includes("ui") ? "hover UI" : "hover interaction";

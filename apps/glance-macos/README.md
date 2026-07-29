@@ -34,7 +34,8 @@ It runs as a menu-bar accessory without a Dock icon. At rest, nothing is
 visible. Move the pointer into the top menu-bar strip to reveal one tiny,
 stationary `aibill` glass wordmark to the left of the camera/notch. Hover that
 wordmark to slide the panel down; move away to hide both surfaces again. No
-click is required. Right-click the visible wordmark to refresh data or quit
+click is required. Right-click the visible wordmark to refresh data, enable or
+disable launch at login, check for a signed update in release builds, or quit
 the app.
 
 The app resolves data in this order:
@@ -52,11 +53,18 @@ The Main focus row summarizes what occupied the user across observed prompts
 and tool calls; its percentage is activity share, not elapsed time or spend.
 Raw prompts never enter the Glance JSON contract.
 
-The final compact row renders the canonical hook-aware Context Health result
-used by `aibill context --json` and MCP `get_context_health`. A “start fresh”
-decision comes from this user's same-agent transcript-token median. Installed
-hook metadata can instead produce a review action, but Glance never executes a
-hook command or invents the hook's runtime token payload.
+The footer shows `Updated 12s ago` from the last successful local snapshot.
+After 75 seconds it changes to an explicit stale state. A failed refresh keeps
+the last good snapshot visible and labels its age; a first-run failure says
+that no current data is available. Right-click the wordmark to retry.
+
+The final compact row renders one focus-aware next move derived from the
+canonical hook-aware Context Health result, Main focus, and any
+transcript-reported runway. It stays to two short lines plus a small Copy
+affordance; the complete handoff prompt is never displayed in the hover card.
+Clicking copies that prompt for any coding agent. Glance does not launch an
+agent, execute the prompt, run a hook command, or invent a hook's runtime token
+payload.
 
 The visible card keeps provenance beside the metric: session value says local
 tokens × API list rates; limit rows distinguish coding-agent-reported reset
@@ -102,6 +110,9 @@ Keep these trust invariants in customized versions:
   contract.
 - Render `sessionHealth` from the shared contract; do not invent a second
   session threshold or hook-cost estimate in the UI.
+- Render `primaryAction` from the shared contract. Keep its full `agentPrompt`
+  out of the compact card and require a deliberate copy/paste before an agent
+  can act.
 - Render missing limits as unavailable instead of guessing.
 - Do not upload transcripts or invoke the data command through a shell.
 
@@ -125,4 +136,30 @@ universal binary slices must be signed together, run with the hardened
 runtime, notarized, and stapled before the `.dmg` is published.
 
 The prototype is ad-hoc signed for local testing only. Do not distribute the
-`dist` bundle publicly.
+`dist` bundle publicly. Release builds use Sparkle 2.9.2 but the updater stays
+dormant unless the build embeds both an HTTPS appcast URL and its matching
+EdDSA public key.
+
+### Maintainer release gate
+
+Store the Developer ID certificate in the login keychain and a notarization
+profile with `xcrun notarytool store-credentials`. Keep the Sparkle private key
+outside the repository. Then provide these settings to
+`scripts/release-app.sh`:
+
+```text
+AIBILL_GLANCE_SIGN_IDENTITY
+AIBILL_GLANCE_VERSION
+AIBILL_GLANCE_BUILD_NUMBER
+AIBILL_NOTARY_KEYCHAIN_PROFILE
+AIBILL_SPARKLE_FEED_URL
+AIBILL_SPARKLE_PUBLIC_KEY
+AIBILL_SPARKLE_PRIVATE_KEY_FILE
+```
+
+The script refuses missing credentials or a non-HTTPS feed, builds a universal
+app, embeds the updater configuration, signs with the hardened runtime,
+submits to Apple notarization, staples and validates the ticket, produces the
+final update ZIP, and generates a signed appcast. A successful script run is a
+release prerequisite; the presence of this source code alone is not evidence
+that a public artifact is signed or notarized.

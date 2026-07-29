@@ -10,13 +10,17 @@ final class GlancePanelController: NSObject {
   private let triggerPanel: NSPanel
   private let detailPanel: NSPanel
   private let hostScreen: NSScreen
+  private let launchAtLogin = LaunchAtLoginController()
+  private let updater: GlanceUpdaterController
   private var hoverTimer: Timer?
+  private weak var launchAtLoginItem: NSMenuItem?
   private var expanded = false
   private var triggerVisible = false
   private var lastHoverDate = Date.distantPast
 
-  init(store: GlanceStore) {
+  init(store: GlanceStore, updater: GlanceUpdaterController) {
     self.store = store
+    self.updater = updater
     hostScreen = NSScreen.main ?? NSScreen.screens[0]
     triggerPanel = NSPanel(
       contentRect: NSRect(origin: .zero, size: Self.triggerSize),
@@ -204,6 +208,21 @@ final class GlancePanelController: NSObject {
     )
     refreshItem.target = self
     menu.addItem(.separator())
+    let loginItem = menu.addItem(
+      withTitle: launchAtLogin.menuTitle,
+      action: #selector(toggleLaunchAtLogin),
+      keyEquivalent: ""
+    )
+    loginItem.target = self
+    launchAtLoginItem = loginItem
+    let updateItem = menu.addItem(
+      withTitle: updater.menuTitle,
+      action: #selector(checkForUpdates),
+      keyEquivalent: ""
+    )
+    updateItem.target = self
+    updateItem.isEnabled = updater.isConfigured
+    menu.addItem(.separator())
     let quitItem = menu.addItem(
       withTitle: "Quit aibill Glance",
       action: #selector(quit),
@@ -215,6 +234,25 @@ final class GlancePanelController: NSObject {
 
   @objc private func refresh() {
     Task { await store.refresh() }
+  }
+
+  @objc private func toggleLaunchAtLogin() {
+    switch launchAtLogin.toggle() {
+    case .enabled, .disabled:
+      launchAtLoginItem?.title = launchAtLogin.menuTitle
+    case .requiresApproval:
+      launchAtLoginItem?.title = launchAtLogin.menuTitle
+    case .failed(let message):
+      let alert = NSAlert()
+      alert.alertStyle = .warning
+      alert.messageText = "Could not change Launch at Login"
+      alert.informativeText = message
+      alert.runModal()
+    }
+  }
+
+  @objc private func checkForUpdates() {
+    updater.checkForUpdates()
   }
 
   @objc private func quit() {

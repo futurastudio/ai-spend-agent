@@ -102,15 +102,16 @@ export function UsageGlance() {
             <div className="glance-insight">
               <span className="glance-insight-dot" aria-hidden="true" />
               <div>
-                <strong>This session is 1.8× your same-agent token median</strong>
-                <span>Start fresh before a new task.</span>
+                <strong>Start fresh · agent-finops</strong>
+                <span>Carry “Refining Glance hover UI” into a clean session</span>
               </div>
+              <span className="glance-action-copy">Copy</span>
             </div>
 
             <div className="glance-source-row">
               <span aria-hidden="true">◇</span>
               <p>Local: Claude Code + Codex · 60 files · nothing uploaded</p>
-              <strong>30s refresh</strong>
+              <strong>Updated 12s ago</strong>
             </div>
           </div>
         </div>

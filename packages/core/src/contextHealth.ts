@@ -32,7 +32,7 @@ export type ContextHealthRecommendation =
   | "collect_more_history";
 
 export type ContextHealthEvidence = {
-  kind: "session_history" | "hook_config" | "inventory_usage";
+  kind: "session_history" | "context_churn" | "hook_config" | "inventory_usage";
   summary: string;
   source: string;
   confidence: "observed" | "derived" | "unmeasured";
@@ -53,6 +53,8 @@ export type ContextHealthResult = {
     totalTokens: number;
     ratioToMedian: number | null;
     comparisonSessions: number;
+    cacheWriteTokens: number;
+    cacheWriteRatioToMedian: number | null;
     source: "local_transcript_metadata";
   } | null;
   activation: {
@@ -70,6 +72,23 @@ export type ContextHealthResult = {
     measuredNeverInvokedItems: number;
     unmeasuredNeverInvokedItems: number;
     windowDays: number;
+  };
+  contextChurn: {
+    currentSessionEvidence:
+      | "matched"
+      | "not_matched"
+      | "no_current_session";
+    compactionEvents: number | null;
+    explicitFileReads: number | null;
+    repeatedReadEvents: number | null;
+    repeatedFiles: Array<{
+      file: string;
+      readCount: number;
+    }>;
+    readCoverage: "explicit_read_tools_only" | "not_available";
+    currentSessionScope: "parent" | "subagent" | "unknown" | null;
+    observedParentSessions: number;
+    observedSubagentSessions: number;
   };
   evidence: ContextHealthEvidence[];
   provenance: {
@@ -141,11 +160,14 @@ export function buildContextHealth(
     windowDays,
     pricingModel: "claude-sonnet-4"
   });
+  const sessionGroups = contextSessions(calls);
+  const latestSession = latestContextSession(sessionGroups);
   const currentSession = buildCurrentSession(
-    calls,
+    sessionGroups,
     now,
     input.activeWithinMinutes ?? 20
   );
+  const contextChurn = buildContextChurn(latestSession, invocations);
   const activation = activationSummary(items, invocations);
   const hookItems = items.filter((item) => item.activation === "hook_injected");
   const evidence: ContextHealthEvidence[] = [];
@@ -158,6 +180,38 @@ export function buildContextHealth(
         : `${currentSession.totalTokens.toLocaleString("en-US")} local transcript tokens, ${currentSession.ratioToMedian}× the median of ${currentSession.comparisonSessions} prior same-agent session${currentSession.comparisonSessions === 1 ? "" : "s"}.`,
       source: `${currentSession.agent} local transcripts`,
       confidence: currentSession.ratioToMedian === null ? "observed" : "derived"
+    });
+  }
+  if ((contextChurn.compactionEvents ?? 0) > 0) {
+    evidence.push({
+      kind: "context_churn",
+      summary: `${contextChurn.compactionEvents} explicit compaction event${contextChurn.compactionEvents === 1 ? "" : "s"} observed in the current session transcript.`,
+      source: `${currentSession?.agent ?? "coding-agent"} local transcript event metadata`,
+      confidence: "observed"
+    });
+  }
+  if ((contextChurn.repeatedReadEvents ?? 0) > 0) {
+    const files = contextChurn.repeatedFiles
+      .slice(0, 3)
+      .map((file) => `${file.file} ×${file.readCount}`)
+      .join(", ");
+    evidence.push({
+      kind: "context_churn",
+      summary: `${contextChurn.repeatedReadEvents} repeat read event${contextChurn.repeatedReadEvents === 1 ? "" : "s"} observed through explicit file-read tools${files ? ` (${files})` : ""}.`,
+      source: "local transcript tool-call metadata; basenames only",
+      confidence: "observed"
+    });
+  }
+  if (
+    currentSession?.cacheWriteRatioToMedian !== null &&
+    currentSession?.cacheWriteRatioToMedian !== undefined &&
+    currentSession.cacheWriteRatioToMedian >= 1.5
+  ) {
+    evidence.push({
+      kind: "context_churn",
+      summary: `${currentSession.cacheWriteTokens.toLocaleString("en-US")} cache-write tokens, ${currentSession.cacheWriteRatioToMedian}× the median of prior same-agent sessions with cache-write data.`,
+      source: `${currentSession.agent} local transcript usage metadata`,
+      confidence: "derived"
     });
   }
 
@@ -197,6 +251,7 @@ export function buildContextHealth(
 
   const decision = contextDecision({
     currentSession,
+    contextChurn,
     hookInjectedItems: activation.hookInjectedItems,
     deadContext
   });
@@ -214,6 +269,7 @@ export function buildContextHealth(
       unmeasuredNeverInvokedItems: deadContext.unmeasuredDeadCount,
       windowDays
     },
+    contextChurn,
     evidence,
     provenance: {
       inventory: "local_agent_configuration",
@@ -227,6 +283,8 @@ export function buildContextHealth(
       "A session comparison uses local transcript token totals from the same coding agent; it is not a provider charge or a universal context-window measurement.",
       "Never-invoked means no matching invocation was observed in the selected local transcript window, not that an item has no future value.",
       "Items whose host transcript does not expose explicit invocation evidence are excluded from never-invoked counts.",
+      "Repeated-read evidence includes only explicit file-read tools and returns basenames only. Shell commands are not guessed to be reads.",
+      "Compaction counts come from explicit transcript markers; absence means not observed in the parsed format, not proof that compaction never occurred.",
       "No per-session savings claim is made without an observed counterfactual baseline."
     ]
   };
@@ -234,6 +292,7 @@ export function buildContextHealth(
 
 function contextDecision(input: {
   currentSession: ContextHealthResult["currentSession"];
+  contextChurn: ContextHealthResult["contextChurn"];
   hookInjectedItems: number;
   deadContext: DeadContextResult;
 }): Pick<
@@ -248,6 +307,16 @@ function contextDecision(input: {
       headline: `This session is ${ratio}× your same-agent token median.`,
       action: "Start fresh before a new task; keep this session only while its existing context is directly useful.",
       confidence: input.currentSession!.comparisonSessions >= 3 ? "high" : "medium"
+    };
+  }
+  if ((input.contextChurn.compactionEvents ?? 0) >= 2) {
+    const count = input.contextChurn.compactionEvents!;
+    return {
+      status: "start_fresh",
+      recommendation: "start_fresh",
+      headline: `This session has compacted ${count} times.`,
+      action: "Start fresh before the next task; preserve only the concrete state you still need.",
+      confidence: "high"
     };
   }
   if (input.hookInjectedItems > 0) {
@@ -292,17 +361,15 @@ type ContextSessionGroup = {
   project?: string;
   lastActivityAt: string;
   totalTokens: number;
+  cacheWriteTokens: number;
 };
 
 function buildCurrentSession(
-  calls: LocalAgentCall[],
+  sessions: ContextSessionGroup[],
   now: Date,
   activeWithinMinutes: number
 ): ContextHealthResult["currentSession"] {
-  const sessions = contextSessions(calls);
-  const latest = sessions
-    .slice()
-    .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))[0];
+  const latest = latestContextSession(sessions);
   if (!latest) return null;
   const comparisons = sessions.filter((session) => (
     session.key !== latest.key &&
@@ -310,6 +377,11 @@ function buildCurrentSession(
     session.totalTokens > 0
   ));
   const baseline = median(comparisons.map((session) => session.totalTokens));
+  const cacheWriteBaseline = median(
+    comparisons
+      .map((session) => session.cacheWriteTokens)
+      .filter((tokens) => tokens > 0)
+  );
   const ratio = baseline && baseline > 0
     ? roundRatio(latest.totalTokens / baseline)
     : null;
@@ -321,6 +393,10 @@ function buildCurrentSession(
     totalTokens: latest.totalTokens,
     ratioToMedian: ratio,
     comparisonSessions: comparisons.length,
+    cacheWriteTokens: latest.cacheWriteTokens,
+    cacheWriteRatioToMedian: cacheWriteBaseline && latest.cacheWriteTokens > 0
+      ? roundRatio(latest.cacheWriteTokens / cacheWriteBaseline)
+      : null,
     source: "local_transcript_metadata"
   };
 }
@@ -346,9 +422,62 @@ function contextSessions(calls: LocalAgentCall[]): ContextSessionGroup[] {
         (call.usage.cacheReadTokens ?? 0) +
         (call.usage.cacheWrite5mTokens ?? 0) +
         (call.usage.cacheWrite1hTokens ?? 0)
+      ), 0),
+      cacheWriteTokens: ordered.reduce((total, call) => total + (
+        (call.usage.cacheWrite5mTokens ?? 0) +
+        (call.usage.cacheWrite1hTokens ?? 0)
       ), 0)
     };
   });
+}
+
+function latestContextSession(
+  sessions: ContextSessionGroup[]
+): ContextSessionGroup | undefined {
+  return sessions
+    .slice()
+    .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))[0];
+}
+
+function buildContextChurn(
+  latest: ContextSessionGroup | undefined,
+  invocations: InvocationSummary
+): ContextHealthResult["contextChurn"] {
+  const signals = invocations.sessionSignals ?? [];
+  const currentSignal = latest
+    ? signals.find((signal) => (
+      signal.agent === latest.agent &&
+      signal.sessionId &&
+      latest.key === `${signal.agent}:${signal.sessionId}`
+    ))
+    : undefined;
+  const repeatedFiles = (currentSignal?.repeatedFileReads ?? [])
+    .map((file) => ({ file: file.name, readCount: file.count }));
+  return {
+    currentSessionEvidence: !latest
+      ? "no_current_session"
+      : currentSignal
+        ? "matched"
+        : "not_matched",
+    compactionEvents: currentSignal?.compactionEvents ?? null,
+    explicitFileReads: currentSignal
+      ? currentSignal.fileReads.reduce((total, file) => total + file.count, 0)
+      : null,
+    repeatedReadEvents: currentSignal
+      ? repeatedFiles.reduce((total, file) => total + file.readCount - 1, 0)
+      : null,
+    repeatedFiles,
+    readCoverage: currentSignal?.readCoverage ?? "not_available",
+    currentSessionScope: currentSignal
+      ? currentSignal.isSubagent
+        ? "subagent"
+        : "parent"
+      : latest
+        ? "unknown"
+        : null,
+    observedParentSessions: signals.filter((signal) => !signal.isSubagent).length,
+    observedSubagentSessions: signals.filter((signal) => signal.isSubagent).length
+  };
 }
 
 function activationSummary(

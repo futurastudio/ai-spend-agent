@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 /**
@@ -26,6 +26,28 @@ import { homedir } from "node:os";
 
 export type ToolInvocationCount = { name: string; count: number };
 
+export type SessionContextSignal = {
+  agent: "claude-code" | "codex";
+  sessionId?: string;
+  lastActivityAt?: string;
+  /** Explicit compaction markers observed in this transcript. */
+  compactionEvents: number;
+  /**
+   * Explicit file-read tool calls, reduced to basenames so raw local paths
+   * never enter the Context Health contract.
+   */
+  fileReads: ToolInvocationCount[];
+  repeatedFileReads: ToolInvocationCount[];
+  /** Whether this transcript is a Claude sidechain/subagent transcript. */
+  isSubagent: boolean;
+  parentSessionId?: string;
+  /**
+   * Coverage is intentionally narrow. Shell commands are not parsed as file
+   * reads because doing so would turn arbitrary command text into a heuristic.
+   */
+  readCoverage: "explicit_read_tools_only";
+};
+
 export type InvocationSummary = {
   /** aggregated counts by raw tool name across all parsed transcripts */
   invocations: ToolInvocationCount[];
@@ -48,6 +70,8 @@ export type InvocationSummary = {
     claudeCode: number;
     codex: number;
   };
+  /** Per-transcript compaction/read evidence used by Context Health. */
+  sessionSignals?: SessionContextSignal[];
 };
 
 export type ToolInvocationOptions = {
@@ -67,14 +91,21 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
   invokedSubagents: string[];
   invokedCommands: string[];
   assistantTurns: number;
+  contextSignal: SessionContextSignal;
 } {
   const counts = new Map<string, number>();
   const mcpTools = new Set<string>();
   const skills = new Set<string>();
   const subagents = new Set<string>();
   const commands = new Set<string>();
+  const fileReads = new Map<string, number>();
   const seen = new Set<string>();
   let assistantTurns = 0;
+  let sessionId: string | undefined;
+  let lastActivityAt: string | undefined;
+  let compactionEvents = 0;
+  let isSubagent = false;
+  let parentSessionId: string | undefined;
 
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
@@ -85,12 +116,20 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
       continue;
     }
     if (!isRecord(entry)) continue;
+    sessionId = stringOf(entry.sessionId) ?? sessionId;
+    if (entry.isSidechain === true) isSubagent = true;
+    parentSessionId = stringOf(entry.parentSessionId) ?? parentSessionId;
+    const timestamp = stringOf(entry.timestamp);
+    if (timestamp && (!lastActivityAt || timestamp > lastActivityAt)) {
+      lastActivityAt = timestamp;
+    }
 
     // sinceIso filter: skip lines older than the cutoff when a timestamp exists.
     if (typeof sinceMs === "number") {
       const ts = Date.parse(stringOf(entry.timestamp) ?? "");
       if (Number.isFinite(ts) && ts < sinceMs) continue;
     }
+    if (isClaudeCompactionEntry(entry)) compactionEvents += 1;
 
     // Slash commands surface in user lines as "<command-name>/foo</command-name>".
     if (entry.type === "user") {
@@ -128,6 +167,8 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
         const sub = input && stringOf(input.subagent_type);
         if (sub) subagents.add(sub);
       }
+      const file = input && explicitReadFile(name, input);
+      if (file) fileReads.set(file, (fileReads.get(file) ?? 0) + 1);
     }
   }
 
@@ -141,7 +182,16 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
     invokedSkills: [...skills].sort(),
     invokedSubagents: [...subagents].sort(),
     invokedCommands: [...commands].sort(),
-    assistantTurns
+    assistantTurns,
+    contextSignal: buildSessionContextSignal({
+      agent: "claude-code",
+      sessionId,
+      lastActivityAt,
+      compactionEvents,
+      fileReads,
+      isSubagent,
+      parentSessionId
+    })
   };
 }
 
@@ -153,13 +203,18 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
   invokedSubagents: string[];
   invokedCommands: string[];
   assistantTurns: number;
+  contextSignal: SessionContextSignal;
 } {
   const counts = new Map<string, number>();
   const mcpTools = new Set<string>();
   const skills = new Set<string>();
   const subagents = new Set<string>();
   const commands = new Set<string>();
+  const fileReads = new Map<string, number>();
   let assistantTurns = 0;
+  let sessionId: string | undefined;
+  let lastActivityAt: string | undefined;
+  let compactionEvents = 0;
 
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
@@ -170,12 +225,22 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
       continue;
     }
     if (!isRecord(entry)) continue;
+    const timestampValue = stringOf(entry.timestamp);
+    if (timestampValue && (!lastActivityAt || timestampValue > lastActivityAt)) {
+      lastActivityAt = timestampValue;
+    }
     if (typeof sinceMs === "number") {
       const timestamp = Date.parse(stringOf(entry.timestamp) ?? "");
       if (Number.isFinite(timestamp) && timestamp < sinceMs) continue;
     }
     const payload = isRecord(entry.payload) ? entry.payload : undefined;
     if (!payload) continue;
+    if (entry.type === "session_meta") {
+      sessionId = stringOf(payload.id) ?? sessionId;
+    }
+    // Codex writes both a top-level `compacted` entry and a separate
+    // `context_compacted` event for one compaction. Count only the former.
+    if (entry.type === "compacted") compactionEvents += 1;
 
     // Codex emits one turn_context per model turn.
     if (entry.type === "turn_context") {
@@ -211,6 +276,8 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
       );
       if (subagent) subagents.add(subagent);
     }
+    const file = input && explicitReadFile(name, input);
+    if (file) fileReads.set(file, (fileReads.get(file) ?? 0) + 1);
   }
 
   return {
@@ -221,7 +288,15 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
     invokedSkills: [...skills].sort(),
     invokedSubagents: [...subagents].sort(),
     invokedCommands: [...commands].sort(),
-    assistantTurns
+    assistantTurns,
+    contextSignal: buildSessionContextSignal({
+      agent: "codex",
+      sessionId,
+      lastActivityAt,
+      compactionEvents,
+      fileReads,
+      isSubagent: false
+    })
   };
 }
 
@@ -238,6 +313,7 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   const subagents = new Set<string>();
   const commands = new Set<string>();
   const sessionTurnCounts: number[] = [];
+  const sessionSignals: SessionContextSignal[] = [];
   let sessions = 0;
   let claudeCodeSessions = 0;
   let codexSessions = 0;
@@ -249,6 +325,7 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
     claudeCodeSessions += 1;
     const parsed = parseClaudeCodeInvocations(content, sinceMs);
     sessionTurnCounts.push(parsed.assistantTurns);
+    sessionSignals.push(parsed.contextSignal);
     for (const { name, count } of parsed.invocations) {
       counts.set(name, (counts.get(name) ?? 0) + count);
     }
@@ -265,6 +342,7 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
     codexSessions += 1;
     const parsed = parseCodexInvocations(content, sinceMs);
     sessionTurnCounts.push(parsed.assistantTurns);
+    sessionSignals.push(parsed.contextSignal);
     for (const { name, count } of parsed.invocations) {
       counts.set(name, (counts.get(name) ?? 0) + count);
     }
@@ -290,7 +368,8 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
     sourceSessions: {
       claudeCode: claudeCodeSessions,
       codex: codexSessions
-    }
+    },
+    sessionSignals
   };
 }
 
@@ -366,6 +445,58 @@ function codexTextValues(value: unknown): string[] {
     }
   }
   return out;
+}
+
+function isClaudeCompactionEntry(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "system") return false;
+  const subtype = stringOf(entry.subtype)?.toLowerCase();
+  return subtype === "compact_boundary" ||
+    subtype === "compacted" ||
+    subtype === "context_compacted";
+}
+
+function explicitReadFile(
+  toolName: string,
+  input: Record<string, unknown>
+): string | undefined {
+  const normalized = toolName.toLowerCase();
+  if (![
+    "read",
+    "read_file",
+    "readfile",
+    "view_image"
+  ].includes(normalized)) return undefined;
+  const raw = stringOf(input.file_path) ??
+    stringOf(input.path) ??
+    stringOf(input.file);
+  if (!raw) return undefined;
+  const name = basename(raw);
+  return name && name !== "." && name !== "/" ? name : undefined;
+}
+
+function buildSessionContextSignal(input: {
+  agent: SessionContextSignal["agent"];
+  sessionId?: string;
+  lastActivityAt?: string;
+  compactionEvents: number;
+  fileReads: Map<string, number>;
+  isSubagent: boolean;
+  parentSessionId?: string;
+}): SessionContextSignal {
+  const fileReads = [...input.fileReads.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
+  return {
+    agent: input.agent,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.lastActivityAt ? { lastActivityAt: input.lastActivityAt } : {}),
+    compactionEvents: input.compactionEvents,
+    fileReads,
+    repeatedFileReads: fileReads.filter((file) => file.count > 1),
+    isSubagent: input.isSubagent,
+    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+    readCoverage: "explicit_read_tools_only"
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -20,8 +20,10 @@ install hooks, scan broad directories, connect providers, or write local state.
 3. Return one compact answer in this order:
    - current/latest session and API-equivalent value;
    - reported five-hour/weekly windows, explicitly saying when unavailable;
-   - Context Health headline and action;
    - main recent focus;
+   - `primaryAction.label` and `primaryAction.detail` as the one recommended
+     next move; offer `primaryAction.agentPrompt` only if the user wants a
+     copy-ready handoff;
    - the most important caveat or missing source.
 
 ## Accuracy Rules
@@ -35,5 +37,8 @@ install hooks, scan broad directories, connect providers, or write local state.
 - Do not convert “never invoked” into savings without a measured
   counterfactual.
 - Do not reveal raw prompts, credentials, or unrelated filesystem paths.
+- Never execute `primaryAction.agentPrompt` or imply that Glance ran an agent.
+  It is an explicit, user-confirmed copy handoff derived from the same
+  Context Health, focus, and reported-runway contract as CLI and Glance.
 - Say that aibill itself uploads nothing; MCP results are returned to the AI
   client that invoked the tool and follow that client's data policy.

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GlanceView: View {
   @ObservedObject var store: GlanceStore
+  @State private var actionCopied = false
 
   private var session: UsageGlanceSnapshot.Session? { store.snapshot?.currentSession }
   private var fiveHour: UsageGlanceSnapshot.Limit? {
@@ -67,25 +68,11 @@ struct GlanceView: View {
       }
 
       focusRow
-      contextHealthRow
+      primaryActionRow
 
-      HStack(spacing: 6) {
-        Image(systemName: "lock.shield")
-        Text(footerText)
-          .lineLimit(1)
-          .minimumScaleFactor(0.82)
-        Spacer()
-        if store.isRefreshing {
-          ProgressView()
-            .controlSize(.mini)
-        } else {
-          Text("30s refresh")
-        }
+      TimelineView(.periodic(from: .now, by: 1)) { timeline in
+        footer(at: timeline.date)
       }
-      .font(.system(size: 9, weight: .medium, design: .rounded))
-      .foregroundStyle(.white.opacity(0.36))
-      .padding(.horizontal, 3)
-      .help(footerSourceHelp)
     }
     .padding(.horizontal, 18)
     .padding(.top, 18)
@@ -226,28 +213,44 @@ struct GlanceView: View {
     .help(focusSourceHelp)
   }
 
-  private var contextHealthRow: some View {
+  private var primaryActionRow: some View {
     let health = store.snapshot?.sessionHealth
     let color = contextHealthColor(health?.status)
-    return HStack(spacing: 10) {
-      Circle()
-        .fill(color)
-        .frame(width: 7, height: 7)
-        .shadow(color: color.opacity(0.7), radius: 6)
+    let action = store.snapshot?.primaryAction
+    return Button(action: copyPrimaryAction) {
+      HStack(spacing: 10) {
+        Circle()
+          .fill(color)
+          .frame(width: 7, height: 7)
+          .shadow(color: color.opacity(0.7), radius: 6)
 
-      VStack(alignment: .leading, spacing: 2) {
-        Text(health?.headline ?? store.snapshot?.anomaly?.summary ?? "Collecting local context history")
-          .font(.system(size: 10, weight: .semibold, design: .rounded))
-          .foregroundStyle(.white.opacity(0.87))
-          .lineLimit(1)
-        Text(health?.action ?? store.snapshot?.anomaly?.action ?? "Keep using your coding agents; Glance will compare local sessions.")
-          .font(.system(size: 9, weight: .medium, design: .rounded))
-          .foregroundStyle(.white.opacity(0.4))
-          .lineLimit(1)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(action?.label ?? health?.headline ?? "Collecting local context history")
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.87))
+            .lineLimit(1)
+          Text(action?.detail ?? "Glance will suggest one verified next move.")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(1)
+        }
+
+        Spacer()
+
+        HStack(spacing: 4) {
+          Image(systemName: actionCopied ? "checkmark" : "doc.on.doc")
+          Text(actionCopied ? "Copied" : "Copy")
+        }
+        .font(.system(size: 8, weight: .semibold, design: .rounded))
+        .foregroundStyle(.white.opacity(action == nil ? 0.3 : 0.62))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.045), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.075), lineWidth: 1))
       }
-
-      Spacer()
     }
+    .buttonStyle(.plain)
+    .disabled(action == nil)
     .padding(.horizontal, 11)
     .frame(height: 52)
     .background(color.opacity(health?.status == "healthy" ? 0.018 : 0.04), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
@@ -255,7 +258,21 @@ struct GlanceView: View {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(color.opacity(health?.status == "healthy" ? 0.07 : 0.14), lineWidth: 1)
     }
-    .help(contextHealthSourceHelp)
+    .help(primaryActionSourceHelp)
+    .accessibilityLabel(action.map { "\($0.label). \($0.detail)" } ?? "No next move available")
+    .accessibilityHint(action == nil ? "" : "Copies a project-aware handoff prompt. Nothing runs automatically.")
+  }
+
+  private func copyPrimaryAction() {
+    guard let prompt = store.snapshot?.primaryAction?.agentPrompt else {
+      return
+    }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(prompt, forType: .string)
+    actionCopied = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+      actionCopied = false
+    }
   }
 
   private func contextHealthColor(_ status: String?) -> Color {
@@ -328,15 +345,49 @@ struct GlanceView: View {
     return ("No \(label) transcript window", "No percentage inferred")
   }
 
-  private var footerText: String {
-    if let error = store.errorMessage {
-      return error
-    }
+  private var coverageFooterText: String {
     let files = store.snapshot?.coverage.filesParsed ?? 0
     let agents = store.snapshot?.coverage.detectedAgents
       .map(GlanceFormatting.agentName)
       .joined(separator: " + ") ?? "Local transcripts"
     return "Local: \(agents) · \(files) files · nothing uploaded"
+  }
+
+  private func footer(at now: Date) -> some View {
+    let refresh = store.refreshPresentation(at: now)
+    return HStack(spacing: 6) {
+      Image(systemName: "lock.shield")
+      Text(coverageFooterText)
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+      Spacer(minLength: 5)
+      if store.isRefreshing {
+        ProgressView()
+          .controlSize(.mini)
+      }
+      Image(systemName: refresh.symbol)
+        .foregroundStyle(refreshColor(refresh.state))
+      Text(refresh.label)
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+    .font(.system(size: 9, weight: .medium, design: .rounded))
+    .foregroundStyle(.white.opacity(0.42))
+    .padding(.horizontal, 3)
+    .help("\(footerSourceHelp) \(refresh.help)")
+  }
+
+  private func refreshColor(
+    _ state: GlanceRefreshPresentation.State
+  ) -> Color {
+    switch state {
+    case .fresh:
+      Color(red: 0.24, green: 0.94, blue: 0.57).opacity(0.82)
+    case .loading:
+      Color.white.opacity(0.45)
+    case .stale, .failed:
+      Color(red: 1, green: 0.58, blue: 0.18).opacity(0.9)
+    }
   }
 
   private var sessionSourceHelp: String {
@@ -360,11 +411,11 @@ struct GlanceView: View {
     return "Derived locally from observed prompt and tool activity across \(sessions) session\(sessions == 1 ? "" : "s"). Raw prompt text is not returned by the Glance contract or uploaded."
   }
 
-  private var contextHealthSourceHelp: String {
-    guard let health = store.snapshot?.sessionHealth else {
-      return "Calculated locally by comparing this session with prior sessions from the same coding agent. It is not a provider alert."
+  private var primaryActionSourceHelp: String {
+    guard let action = store.snapshot?.primaryAction else {
+      return "Glance is waiting for enough local evidence to produce a next move."
     }
-    return "The same aibill Context Health result used by the terminal and MCP. Session evidence comes from local transcripts; inventory comes from local agent configuration. Hook commands are not run and hook payload size is not inferred. Confidence: \(health.confidence)."
+    return "Built locally from the same Context Health, Main focus, and transcript-reported runway used by CLI and MCP. Click to copy a handoff prompt for any coding agent; Glance never runs it automatically. Confidence: \(action.confidence)."
   }
 
   private var footerSourceHelp: String {

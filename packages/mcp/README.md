@@ -39,7 +39,7 @@ rejected and never persisted.
 | `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
 | `sync_local_agent_spend` | Build an estimated API-equivalent report from local Claude Code/Codex metadata. |
 | `sync_provider_spend` | Pull read-only provider billing through an `env:NAME` reference. |
-| `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and the canonical Context Health decision without guessing missing fields. |
+| `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. |
 | `get_context_health` | Distinguish discoverable, invoked, MCP-schema-loaded, hook-injected, and invocation-unobservable context without running hook commands. |
 | `list_sources` | List locally registered sources and verification levels. |
 | `get_spend_report` | Return the active records, data mode, and analyzed summary. |

@@ -394,6 +394,18 @@ function renderContextHealth(health: ContextHealthResult): string {
         : `${session.ratioToMedian}× median (${session.comparisonSessions} prior)`)
     );
   }
+  const churn = health.contextChurn;
+  if (churn.currentSessionEvidence === "matched") {
+    lines.push(
+      `Context churn: ${churn.compactionEvents ?? 0} compaction event${churn.compactionEvents === 1 ? "" : "s"} · ` +
+      `${churn.repeatedReadEvents ?? 0} repeat explicit read${churn.repeatedReadEvents === 1 ? "" : "s"} · ` +
+      `${churn.currentSessionScope ?? "unknown"} session`
+    );
+  } else {
+    lines.push(
+      `Context churn: current transcript ${churn.currentSessionEvidence === "not_matched" ? "not matched" : "unavailable"}`
+    );
+  }
   if (health.evidence.length > 0) {
     lines.push("", "Evidence");
     for (const evidence of health.evidence) {

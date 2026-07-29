@@ -11,6 +11,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
   let focus: Focus?
   let anomaly: Anomaly?
   let sessionHealth: ContextHealth?
+  let primaryAction: PrimaryAction?
 
   struct Coverage: Decodable, Sendable {
     let filesParsed: Int
@@ -32,6 +33,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let focus: FocusSource
     let anomaly: AnomalySource
     let contextHealth: ContextHealthSource?
+    let primaryAction: PrimaryActionSource?
     let network: NetworkSource
 
     struct SessionSource: Decodable, Sendable {
@@ -73,6 +75,12 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     struct ContextHealthSource: Decodable, Sendable {
       let source: String
       let hookPayload: String
+    }
+
+    struct PrimaryActionSource: Decodable, Sendable {
+      let source: String
+      let execution: String
+      let automaticExecution: Bool
     }
 
     struct NetworkSource: Decodable, Sendable {
@@ -166,6 +174,19 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
       let hookPayload: String
       let uploaded: Bool
     }
+  }
+
+  struct PrimaryAction: Decodable, Sendable {
+    let intent: String
+    let label: String
+    let detail: String
+    let project: String?
+    let focus: String?
+    let agentPrompt: String
+    let source: String
+    let confidence: String
+    let execution: String
+    let requiresUserConfirmation: Bool
   }
 }
 

@@ -14,24 +14,24 @@ const sources = [
 
 const features = [
   {
-    title: "Every source, one view",
-    body: "Your Claude Code and Codex session logs (priced locally at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin/owner key — unified into a single breakdown. Cursor and Copilot connectors are in beta. No more flipping between dashboards.",
+    title: "Runway, not another meter",
+    body: "See five-hour and weekly headroom only when the coding agent reports it, paired with reset time and a clearly labeled local exhaustion projection. Missing windows stay missing.",
   },
   {
-    title: "A ranked list of cuts",
-    body: "Surfaces your most expensive models and the concrete switches that lower the bill — move to a cheaper tier, batch offline work, cache repeats — each with an estimated $/mo saving.",
+    title: "Your work + one decision",
+    body: "Connect observed project, file, automation, and agent activity to one Context Health action: continue, start fresh, review context sources, or collect more evidence.",
   },
   {
-    title: "The plan-vs-API math",
-    body: "Projects your usage at API rates against subscription plan prices, so you can tell whether Pro, Max 5x, or pay-per-token is actually cheapest. The math no provider shows you.",
+    title: "Every number explains itself",
+    body: "Reported, locally observed, calculated, unmeasured, stale, or unavailable: source and freshness travel with the field instead of hiding behind one generic “live” label.",
   },
   {
-    title: "Runs entirely locally",
-    body: "One npx command reads your usage and renders the report in your terminal. No account, no upload, no telemetry. Open-source — read every line before you run it.",
+    title: "One engine, three surfaces",
+    body: "Terminal gives the full private baseline, Glance protects momentum during work, and explicit MCP answers “why?” from the same contract. No renderer gets a second parser.",
   },
   {
-    title: "Hook-aware Context Health",
-    body: "Separates discoverable, invoked, MCP-schema-loaded, and hook-injected context, then gives one evidence-backed session action. Hook commands are never run and unknown payloads stay unmeasured.",
+    title: "Billing when it actually matters",
+    body: "API-equivalent value is comparison math—not an added subscription charge. Connect OpenAI or Anthropic admin billing only when you need verified reconciliation.",
   },
 ];
 
@@ -43,13 +43,13 @@ const steps = [
   },
   {
     n: "02",
-    title: "It reads what's already there",
-    body: "Your Claude Code and Codex session logs, locally — priced at API rates as estimates. Connect provider billing with an admin/owner key to reconcile those estimates into verified numbers.",
+    title: "Keep the decision at a glance",
+    body: "The optional macOS hover shows current work, reported runway, freshness, and one action without becoming an always-on floating widget.",
   },
   {
     n: "03",
-    title: "See spend + what to cut",
-    body: "A headline number, a ranked cut list with dollar savings, and a plan check — in under 90 seconds.",
+    title: "Ask why only when needed",
+    body: "Invoke the optional MCP/plugin for a conversational explanation, or connect provider billing for verified reconciliation. Both reuse the same local contracts.",
   },
 ];
 
@@ -113,17 +113,17 @@ export default function Home() {
         </a>
 
         <h1 className="mx-auto mt-7 max-w-4xl animate-fade-up text-balance text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.06em] text-ink sm:text-[5rem]">
-          Your AI bill,
-          <br className="hidden sm:block" /> finally in{" "}
+          Will your AI coding session
+          <br className="hidden sm:block" />{" "}
           <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
-            focus.
+            make it to the finish line?
           </span>
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-xl">
-          One local command turns Claude Code and Codex usage into a clear
-          receipt, plan check, and ranked cut list. Connect provider billing
-          only when you want verified invoice numbers.
+          Know what you&apos;re working on, whether reported limits will last,
+          and what to do next. Start in Terminal, keep it visible only on hover,
+          and ask the same local data through MCP when you need an explanation.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
@@ -157,9 +157,12 @@ export default function Home() {
             panel. Session value is estimated at API rates—not treated as
             an added subscription charge—plan limits appear only when the agent
             reports each window, and Main focus describes the dominant local
-            workstream rather than its spend. Its Context Health row is the
-            same decision returned by the terminal and MCP. The numbers above are
-            illustrative; a signed public download is not available yet.
+            workstream rather than its spend. Its final two-line row combines
+            the same Context Health, focus, and reported-runway contract used
+            by Terminal and MCP; clicking it copies a handoff, but never runs
+            an agent. Freshness is explicit, including stale and failed-refresh
+            states. The numbers above are illustrative; a signed public
+            download is not available yet.
           </p>
         </div>
 
@@ -327,9 +330,9 @@ export default function Home() {
                 copy: "A hidden-until-hover macOS view of runway, focus, and one action."
               },
               {
-                week: "next",
-                cmd: "npx aibill wrapped",
-                copy: "Your month with AI, as a card worth sharing."
+                week: "research next",
+                cmd: "aibill Workboard",
+                copy: "A temporary expanded view of recent work, verified changes, blockers, and resume state."
               }
             ].map((item) => (
               <div key={item.cmd} className="glass rounded-2xl px-5 py-6">

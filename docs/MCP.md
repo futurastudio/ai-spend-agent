@@ -165,7 +165,9 @@ Builds the read-only data contract for the native Glance UI:
 - the main recent work focus derived from observed local prompt/tool activity,
   with task, project, file, automation, or delegated-agent context only when
   supported; and
-- one canonical Context Health decision with a concrete next action.
+- one `primaryAction` derived from canonical Context Health, Main focus, and
+  reported runway. It includes a compact label/detail plus a copy-ready agent
+  handoff; it is never executed automatically.
 
 ```json
 {
@@ -198,6 +200,8 @@ machine-readable for every custom client:
 - focus and anomaly: local activity/history derivations; and
 - Context Health: the canonical CLI/MCP/Glance result, with hook payload
   explicitly marked `not_executed_or_inferred`; and
+- primary action: the canonical local Context Health + focus + reported-runway
+  decision, with `execution: copy_prompt` and `automaticExecution: false`; and
 - network: `uploaded: false`.
 
 ### `get_context_health`

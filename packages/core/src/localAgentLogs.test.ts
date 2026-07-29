@@ -96,6 +96,37 @@ describe("parseClaudeCodeTranscript", () => {
     });
     expect(JSON.stringify(activity)).not.toContain("make it more transparent");
   });
+
+  it("turns Glance prompt and action requests into a natural agent-handoff focus", () => {
+    const content = [
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: "Could we include a call to action for the specific main focus in Glance?"
+        }
+      }),
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: "Make sure the prompt does not look crowded in the Glance."
+        }
+      }),
+      claudeLine({
+        message: {
+          id: "msg-handoff-focus",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 10, output_tokens: 20 }
+        }
+      })
+    ].join("\n");
+
+    expect(parseClaudeCodeTranscript(content)[0]?.activity).toMatchObject({
+      summary: "Building Glance agent handoff",
+      kind: "agent",
+      source: "user_prompts",
+      promptCount: 2
+    });
+  });
 });
 
 describe("parseCodexRollout", () => {

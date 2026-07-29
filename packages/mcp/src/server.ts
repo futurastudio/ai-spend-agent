@@ -153,7 +153,7 @@ export function createServer(): McpServer {
     {
       title: "Get coding-agent usage Glance",
       description:
-        "Build a read-only Glance snapshot from local Claude Code and Codex transcript metadata: current or latest session value, exact transcript-reported plan windows when available, a privacy-conscious summary of the main recent work focus, and at most one evidence-backed anomaly. Cursor and GitHub Copilot require provider connections; missing plan limits are never inferred.",
+        "Build a read-only Glance snapshot from local Claude Code and Codex transcript metadata: current or latest session value, exact transcript-reported plan windows when available, a privacy-conscious summary of the main recent work focus, and one copy-ready next move derived from canonical Context Health, focus, and reported runway. The action never executes automatically. Cursor and GitHub Copilot require provider connections; missing plan limits are never inferred.",
       inputSchema: {
         sinceDays: z.number().int().min(1).max(365).optional().describe("History used for baselines; defaults to 30 days."),
         project: z.string().min(1).optional().describe("Optional exact project filter for session, focus, and anomaly metrics. Account-level limit metadata remains visible."),

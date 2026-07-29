@@ -24,6 +24,11 @@ MCP provider and local-log hardening.
 - Added deterministic Context Health fixtures, adapter-drift checks, and a
   public-boundary CI check that blocks internal roadmap, audit, research, GTM,
   environment, and developer-home files from the public repository.
+- Context Health now records explicit compaction markers, basename-only
+  repeated file-read evidence, cache-write change against prior same-agent
+  sessions, and separate parent/subagent transcript coverage. The expanded
+  13-case benchmark includes Ponytail-shaped context-hook fixtures and avoids
+  treating repeated reads alone as a restart rule.
 - Added a Context Health methodology/SEO page and documentation for all three
   delivery surfaces, their shared provenance, known limitations, and the
   difference between local computation and an MCP client's transport boundary.
@@ -37,6 +42,11 @@ MCP provider and local-log hardening.
   provider-reported limit/reset windows, a privacy-conscious description of
   the user's main recent work focus, and one evidence-backed anomaly. Missing
   plan windows remain unavailable instead of being inferred.
+- Added one canonical `primaryAction` shared by CLI JSON, MCP, and native
+  Glance. It combines Context Health, Main focus, and transcript-reported
+  runway into a project-aware label, compact reason, and copy-ready handoff
+  prompt. The hover card shows only two short lines; execution is always an
+  explicit copy/paste and never automatic.
 - Added `aibill glance`, a machine-readable version of that contract for
   local rendering surfaces.
 - Added an ad-hoc-signed native macOS Glance prototype: one stationary
@@ -44,6 +54,16 @@ MCP provider and local-log hardening.
   session/limit, reset/exhaustion, main-focus, and anomaly panel
   on hover. Public distribution still requires a universal Developer
   ID-signed and notarized release bundle.
+- Glance now labels the last successful refresh age, turns stale after 75
+  seconds, preserves and labels the last good snapshot after an error, and
+  provides right-click launch-at-login control.
+- Added dormant-by-default Sparkle 2.9.2 integration plus a credential-gated
+  universal build/sign/notarize/staple/appcast release script. No source build
+  is described as automatically updatable without a real HTTPS feed and EdDSA
+  key, and public signing remains blocked on maintainer Apple credentials.
+- Published the preregistered 8–12-person Glance comprehension and day-seven
+  retention protocol with a blank scorecard; no participant outcome is
+  claimed yet.
 - Home-launched Codex sessions now use their dominant explicit tool working
   directory for project attribution, so Glance can name the project where work
   actually happened instead of grouping it under `(home)`.

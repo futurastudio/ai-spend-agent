@@ -181,11 +181,34 @@ All three interfaces consume the same core data and Context Health contract:
 | --- | --- | --- |
 | Terminal | Private, scriptable inspection with no AI-client handoff | `npx aibill` and `npx aibill context` |
 | MCP/plugin | Asking an AI client to explain the same structured result on demand | Install the optional aibill plugin or configure `@agent-finops/mcp` |
-| macOS Glance | A hover-only view of session value, reported limits, focus, and one action | Build the current prototype from `apps/glance-macos` |
+| macOS Glance | A hover-only monitor with one focus-aware, copy-to-agent next move | Build the current prototype from `apps/glance-macos` |
 
 Contract tests compare terminal JSON, MCP, and Glance decision fields. Custom
 interfaces should render `aibill glance` or `aibill context --json` instead of
 adding another transcript parser.
+
+### The most complete workflow
+
+The interfaces work best as one local loop:
+
+1. Run `npx aibill` once to establish local Claude Code/Codex usage,
+   attribution, plan context, and API-equivalent value.
+2. Run `npx aibill context` when deciding whether to continue the current
+   session or start fresh before a new task.
+3. Keep the optional macOS Glance companion running for current work, reported
+   five-hour/weekly runway, reset or projected exhaustion, freshness, and one
+   action. Click its compact action only when you want to copy a project-aware
+   handoff into your coding agent.
+4. Invoke the optional MCP/plugin only when you want an AI client to explain
+   the same structured result conversationally.
+5. Connect OpenAI or Anthropic billing only when verified spend is needed;
+   local estimates, subscription allowance, and provider bills remain separate.
+
+Terminal is the most complete private inspection surface, Glance is the
+monitor and momentum surface, and MCP is the on-demand explanation layer.
+Glance can prepare a safe handoff, but it does not become an always-on prompt
+injector or run an agent by itself. None maintains separate usage or Context
+Health logic.
 
 ## Use it inside an AI client (MCP or optional plugin)
 
@@ -215,7 +238,9 @@ camera/notch. Hover that fixed target—no click required—to slide down
 current-session value at API rates, available
 five-hour/weekly limits, reset or exhaustion timing, a local transcript-derived
 description of the user's main work focus, and one actionable Context Health
-decision; moving
+and runway decision. The final row shows only a short project-aware label and reason;
+clicking it copies a longer handoff prompt for any coding agent, while nothing
+runs automatically. Moving
 away hides the panel again.
 
 Glance reads the same local Claude Code and Codex transcript metadata as the
@@ -241,16 +266,28 @@ Each Glance field carries its own provenance instead of inheriting one vague
 | Exhaustion time | Reported headroom + reset time | Calculates a separate local pace estimate |
 | Main focus | Local prompt/tool activity | Returns a short activity summary, never raw prompt text |
 | Context Health | This user's prior same-agent sessions + local skill/MCP/plugin configuration and transcript invocations | Reuses the canonical CLI/MCP decision; hook commands are not run and hook payload size is not inferred |
+| Next move | Canonical Context Health + Main focus + transcript-reported runway | Shows one compact action and copies a verification-first handoff; never auto-runs an agent |
 
 The machine-readable snapshot includes the same mapping under `provenance`,
 including the price-table date and `uploaded: false`, so custom UIs do not
 have to infer trust from display copy.
+
+Glance refreshes its local snapshot every 30 seconds while running. The footer
+shows the age of the last successful update, changes to stale after 75 seconds,
+and keeps the last good result visibly labeled if refresh fails. Release
+builds also offer launch at login and signed Sparkle updates; source builds
+leave updates disabled because they do not contain a release feed/key.
 
 The Glance source is MIT-licensed and intentionally editable. Fork it to
 change the panel size, placement, visual treatment, refresh interval, or which
 fields appear in the hover card. The shared `aibill glance`
 JSON contract keeps custom interfaces on the same local, evidence-labeled data
 as the CLI and MCP server.
+
+The preregistered 8–12-person comprehension/retention protocol is public at
+[`benchmarks/glance-comprehension/README.md`](benchmarks/glance-comprehension/README.md).
+Its blank scorecard is not a launch result; broad-distribution claims wait for
+real participant sessions and the day-seven follow-up.
 
 ## Privacy & trust
 
