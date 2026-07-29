@@ -86,6 +86,7 @@ struct GlanceView: View {
       .padding(.horizontal, 3)
     }
     .padding(.horizontal, 18)
+    .padding(.top, 18)
     .padding(.bottom, 13)
   }
 

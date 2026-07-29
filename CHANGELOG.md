@@ -42,6 +42,8 @@ MCP provider and local-log hardening.
 - Native hosting layers now use the same continuous corner mask as the glass,
   with an inside-only stroke and no external shadow, eliminating square lines
   outside the rounded card corners.
+- Balanced the native card's top and bottom insets so session text no longer
+  crowds the upper rounded edge.
 - Subscription users now see their locally detected plan beside session value
   at API rates, making clear that the estimate is not an added charge. Limit
   availability is reported per window, so a missing five-hour gauge explains
