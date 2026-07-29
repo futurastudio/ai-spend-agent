@@ -1,10 +1,10 @@
 # aibill Glance for macOS
 
 This is the native hover prototype for the small panel below the
-camera/notch. A stationary liquid-glass `aibill` wordmark sits immediately
-left of the camera and reveals the panel on hover. It is a rendering surface
-over the same transcript-derived Glance contract used by the CLI and MCP
-server.
+camera/notch. It stays fully hidden until the pointer reaches the top menu bar;
+then a stationary liquid-glass `aibill` wordmark appears immediately left of
+the camera and reveals the panel on hover. It is a rendering surface over the
+same transcript-derived Glance contract used by the CLI and MCP server.
 
 ## Local prototype
 
@@ -30,10 +30,11 @@ The unsigned local app is written to:
 apps/glance-macos/dist/aibill Glance.app
 ```
 
-It runs as a menu-bar accessory without a Dock icon. At rest, the only visible
-surface is one tiny, stationary `aibill` glass wordmark to the left of the
-camera/notch. Hover that wordmark to slide the panel down; move away to hide it
-again. No click is required. Right-click the wordmark to refresh data or quit
+It runs as a menu-bar accessory without a Dock icon. At rest, nothing is
+visible. Move the pointer into the top menu-bar strip to reveal one tiny,
+stationary `aibill` glass wordmark to the left of the camera/notch. Hover that
+wordmark to slide the panel down; move away to hide both surfaces again. No
+click is required. Right-click the visible wordmark to refresh data or quit
 the app.
 
 The app resolves data in this order:

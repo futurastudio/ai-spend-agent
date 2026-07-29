@@ -179,9 +179,11 @@ configuration, all seven tools, and the safety model.
 
 ## Glance for macOS
 
-The native Glance prototype leaves one tiny liquid-glass `aibill` wordmark
-parked to the left of the camera/notch. Hover that fixed target—no click
-required—to slide down current-session value at API rates, available
+The native Glance prototype stays completely hidden until the pointer reaches
+the top menu bar, so it does not sit over movies or full-screen video. In the
+menu bar, one tiny liquid-glass `aibill` wordmark appears to the left of the
+camera/notch. Hover that fixed target—no click required—to slide down
+current-session value at API rates, available
 five-hour/weekly limits, reset or exhaustion timing, a local transcript-derived
 description of the user's main work focus, and one actionable anomaly; moving
 away hides the panel again.

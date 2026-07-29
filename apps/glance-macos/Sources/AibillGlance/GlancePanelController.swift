@@ -12,6 +12,7 @@ final class GlancePanelController: NSObject {
   private let hostScreen: NSScreen
   private var hoverTimer: Timer?
   private var expanded = false
+  private var triggerVisible = false
   private var lastHoverDate = Date.distantPast
 
   init(store: GlanceStore) {
@@ -41,6 +42,8 @@ final class GlancePanelController: NSObject {
     )
     detailPanel.alphaValue = 0
     detailPanel.orderOut(nil)
+    triggerPanel.alphaValue = 0
+    triggerPanel.orderOut(nil)
     triggerPanel.setFrame(triggerFrame(), display: true)
     detailPanel.setFrame(detailFrame(), display: true)
     configureContextMenu()
@@ -59,12 +62,49 @@ final class GlancePanelController: NSObject {
   func show() {
     setExpanded(false, animated: false)
     triggerPanel.setFrame(triggerFrame(), display: true)
-    triggerPanel.orderFrontRegardless()
+    triggerVisible = false
+    triggerPanel.alphaValue = 0
+    triggerPanel.orderOut(nil)
   }
 
   func hide() {
     setExpanded(false, animated: false)
+    triggerVisible = false
+    triggerPanel.alphaValue = 0
     triggerPanel.orderOut(nil)
+  }
+
+  private func setTriggerVisible(_ value: Bool, animated: Bool = true) {
+    guard triggerVisible != value else { return }
+    triggerVisible = value
+
+    if value {
+      triggerPanel.setFrame(triggerFrame(), display: true)
+      triggerPanel.alphaValue = animated ? 0 : 1
+      triggerPanel.orderFrontRegardless()
+      guard animated else { return }
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.16
+        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        triggerPanel.animator().alphaValue = 1
+      }
+    } else {
+      guard animated else {
+        triggerPanel.alphaValue = 0
+        triggerPanel.orderOut(nil)
+        return
+      }
+      NSAnimationContext.runAnimationGroup({ context in
+        context.duration = 0.14
+        context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        triggerPanel.animator().alphaValue = 0
+      }, completionHandler: { [weak self] in
+        Task { @MainActor in
+          guard let self, !self.triggerVisible else { return }
+          self.triggerPanel.orderOut(nil)
+        }
+      })
+    }
   }
 
   private func setExpanded(_ value: Bool, animated: Bool = true) {
@@ -108,9 +148,12 @@ final class GlancePanelController: NSObject {
 
   @objc private func updateHoverState() {
     let mouse = NSEvent.mouseLocation
+    let overMenuBar = menuBarActivationFrame().contains(mouse)
     let overTrigger = triggerPanel.frame.contains(mouse)
     let overDetail = expanded
       && detailPanel.frame.insetBy(dx: -10, dy: -14).contains(mouse)
+
+    setTriggerVisible(overMenuBar || overTrigger || overDetail || expanded)
 
     if overTrigger || overDetail {
       lastHoverDate = Date()
@@ -172,14 +215,25 @@ final class GlancePanelController: NSObject {
       x = hostScreen.frame.midX - Self.triggerSize.width - 82
     }
 
-    let menuBarHeight = max(
-      24,
-      hostScreen.frame.maxY - hostScreen.visibleFrame.maxY
-    )
+    let menuBarHeight = currentMenuBarHeight()
     let y = hostScreen.frame.maxY
       - menuBarHeight
       + (menuBarHeight - Self.triggerSize.height) / 2
     return NSRect(origin: NSPoint(x: x, y: y), size: Self.triggerSize)
+  }
+
+  private func menuBarActivationFrame() -> NSRect {
+    let height = currentMenuBarHeight()
+    return NSRect(
+      x: hostScreen.frame.minX,
+      y: hostScreen.frame.maxY - height,
+      width: hostScreen.frame.width,
+      height: height
+    )
+  }
+
+  private func currentMenuBarHeight() -> CGFloat {
+    max(24, hostScreen.frame.maxY - hostScreen.visibleFrame.maxY)
   }
 
   private func detailFrame() -> NSRect {

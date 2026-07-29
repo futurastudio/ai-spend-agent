@@ -36,6 +36,9 @@ MCP provider and local-log hardening.
   prompt text is not included in the Glance contract.
 - Removed the redundant metric strip below the camera and the duplicate native
   window/web-preview framing, leaving one clean rounded glass card on hover.
+- The `aibill` wordmark now stays fully hidden until the pointer reaches the
+  top menu-bar strip, keeping it off movies and full-screen video while making
+  the same hover target available on demand.
 - Subscription users now see their locally detected plan beside session value
   at API rates, making clear that the estimate is not an added charge. Limit
   availability is reported per window, so a missing five-hour gauge explains

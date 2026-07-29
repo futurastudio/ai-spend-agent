@@ -147,9 +147,10 @@ export default function Home() {
           <p className="mt-4 text-center text-xs leading-relaxed text-faint">
             Native prototype: <span className="text-muted">aibill Glance</span>,
             a source-built macOS companion backed by the same local transcript
-            engine as the CLI and MCP server. One stationary glass wordmark
-            sits left of the camera; hover it—no click required—to slide down
-            the panel. Session value is estimated at API rates—not treated as
+            engine as the CLI and MCP server. It stays hidden until the pointer
+            reaches the menu bar; then one stationary glass wordmark appears
+            left of the camera. Hover it—no click required—to slide down the
+            panel. Session value is estimated at API rates—not treated as
             an added subscription charge—plan limits appear only when the agent
             reports each window, and Main focus describes the dominant local
             workstream rather than its spend. The numbers above are

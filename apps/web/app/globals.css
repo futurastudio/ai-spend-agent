@@ -292,12 +292,30 @@ body {
     font-weight: 650;
     letter-spacing: -0.025em;
     list-style: none;
-    pointer-events: auto;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
     cursor: default;
+    transform: translateY(-3px);
     transition:
+      opacity 0.16s ease,
+      visibility 0s linear 0.18s,
+      transform 0.2s ease,
       border-color 0.18s ease,
       background 0.18s ease,
       color 0.18s ease;
+  }
+
+  .glance-stage:has(.glance-menu-bar:hover) .glance-trigger,
+  .glance-stage:has(.glance-trigger:hover) .glance-trigger,
+  .glance-stage:has(.glance-trigger:focus-visible) .glance-trigger,
+  .glance-stage:has(.glance-panel:hover) .glance-trigger,
+  .glance-stage:focus-within .glance-trigger {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition-delay: 0s;
   }
 
   .glance-trigger:hover,
