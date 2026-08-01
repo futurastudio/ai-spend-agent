@@ -33,9 +33,22 @@ Do not recruit repository contributors for the first pass. Use anonymous
 participant IDs (`P01`–`P12`) and do not commit names, email addresses,
 transcripts, screenshots containing private work, or credentials.
 
+### Volunteer interest
+
+Glance is currently an unsigned, source-built preview; there is no public Mac
+download yet. Active Claude Code and Codex users can [register interest in the
+study through the design-partner
+form](https://ai-spend-agent.vercel.app/?ref=glance-study#beta). The attributed
+link identifies Glance-study volunteers, but submission does not promise
+immediate access or a signed build. Keep volunteer contact data in the private
+signup system, not in this repository or the scorecard below.
+
 ## Procedure
 
-1. Install the same signed candidate build and record its commit/version.
+1. Install the same candidate and record its commit/version. Early moderated
+   sessions may use the source-built preview from a path-neutral public clone;
+   the broad-distribution gate must be repeated with the exact Developer
+   ID-signed, notarized candidate once it exists.
 2. Ask the participant to run the CLI baseline once, then open Glance by
    hovering without explaining the card.
 3. Give them 60 seconds to answer the five research questions aloud.

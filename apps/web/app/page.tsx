@@ -198,6 +198,30 @@ export default function Home() {
             states. The numbers above are illustrative; a signed public
             download is not available yet.
           </p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 font-mono text-xs">
+            <a
+              href="https://github.com/futurastudio/ai-spend-agent/tree/main/apps/glance-macos"
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted transition-colors hover:text-ink"
+            >
+              Build Glance from source ↗
+            </a>
+            <a
+              href="https://github.com/futurastudio/ai-spend-agent/tree/main/benchmarks/glance-comprehension"
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted transition-colors hover:text-ink"
+            >
+              Read the study protocol ↗
+            </a>
+            <a
+              href="/?ref=glance-study#beta"
+              className="text-green transition-colors hover:text-green-bright"
+            >
+              Volunteer for the study →
+            </a>
+          </div>
         </div>
 
         {/* Real terminal recording — regenerated from the CLI by scripts/record-demo.sh */}
@@ -399,12 +423,16 @@ export default function Home() {
               {
                 week: "public beta",
                 cmd: "MCP + explicit plugin",
-                copy: "On-demand explanation from the same structured contract; never an always-on prompt."
+                copy: "On-demand explanation from the same structured contract; never an always-on prompt.",
+                href: "https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md",
+                cta: "Configure MCP →"
               },
               {
                 week: "source preview",
                 cmd: "aibill Glance",
-                copy: "A hidden-until-hover macOS view. No signed standalone download is available yet."
+                copy: "A hidden-until-hover macOS view. No signed standalone download is available yet.",
+                href: "https://github.com/futurastudio/ai-spend-agent/tree/main/apps/glance-macos",
+                cta: "Build from source →"
               }
             ].map((item) => (
               <div key={item.cmd} className="glass rounded-2xl px-5 py-6">
@@ -415,6 +443,16 @@ export default function Home() {
                   {item.cmd}
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-muted">{item.copy}</p>
+                {item.href && item.cta && (
+                  <a
+                    href={item.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-4 inline-flex font-mono text-xs text-green transition-colors hover:text-green-bright"
+                  >
+                    {item.cta}
+                  </a>
+                )}
               </div>
             ))}
           </div>
@@ -443,6 +481,20 @@ export default function Home() {
               private. Join as a design partner to shape the first shared-ledger
               alpha. Workspace is not launched; the local CLI and MCP remain
               useful without an account.
+            </p>
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-faint">
+              Testing the Mac preview instead? Read the{" "}
+              <a
+                href="https://github.com/futurastudio/ai-spend-agent/tree/main/benchmarks/glance-comprehension"
+                target="_blank"
+                rel="noreferrer"
+                className="text-muted underline-offset-4 hover:text-ink hover:underline"
+              >
+                Glance study protocol
+              </a>{" "}
+              and volunteer below. We&apos;ll provide the exact preview build and
+              setup for each session; broad-distribution validation will be
+              repeated on the future signed candidate.
             </p>
             <div className="mx-auto mt-8 max-w-md text-left">
               <WaitlistForm />
@@ -481,6 +533,14 @@ export default function Home() {
               className="transition-colors hover:text-ink"
             >
               GitHub
+            </a>
+            <a
+              href="https://github.com/futurastudio/ai-spend-agent/issues/new/choose"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              Report an issue
             </a>
             <a
               href="https://www.npmjs.com/package/ai-spend-agent"

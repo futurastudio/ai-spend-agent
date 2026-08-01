@@ -159,7 +159,7 @@ estimate. It does not convert a transcript estimate into an invoice line item.
 | Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented and live-verified |
 | Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Fixture-verified beta; live account QA pending |
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Fixture-verified beta; live account QA pending |
-| Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | 🔜 Planned — parsers welcome ([open an issue](https://github.com/futurastudio/ai-spend-agent/issues)) |
+| Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | 🔜 Planned — parsers welcome ([request an agent or provider](https://github.com/futurastudio/ai-spend-agent/issues/new/choose)) |
 
 **Model price coverage:** local-log estimates use published list prices for
 Anthropic, OpenAI, Google (Gemini), DeepSeek, Moonshot (Kimi), and xAI (Grok)
@@ -256,6 +256,9 @@ GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
 configuration, all eight tools, and the safety model.
 
+Beta problem? [Report a bug or request an agent/provider
+format](https://github.com/futurastudio/ai-spend-agent/issues/new/choose).
+
 Codex users can instead install the thin, explicit-only plugin in
 [`plugins/aibill`](plugins/aibill). It exposes the same MCP plus
 `$aibill-check`, `$aibill-explain`, and `$aibill-help`. The plugin adds no
@@ -319,7 +322,10 @@ as the CLI and MCP server.
 The preregistered 8–12-person comprehension/retention protocol is public at
 [`benchmarks/glance-comprehension/README.md`](benchmarks/glance-comprehension/README.md).
 Its blank scorecard is not a launch result; broad-distribution claims wait for
-real participant sessions and the day-seven follow-up.
+real participant sessions and the day-seven follow-up. Mac users can
+[volunteer for the Glance preview
+study](https://ai-spend-agent.vercel.app/?ref=github-glance-study#beta); the
+current form records interest, not access to a signed download.
 
 ## Privacy & trust
 
@@ -348,7 +354,7 @@ reconciliation, allocation, budgets, anomaly routing, approvals, and
 evidence-backed cost per accepted outcome where coverage supports it. It will
 never be required to inspect a user's own local data.
 
-**[Join the Workspace design-partner waitlist →](https://ai-spend-agent.vercel.app)**
+**[Apply as a Workspace design partner →](https://ai-spend-agent.vercel.app/?ref=github-readme#beta)**
 
 See the [public roadmap](ROADMAP.md) for the evidence-first sequence and its
 explicit non-goals.
