@@ -48,9 +48,9 @@ export function PageShell({
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
+              className="glass glass-interactive whitespace-nowrap rounded-xl px-2.5 py-2 text-xs font-medium text-muted hover:text-ink sm:px-3.5 sm:text-sm"
             >
-              Workspace waitlist
+              Become a design partner
             </Link>
           </nav>
         </div>

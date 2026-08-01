@@ -293,7 +293,7 @@ body {
     letter-spacing: -0.025em;
     list-style: none;
     opacity: 0;
-    visibility: hidden;
+    visibility: visible;
     pointer-events: none;
     cursor: default;
     transform: translateY(-3px);
@@ -310,6 +310,7 @@ body {
   .glance-stage:has(.glance-trigger:hover) .glance-trigger,
   .glance-stage:has(.glance-trigger:focus-visible) .glance-trigger,
   .glance-stage:has(.glance-panel:hover) .glance-trigger,
+  .usage-glance[data-open="true"] .glance-trigger,
   .glance-stage:focus-within .glance-trigger {
     opacity: 1;
     visibility: visible;
@@ -365,9 +366,8 @@ body {
   }
 
   .usage-glance:has(.glance-trigger:hover) .glance-panel,
-  .usage-glance:has(.glance-trigger:focus-visible) .glance-panel,
   .usage-glance:has(.glance-panel:hover) .glance-panel,
-  .usage-glance:focus-within .glance-panel {
+  .usage-glance[data-open="true"] .glance-panel {
     opacity: 1;
     visibility: visible;
     pointer-events: auto;
@@ -723,8 +723,24 @@ body {
     animation: none;
     opacity: 1;
   }
+  .glance-trigger,
   .glance-panel {
     transition-duration: 0.01ms;
+  }
+}
+
+/* Hover is the native Mac interaction. Touch and other non-hover devices keep
+   the wordmark discoverable and use the same button as a tap disclosure. */
+@media (hover: none), (pointer: coarse) {
+  .glance-trigger {
+    top: 0;
+    height: 24px;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    cursor: pointer;
+    transform: none;
+    transition-delay: 0s;
   }
 }
 

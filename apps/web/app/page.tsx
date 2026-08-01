@@ -125,9 +125,9 @@ export default function Home() {
             </a>
             <a
               href="#beta"
-              className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
+              className="glass glass-interactive whitespace-nowrap rounded-xl px-2.5 py-2 text-xs font-medium text-muted hover:text-ink sm:px-3.5 sm:text-sm"
             >
-              Workspace waitlist
+              Become a design partner
             </a>
           </nav>
         </div>
@@ -149,15 +149,15 @@ export default function Home() {
           Know what your AI coding agents consumed
           <br className="hidden sm:block" />{" "}
           <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
-            and what it means financially.
+            and what to do next.
           </span>
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-xl">
           Separate local API-equivalent usage, detected subscription context,
-          and optional provider-reported cost; attribute what each source
-          exposes; and see runway risk and the next investigation—without
-          uploading raw conversations.
+          and optional provider-reported cost. See what each source exposes,
+          where runway is at risk, and one evidence-backed next
+          action—without uploading raw conversations.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
@@ -183,20 +183,13 @@ export default function Home() {
           />
           <UsageGlance />
           <p className="mt-4 text-center text-xs leading-relaxed text-faint">
-            Native prototype: <span className="text-muted">aibill Glance</span>,
-            a source-built macOS companion backed by the same local transcript
-            engine as the CLI and MCP server. It stays hidden until the pointer
-            reaches the menu bar; then one stationary glass wordmark appears
-            left of the camera. Hover it—no click required—to slide down the
-            panel. Session value is estimated at API rates—not treated as
-            an added subscription charge—plan limits appear only when the agent
-            reports each window, and Main focus describes the dominant local
-            workstream rather than its spend. Its final two-line row combines
-            the same Context Health, focus, and reported-runway contract used
-            by Terminal and MCP; clicking it copies a handoff, but never runs
-            an agent. Freshness is explicit, including stale and failed-refresh
-            states. The numbers above are illustrative; a signed public
-            download is not available yet.
+            Hidden until hover on macOS, <span className="text-muted">aibill
+            Glance</span> reveals one sourced snapshot: session value, reported
+            runway, main focus, freshness, and one next action. Hover its
+            wordmark—or tap it in this preview. It reads the same local
+            contract as Terminal and MCP, never invents missing limits, and
+            never runs an agent. This is a source-built preview; a signed
+            public download is not available yet.
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 font-mono text-xs">
             <a

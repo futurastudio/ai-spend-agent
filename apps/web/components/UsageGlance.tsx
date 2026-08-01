@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+
 const limits = [
   {
     label: "5-hour limit",
@@ -23,6 +27,8 @@ const limits = [
  * same local state as the CLI.
  */
 export function UsageGlance() {
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
     <div className="glance-stage" aria-label="Preview of aibill Glance">
       <div className="glance-wallpaper" aria-hidden="true" />
@@ -34,16 +40,25 @@ export function UsageGlance() {
       <div
         className="usage-glance"
         aria-describedby="glance-sample-note"
+        data-open={isOpen}
       >
         <button
           type="button"
           className="glance-trigger"
-          aria-label="aibill Glance. Hover or focus to reveal current AI usage."
+          aria-label="aibill Glance. Hover with a pointer or activate to reveal illustrative AI usage."
+          aria-expanded={isOpen}
+          aria-controls="glance-preview-panel"
+          onClick={() => setIsOpen((open) => !open)}
         >
           aibill
         </button>
 
-        <div className="glance-panel">
+        <div
+          className="glance-panel"
+          id="glance-preview-panel"
+          role="region"
+          aria-label="Illustrative Glance usage panel"
+        >
           <div className="glance-detail">
             <div className="glance-headline">
               <div>
