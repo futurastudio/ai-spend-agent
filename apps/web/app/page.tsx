@@ -182,8 +182,8 @@ export default function Home() {
             One bill. Three ways to use it.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
-            Switch surfaces. The numbers, labels, freshness, and missing coverage
-            do not change.
+            Each surface keeps the same evidence rules: source, freshness,
+            billing class, and missing data stay explicit.
           </p>
         </div>
 

@@ -44,6 +44,32 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).not.toContain("all four");
   });
 
+  it("keeps explicit sample output deterministic and free of local plan or credential hints", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-capture-"));
+    const priorKey = process.env.OPENAI_ADMIN_KEY;
+    process.env.OPENAI_ADMIN_KEY = `sk-${"capture-test-key".repeat(2)}`;
+    await writeFile(process.env.AI_SPEND_CLAUDE_CONFIG!, JSON.stringify({
+      oauthAccount: {
+        billingType: "stripe_subscription",
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x"
+      }
+    }));
+
+    try {
+      const result = await runCli(["--sample", "--path", dir, "--no-color"]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("DATA MODE: demo sample");
+      expect(result.stdout).not.toContain("Claude Max 20x");
+      expect(result.stdout).not.toContain("Found local key");
+      expect(result.stdout).not.toContain("capture-test-key");
+    } finally {
+      if (priorKey === undefined) delete process.env.OPENAI_ADMIN_KEY;
+      else process.env.OPENAI_ADMIN_KEY = priorKey;
+    }
+  });
+
   it("prints --version without scanning local data", async () => {
     const result = await runCli(["--version"]);
 

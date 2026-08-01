@@ -311,6 +311,10 @@ body {
     background: #07090d;
   }
 
+  .tour-terminal-recording {
+    min-height: 0;
+  }
+
   .tour-window-bar {
     display: flex;
     height: 48px;
@@ -345,6 +349,59 @@ body {
     font-family: var(--font-geist-mono), ui-monospace, monospace;
     font-size: 10px;
     font-weight: 550;
+  }
+
+  .tour-video-control {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    margin-left: auto;
+    border-radius: 999px;
+    padding: 0 12px;
+    color: rgba(255, 255, 255, 0.58);
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .tour-video-control:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .tour-video-control:focus-visible {
+    outline: 2px solid rgba(94, 242, 168, 0.62);
+    outline-offset: -2px;
+  }
+
+  .tour-video-control svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+  }
+
+  .tour-terminal-media {
+    overflow: hidden;
+    aspect-ratio: 10 / 7;
+    background: #060609;
+  }
+
+  .tour-terminal-video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #060609;
+    object-fit: contain;
   }
 
   .tour-terminal-body {
@@ -1155,6 +1212,31 @@ body {
   .tour-terminal,
   .tour-mcp {
     min-height: 550px;
+  }
+  .tour-terminal-recording {
+    min-height: 0;
+  }
+  .tour-window-bar {
+    padding: 0 12px;
+  }
+  .tour-window-bar strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tour-video-control {
+    flex: 0 0 44px;
+    width: 44px;
+    padding: 0;
+  }
+  .tour-video-control > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .tour-terminal-body {
     padding: 17px;

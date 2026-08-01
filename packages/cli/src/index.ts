@@ -221,7 +221,11 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   // Persona: --plan override wins; otherwise read the plans the coding agents
   // themselves persisted locally (read-only, whitelisted fields, no network).
   let detectedPlans: DetectedPlan[];
-  if (args.plan) {
+  if (args.sample) {
+    // An explicit sample run must be deterministic and safe to record/share.
+    // Never mix the developer's real local plan into illustrative output.
+    detectedPlans = [];
+  } else if (args.plan) {
     const override = planOverrideFromFlag(args.plan);
     if (!override) {
       return {
@@ -241,7 +245,12 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
 
   // Surface auto-detected credentials so the user knows their next 2-min step,
   // without ever printing a raw secret.
-  const detection = await detectLocalCredentials({ cwd: resolve(args.path) });
+  // Sample output is designed for demos, docs, and screenshots. Keeping local
+  // credential discovery out of that path prevents even redacted machine-
+  // specific hints from leaking into a recording.
+  const detection = args.sample
+    ? { credentials: [] as DetectedCredential[], scannedFiles: [] as string[] }
+    : await detectLocalCredentials({ cwd: resolve(args.path) });
   const nextSteps = quickstartNextSteps(mode, detection.credentials);
 
   // Dead-context cost, globalized across the user's whole Claude Code setup

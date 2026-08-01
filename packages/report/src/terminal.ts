@@ -114,7 +114,7 @@ export function generatePlainEnglishSummary(
   if (options.mode === "demo") {
     lines.push("");
     lines.push(
-      `  ${c.yellow("DEMO")} ${c.dim("sample data — run")} ${c.bold("npx ai-spend-agent connect openai")} ${c.dim("for your real numbers")}`
+      `  ${c.yellow("DEMO")} ${c.dim("sample data — run")} ${c.bold("npx aibill connect openai")} ${c.dim("for your real numbers")}`
     );
   }
   if (options.mode === "local-logs") {
@@ -160,7 +160,7 @@ export function generatePlainEnglishSummary(
     lines.push("");
     lines.push(indentBlock(renderBreakdownTable(focusedEntries, summary.totalUsd, c, useColor), "  "));
     lines.push("");
-    lines.push(`  ${c.dim("run")} ${c.bold("npx ai-spend-agent")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
+    lines.push(`  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
     lines.push("");
     return lines.join("\n");
   }
@@ -351,14 +351,14 @@ export function generatePlainEnglishSummary(
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
   lines.push(sectionHeader(3, "APPLY", "make the cuts (copy, don't retype)", c));
   lines.push("");
-  // Every command is npx-prefixed: most users run via `npx ai-spend-agent`
-  // and have NO `ai-spend-agent` on PATH — a bare command is a guaranteed
+  // Every command is npx-prefixed: most users run via `npx aibill`
+  // and have NO `aibill` on PATH — a bare command is a guaranteed
   // "command not found" for exactly the person who just got motivated.
   lines.push(
     `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a ready-to-paste prompt + action plan for your coding agent")}`
   );
   lines.push(
-    `  ${c.dim("    paste it into Claude Code / Codex — it bundles the cuts above with guardrails (long form: npx ai-spend-agent apply-artifact)")}`
+    `  ${c.dim("    paste it into Claude Code / Codex — it bundles the cuts above with guardrails (long form: npx aibill apply-artifact)")}`
   );
   lines.push("");
 

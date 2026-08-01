@@ -33,7 +33,7 @@ No agent logs? You get a full demo on sample data instead. When you're ready,
 add official provider-reported cost with an OpenAI or Anthropic admin/owner
 key. Availability depends on the permissions of that provider account.
 
-![Terminal recording of npx ai-spend-agent rendering the spend report on sample data](docs/assets/demo.gif)
+![Terminal recording of npx aibill rendering the spend report on sample data](docs/assets/demo.gif)
 
 *Illustrative sample output — demo data and modeled API-rate opportunities, not
 provider-reported cost, an invoice, or verified savings. Regenerated from the

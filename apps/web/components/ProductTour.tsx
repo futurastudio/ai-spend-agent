@@ -2,6 +2,7 @@
 
 import { useState, type KeyboardEvent } from "react";
 import { UsageGlance } from "@/components/UsageGlance";
+import { TerminalDemo } from "@/components/TerminalDemo";
 import { PRODUCT_DEMO } from "@/lib/product-demo";
 
 const surfaces = [
@@ -90,48 +91,7 @@ export function ProductTour() {
         {active === "glance" && <UsageGlance />}
 
         {active === "terminal" && (
-          <div className="tour-terminal" aria-label="Illustrative aibill terminal receipt">
-            <div className="tour-window-bar">
-              <span aria-hidden="true" />
-              <span aria-hidden="true" />
-              <span aria-hidden="true" />
-              <strong>aibill · local receipt</strong>
-            </div>
-            <div className="tour-terminal-body">
-              <p className="tour-prompt"><span>$</span> npx aibill</p>
-              <div className="tour-terminal-grid">
-                <div className="tour-terminal-primary">
-                  <p>Current session · {session.basis}</p>
-                  <strong>{session.value}</strong>
-                  <span>{session.agent} · {session.model} · {session.project}</span>
-                  <small>{session.plan} detected locally · usage value ≠ billed spend</small>
-                </div>
-                <div className="tour-terminal-runway">
-                  {limits.map((limit) => (
-                    <div key={limit.label}>
-                      <span>{limit.label}</span>
-                      <strong>{limit.value}</strong>
-                      <small>{limit.projection} · {limit.reset}</small>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="tour-terminal-row">
-                <span>MAIN FOCUS</span>
-                <strong>{focus.label}</strong>
-                <small>{focus.activity} of observed 7d activity · {focus.file}</small>
-              </div>
-              <div className="tour-terminal-row tour-terminal-action">
-                <span>NEXT ACTION</span>
-                <strong>{action.label}</strong>
-                <small>{action.detail}</small>
-              </div>
-              <div className="tour-terminal-source">
-                Local: {evidence.sources} · {evidence.files} · nothing uploaded
-                <strong>{evidence.freshness}</strong>
-              </div>
-            </div>
-          </div>
+          <TerminalDemo />
         )}
 
         {active === "mcp" && (
@@ -167,9 +127,10 @@ export function ProductTour() {
       </div>
 
       <p className="product-tour-note">
-        Illustrative sample data. Every surface reads one evidence contract;
-        estimated value, provider-reported cost, detected plans, and missing
-        limits remain visibly separate.
+        Glance and Ask aibill share one illustrative receipt. Terminal replays
+        the real CLI with deterministic sample data. Estimated value,
+        provider-reported cost, detected plans, and missing limits remain
+        visibly separate.
       </p>
     </div>
   );
