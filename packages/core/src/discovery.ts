@@ -1,5 +1,6 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
+import { resolveSafeScanRoot } from "./scanGuard.js";
 
 export type UsageSignalKind = "dependency" | "config" | "environment" | "source_code" | "provider_export" | "invoice";
 
@@ -7,15 +8,29 @@ export type UsageSignal = {
   provider: string;
   kind: UsageSignalKind;
   filePath: string;
+  /** Stable rule identity; present on scanner-produced signals. */
+  ruleId?: string;
+  /** Structured, non-content evidence; present on scanner-produced signals. */
+  evidenceMeta?: UsageSignalEvidence;
+  /** JSON encoding of evidenceMeta retained for registry/backward compatibility. */
   evidence: string;
   confidence: number;
+};
+
+export type UsageSignalEvidence = {
+  file: string;
+  provider: string;
+  signal: UsageSignalKind;
+  ruleId: string;
 };
 
 export type LocalDiscoveryResult = {
   rootPath: string;
   scannedFiles: number;
   skippedDirectories: string[];
-  /** Paths that could not be read (permissions, dangling symlinks, non-UTF8) — skipped, never fatal. */
+  /** Symbolic links found below the approved root. They are never followed. */
+  skippedSymlinks: string[];
+  /** Paths that could not be read (permissions, vanished entries, non-UTF8) — skipped, never fatal. */
   unreadablePaths: string[];
   signals: UsageSignal[];
   secretsDetected: string[];
@@ -30,6 +45,7 @@ const skippedDirectoryNames = new Set([
   ".next",
   ".turbo",
   "coverage",
+  ".ai-spend-agent",
   ".ssh",
   "Keychains"
 ]);
@@ -37,25 +53,26 @@ const skippedDirectoryNames = new Set([
 const maxFileBytes = 512_000;
 
 const providerRules: Array<{
+  id: string;
   provider: string;
   kind: UsageSignalKind;
   patterns: RegExp[];
   confidence: number;
 }> = [
-  { provider: "anthropic", kind: "dependency", patterns: [/@anthropic-ai\/sdk/, /anthropic/i], confidence: 0.9 },
-  { provider: "langfuse", kind: "dependency", patterns: [/langfuse/i], confidence: 0.82 },
-  { provider: "openai", kind: "dependency", patterns: [/"openai"\s*:/, /from\s+["']openai["']/, /OPENAI_API_KEY/], confidence: 0.9 },
-  { provider: "vercel-ai-sdk", kind: "dependency", patterns: [/"ai"\s*:/, /from\s+["']ai["']/], confidence: 0.78 },
-  { provider: "litellm", kind: "config", patterns: [/litellm/i, /model_list:/], confidence: 0.84 },
-  { provider: "helicone", kind: "environment", patterns: [/HELICONE_API_KEY/, /helicone/i], confidence: 0.8 },
-  { provider: "cursor", kind: "invoice", patterns: [/cursor/i], confidence: 0.76 },
-  { provider: "replit", kind: "invoice", patterns: [/replit/i], confidence: 0.72 }
+  { id: "provider.anthropic.dependency", provider: "anthropic", kind: "dependency", patterns: [/@anthropic-ai\/sdk/, /anthropic/i], confidence: 0.9 },
+  { id: "provider.langfuse.dependency", provider: "langfuse", kind: "dependency", patterns: [/langfuse/i], confidence: 0.82 },
+  { id: "provider.openai.dependency", provider: "openai", kind: "dependency", patterns: [/"openai"\s*:/, /from\s+["']openai["']/, /OPENAI_API_KEY/], confidence: 0.9 },
+  { id: "provider.vercel-ai-sdk.dependency", provider: "vercel-ai-sdk", kind: "dependency", patterns: [/"ai"\s*:/, /from\s+["']ai["']/], confidence: 0.78 },
+  { id: "provider.litellm.config", provider: "litellm", kind: "config", patterns: [/litellm/i, /model_list:/], confidence: 0.84 },
+  { id: "provider.helicone.environment", provider: "helicone", kind: "environment", patterns: [/HELICONE_API_KEY/, /helicone/i], confidence: 0.8 },
+  { id: "provider.cursor.invoice", provider: "cursor", kind: "invoice", patterns: [/cursor/i], confidence: 0.76 },
+  { id: "provider.replit.invoice", provider: "replit", kind: "invoice", patterns: [/replit/i], confidence: 0.72 }
 ];
 
 // Name-based redaction: any UPPER_SNAKE env-style assignment whose name ends
 // in a secret-ish suffix. `KEY` deliberately subsumes API_KEY/ADMIN_KEY/etc —
 // over-redacting a public key is harmless; leaking a private one is not.
-const secretAssignmentPattern = /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH))\s*=\s*([^\s#"']+)/g;
+const secretAssignmentPattern = /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH))\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s#]+)/g;
 // Value-based redaction: known secret shapes regardless of how they're named.
 const providerSecretPatterns = [
   /sk-proj-[A-Za-z0-9_-]{20,}/g,
@@ -79,10 +96,12 @@ const providerSecretPatterns = [
 ];
 
 export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDiscoveryResult> {
+  const canonicalRoot = await resolveSafeScanRoot(rootPath);
   const result: LocalDiscoveryResult = {
-    rootPath,
+    rootPath: canonicalRoot,
     scannedFiles: 0,
     skippedDirectories: [],
+    skippedSymlinks: [],
     unreadablePaths: [],
     signals: [],
     secretsDetected: [],
@@ -90,16 +109,22 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
   };
   const secrets = new Set<string>();
   const skipped = new Set<string>();
+  const symlinks = new Set<string>();
   const unreadable = new Set<string>();
 
-  await walk(rootPath, async (path) => {
-    // A dangling symlink, permission-denied entry, or unreadable file must
-    // never reject the whole scan — real machines are messy. Skip and report.
+  await walk(canonicalRoot, async (path) => {
+    // A permission-denied, vanished, or unreadable file must never reject the
+    // whole scan — real machines are messy. Symlinks are handled by walk and
+    // never reach this callback.
     let fileInfo;
     try {
-      fileInfo = await stat(path);
+      fileInfo = await lstat(path);
     } catch {
       unreadable.add(path);
+      return;
+    }
+    if (fileInfo.isSymbolicLink()) {
+      symlinks.add(path);
       return;
     }
     if (fileInfo.size > maxFileBytes || !isInterestingFile(path)) {
@@ -114,7 +139,7 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
       return;
     }
     const redacted = redactSecrets(raw);
-    const relativePath = relative(rootPath, path) || basename(path);
+    const relativePath = relative(canonicalRoot, path) || basename(path);
     result.scannedFiles += 1;
 
     for (const name of detectSecretNames(raw)) {
@@ -132,20 +157,26 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
         continue;
       }
 
-      const evidence = buildEvidence(relativePath, rule.provider, redacted);
+      const kind = inferKind(path, rule.kind);
+      const evidenceMeta = buildEvidence(relativePath, rule.provider, kind, rule.id);
       result.signals.push({
         provider: rule.provider,
-        kind: inferKind(path, rule.kind),
+        kind,
         filePath: relativePath,
-        evidence,
+        ruleId: rule.id,
+        evidenceMeta,
+        evidence: encodeEvidence(evidenceMeta),
         confidence: rule.confidence
       });
     }
-  }, skipped, unreadable);
+  }, skipped, symlinks, unreadable);
 
   result.skippedDirectories = Array.from(skipped).sort();
+  result.skippedSymlinks = Array.from(symlinks)
+    .map((path) => relative(canonicalRoot, path) || basename(path))
+    .sort();
   result.unreadablePaths = Array.from(unreadable)
-    .map((path) => relative(rootPath, path) || basename(path))
+    .map((path) => relative(canonicalRoot, path) || basename(path))
     .sort();
   result.secretsDetected = Array.from(secrets).sort();
   result.signals = dedupeSignals(result.signals).sort((left, right) => {
@@ -178,6 +209,7 @@ async function walk(
   rootPath: string,
   visit: (path: string) => Promise<void>,
   skipped: Set<string>,
+  symlinks: Set<string>,
   unreadable: Set<string>
 ): Promise<void> {
   let entries;
@@ -190,16 +222,20 @@ async function walk(
   }
   for (const entry of entries) {
     const path = join(rootPath, entry.name);
+    if (entry.isSymbolicLink()) {
+      symlinks.add(path);
+      continue;
+    }
     if (entry.isDirectory()) {
       if (skippedDirectoryNames.has(entry.name)) {
         skipped.add(entry.name);
         continue;
       }
-      await walk(path, visit, skipped, unreadable);
+      await walk(path, visit, skipped, symlinks, unreadable);
       continue;
     }
 
-    if (entry.isFile() || entry.isSymbolicLink()) {
+    if (entry.isFile()) {
       await visit(path);
     }
   }
@@ -249,18 +285,30 @@ function detectExportSignals(filePath: string, redacted: string): UsageSignal[] 
 
   const normalizedProvider = provider === "google" ? "gemini" : provider;
   const kind: UsageSignalKind = isInvoice ? "invoice" : "provider_export";
+  const ruleId = `export.${normalizedProvider}.${kind}`;
+  const evidenceMeta = buildEvidence(filePath, normalizedProvider, kind, ruleId);
   return [{
     provider: normalizedProvider,
     kind,
     filePath,
-    evidence: `${filePath}: detected ${normalizedProvider} ${kind.replace("_", " ")}`,
+    ruleId,
+    evidenceMeta,
+    evidence: encodeEvidence(evidenceMeta),
     confidence: isInvoice ? 0.82 : 0.88
   }];
 }
 
-function buildEvidence(filePath: string, provider: string, redacted: string): string {
-  const line = redacted.split(/\r?\n/).find((candidate) => candidate.toLowerCase().includes(provider.split("-")[0]!));
-  return line ? `${filePath}: ${line.trim()}` : `${filePath}: detected ${provider} usage signal`;
+function buildEvidence(
+  file: string,
+  provider: string,
+  signal: UsageSignalKind,
+  ruleId: string
+): UsageSignalEvidence {
+  return { file, provider, signal, ruleId };
+}
+
+function encodeEvidence(evidence: UsageSignalEvidence): string {
+  return JSON.stringify(evidence);
 }
 
 function dedupeSignals(signals: UsageSignal[]): UsageSignal[] {

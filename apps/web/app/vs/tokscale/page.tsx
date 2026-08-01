@@ -4,7 +4,7 @@ import { Reveal } from "@/components/Reveal";
 
 const title = "aibill vs tokscale (2026) — AI usage tools compared";
 const description =
-  "A current comparison of aibill and tokscale: tokscale offers broad agent coverage, a TUI, quota views, and social graphs; aibill focuses on provider-bill reconciliation and recommended cuts.";
+  "A current comparison of aibill and tokscale: tokscale offers broad agent coverage, a TUI, quota views, and social graphs; aibill focuses on financial semantics, provenance, Context Health, and recommended actions.";
 
 export const metadata: Metadata = {
   title,
@@ -22,11 +22,11 @@ const rows: Array<[string, string, string]> = [
     "Yes — multiple providers",
   ],
   [
-    "Reconciles against real provider bills (OpenAI/Anthropic admin key)",
-    "Yes — estimates become verified",
+    "Adds official provider cost reports (OpenAI/Anthropic admin key)",
+    "Yes — kept separate from local estimates",
     "Quota display; not independently reconciled",
   ],
-  ["Ranked savings cut list with $/mo estimates", "Yes", "—"],
+  ["Ranked cost opportunities with modeled $/mo impact", "Yes", "—"],
   ["Dead-context detection and measured estimates", "Yes", "—"],
   ["Optional public leaderboard", "No", "Yes — opt-in submission"],
   ["Local-first by default", "Yes", "Yes"],
@@ -57,9 +57,9 @@ export default function Page() {
             reads your Claude Code and Codex logs the same way — locally, no
             account — then adds the layers you need to act:{" "}
             <span className="text-ink">
-              plan-vs-API math, a ranked cut list with estimated savings,
-              dead-context detection, and reconciliation against provider
-              cost reports
+              plan-vs-API math, ranked cost opportunities with a verification
+              step, hook-aware Context Health, and official provider cost
+              reports kept separate from local estimates
             </span>{" "}
             when you connect an admin key.
           </p>
@@ -109,8 +109,8 @@ export default function Page() {
           <p className="mt-4 text-base leading-relaxed text-muted">
             Use tokscale when you want broad tool coverage, live quota views,
             a TUI, or social usage graphs. Use aibill when the question behind
-            the number is what to do next: which plan fits, what to cut, and how
-            local estimates compare with provider cost reports. Both are free;
+            the number is what to do next: which plan fits, what to investigate,
+            and how local estimates compare with provider cost reports. Both are free;
             trying both takes two npx commands.
           </p>
         </Reveal>

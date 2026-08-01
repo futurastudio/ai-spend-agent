@@ -1,184 +1,339 @@
-# AI Spend Analyst — MCP Server
+# aibill MCP Server
 
-See your AI spend in one view, locally. This is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) stdio server that lets an MCP client such as **Cursor** or **Claude Desktop** scan a local folder for AI provider usage signals (OpenAI, Anthropic, and more), build a spend report, and suggest where to cut. Everything runs on your machine: folders are scanned read-only, secrets are redacted before anything is returned, and nothing is uploaded to the cloud.
+`@agent-finops/mcp` is a local-first Model Context Protocol server for aibill.
+It works with any client that supports a local stdio MCP server, including
+Claude Desktop/Claude Code, Codex, Cursor, and compatible agent hosts.
 
-- Package: `@agent-finops/mcp` (internal workspace scope; the published CLI is `ai-spend-agent`)
-- Binary: `ai-spend-mcp`
-- Built entrypoint: `packages/mcp/dist/server.js`
-- Transport: stdio (JSON-RPC)
-- Tools: `scan_ai_spend`, `list_sources`, `get_spend_report`, `recommend_cuts`
+The MCP client and the spend provider are separate concerns:
 
----
+- **MCP clients:** any stdio-compatible agent can call the tools.
+- **Local usage:** Claude Code and Codex transcript metadata.
+- **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
+- **Live verification:** OpenAI and Anthropic were exercised against their
+  read-only billing/usage APIs on 2026-07-28. Copilot and Cursor have fixture
+  and failure-path coverage but still require a live account QA pass.
 
-## Quick start
+Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
+
+## Quick start from npm
+
+Use this server definition in a JSON-based MCP client:
+
+```json
+{
+  "mcpServers": {
+    "aibill": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--package",
+        "@agent-finops/mcp@latest",
+        "ai-spend-mcp"
+      ]
+    }
+  }
+}
+```
+
+For Codex-style TOML configuration:
+
+```toml
+[mcp_servers.aibill]
+command = "npx"
+args = ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
+```
+
+Restart the client and confirm that these eight tools appear:
+
+1. `scan_ai_spend`
+2. `sync_local_agent_spend`
+3. `sync_provider_spend`
+4. `get_usage_glance`
+5. `get_context_health`
+6. `list_sources`
+7. `get_spend_report`
+8. `recommend_cuts`
+
+## Optional on-demand Codex plugin
+
+The repo also contains [`plugins/aibill`](../plugins/aibill), a thin plugin
+that pins this MCP package and adds three explicit-only skills. It has no
+lifecycle hooks or always-on prompt injection.
+
+From a clone:
 
 ```bash
-# From the repo root
+codex plugin marketplace add /absolute/path/to/ai-spend-agent
+codex plugin add aibill@aibill
+```
+
+Start a new Codex task, then explicitly invoke `$aibill-check`,
+`$aibill-explain`, or `$aibill-help`.
+
+## Local development
+
+```bash
 npm install
-npm run build        # produces packages/mcp/dist/server.js (with a #!/usr/bin/env node shebang)
+npm run build --workspace @agent-finops/core
+npm run build --workspace @agent-finops/mcp
 ```
 
-Then point your MCP client at the built server (see [Use it in Cursor / Claude Desktop](#use-it-in-cursor--claude-desktop)).
-
-To run the binary by name instead of an absolute path, link or install it globally:
-
-```bash
-# Link from the workspace (development)
-cd packages/mcp && npm link
-```
-
-> `@agent-finops/mcp` is not yet published to npm — use the local checkout +
-> `npm link` flow above until it is. This doc will switch to
-> `npm install -g @agent-finops/mcp` when the package is live.
-
-After linking, `ai-spend-mcp` is on your PATH and starts the stdio server.
-
-**Safety:** `scan_ai_spend` enforces the same guard as the CLI — it refuses to
-scan your home directory, the filesystem root, or system directories, and all
-discovered secrets are redacted before anything reaches the MCP client.
-
----
-
-## Use it in Cursor / Claude Desktop
-
-Add one of the configs below. Use the **`node /abs/path` form** for a local checkout, or the **`ai-spend-mcp` bin form** after `npm link` / global install.
-
-### Cursor
-
-Open **Settings → MCP → Add new MCP server** (or edit `~/.cursor/mcp.json`).
-
-`node /abs/path` form:
+Point the MCP client at the checkout:
 
 ```json
 {
   "mcpServers": {
-    "ai-spend-analyst": {
+    "aibill-local": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
+      "args": [
+        "/ABSOLUTE/PATH/TO/agent-finops/packages/mcp/dist/server.js"
+      ]
     }
   }
 }
 ```
 
-`ai-spend-mcp` bin form (after `npm link` / global install):
+Importing `@agent-finops/mcp` as a library does not start the stdio server.
+The executable starts only when `dist/server.js` is invoked as the main module.
 
-```json
-{
-  "mcpServers": {
-    "ai-spend-analyst": {
-      "command": "ai-spend-mcp"
-    }
-  }
-}
-```
+## Data and safety model
 
-### Claude Desktop
-
-Edit `claude_desktop_config.json`:
-
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-`node /abs/path` form:
-
-```json
-{
-  "mcpServers": {
-    "ai-spend-analyst": {
-      "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
-    }
-  }
-}
-```
-
-`ai-spend-mcp` bin form (after `npm link` / global install):
-
-```json
-{
-  "mcpServers": {
-    "ai-spend-analyst": {
-      "command": "ai-spend-mcp"
-    }
-  }
-}
-```
-
-> Replace `/ABSOLUTE/PATH/TO/ai-spend-agent` with the real path to your checkout. Restart Cursor / Claude Desktop after editing the config, then look for `ai-spend-analyst` and its four tools in the MCP tool list.
-
----
+- State tools require an absolute project `path`; home, filesystem, and system
+  roots are refused.
+- `get_usage_glance` is read-only and scans only the known Claude Code and
+  Codex transcript locations (or the documented test-directory overrides).
+- State is written only to `<path>/.ai-spend-agent/`.
+- aibill itself does not upload local transcript contents or send telemetry.
+  An MCP tool's selected structured result is returned to the invoking AI
+  client and follows that client's data-handling policy.
+- Provider tools are read-only against provider APIs.
+- Provider credentials must be inherited environment variables referenced as
+  `env:NAME`; raw keys are rejected before any network request.
+- Only the reference name is persisted. Raw credentials are neither returned
+  to the MCP client nor written to state.
+- Provider syncs merge with prior provider syncs by provider. Re-syncing one
+  provider replaces only that provider's older records.
+- Local-log estimates and provider-billed costs use separate active modes to
+  avoid silently double-counting the same work.
 
 ## Tools
 
-All tools take an absolute `path` to the folder you want to analyze. State for that folder is written to `<path>/.ai-spend-agent/` (a read-only registry, an audit log, the discovery result, and — when sampled — a spend report).
-
-> **Run `scan_ai_spend` first.** The other three tools read state produced by a scan, so calling them before scanning returns an error result (`isError: true`) rather than crashing the server.
-
 ### `scan_ai_spend`
 
-Scan a local folder for AI provider usage signals. Registers the folder as a read-only source, writes an audit log, and redacts secrets before output. Pass `sample: true` to also load the bundled demo usage data so `get_spend_report` has a report to return. Nothing is uploaded.
-
-Inputs:
-
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `path` | string | yes | Absolute path to a local folder to analyze. |
-| `sample` | boolean | no | When `true`, load bundled sample usage data and compute a demo spend report. |
-
-Example call (arguments):
+Discovers provider configuration, dependencies, exports, invoices, and secret
+names in an approved folder. Evidence is redacted before persistence/output.
+Discovery does not make a file a verified billing source and does not parse an
+arbitrary provider export into spend.
 
 ```json
-{ "path": "/Users/you/projects/my-agency", "sample": true }
+{ "path": "/Users/you/projects/agent-finops" }
 ```
 
-Returns a JSON text block with `{ registry, auditLog, discovery }`.
+For a deterministic demo only:
+
+```json
+{ "path": "/Users/you/projects/agent-finops", "sample": true }
+```
+
+### `sync_local_agent_spend`
+
+Reads local Claude Code and Codex transcript metadata, estimates
+API-equivalent model cost, and writes a local report. The optional project
+filter matches the aggregated project name exactly.
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "sinceDays": 30,
+  "project": "agent-finops"
+}
+```
+
+Returned totals are estimates, not provider invoices or subscription quota
+consumption.
+
+### `get_usage_glance`
+
+Builds the read-only data contract for the native Glance UI:
+
+- current or latest session value at API rates, duration, project, and model;
+- locally detected subscription/API billing context, without exposing tokens
+  or config paths;
+- five-hour, weekly, or custom plan windows only when a transcript reports
+  remaining usage and reset metadata;
+- projected exhaustion time, explicitly labeled as a pace estimate;
+- the main recent work focus derived from observed local prompt/tool activity,
+  with task, project, file, automation, or delegated-agent context only when
+  supported; and
+- one `primaryAction` derived from canonical Context Health, Main focus, and
+  reported runway. It includes a compact label/detail plus a copy-ready agent
+  handoff; it is never executed automatically.
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "sinceDays": 30,
+  "project": "agent-finops"
+}
+```
+
+Claude Code and Codex session value is an API-equivalent estimate calculated
+from transcript token metadata. Codex rollouts can contain exact
+provider-reported rate-limit percentages and reset times; Claude Code
+transcripts do not currently contain equivalent plan-headroom fields. The tool
+returns that limit as unavailable instead of guessing. Cursor and GitHub
+Copilot require their provider connections rather than local chat stores.
+“Main focus” is not a time tracker or spend ranking: its percentage is the
+share of observed prompt/tool activity in the focus window. Raw prompts are
+reduced locally to a short summary and are not returned in the snapshot.
+
+The response includes a `provenance` object that makes these distinctions
+machine-readable for every custom client:
+
+- session/model/project: local transcript metadata;
+- session value: local token calculation at published API list rates, with
+  the bundled price-table date;
+- plan: locally detected account metadata, user-declared override, or
+  unavailable;
+- limits: transcript-reported windows, with exhaustion labeled as a separate
+  local pace estimate;
+- focus and anomaly: local activity/history derivations; and
+- Context Health: the canonical CLI/MCP/Glance result, with hook payload
+  explicitly marked `not_executed_or_inferred`; and
+- primary action: the canonical local Context Health + focus + reported-runway
+  decision, with `execution: copy_prompt` and `automaticExecution: false`; and
+- network: `uploaded: false`.
+
+### `get_context_health`
+
+Returns the same hook-aware decision contract used by
+`aibill context --json` and `get_usage_glance.sessionHealth`.
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "sinceDays": 30,
+  "project": "agent-finops"
+}
+```
+
+It distinguishes:
+
+- discoverable skills, commands, and subagents;
+- items explicitly invoked where the local Claude Code or Codex transcript
+  exposes a matchable event;
+- MCP schema-loaded items;
+- context-injecting lifecycle events such as `SessionStart`,
+  `UserPromptSubmit`, and `SubagentStart`; and
+- other lifecycle hooks that are configured but not treated as prompt
+  injection.
+
+Installed hook configuration is read as metadata only. aibill never executes a
+hook command, never reads its runtime stdout, and never assigns it a token or
+dollar value. The recommendation precedence is deterministic: a large
+same-agent session can recommend starting fresh; otherwise hook review,
+never-invoked inventory, a healthy continue decision, or insufficient history
+is returned with evidence and caveats.
+Configured items whose host transcript does not expose explicit invocation
+evidence are counted as `invocationUnobservableItems` and excluded from
+never-invoked totals.
+
+### `sync_provider_spend`
+
+Pulls provider billing/usage with an inherited reference-only credential.
+
+OpenAI:
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "provider": "openai",
+  "authReference": "env:OPENAI_ADMIN_KEY",
+  "startTime": 1784606400,
+  "endTime": 1785211200
+}
+```
+
+Anthropic:
+
+```json
+{
+  "path": "/Users/you/projects/agent-finops",
+  "provider": "anthropic",
+  "authReference": "env:ANTHROPIC_ADMIN_KEY",
+  "startTime": 1784606400,
+  "endTime": 1785211200
+}
+```
+
+GitHub Copilot additionally requires `org` or `enterprise`; Cursor can take
+`accountId`. The server returns record counts, completeness, totals, and QA
+metadata. Detailed records are available through `get_spend_report`.
 
 ### `list_sources`
 
-List the approved local sources discovered by a previous `scan_ai_spend` run for the given folder. Returns the source registry.
+Lists approved sources, ingestion method, and verification level:
 
 ```json
-{ "path": "/Users/you/projects/my-agency" }
+{ "path": "/Users/you/projects/agent-finops" }
 ```
 
 ### `get_spend_report`
 
-Return the AI spend report (usage records plus an analyzed summary — totals, breakdowns by source/model/client/agent, anomalies, recommendations, and insights) produced by a `scan_ai_spend` run with `sample: true`.
+Returns the active data mode, records, and analyzed summary after a local,
+provider, or explicit sample sync:
 
 ```json
-{ "path": "/Users/you/projects/my-agency" }
+{ "path": "/Users/you/projects/agent-finops" }
 ```
 
 ### `recommend_cuts`
 
-Return scanner-backed recommendations for reducing AI spend, derived from the providers discovered during a `scan_ai_spend` run for the given folder.
+Uses analyzed spend recommendations when a report exists. If only discovery
+state exists, it returns clearly labeled discovery-based guidance:
 
 ```json
-{ "path": "/Users/you/projects/my-agency" }
+{ "path": "/Users/you/projects/agent-finops" }
 ```
 
----
+## Repeatable QA
 
-## Talk to it in plain language
+Focused protocol and connector tests:
 
-Once the server is connected, you can just ask your assistant:
+```bash
+npx vitest run packages/core/src/providerConnectors.test.ts \
+  packages/core/src/localAgentLogs.test.ts \
+  packages/mcp/src/index.test.ts
+```
 
-> "Scan `/Users/you/projects/my-agency` for AI spend with the sample data, then show me the spend report and where I can cut."
+Read-only live provider audit (outputs only sanitized summaries):
 
-The client will call `scan_ai_spend`, then `get_spend_report` and `recommend_cuts` for you.
+```bash
+node scripts/audit-mcp-providers.mjs
+```
 
----
+Full stdio audit through a spawned MCP server:
 
-## Privacy and safety
+```bash
+node scripts/audit-mcp-stdio.mjs
+```
 
-- **Local-first.** All scanning and analysis happen on your machine over stdio. There is no network upload.
-- **Read-only sources.** Scanned folders are registered as read-only; the server never writes back into your source files (only into `<path>/.ai-spend-agent/`).
-- **Secret redaction.** Detected secrets are redacted before any result leaves the server, and redactions are recorded in the audit log.
+Deterministic Context Health classification and safety benchmark:
 
----
+```bash
+npm run benchmark:context
+```
 
 ## Troubleshooting
 
-- **Tools don't appear in the client.** Confirm `packages/mcp/dist/server.js` exists (run `npm run build`) and that the `command`/`args` path in your config is absolute and correct. Restart the client after editing the config.
-- **`command not found: ai-spend-mcp`.** Run `npm link` in `packages/mcp` (or `npm install -g @agent-finops/mcp`) so the bin is on your PATH, or switch to the `node /abs/path` form.
-- **A tool returns an error result.** Make sure you ran `scan_ai_spend` for that `path` first; `list_sources`, `get_spend_report`, and `recommend_cuts` read state a scan creates. Use `sample: true` if you want `get_spend_report` to return demo data.
+- **Tools do not appear:** run the exact `npx` command manually and ensure the
+  client supports local stdio servers.
+- **Provider variable is missing:** launch the MCP client from an environment
+  that exports the referenced variable. Do not paste a raw key into tool
+  arguments.
+- **Provider returns 401/403:** the credential needs organization/admin
+  billing-read scopes, not a normal inference API key.
+- **`get_spend_report` is missing:** run a local/provider sync or an explicit
+  sample scan first.
+- **A root is refused:** select a specific project folder; broad-root refusal
+  is intentional prompt-injection protection.

@@ -1,12 +1,12 @@
 {
   "name": "ai-spend-agent",
-  "version": "0.5.5",
-  "description": "Your AI spend in one view, in 90 seconds — local-first CLI for OpenAI, Anthropic, Cursor, Copilot + Claude Code/Codex session logs, with a ranked savings cut list, and flags the tools your agent loads but never uses (dead context).",
+  "version": "0.5.7",
+  "description": "Local-first financial intelligence CLI for Claude Code and Codex activity, provider-reported cost, attribution, runway, provenance, and Context Health.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "ai-spend-agent": "./dist/index.js"
+    "ai-spend-agent": "dist/index.js"
   },
   "files": [
     "dist",
@@ -21,6 +21,9 @@
     "directory": "packages/cli"
   },
   "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "bugs": {
+    "url": "https://github.com/futurastudio/ai-spend-agent/issues"
+  },
   "keywords": [
     "ai",
     "spend",
@@ -51,8 +54,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.5.5",
-    "@agent-finops/report": "0.5.5",
+    "@agent-finops/core": "0.5.7",
+    "@agent-finops/report": "0.5.7",
     "yocto-spinner": "^1.2.0"
   }
 }

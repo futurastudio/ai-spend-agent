@@ -1,0 +1,6 @@
+interface:
+  display_name: "aibill Help"
+  short_description: "Choose the right aibill local workflow"
+  default_prompt: "Use $aibill-help to show the safest aibill workflow for my goal."
+policy:
+  allow_implicit_invocation: false

@@ -4,7 +4,7 @@ import { Reveal } from "@/components/Reveal";
 
 const title = "aibill vs ccusage (2026) — AI usage tools compared";
 const description =
-  "A current comparison of aibill and ccusage for Claude Code and Codex usage: ccusage excels at detailed local reporting; aibill adds provider-bill reconciliation and an action-oriented cut list.";
+  "A current comparison of aibill and ccusage for Claude Code and Codex usage: ccusage excels at detailed local reporting; aibill adds provider cost reports, Context Health, and an action-oriented evidence layer.";
 
 export const metadata: Metadata = {
   title,
@@ -22,8 +22,8 @@ const rows: Array<[string, string, string]> = [
     "Detailed local usage and cost reporting",
   ],
   [
-    "Reconciles against real provider bills (OpenAI/Anthropic admin key)",
-    "Yes — estimates become verified",
+    "Adds official provider cost reports (OpenAI/Anthropic admin key)",
+    "Yes — kept separate from local estimates",
     "Not a stated focus",
   ],
   [
@@ -31,7 +31,7 @@ const rows: Array<[string, string, string]> = [
     "Yes — projects your usage against plan tiers",
     "Block, quota, and usage reporting",
   ],
-  ["Ranked savings cut list with $/mo estimates", "Yes", "—"],
+  ["Ranked cost opportunities with modeled $/mo impact", "Yes", "—"],
   ["Dead-context detection and measured estimates", "Yes", "—"],
   ["Local-first, no telemetry", "Yes", "Yes"],
   ["Open source", "MIT", "MIT"],
@@ -63,9 +63,9 @@ export default function Page() {
             <span className="text-ink">
               okay, that&apos;s the number. Now what?
             </span>{" "}
-            It adds the plan-vs-API decision math, a ranked list of cuts with
-            estimated savings, dead-context detection, and the option to
-            reconcile estimates against actual provider cost reports.
+            It adds plan-vs-API decision math, ranked cost opportunities that
+            require verification, hook-aware Context Health, and optional
+            official provider cost reports kept separate from local estimates.
           </p>
         </Reveal>
 
@@ -113,8 +113,9 @@ export default function Page() {
           <p className="mt-4 text-base leading-relaxed text-muted">
             Use ccusage when detailed Claude Code or Codex usage reporting is
             the job. Use aibill when you want the decision layer on top: plan
-            economics, concrete cuts, and — when you connect an admin billing
-            key — reconciliation against provider cost reports. Both are free
+            economics, evidence-backed actions, and — when you connect an
+            admin billing key — official provider cost reports beside local
+            estimates. Both are free
             and local-first; running both is a sensible comparison.
           </p>
         </Reveal>

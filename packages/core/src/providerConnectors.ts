@@ -1,7 +1,7 @@
 import type { ApprovedSource } from "./sourceRegistry.js";
 import { createProviderConnectorStub, slugifySourceId } from "./sourceRegistry.js";
 import { redactSecrets } from "./discovery.js";
-import type { CostConfidence, UsageRecord } from "./schema.js";
+import type { UsageRecord } from "./schema.js";
 
 type ProviderResponse = {
   ok: boolean;
@@ -14,11 +14,31 @@ type ProviderResponse = {
 export type ProviderQaPagination = {
   label: string;
   pagesFetched: number;
-  stoppedBecause: "complete" | "missing_cursor" | "max_pages" | "fetch_error";
+  stoppedBecause:
+    | "complete"
+    | "missing_cursor"
+    | "max_pages"
+    | "max_range_days"
+    | "fetch_error"
+    | "unsafe_next_link";
   maxPages: number;
   limitPerPage?: number;
   /** Present when stoppedBecause is "fetch_error": the sanitized reason the fetch stopped early. */
   note?: string;
+};
+
+export type ProviderCoverageStatus = "complete" | "partial";
+
+export type ProviderFinancialSummary = {
+  providerReportedBilledUsd: number | null;
+  apiEquivalentEstimatedUsd: number | null;
+  providerEstimatedUsd: number | null;
+  headlineUsd: number | null;
+  headlineBasis:
+    | "provider_reported_billed_cost"
+    | "api_equivalent_estimate"
+    | "provider_estimated_cost"
+    | "unavailable";
 };
 
 export type ProviderQaRateLimit = {
@@ -35,6 +55,7 @@ export type ProviderQaDriftIssue = {
 
 export type ProviderQaSummary = {
   provider: string;
+  coverage?: ProviderCoverageStatus;
   requestedEndpoints: string[];
   pagination: ProviderQaPagination[];
   rateLimits: ProviderQaRateLimit[];
@@ -69,6 +90,8 @@ export type ProviderConnectorResult = {
   source: ApprovedSource;
   records: UsageRecord[];
   fetchedAt: string;
+  coverage: ProviderCoverageStatus;
+  financials: ProviderFinancialSummary;
   completeness: "verified" | "estimated" | "detected_unverified" | "missing";
   qa: ProviderQaSummary;
 };
@@ -531,10 +554,19 @@ async function fetchPaginatedJson(
     if (response.rateLimit) rateLimits.push(response.rateLimit);
     responseDrift.push(...detectResponseDrift(page, provider, label));
     const nextPage = nextPageFromPayload(page);
-    const nextLink = nextUrlFromHeaders(response.headers);
-    const hasMore = isRecord(page) && (page.has_more === true || page.hasMore === true || Boolean(nextPage) || Boolean(nextLink));
-    if (nextLink) {
-      nextUrl = nextLink;
+    const rawNextLink = nextUrlFromHeaders(response.headers);
+    const safeNextLink = rawNextLink ? validatePaginationUrl(initialUrl, rawNextLink) : undefined;
+    const hasMore = isRecord(page) && (page.has_more === true || page.hasMore === true || Boolean(nextPage) || Boolean(rawNextLink));
+    if (rawNextLink && !safeNextLink) {
+      stoppedBecause = "unsafe_next_link";
+      responseDrift.push({
+        label,
+        field: "headers.link",
+        issue: "rejected pagination URL because it was not HTTPS and same-origin with the provider endpoint"
+      });
+      nextUrl = undefined;
+    } else if (safeNextLink) {
+      nextUrl = safeNextLink;
     } else if (hasMore && nextPage) {
       nextUrl = appendPageCursor(initialUrl, nextPage);
     } else {
@@ -554,6 +586,19 @@ async function fetchPaginatedJson(
   };
 }
 
+function validatePaginationUrl(initialUrl: string, candidate: string): string | undefined {
+  try {
+    const initial = new URL(initialUrl);
+    const next = new URL(candidate, initial);
+    if (initial.protocol !== "https:" || next.protocol !== "https:" || next.origin !== initial.origin) {
+      return undefined;
+    }
+    return next.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchDateRangeJson(
   fetcher: Fetcher,
   buildUrl: (startTime: number) => string,
@@ -566,7 +611,8 @@ async function fetchDateRangeJson(
   const results: FetchPagesResult[] = [];
   const daySeconds = 24 * 60 * 60;
   const finalTime = endTime ?? startTime;
-  for (let cursor = startTime, count = 0; cursor <= finalTime && count < 370; cursor += daySeconds, count += 1) {
+  const maxRangeDays = 370;
+  for (let cursor = startTime, count = 0; cursor <= finalTime && count < maxRangeDays; cursor += daySeconds, count += 1) {
     try {
       results.push(await fetchPaginatedJson(fetcher, buildUrl(cursor), request, provider, label));
     } catch (error) {
@@ -588,6 +634,21 @@ async function fetchDateRangeJson(
       });
       break;
     }
+  }
+  const lastCoveredTime = startTime + (maxRangeDays - 1) * daySeconds;
+  if (finalTime > lastCoveredTime && results.every((result) => result.pagination.stoppedBecause !== "fetch_error")) {
+    results.push({
+      pages: [],
+      pagination: {
+        label,
+        pagesFetched: 0,
+        stoppedBecause: "max_range_days",
+        maxPages: 50,
+        note: `Requested range exceeds the ${maxRangeDays}-day connector limit; narrow the range or run multiple syncs.`
+      },
+      rateLimits: [],
+      responseDrift: []
+    });
   }
   return results;
 }
@@ -675,6 +736,7 @@ function headerString(headers: ProviderResponse["headers"], name: string): strin
 function headerNumber(headers: ProviderResponse["headers"], name: string): number | undefined {
   if (!headers) return undefined;
   const value = hasHeaderGetter(headers) ? headers.get(name) : headers[name] ?? headers[name.toLowerCase()];
+  if (value === null || value === undefined || value.trim() === "") return undefined;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
 }
@@ -713,13 +775,13 @@ function knownProviderFields(provider: string, label: string): Set<string> {
   // as drift, burying real drift signals in thousands of false positives.
   const common = ["data", "data[]", "has_more", "hasMore", "next_page", "nextPage", "object", "links", "links.next"];
   if (provider === "openai" && label.includes("costs")) {
-    return new Set([...common, "data[].object", "data[].start_time", "data[].end_time", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].amount", "data[].results[].amount.value", "data[].results[].amount.currency", "data[].results[].line_item", "data[].results[].project_id", "data[].results[].api_key_id", "data[].results[].quantity"]);
+    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].amount", "data[].results[].amount.value", "data[].results[].amount.currency", "data[].results[].line_item", "data[].results[].organization_id", "data[].results[].organization_name", "data[].results[].project_id", "data[].results[].project_name", "data[].results[].user_id", "data[].results[].user_email", "data[].results[].api_key_id", "data[].results[].quantity"]);
   }
   if (provider === "openai" && label.includes("usage")) {
-    return new Set([...common, "data[].object", "data[].start_time", "data[].end_time", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].output_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_audio_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].model"]);
+    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("cost")) {
-    return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window"]);
+    return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("claude code")) {
     return new Set([...common, "data[].date", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
@@ -739,6 +801,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
 function qaSummary(provider: string, fetches: FetchPagesResult[]): ProviderQaSummary {
   return {
     provider,
+    coverage: fetches.every((fetchResult) => fetchResult.pagination.stoppedBecause === "complete") ? "complete" : "partial",
     requestedEndpoints: Array.from(new Set(fetches.map((fetchResult) => fetchResult.pagination.label))),
     pagination: fetches.map((fetchResult) => fetchResult.pagination),
     rateLimits: fetches.flatMap((fetchResult) => fetchResult.rateLimits),
@@ -806,33 +869,79 @@ function sanitizeProviderMessage(message: string): string {
   return redactSecrets(message).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]").replace(/gh[pousr]_[A-Za-z0-9_]+/g, "[REDACTED]");
 }
 
-/**
- * Result-level completeness is DERIVED from record-level confidence, never
- * hardcoded: the label on the whole pull is the weakest confidence among the
- * records that actually carry dollars (worst-wins, matching analyze.ts).
- * Copilot seats and Cursor spend are estimated, so their results say so.
- */
-function completenessFromRecords(records: UsageRecord[]): ProviderConnectorResult["completeness"] {
-  const rank: Record<CostConfidence, number> = { verified: 0, estimated: 1, detected_unverified: 2, missing: 3 };
-  const costBearing = records.filter((record) => typeof record.amountUsd === "number");
-  if (costBearing.length === 0) {
-    return "missing";
+export function summarizeProviderFinancials(records: UsageRecord[]): ProviderFinancialSummary {
+  const providerReportedBilledUsd = sumAmounts(records.filter((record) => record.costConfidence === "verified"));
+  const apiEquivalentEstimatedUsd = sumAmounts(records.filter((record) =>
+    record.providerCostType === "anthropic_claude_code_usage" && record.costConfidence === "estimated"
+  ));
+  const providerEstimatedUsd = sumAmounts(records.filter((record) =>
+    record.costConfidence === "estimated" && record.providerCostType !== "anthropic_claude_code_usage"
+  ));
+
+  if (providerReportedBilledUsd !== null) {
+    return { providerReportedBilledUsd, apiEquivalentEstimatedUsd, providerEstimatedUsd, headlineUsd: providerReportedBilledUsd, headlineBasis: "provider_reported_billed_cost" };
   }
-  return costBearing
-    .map((record) => record.costConfidence)
-    .reduce((worst, current) => (rank[current] > rank[worst] ? current : worst));
+  if (apiEquivalentEstimatedUsd !== null) {
+    return { providerReportedBilledUsd, apiEquivalentEstimatedUsd, providerEstimatedUsd, headlineUsd: apiEquivalentEstimatedUsd, headlineBasis: "api_equivalent_estimate" };
+  }
+  if (providerEstimatedUsd !== null) {
+    return { providerReportedBilledUsd, apiEquivalentEstimatedUsd, providerEstimatedUsd, headlineUsd: providerEstimatedUsd, headlineBasis: "provider_estimated_cost" };
+  }
+  return { providerReportedBilledUsd, apiEquivalentEstimatedUsd, providerEstimatedUsd, headlineUsd: null, headlineBasis: "unavailable" };
+}
+
+/**
+ * Keep evidence records available to callers, but never add estimates to a
+ * provider's official billed total. This selection is intended for aggregate
+ * spend headlines; callers should retain the original records for attribution.
+ */
+export function selectProviderFinancialHeadlineRecords(records: UsageRecord[]): UsageRecord[] {
+  const byProvider = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    const providerRecords = byProvider.get(record.source.provider) ?? [];
+    providerRecords.push(record);
+    byProvider.set(record.source.provider, providerRecords);
+  }
+  return Array.from(byProvider.values()).flatMap((providerRecords) => {
+    const hasProviderBilledCost = providerRecords.some((record) =>
+      record.costConfidence === "verified" && typeof record.amountUsd === "number"
+    );
+    return hasProviderBilledCost
+      ? providerRecords.filter((record) => record.costConfidence === "verified" || record.amountUsd === null)
+      : providerRecords;
+  });
+}
+
+function sumAmounts(records: UsageRecord[]): number | null {
+  const amounts = records
+    .map((record) => record.amountUsd)
+    .filter((amount): amount is number => typeof amount === "number");
+  return amounts.length > 0 ? amounts.reduce((sum, amount) => sum + amount, 0) : null;
 }
 
 function providerResult(provider: string, sourceId: string, authReference: string, records: UsageRecord[], qa?: ProviderQaSummary): ProviderConnectorResult {
-  const totalUsd = records.reduce((sum, record) => sum + (record.amountUsd ?? 0), 0);
-  const completeness = completenessFromRecords(records);
+  const resolvedQa = qa ?? qaSummary(provider, []);
+  const coverage: ProviderCoverageStatus = resolvedQa.coverage
+    ?? (resolvedQa.pagination.every((pagination) => pagination.stoppedBecause === "complete") ? "complete" : "partial");
+  const financials = summarizeProviderFinancials(records);
+  const headlineConfidence: ProviderConnectorResult["completeness"] =
+    financials.headlineBasis === "provider_reported_billed_cost"
+      ? "verified"
+      : financials.headlineBasis === "unavailable"
+        ? "missing"
+        : "estimated";
+  const completeness = coverage === "partial" && headlineConfidence !== "missing"
+    ? "detected_unverified"
+    : headlineConfidence;
   return {
     provider,
-    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd, completeness }),
+    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd: financials.headlineUsd ?? 0, completeness }),
     records,
     fetchedAt: new Date().toISOString(),
+    coverage,
+    financials,
     completeness,
-    qa: qa ?? qaSummary(provider, [])
+    qa: resolvedQa
   };
 }
 
@@ -922,7 +1031,9 @@ function defaultTokenResolver(reference: string): string {
 }
 
 async function defaultFetcher(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) {
-  return fetch(url, init);
+  // Never let the runtime automatically replay provider credentials to a
+  // redirect target. Provider endpoint changes must be explicit code changes.
+  return fetch(url, { ...init, redirect: "manual" });
 }
 
 function parseMinorUsd(value: unknown): number | undefined {

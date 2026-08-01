@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "aibill": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--package",
+        "@agent-finops/mcp@0.5.7",
+        "ai-spend-mcp"
+      ]
+    }
+  }
+}

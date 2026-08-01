@@ -69,7 +69,7 @@ export function WaitlistForm() {
         <span>
           You&apos;re on the list. We&apos;ll email{" "}
           <span className="font-medium text-green-bright">{email}</span> when
-          the hosted beta opens.
+          Workspace design-partner access opens.
         </span>
       </div>
     );
@@ -103,7 +103,7 @@ export function WaitlistForm() {
           disabled={status === "loading"}
           className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-green px-6 text-sm font-semibold text-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_24px_-8px_rgba(89,212,153,0.5)] transition-[background-color,transform,box-shadow] duration-200 ease-out hover:bg-green-bright hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_12px_28px_-8px_rgba(94,242,168,0.55)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
-          {status === "loading" ? "Joining..." : "Join the hosted beta"}
+          {status === "loading" ? "Requesting..." : "Request design-partner access"}
         </button>
       </div>
       {status === "error" && (
@@ -112,7 +112,7 @@ export function WaitlistForm() {
         </p>
       )}
       <p className="mt-3 text-xs text-faint">
-        No spam. One email when the beta opens, then nothing until it does.
+        No spam. One email when Workspace design-partner access opens.
       </p>
     </form>
   );

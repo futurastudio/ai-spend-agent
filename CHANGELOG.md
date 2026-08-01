@@ -5,6 +5,123 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.7 — 2026-07-31
+
+MCP provider and local-log hardening.
+
+- Added side-effect-free `--version` / `-v` handling so a standard metadata
+  request never falls through to local transcript discovery.
+
+- Added one canonical, hook-aware Context Health contract shared by
+  `aibill context`, the `get_context_health` MCP tool, `get_usage_glance`, and
+  the native Glance card. The decision is based on same-agent session token
+  history, observed activation metadata, and observable invocations—not API
+  value or subscription price.
+- Context Health inventories installed Claude Code and enabled Codex skills,
+  MCP servers, subagents, commands, and hook metadata. It never executes hooks
+  or guesses their payload size, and it keeps invocation-unobservable items out
+  of “never invoked” findings.
+- Added a thin, explicit-only aibill Codex plugin with `check`, `explain`, and
+  `help` skills. It delegates calculations to the version-pinned MCP server,
+  adds no hooks, and returns the same canonical data as CLI and Glance.
+- Added deterministic Context Health fixtures, adapter-drift checks, and a
+  public-boundary CI check that blocks internal roadmap, audit, research, GTM,
+  environment, and developer-home files from the public repository.
+- Context Health now records explicit compaction markers, basename-only
+  repeated file-read evidence, cache-write change against prior same-agent
+  sessions, and separate parent/subagent transcript coverage. The expanded
+  13-case benchmark includes Ponytail-shaped context-hook fixtures and avoids
+  treating repeated reads alone as a restart rule.
+- Added a Context Health methodology/SEO page and documentation for all three
+  delivery surfaces, their shared provenance, known limitations, and the
+  difference between local computation and an MCP client's transport boundary.
+- `sync_local_agent_spend` now produces real, explicitly estimated reports
+  from local Claude Code and Codex metadata.
+- `sync_provider_spend` exposes the existing read-only OpenAI, Anthropic,
+  GitHub Copilot, and Cursor connectors through strict `env:NAME` references.
+  Raw keys are rejected and never persisted.
+- `get_usage_glance` now exposes a read-only transcript-derived contract for
+  current-session value at API rates, locally detected billing mode,
+  provider-reported limit/reset windows, a privacy-conscious description of
+  the user's main recent work focus, and one evidence-backed anomaly. Missing
+  plan windows remain unavailable instead of being inferred.
+- Added one canonical `primaryAction` shared by CLI JSON, MCP, and native
+  Glance. It combines Context Health, Main focus, and transcript-reported
+  runway into a project-aware label, compact reason, and copy-ready handoff
+  prompt. The hover card shows only two short lines; execution is always an
+  explicit copy/paste and never automatic.
+- Added `aibill glance`, a machine-readable version of that contract for
+  local rendering surfaces.
+- Added an ad-hoc-signed native macOS Glance prototype: one stationary
+  liquid-glass `aibill` wordmark to the left of the camera reveals a
+  session/limit, reset/exhaustion, main-focus, and anomaly panel
+  on hover. Public distribution still requires a universal Developer
+  ID-signed and notarized release bundle.
+- Glance now labels the last successful refresh age, turns stale after 75
+  seconds, preserves and labels the last good snapshot after an error, and
+  provides right-click launch-at-login control.
+- Added dormant-by-default Sparkle 2.9.2 integration plus a credential-gated
+  universal build/sign/notarize/staple/appcast release script. No source build
+  is described as automatically updatable without a real HTTPS feed and EdDSA
+  key, and public signing remains blocked on maintainer Apple credentials.
+- Published the preregistered 8–12-person Glance comprehension and day-seven
+  retention protocol with a blank scorecard; no participant outcome is
+  claimed yet.
+- Home-launched Codex sessions now use their dominant explicit tool working
+  directory for project attribution, so Glance can name the project where work
+  actually happened instead of grouping it under `(home)`.
+- Glance uses separate trigger and detail surfaces so its single wordmark
+  never moves while the card slides down. Its seven-day “Main focus” is based
+  on locally observed human prompts and tool activity—not spend—and can surface
+  a task, automation, agent, file, or project as the evidence supports. Raw
+  prompt text is not included in the Glance contract.
+- Removed the redundant metric strip below the camera and the duplicate native
+  window/web-preview framing, leaving one clean rounded glass card on hover.
+- The `aibill` wordmark now stays fully hidden until the pointer reaches the
+  top menu-bar strip, keeping it off movies and full-screen video while making
+  the same hover target available on demand.
+- Native hosting layers now use the same continuous corner mask as the glass,
+  with an inside-only stroke and no external shadow, eliminating square lines
+  outside the rounded card corners.
+- Balanced the native card's top and bottom insets so session text no longer
+  crowds the upper rounded edge.
+- Added per-field Glance provenance to the JSON contract and visible card:
+  local transcript facts, local API-rate calculations, locally detected plan
+  context, coding-agent-reported limits, local activity/history derivations,
+  the bundled pricing date, and an explicit no-upload flag.
+- Updated GPT-5.2 through GPT-5.6 API-rate rules to current published prices;
+  GPT-5.6 Sol no longer falls through to the older generic GPT-5 rate.
+- Filtered temporary screenshot-path noise from Main focus summaries so local
+  folder fragments do not displace the actual hover/UI topic.
+- Subscription users now see their locally detected plan beside session value
+  at API rates, making clear that the estimate is not an added charge. Limit
+  availability is reported per window, so a missing five-hour gauge explains
+  whether only a weekly window was present instead of silently showing a dash.
+- The CLI help header now uses the public `aibill` name consistently.
+- Provider syncs merge by provider instead of silently replacing the previous
+  provider's records. OpenAI and Anthropic were live-verified through stdio;
+  Copilot and Cursor remain fixture-verified pending account QA.
+- The MCP server reports its actual package version, returns structured tool
+  content, carries accurate safety annotations, refuses broad roots on reads
+  and writes, and no longer starts as a side effect of a library import.
+- Report-backed recommendations replace generic discovery advice when spend
+  data exists.
+- Fixed a shared analyzer edge case where display rounding on a tiny total
+  could produce a workflow share greater than 100%.
+- Added protocol-level initialization, tool-list, safe-error, local-log,
+  multi-provider merge, credential non-persistence, and cold stdio audits.
+
+## 0.5.5 — 2026-07-28
+
+Launch hardening and public web release.
+
+- Fixed legacy persisted-state routing so `apply` refreshes real local logs
+  instead of serving stale or demo-shaped state.
+- Added the liquid-glass aibill landing page, Glance interaction prototype,
+  technical SEO, corrected provider claims, and current comparison pages.
+- Pinned the production dependency tree, added CI/security gates, coordinated
+  package versions, and published all five npm packages.
+
 ## 0.5.4 — 2026-07-20
 
 **The shareable report now looks like the product: a terminal.** Its own

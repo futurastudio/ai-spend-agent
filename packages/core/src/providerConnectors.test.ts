@@ -9,7 +9,8 @@ import {
   normalizeOpenAiUsageResponse,
   normalizeAnthropicClaudeCodeUsageResponse,
   normalizeGitHubCopilotSeatResponse,
-  resolveTokenReference
+  resolveTokenReference,
+  selectProviderFinancialHeadlineRecords
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
@@ -303,9 +304,41 @@ describe("real provider connector implementations", () => {
         ok: true,
         status: 200,
         json: async () => url.includes("/usage/completions") ? ({
-          data: [{ start_time: 1761955200, results: [{ input_tokens: 100, output_tokens: 25, project_id: "proj_usage", user_id: "user_123", api_key_id: "key_123", model: "gpt-5.1" }] }]
+          data: [{
+            start_time: 1761955200,
+            start_time_iso: "2025-11-01T00:00:00Z",
+            end_time_iso: "2025-11-02T00:00:00Z",
+            results: [{
+              input_tokens: 100,
+              input_uncached_tokens: 80,
+              input_cache_write_tokens: 5,
+              input_cached_text_tokens: 15,
+              output_tokens: 25,
+              output_text_tokens: 25,
+              project_id: "proj_usage",
+              user_id: "user_123",
+              api_key_id: "key_123",
+              model: "gpt-5.1",
+              batch: false,
+              service_tier: "default"
+            }]
+          }]
         }) : ({
-          data: [{ start_time: 1761955200, results: [{ amount: { value: 4.2, currency: "usd" }, line_item: "Responses API", api_key_id: "key_123" }] }]
+          data: [{
+            start_time: 1761955200,
+            start_time_iso: "2025-11-01T00:00:00Z",
+            end_time_iso: "2025-11-02T00:00:00Z",
+            results: [{
+              amount: { value: 4.2, currency: "usd" },
+              line_item: "Responses API",
+              organization_id: "org_123",
+              organization_name: "Example",
+              project_name: "Usage",
+              user_id: "user_123",
+              user_email: "dev@example.com",
+              api_key_id: "key_123"
+            }]
+          }]
         })
       };
     };
@@ -335,6 +368,7 @@ describe("real provider connector implementations", () => {
       expect.objectContaining({ providerCostType: "openai_usage_evidence", userId: "user_123", model: "gpt-5.1", costConfidence: "missing" })
     ]));
     expect(result.source).toMatchObject({ verification: "verified", provider: "openai", authReference: "env:OPENAI_ADMIN_KEY" });
+    expect(result.qa.responseDrift).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
@@ -483,8 +517,45 @@ describe("real provider connector implementations", () => {
     // Seat dollars are estimated (plan-price reconciliation), so the result
     // and source labels must say estimated — never "verified" over estimates.
     expect(result.completeness).toBe("estimated");
+    expect(result.coverage).toBe("complete");
     expect(result.source).toMatchObject({ provider: "github-copilot", verification: "estimated" });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("rejects cross-origin pagination links before forwarding provider authorization", async () => {
+    const calls: Array<{ url: string; authorization?: string }> = [];
+    const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {
+      calls.push({ url, authorization: init?.headers?.Authorization });
+      if (url.includes("/copilot/billing/seats")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { link: '<https://evil.example/steal>; rel="next"' },
+          json: async () => ({ total_seats: 1, plan_type: "business", seats: [{ assignee: { login: "alice" } }] })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ day_totals: [] }) };
+    };
+
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      fetcher
+    });
+
+    expect(calls.some((call) => call.url.startsWith("https://evil.example"))).toBe(false);
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "GitHub Copilot seats", stoppedBecause: "unsafe_next_link" })
+    ]));
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "headers.link", issue: expect.stringContaining("same-origin") })
+    ]));
   });
 
   it("normalizes Cursor Admin API spend when a real team API path is available", () => {
@@ -605,15 +676,23 @@ describe("real provider connector implementations", () => {
         note: expect.stringContaining("Stopped after 1 page")
       })
     ]));
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.financials).toMatchObject({
+      providerReportedBilledUsd: 2,
+      headlineUsd: 2,
+      headlineBasis: "provider_reported_billed_cost"
+    });
   });
 
-  it("reports zero response drift for legitimate anthropic fields and derives estimated completeness from claude-code records", async () => {
+  it("keeps official Anthropic billing separate from Claude Code API-equivalent estimates", async () => {
     const fetcher = async (url: string) => {
       if (url.includes("/organizations/cost_report")) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ data: [{ starting_at: "2026-05-01T00:00:00Z", ending_at: "2026-05-02T00:00:00Z", results: [{ amount: "250", currency: "USD", cost_type: "tokens", description: "Output tokens", model: "claude-opus-4-8", workspace_id: "wrk_eng", token_type: "output_tokens" }] }], has_more: false })
+          json: async () => ({ data: [{ starting_at: "2026-05-01T00:00:00Z", ending_at: "2026-05-02T00:00:00Z", results: [{ amount: "250", currency: "USD", cost_type: "tokens", description: "Output tokens", model: "claude-opus-4-8", workspace_id: "wrk_eng", token_type: "output_tokens", inference_geo: "us" }] }], has_more: false })
         };
       }
       return {
@@ -633,10 +712,53 @@ describe("real provider connector implementations", () => {
     });
 
     expect(result.qa.responseDrift).toEqual([]);
-    // Mixed verified (cost report) + estimated (claude code) records: the
-    // result-level label is the weakest cost-bearing confidence — estimated.
-    expect(result.completeness).toBe("estimated");
-    expect(result.source.verification).toBe("estimated");
+    expect(result.coverage).toBe("complete");
+    expect(result.completeness).toBe("verified");
+    expect(result.source.verification).toBe("verified");
+    expect(result.financials).toEqual({
+      providerReportedBilledUsd: 2.5,
+      apiEquivalentEstimatedUsd: 1.23,
+      providerEstimatedUsd: null,
+      headlineUsd: 2.5,
+      headlineBasis: "provider_reported_billed_cost"
+    });
+    expect(selectProviderFinancialHeadlineRecords(result.records)).toEqual([
+      expect.objectContaining({ amountUsd: 2.5, costConfidence: "verified" })
+    ]);
+  });
+
+  it("marks Anthropic coverage partial when a requested date range exceeds the connector cap", async () => {
+    const startTime = 1_761_955_200;
+    const fetcher = async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("cost_report")
+        ? {
+            data: [{
+              starting_at: new Date(startTime * 1000).toISOString(),
+              results: [{ amount: "100", currency: "USD", cost_type: "tokens" }]
+            }],
+            has_more: false
+          }
+        : { data: [], has_more: false }
+    });
+
+    const result = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime,
+      endTime: startTime + 371 * 24 * 60 * 60,
+      fetcher
+    });
+
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.financials.headlineUsd).toBe(1);
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stoppedBecause: "max_range_days", note: expect.stringContaining("370-day") })
+    ]));
   });
 
   it("reports zero response drift for legitimate copilot and cursor fields", async () => {

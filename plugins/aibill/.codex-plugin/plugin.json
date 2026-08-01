@@ -1,0 +1,41 @@
+{
+  "name": "aibill",
+  "version": "0.5.7",
+  "description": "On-demand local AI usage, spend provenance, and hook-aware Context Health through aibill MCP.",
+  "author": {
+    "name": "Futura Studio",
+    "url": "https://github.com/futurastudio"
+  },
+  "homepage": "https://ai-spend-agent.vercel.app",
+  "repository": "https://github.com/futurastudio/ai-spend-agent",
+  "license": "MIT",
+  "keywords": [
+    "ai-spend",
+    "finops",
+    "claude-code",
+    "codex",
+    "mcp",
+    "context-health"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "aibill",
+    "shortDescription": "Local AI usage and Context Health, on demand",
+    "longDescription": "Inspect local Claude Code and Codex usage, exact data provenance, plan-window availability, and hook-aware Context Health without always-on prompt injection.",
+    "developerName": "Futura Studio",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read-only",
+      "Local data",
+      "MCP"
+    ],
+    "websiteURL": "https://ai-spend-agent.vercel.app",
+    "defaultPrompt": [
+      "Check my current AI usage and Context Health.",
+      "Explain where each aibill number came from.",
+      "Show me the safest aibill workflow."
+    ],
+    "brandColor": "#43E6A2"
+  },
+  "mcpServers": "./.mcp.json"
+}

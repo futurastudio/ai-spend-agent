@@ -1,22 +1,22 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 /**
- * Agent context inventory: enumerate the Claude Code "inventory" that gets
- * loaded into an agent's always-on context (skills, subagents, slash commands,
- * MCP servers + their tools) and estimate how many tokens each item adds.
+ * Agent context inventory: enumerate configured Claude Code and Codex skills,
+ * subagents, slash commands, MCP servers, and installed lifecycle hooks.
  *
  * This feeds a later "dead-context cost" feature that prices loaded-but-never-
- * invoked tools. Every read here is read-only and missing dirs/files never throw.
+ * invoked tools. Every read here is read-only, hook commands are never run,
+ * and missing dirs/files never throw.
  *
  * CRITICAL token-weight rules (these drive the honesty of the final $ number):
  *  - Skills use *progressive disclosure*: only the YAML frontmatter (`name` +
  *    `description`) is always loaded — the body loads only when invoked. So a
  *    skill's alwaysLoadedTokens reflects ONLY name + description, never the body.
  *  - MCP tools: the FULL tool definition (name + description + JSON input schema)
- *    is always loaded — the heavy weight. Config (~/.claude.json) almost never
- *    carries tool schemas, so MCP enumeration is usually limited to server names;
+ *    is always loaded — the heavy weight. Local host config almost never carries
+ *    tool schemas, so MCP enumeration is usually limited to server names;
  *    those items are flagged "estimated_understated" because the real weight is
  *    larger than what we can see.
  *  - Subagents / slash commands: estimate from their description/frontmatter line
@@ -25,7 +25,21 @@ import { homedir } from "node:os";
  *    loaded, not prunable, not "waste."
  */
 
-export type InventoryKind = "skill" | "subagent" | "command" | "mcp_tool" | "mcp_server";
+export type InventoryKind =
+  | "skill"
+  | "subagent"
+  | "command"
+  | "mcp_tool"
+  | "mcp_server"
+  | "hook";
+
+export type InventoryActivation =
+  | "discoverable"
+  | "mcp_schema_loaded"
+  | "hook_injected"
+  | "lifecycle_hook";
+
+export type InventoryHost = "claude-code" | "codex";
 
 export type InventoryItem = {
   kind: InventoryKind;
@@ -37,9 +51,17 @@ export type InventoryItem = {
   scope: "user" | "project";
   /** e.g. mcp server name for an mcp_tool, plugin name for a plugin skill. */
   group?: string;
+  /** How the host makes this item available to the model/runtime. */
+  activation: InventoryActivation;
+  /** Host that owns an installed lifecycle hook. */
+  host?: InventoryHost;
+  /** Lifecycle event for hook items, for example SessionStart. */
+  event?: string;
+  /** Whether local transcripts can prove this item was explicitly invoked. */
+  invocationTracking: "observable" | "not_observable";
   alwaysLoadedTokens: number;
-  /** "estimated_understated" when an MCP tool schema is unavailable. */
-  weightConfidence: "estimated" | "estimated_understated";
+  /** "unmeasured" means config proves activation but not runtime payload size. */
+  weightConfidence: "estimated" | "estimated_understated" | "unmeasured";
   path?: string;
   /** For project-scoped MCP servers: the project dirs that load this server. */
   ownerDirs?: string[];
@@ -50,8 +72,22 @@ export type AgentInventoryOptions = {
   claudeHomeDir?: string;
   /** Default: ~/.claude.json */
   claudeConfigPath?: string;
+  /** Default: <claudeHomeDir>/settings.json */
+  claudeSettingsPath?: string;
   /** Default: process.cwd(); scans <projectDir>/.claude/**. */
   projectDir?: string;
+  /** Default: ~/.codex. Used to locate enabled Codex plugins. */
+  codexHomeDir?: string;
+  /**
+   * Explicit installed plugin roots. Primarily useful for deterministic audits
+   * and tests; default discovery reads Claude's installed_plugins.json and
+   * Codex's enabled plugin list.
+   */
+  pluginRoots?: Array<{
+    root: string;
+    host: InventoryHost;
+    scope?: "user" | "project";
+  }>;
   /**
    * Include MCP servers from EVERY project in the config (not just projectDir).
    * Used for the global "across your whole setup" dead-context view so the
@@ -68,6 +104,8 @@ export type AgentInventoryResult = {
     commands: number;
     mcpServers: number;
     mcpTools: number;
+    hooks: number;
+    hookManifests: number;
   };
 };
 
@@ -91,19 +129,65 @@ export async function loadAgentInventory(
 ): Promise<AgentInventoryResult> {
   const home = homedir();
   const claudeHome = options.claudeHomeDir ?? join(home, ".claude");
+  const codexHome = options.codexHomeDir ?? join(home, ".codex");
   const configPath = options.claudeConfigPath ?? join(home, ".claude.json");
+  const settingsPath = options.claudeSettingsPath ?? join(claudeHome, "settings.json");
   const projectDir = options.projectDir ?? process.cwd();
   const projectClaude = join(projectDir, ".claude");
+  const projectClaudeRoots = resolve(projectClaude) === resolve(claudeHome)
+    ? []
+    : [{ dir: projectClaude, scope: "project" as const }];
 
   const items: InventoryItem[] = [];
-  const scanned = { skills: 0, subagents: 0, commands: 0, mcpServers: 0, mcpTools: 0 };
+  const pluginRoots = options.pluginRoots ?? await configuredPluginRoots(claudeHome, codexHome);
+  const seenSkills = new Set<string>();
+  const scanned = {
+    skills: 0,
+    subagents: 0,
+    commands: 0,
+    mcpServers: 0,
+    mcpTools: 0,
+    hooks: 0,
+    hookManifests: 0
+  };
 
   // --- Skills (user + project) ---
-  for (const { dir, scope } of [
-    { dir: join(claudeHome, "skills"), scope: "user" as const },
-    { dir: join(projectClaude, "skills"), scope: "project" as const }
+  for (const { dir, scope, host, invocationTracking } of [
+    {
+      dir: join(claudeHome, "skills"),
+      scope: "user" as const,
+      host: "claude-code" as const,
+      invocationTracking: "observable" as const
+    },
+    {
+      dir: join(codexHome, "skills"),
+      scope: "user" as const,
+      host: "codex" as const,
+      invocationTracking: "not_observable" as const
+    },
+    ...projectClaudeRoots.map((entry) => ({
+      dir: join(entry.dir, "skills"),
+      scope: entry.scope,
+      host: "claude-code" as const,
+      invocationTracking: "observable" as const
+    })),
+    {
+      dir: join(projectDir, ".agents", "skills"),
+      scope: "project" as const,
+      host: "codex" as const,
+      invocationTracking: "not_observable" as const
+    },
+    {
+      dir: join(projectDir, ".codex", "skills"),
+      scope: "project" as const,
+      host: "codex" as const,
+      invocationTracking: "not_observable" as const
+    }
   ]) {
     for (const file of await findFiles(dir, (name) => name === "SKILL.md")) {
+      const skillKey = `${host}:${resolve(file)}`;
+      if (seenSkills.has(skillKey)) continue;
+      seenSkills.add(skillKey);
       const content = await readFile(file, "utf8").catch(() => "");
       if (!content) continue;
       scanned.skills += 1;
@@ -121,6 +205,9 @@ export async function loadAgentInventory(
         name,
         scope,
         group: pluginGroupFromPath(file, dir),
+        activation: "discoverable",
+        host,
+        invocationTracking,
         alwaysLoadedTokens: estimateTokensFromText(loadedText),
         weightConfidence: "estimated",
         path: file
@@ -131,7 +218,10 @@ export async function loadAgentInventory(
   // --- Subagents (user + project) ---
   for (const { dir, scope } of [
     { dir: join(claudeHome, "agents"), scope: "user" as const },
-    { dir: join(projectClaude, "agents"), scope: "project" as const }
+    ...projectClaudeRoots.map((entry) => ({
+      dir: join(entry.dir, "agents"),
+      scope: entry.scope
+    }))
   ]) {
     for (const file of await findFiles(dir, (name) => name.endsWith(".md"))) {
       const content = await readFile(file, "utf8").catch(() => "");
@@ -150,6 +240,9 @@ export async function loadAgentInventory(
         kind: "subagent",
         name,
         scope,
+        activation: "discoverable",
+        host: "claude-code",
+        invocationTracking: "observable",
         alwaysLoadedTokens: estimateTokensFromText(loadedText),
         weightConfidence: "estimated",
         path: file
@@ -160,7 +253,10 @@ export async function loadAgentInventory(
   // --- Slash commands (user + project) ---
   for (const { dir, scope } of [
     { dir: join(claudeHome, "commands"), scope: "user" as const },
-    { dir: join(projectClaude, "commands"), scope: "project" as const }
+    ...projectClaudeRoots.map((entry) => ({
+      dir: join(entry.dir, "commands"),
+      scope: entry.scope
+    }))
   ]) {
     for (const file of await findFiles(dir, (name) => name.endsWith(".md"))) {
       const content = await readFile(file, "utf8").catch(() => "");
@@ -179,6 +275,9 @@ export async function loadAgentInventory(
         kind: "command",
         name,
         scope,
+        activation: "discoverable",
+        host: "claude-code",
+        invocationTracking: "observable",
         alwaysLoadedTokens: estimateTokensFromText(loadedText),
         weightConfidence: "estimated",
         path: file
@@ -187,9 +286,46 @@ export async function loadAgentInventory(
   }
 
   // --- MCP servers (from ~/.claude.json: top-level + per-project map) ---
-  const config = await readJson(configPath);
-  const serverScopes = collectMcpServers(config, projectDir, options.includeAllProjectMcp ?? false);
-  for (const { id, scope, ownerDirs } of serverScopes) {
+  const serverScopes = new Map<string, {
+    id: string;
+    scope: "user" | "project";
+    ownerDirs: string[];
+    path: string;
+    host: InventoryHost;
+  }>();
+  for (const sourcePath of [...new Set([configPath, settingsPath])]) {
+    const config = await readJson(sourcePath);
+    for (const server of collectMcpServers(
+      config,
+      projectDir,
+      options.includeAllProjectMcp ?? false
+    )) {
+      const key = `claude-code:${server.scope}:${server.id}`;
+      const prior = serverScopes.get(key);
+      if (prior) {
+        for (const ownerDir of server.ownerDirs) {
+          if (!prior.ownerDirs.includes(ownerDir)) prior.ownerDirs.push(ownerDir);
+        }
+      } else {
+        serverScopes.set(key, { ...server, path: sourcePath, host: "claude-code" });
+      }
+    }
+  }
+  const codexConfigPath = join(codexHome, "config.toml");
+  const codexConfigText = await readFile(codexConfigPath, "utf8").catch(() => "");
+  for (const id of enabledCodexMcpServerNames(codexConfigText)) {
+    const key = `codex:user:${id}`;
+    if (!serverScopes.has(key)) {
+      serverScopes.set(key, {
+        id,
+        scope: "user",
+        ownerDirs: [],
+        path: codexConfigPath,
+        host: "codex"
+      });
+    }
+  }
+  for (const { id, scope, ownerDirs, path, host } of serverScopes.values()) {
     scanned.mcpServers += 1;
     // We almost never have tool schemas from config, so we can't measure the
     // real weight (full tool definitions). Use a conservative published-typical
@@ -202,14 +338,230 @@ export async function loadAgentInventory(
       name: id,
       scope,
       group: id,
+      activation: "mcp_schema_loaded",
+      host,
+      invocationTracking: host === "claude-code" ? "observable" : "not_observable",
       alwaysLoadedTokens: MCP_SERVER_TOKEN_FLOOR,
       weightConfidence: "estimated_understated",
-      path: configPath,
+      path,
       ownerDirs
     });
   }
 
+  // --- Installed lifecycle hooks (metadata only; commands are NEVER run) ---
+  const seenHooks = new Set<string>();
+  for (const pluginRoot of pluginRoots) {
+    for (const manifestPath of await pluginManifestPaths(pluginRoot.root)) {
+      const manifest = await readJson(manifestPath);
+      if (!isRecord(manifest)) continue;
+      const pluginName = stringValue(manifest.name) ?? basename(dirname(dirname(manifestPath)));
+      const skillsPath = stringValue(manifest.skills)
+        ? resolve(dirname(dirname(manifestPath)), stringValue(manifest.skills)!)
+        : join(pluginRoot.root, "skills");
+      if (isWithinRoot(skillsPath, pluginRoot.root)) {
+        for (const file of await findFiles(skillsPath, (name) => name === "SKILL.md")) {
+          const skillKey = `${pluginRoot.host}:${resolve(file)}`;
+          if (seenSkills.has(skillKey)) continue;
+          seenSkills.add(skillKey);
+          const content = await readFile(file, "utf8").catch(() => "");
+          if (!content) continue;
+          const fm = parseFrontmatter(content);
+          const name = fm.name ?? skillNameFromPath(file, skillsPath);
+          const loadedText = [
+            `name: ${name}`,
+            fm.description ? `description: ${fm.description}` : ""
+          ].filter(Boolean).join("\n");
+          scanned.skills += 1;
+          items.push({
+            kind: "skill",
+            name,
+            scope: pluginRoot.scope ?? "user",
+            group: pluginName,
+            activation: "discoverable",
+            host: pluginRoot.host,
+            invocationTracking: pluginRoot.host === "claude-code"
+              ? "observable"
+              : "not_observable",
+            alwaysLoadedTokens: estimateTokensFromText(loadedText),
+            weightConfidence: "estimated",
+            path: file
+          });
+        }
+      }
+      const configuredHookPath = stringValue(manifest.hooks);
+      const hookPath = configuredHookPath
+        ? resolve(dirname(dirname(manifestPath)), configuredHookPath)
+        : join(dirname(dirname(manifestPath)), "hooks", "hooks.json");
+      if (!isWithinRoot(hookPath, pluginRoot.root)) continue;
+      const hookConfig = await readJson(hookPath);
+      if (!isRecord(hookConfig) || !isRecord(hookConfig.hooks)) continue;
+      scanned.hookManifests += 1;
+
+      for (const [event, registrations] of Object.entries(hookConfig.hooks)) {
+        if (!Array.isArray(registrations) || registrations.length === 0) continue;
+        const activation: InventoryActivation = contextInjectingEvent(event)
+          ? "hook_injected"
+          : "lifecycle_hook";
+        const key = `${pluginRoot.host}:${pluginName}:${event}:${hookPath}`;
+        if (seenHooks.has(key)) continue;
+        seenHooks.add(key);
+        scanned.hooks += 1;
+        items.push({
+          kind: "hook",
+          name: `${pluginName}:${event}`,
+          scope: pluginRoot.scope ?? "user",
+          group: pluginName,
+          activation,
+          host: pluginRoot.host,
+          event,
+          invocationTracking: "not_observable",
+          // Hook config proves the event exists, not what its command emits at
+          // runtime. Assigning tokens or dollars here would be fabricated.
+          alwaysLoadedTokens: 0,
+          weightConfidence: "unmeasured",
+          path: hookPath
+        });
+      }
+    }
+  }
+
   return { items, scanned };
+}
+
+function enabledCodexMcpServerNames(configText: string): string[] {
+  const servers = new Map<string, boolean>();
+  let current: string | undefined;
+  for (const rawLine of configText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const section = /^\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]\s*$/.exec(line);
+    if (section) {
+      current = section[1] ?? section[2];
+      if (current) servers.set(current, true);
+      continue;
+    }
+    if (/^\[/.test(line)) {
+      current = undefined;
+      continue;
+    }
+    if (current && /^enabled\s*=\s*false\s*(?:#.*)?$/.test(line)) {
+      servers.set(current, false);
+    }
+  }
+  return [...servers.entries()]
+    .filter(([, enabled]) => enabled)
+    .map(([name]) => name)
+    .sort();
+}
+
+async function configuredPluginRoots(
+  claudeHome: string,
+  codexHome: string
+): Promise<Array<{ root: string; host: InventoryHost; scope: "user" }>> {
+  const roots: Array<{ root: string; host: InventoryHost; scope: "user" }> = [];
+
+  // Claude records actual install paths. Marketplace checkouts alone are not
+  // treated as active, avoiding a false positive for every available plugin.
+  const installed = await readJson(join(claudeHome, "plugins", "installed_plugins.json"));
+  for (const installPath of collectStringFields(installed, "installPath")) {
+    roots.push({ root: installPath, host: "claude-code", scope: "user" });
+  }
+
+  // Codex records enabled plugin ids in config.toml. Match those ids to cached
+  // manifests by declared plugin name; disabled/cache-only plugins stay out.
+  const configText = await readFile(join(codexHome, "config.toml"), "utf8").catch(() => "");
+  const enabledNames = enabledCodexPluginNames(configText);
+  if (enabledNames.size > 0) {
+    for (const manifestPath of await findFiles(
+      join(codexHome, "plugins", "cache"),
+      (name) => name === "plugin.json"
+    )) {
+      if (!/\/\.codex-plugin\/plugin\.json$/.test(manifestPath.replace(/\\/g, "/"))) continue;
+      const manifest = await readJson(manifestPath);
+      const name = isRecord(manifest) ? stringValue(manifest.name) : undefined;
+      if (name && enabledNames.has(name)) {
+        roots.push({
+          root: dirname(dirname(manifestPath)),
+          host: "codex",
+          scope: "user"
+        });
+      }
+    }
+  }
+
+  return dedupePluginRoots(roots);
+}
+
+function enabledCodexPluginNames(configText: string): Set<string> {
+  const names = new Set<string>();
+  let current: string | undefined;
+  for (const line of configText.split(/\r?\n/)) {
+    const section = /^\[plugins\."([^"]+)"\]\s*$/.exec(line.trim());
+    if (section) {
+      current = section[1]?.split("@")[0];
+      continue;
+    }
+    if (/^\[/.test(line.trim())) {
+      current = undefined;
+      continue;
+    }
+    if (current && /^enabled\s*=\s*true\s*(?:#.*)?$/.test(line.trim())) {
+      names.add(current);
+    }
+  }
+  return names;
+}
+
+function collectStringFields(value: unknown, field: string): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectStringFields(entry, field));
+  }
+  if (!isRecord(value)) return [];
+  const direct = stringValue(value[field]);
+  return [
+    ...(direct ? [direct] : []),
+    ...Object.values(value).flatMap((entry) => collectStringFields(entry, field))
+  ];
+}
+
+function dedupePluginRoots<T extends { root: string; host: InventoryHost }>(roots: T[]): T[] {
+  const seen = new Set<string>();
+  return roots.filter((entry) => {
+    const key = `${entry.host}:${resolve(entry.root)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function pluginManifestPaths(root: string): Promise<string[]> {
+  const directCodex = join(root, ".codex-plugin", "plugin.json");
+  const directClaude = join(root, ".claude-plugin", "plugin.json");
+  const out: string[] = [];
+  if (await stat(directCodex).then((value) => value.isFile()).catch(() => false)) {
+    out.push(directCodex);
+  }
+  if (await stat(directClaude).then((value) => value.isFile()).catch(() => false)) {
+    out.push(directClaude);
+  }
+  return out;
+}
+
+function contextInjectingEvent(event: string): boolean {
+  return event === "SessionStart" ||
+    event === "UserPromptSubmit" ||
+    event === "SubagentStart";
+}
+
+function isWithinRoot(path: string, root: string): boolean {
+  const resolvedPath = resolve(path);
+  const resolvedRoot = resolve(root);
+  return resolvedPath === resolvedRoot || resolvedPath.startsWith(`${resolvedRoot}/`);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 // --------------------------------------------------------------------------

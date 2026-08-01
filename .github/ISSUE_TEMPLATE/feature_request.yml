@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a decision-focused improvement aligned with the public roadmap.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: user
+    attributes:
+      label: Who has this problem?
+      description: Name the daily user and, if relevant, the person responsible for company AI spend.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: What decision or verified action becomes possible?
+      description: Describe more than a chart or field.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and data source
+      description: What observed/reported/verified data supports it, and what would remain missing?
+    validations:
+      required: true
+  - type: textarea
+    id: success
+    attributes:
+      label: Success measure
+      description: How would activation, comprehension, trust, a changed decision, or retention validate the feature?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing integrations or alternatives
+      description: Could an observability, evaluation, billing, or gateway product provide the base data instead?

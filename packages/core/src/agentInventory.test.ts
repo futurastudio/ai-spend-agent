@@ -12,6 +12,7 @@ import {
 
 let root: string;
 let claudeHome: string;
+let codexHome: string;
 let projectDir: string;
 let configPath: string;
 
@@ -20,6 +21,7 @@ const SKILL_BODY = "x".repeat(5000); // long body that must NOT count toward tok
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "agent-inventory-"));
   claudeHome = join(root, ".claude");
+  codexHome = join(root, ".codex");
   projectDir = join(root, "project");
   configPath = join(root, ".claude.json");
 
@@ -80,6 +82,37 @@ beforeAll(async () => {
       }
     })
   );
+
+  // One actually installed plugin with three context-injecting hooks and one
+  // non-context lifecycle hook. Commands are metadata only and never run.
+  const pluginRoot = join(root, "installed-plugin");
+  await mkdir(join(pluginRoot, ".claude-plugin"), { recursive: true });
+  await mkdir(join(pluginRoot, "hooks"), { recursive: true });
+  await mkdir(join(claudeHome, "plugins"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, ".claude-plugin", "plugin.json"),
+    JSON.stringify({ name: "hooked-plugin", hooks: "./hooks/hooks.json" })
+  );
+  await writeFile(
+    join(pluginRoot, "hooks", "hooks.json"),
+    JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "node session.js" }] }],
+        UserPromptSubmit: [{ hooks: [{ type: "command", command: "node prompt.js" }] }],
+        SubagentStart: [{ hooks: [{ type: "command", command: "node subagent.js" }] }],
+        Stop: [{ hooks: [{ type: "command", command: "node stop.js" }] }]
+      }
+    })
+  );
+  await writeFile(
+    join(claudeHome, "plugins", "installed_plugins.json"),
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        "hooked-plugin@test": [{ installPath: pluginRoot }]
+      }
+    })
+  );
 });
 
 afterAll(async () => {
@@ -119,6 +152,7 @@ describe("loadAgentInventory", () => {
   it("enumerates each kind from temp fixtures", async () => {
     const result = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir
     });
@@ -127,11 +161,14 @@ describe("loadAgentInventory", () => {
     expect(result.scanned.subagents).toBe(1);
     expect(result.scanned.commands).toBe(1);
     expect(result.scanned.mcpServers).toBe(3);
+    expect(result.scanned.hookManifests).toBe(1);
+    expect(result.scanned.hooks).toBe(4);
 
     const skills = byKind(result.items, "skill");
     const subagents = byKind(result.items, "subagent");
     const commands = byKind(result.items, "command");
     const servers = byKind(result.items, "mcp_server");
+    const hooks = byKind(result.items, "hook");
 
     expect(skills.map((s) => s.name).sort()).toEqual([
       "deep-research",
@@ -145,11 +182,19 @@ describe("loadAgentInventory", () => {
       "global-server",
       "supabase"
     ]);
+    expect(hooks.filter((hook) => hook.activation === "hook_injected")).toHaveLength(3);
+    expect(hooks.find((hook) => hook.event === "Stop")).toMatchObject({
+      activation: "lifecycle_hook",
+      alwaysLoadedTokens: 0,
+      weightConfidence: "unmeasured",
+      host: "claude-code"
+    });
   });
 
   it("counts only frontmatter tokens for skills (body excluded)", async () => {
     const result = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir
     });
@@ -163,6 +208,7 @@ describe("loadAgentInventory", () => {
   it("scopes skills/servers as user vs project", async () => {
     const result = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir
     });
@@ -179,13 +225,14 @@ describe("loadAgentInventory", () => {
   });
 
   it("collects MCP servers from EVERY project when includeAllProjectMcp is set", async () => {
-    const scoped = await loadAgentInventory({ claudeHomeDir: claudeHome, claudeConfigPath: configPath, projectDir });
+    const scoped = await loadAgentInventory({ claudeHomeDir: claudeHome, codexHomeDir: codexHome, claudeConfigPath: configPath, projectDir });
     // Project-scoped: global-server + this project's context7 + supabase = 3.
     expect(scoped.scanned.mcpServers).toBe(3);
     expect(byKind(scoped.items, "mcp_server").some((s) => s.name === "framer")).toBe(false);
 
     const global = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir,
       includeAllProjectMcp: true
@@ -198,6 +245,7 @@ describe("loadAgentInventory", () => {
   it("flags mcp servers as understated (no tool schemas in config)", async () => {
     const result = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir
     });
@@ -208,9 +256,91 @@ describe("loadAgentInventory", () => {
     }
   });
 
+  it("reads Claude settings and enabled Codex MCP servers without exposing config values", async () => {
+    const hostRoot = await mkdtemp(join(tmpdir(), "agent-host-config-"));
+    const hostClaude = join(hostRoot, ".claude");
+    const hostCodex = join(hostRoot, ".codex");
+    await mkdir(hostClaude, { recursive: true });
+    await mkdir(hostCodex, { recursive: true });
+    await writeFile(
+      join(hostClaude, "settings.json"),
+      JSON.stringify({
+        mcpServers: {
+          "settings-server": {
+            url: "https://example.invalid/mcp?secret=must-not-appear"
+          }
+        }
+      })
+    );
+    await writeFile(
+      join(hostCodex, "config.toml"),
+      [
+        "[mcp_servers.codex-docs]",
+        'url = "https://example.invalid/docs"',
+        "",
+        '[mcp_servers."disabled-server"]',
+        'command = "disabled"',
+        "enabled = false"
+      ].join("\n")
+    );
+
+    const result = await loadAgentInventory({
+      claudeHomeDir: hostClaude,
+      codexHomeDir: hostCodex,
+      claudeConfigPath: join(hostRoot, "missing.json"),
+      projectDir: join(hostRoot, "project")
+    });
+    const servers = byKind(result.items, "mcp_server");
+    expect(servers.map((server) => server.name).sort()).toEqual([
+      "codex-docs",
+      "settings-server"
+    ]);
+    expect(servers.map((server) => server.host).sort()).toEqual([
+      "claude-code",
+      "codex"
+    ]);
+    expect(servers.find((server) => server.host === "codex")).toMatchObject({
+      invocationTracking: "not_observable"
+    });
+    expect(JSON.stringify(result)).not.toContain("must-not-appear");
+    expect(JSON.stringify(result)).not.toContain("example.invalid");
+  });
+
+  it("marks Codex plugin skills invocation-unobservable instead of dead", async () => {
+    const pluginRoot = join(root, "codex-plugin-fixture");
+    await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await mkdir(join(pluginRoot, "skills", "plugin-skill"), { recursive: true });
+    await writeFile(
+      join(pluginRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "codex-fixture", skills: "./skills/" })
+    );
+    await writeFile(
+      join(pluginRoot, "skills", "plugin-skill", "SKILL.md"),
+      "---\nname: plugin-skill\ndescription: Explicit-only fixture.\n---\n"
+    );
+
+    const result = await loadAgentInventory({
+      claudeHomeDir: join(root, "isolated-claude"),
+      codexHomeDir: join(root, "isolated-codex"),
+      claudeConfigPath: join(root, "isolated.json"),
+      projectDir: join(root, "isolated-project"),
+      pluginRoots: [{ root: pluginRoot, host: "codex" }]
+    });
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        kind: "skill",
+        name: "plugin-skill",
+        host: "codex",
+        activation: "discoverable",
+        invocationTracking: "not_observable"
+      })
+    ]);
+  });
+
   it("never includes built-in tools", async () => {
     const result = await loadAgentInventory({
       claudeHomeDir: claudeHome,
+      codexHomeDir: codexHome,
       claudeConfigPath: configPath,
       projectDir
     });
@@ -224,6 +354,7 @@ describe("loadAgentInventory", () => {
     const missing = join(root, "does-not-exist");
     const result = await loadAgentInventory({
       claudeHomeDir: join(missing, ".claude"),
+      codexHomeDir: join(missing, ".codex"),
       claudeConfigPath: join(missing, ".claude.json"),
       projectDir: join(missing, "project")
     });
@@ -233,7 +364,9 @@ describe("loadAgentInventory", () => {
       subagents: 0,
       commands: 0,
       mcpServers: 0,
-      mcpTools: 0
+      mcpTools: 0,
+      hooks: 0,
+      hookManifests: 0
     });
   });
 });

@@ -25,7 +25,7 @@ function localLogRecord(overrides: Partial<UsageRecord>): UsageRecord {
 }
 
 describe("computePlanChecks", () => {
-  it("projects to 30 days and suggests the cheapest covering plan", () => {
+  it("projects to 30 days and selects a reference plan without asserting coverage", () => {
     // $10/day over 2 distinct days -> $20/2d -> $300/mo -> Max 20x territory.
     const checks = computePlanChecks([
       localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 10 }),
@@ -44,10 +44,11 @@ describe("computePlanChecks", () => {
     expect(check.headline).toContain("projected from 2 active days");
     // $300/mo usage on a $200 plan -> 1.5× the plan price in usage.
     expect(check.valueMultiple).toBe(1.5);
-    expect(check.headline).toContain("~1.5× the plan price in usage");
+    expect(check.headline).toContain("~1.5× the plan price in API-equivalent usage");
+    expect(check.headline).toContain("does not prove plan coverage");
   });
 
-  it("speaks in facts when the plan is locally detected, and warns when usage exceeds the tier", () => {
+  it("labels locally detected plan context and warns when usage exceeds the comparison threshold", () => {
     const detected = {
       agent: "claude-code" as const,
       provider: "anthropic" as const,
@@ -63,17 +64,17 @@ describe("computePlanChecks", () => {
     ], [detected]);
 
     const check = checks[0]!;
-    // Detection pins the REAL plan (Max 5x), not the guessed covering tier.
+    // Detection pins the locally observed plan label, not a guessed tier.
     expect(check.detectedPlan?.planId).toBe("claude-max-5x");
     expect(check.suggestedPlan!.id).toBe("claude-max-5x");
-    expect(check.headline).toContain("you're on Claude Max 5x");
+    expect(check.headline).toContain("compared with Claude Max 5x");
     expect(check.headline).toContain("detected locally");
     // $300 usage / $100 plan = 3× value multiple.
     expect(check.valueMultiple).toBe(3);
     expect(check.upgradeHint).toContain("Claude Max 20x");
   });
 
-  it("upgrades 'might hit limits' to hard evidence when a limit signal is present", () => {
+  it("preserves a local limit signal without claiming live provider verification", () => {
     const detected = {
       agent: "claude-code" as const,
       provider: "anthropic" as const,
@@ -88,7 +89,8 @@ describe("computePlanChecks", () => {
       localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 10 })
     ], [detected]);
     expect(checks[0]!.upgradeHint).toContain("extra-usage credits exhausted");
-    expect(checks[0]!.upgradeHint).toContain("you ARE hitting");
+    expect(checks[0]!.upgradeHint).toContain("local metadata reports");
+    expect(checks[0]!.upgradeHint).toContain("verify account limits");
   });
 
   it("states detected-but-unpriceable plans without inventing numbers", () => {
@@ -104,12 +106,12 @@ describe("computePlanChecks", () => {
     expect(checks[0]!.valueMultiple).toBeUndefined();
   });
 
-  it("flags light usage as possibly cheaper on pay-as-you-go", () => {
+  it("flags light usage as a comparison that requires account context", () => {
     // $0.10 on one day -> $3/mo -> within Claude Pro, no positive savings.
     const checks = computePlanChecks([localLogRecord({ amountUsd: 0.1 })]);
     expect(checks[0]!.suggestedPlan!.id).toBe("claude-pro");
     expect(checks[0]!.monthlySavingsVsApiUsd).toBeUndefined();
-    expect(checks[0]!.headline).toContain("pay-as-you-go");
+    expect(checks[0]!.headline).toContain("compare account benefits");
   });
 
   it("separates agents and ignores non-log records", () => {

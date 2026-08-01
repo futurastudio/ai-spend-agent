@@ -1,0 +1,20 @@
+{
+  "name": "aibill",
+  "interface": {
+    "displayName": "Aibill"
+  },
+  "plugins": [
+    {
+      "name": "aibill",
+      "source": {
+        "source": "local",
+        "path": "./plugins/aibill"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

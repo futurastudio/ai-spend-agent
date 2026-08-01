@@ -4,30 +4,34 @@ import { Reveal } from "@/components/Reveal";
 import { UsageGlance } from "@/components/UsageGlance";
 
 const sources = [
-  "Claude Code logs",
-  "Codex logs",
-  "OpenAI",
-  "Anthropic",
-  "Cursor",
-  "Copilot",
+  "Claude Code · local logs",
+  "Codex · local logs",
+  "OpenAI · provider API",
+  "Anthropic · provider API",
+  "Cursor Admin API · beta",
+  "Copilot org API · beta",
 ];
 
 const features = [
   {
-    title: "Every source, one view",
-    body: "Your Claude Code and Codex session logs (priced locally at API rates) — plus your real OpenAI and Anthropic bills when you connect an admin/owner key — unified into a single breakdown. Cursor and Copilot connectors are in beta. No more flipping between dashboards.",
+    title: "Runway, not another meter",
+    body: "See five-hour and weekly headroom only when the coding agent reports it, paired with reset time and a clearly labeled local exhaustion projection. Missing windows stay missing.",
   },
   {
-    title: "A ranked list of cuts",
-    body: "Surfaces your most expensive models and the concrete switches that lower the bill — move to a cheaper tier, batch offline work, cache repeats — each with an estimated $/mo saving.",
+    title: "Your work + one decision",
+    body: "Connect observed project, file, automation, and agent activity to one Context Health action: continue, start fresh, review context evidence, or collect more history.",
   },
   {
-    title: "The plan-vs-API math",
-    body: "Projects your usage at API rates against subscription plan prices, so you can tell whether Pro, Max 5x, or pay-per-token is actually cheapest. The math no provider shows you.",
+    title: "Every number explains itself",
+    body: "Reported, locally observed, calculated, unmeasured, stale, or unavailable: source and freshness travel with the field instead of hiding behind one generic “live” label.",
   },
   {
-    title: "Runs entirely locally",
-    body: "One npx command reads your usage and renders the report in your terminal. No account, no upload, no telemetry. Open-source — read every line before you run it.",
+    title: "One engine, three surfaces",
+    body: "Terminal gives the full private baseline, Glance protects momentum during work, and explicit MCP answers “why?” from the same contract. No renderer gets a second parser.",
+  },
+  {
+    title: "Billing when it actually matters",
+    body: "API-equivalent value is comparison math—not an added subscription charge. Connect OpenAI or Anthropic admin billing only when you need official provider-reported cost beside it.",
   },
 ];
 
@@ -35,17 +39,50 @@ const steps = [
   {
     n: "01",
     title: "Run one command",
-    body: "npx aibill — nothing to install, configure, or sign up for. (Also on npm as ai-spend-agent.)",
+    body: "npx aibill — no global install, account, or initial configuration. (Also on npm as ai-spend-agent.)",
   },
   {
     n: "02",
-    title: "It reads what's already there",
-    body: "Your Claude Code and Codex session logs, locally — priced at API rates as estimates. Connect provider billing with an admin/owner key to reconcile those estimates into verified numbers.",
+    title: "Preview the decision at a glance",
+    body: "The source-built macOS preview shows current work, reported runway, freshness, and one action. A signed standalone download is not available yet.",
   },
   {
     n: "03",
-    title: "See spend + what to cut",
-    body: "A headline number, a ranked cut list with dollar savings, and a plan check — in under 90 seconds.",
+    title: "Ask why only when needed",
+    body: "Invoke the optional MCP/plugin for a conversational explanation, or connect OpenAI/Anthropic admin reporting to add official provider-reported cost beside local estimates.",
+  },
+];
+
+const decisions = [
+  {
+    status: "Available in beta",
+    title: "Separate billed cost from usage value",
+    body: "Keep official cost reports, purchased credits, subscription capacity, and API-equivalent value separate. Final invoices can still include credits, discounts, tax, or adjustments.",
+  },
+  {
+    status: "Available with source coverage",
+    title: "See available ownership",
+    body: "Use only the project, model, agent, user, workspace, or client dimensions each source exposes as inputs to allocation or rebilling decisions.",
+  },
+  {
+    status: "Available in beta",
+    title: "Assess interruption risk",
+    body: "Pair provider-reported limit windows and reset time with a separately labeled exhaustion projection. Missing windows remain unavailable instead of becoming false precision.",
+  },
+  {
+    status: "Available in beta",
+    title: "Investigate possible waste",
+    body: "Review context pressure, injected items or items with no observed invocation, repeated work, model mix, and unusual burn—then re-run the same evidence contract after an intervention.",
+  },
+  {
+    status: "Open roadmap",
+    title: "Compare cost per accepted outcome",
+    body: "Join cost to tests, review, rework, merge, and task acceptance so teams compare workflows on accepted results backed by explicit evidence—not tokens, lines of code, or invented hours saved.",
+  },
+  {
+    status: "Workspace roadmap",
+    title: "Decide what to scale or stop",
+    body: "Give engineering and finance one ledger for provider cost evidence, outcomes, budgets, approvals, and policy results—the basis for deciding whether to expand, constrain, renegotiate, or retire an AI workflow.",
   },
 ];
 
@@ -90,7 +127,7 @@ export default function Home() {
               href="#beta"
               className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
             >
-              Hosted beta
+              Workspace waitlist
             </a>
           </nav>
         </div>
@@ -109,23 +146,24 @@ export default function Home() {
         </a>
 
         <h1 className="mx-auto mt-7 max-w-4xl animate-fade-up text-balance text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.06em] text-ink sm:text-[5rem]">
-          Your AI bill,
-          <br className="hidden sm:block" /> finally in{" "}
+          Know what your AI coding agents consumed
+          <br className="hidden sm:block" />{" "}
           <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
-            focus.
+            and what it means financially.
           </span>
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-xl">
-          One local command turns Claude Code and Codex usage into a clear
-          receipt, plan check, and ranked cut list. Connect provider billing
-          only when you want verified invoice numbers.
+          Separate local API-equivalent usage, detected subscription context,
+          and optional provider-reported cost; attribute what each source
+          exposes; and see runway risk and the next investigation—without
+          uploading raw conversations.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
           <CopyCommand />
           <p className="font-mono text-xs text-faint">
-            Requires Node 22+. Nothing to install or sign up for.
+            Requires Node 22+. No global install or signup.
           </p>
         </div>
 
@@ -145,9 +183,20 @@ export default function Home() {
           />
           <UsageGlance />
           <p className="mt-4 text-center text-xs leading-relaxed text-faint">
-            Product concept: <span className="text-muted">aibill Glance</span>,
-            a planned macOS companion that reads the same local state as the
-            CLI. The sample numbers above are illustrative.
+            Native prototype: <span className="text-muted">aibill Glance</span>,
+            a source-built macOS companion backed by the same local transcript
+            engine as the CLI and MCP server. It stays hidden until the pointer
+            reaches the menu bar; then one stationary glass wordmark appears
+            left of the camera. Hover it—no click required—to slide down the
+            panel. Session value is estimated at API rates—not treated as
+            an added subscription charge—plan limits appear only when the agent
+            reports each window, and Main focus describes the dominant local
+            workstream rather than its spend. Its final two-line row combines
+            the same Context Health, focus, and reported-runway contract used
+            by Terminal and MCP; clicking it copies a handoff, but never runs
+            an agent. Freshness is explicit, including stale and failed-refresh
+            states. The numbers above are illustrative; a signed public
+            download is not available yet.
           </p>
         </div>
 
@@ -156,7 +205,7 @@ export default function Home() {
           <div className="mb-4 flex items-center justify-between px-1 text-left">
             <div>
               <p className="text-sm font-semibold text-ink">Need the full receipt?</p>
-              <p className="mt-1 text-xs text-faint">The terminal remains the source of truth.</p>
+              <p className="mt-1 text-xs text-faint">The terminal remains the complete private baseline.</p>
             </div>
             <span className="font-mono text-xs text-green">npx aibill</span>
           </div>
@@ -183,7 +232,8 @@ export default function Home() {
             </video>
           </div>
           <p className="mt-4 text-center font-mono text-xs text-faint">
-            Illustrative sample output — demo data, not real or verified numbers.
+            Illustrative sample data. API-rate figures are modeled, not
+            provider-reported cost or verified savings.
           </p>
         </div>
       </section>
@@ -213,10 +263,54 @@ export default function Home() {
           <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-muted">
             Every number is labeled. Figures from your local Claude Code and
             Codex logs are <span className="text-ink">estimated</span> at
-            published API rates — not a bill. Connect a provider with an
-            admin/owner key and those estimates become{" "}
-            <span className="text-green">verified</span> against your real
-            invoices.
+            published API rates — not a bill. Glance separately labels local
+            transcript facts, local calculations, locally detected plans, and
+            coding-agent-reported limits. Connect a provider with an
+            admin/owner source to add{" "}
+            <span className="text-green">official provider-reported cost</span>{" "}
+            beside those estimates. Final invoices can still include credits,
+            discounts, tax, or adjustments.
+          </p>
+        </Reveal>
+      </section>
+
+      {/* Decisions and ROI path */}
+      <section className="relative z-10 mx-auto max-w-content px-6 py-16">
+        <Reveal>
+          <div className="text-center">
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
+              A trustworthy view should change a decision
+            </h2>
+            <p className="mx-auto mt-3 max-w-2xl text-balance text-base leading-relaxed text-muted">
+              The beta establishes cost-and-capacity evidence: provider reports,
+              subscription context, API-equivalent value, ownership, coverage,
+              and what is missing. The roadmap then links that ledger to accepted
+              outcomes. ROI also requires independently measured monetary value.
+            </p>
+          </div>
+        </Reveal>
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {decisions.map((decision, i) => (
+            <Reveal key={decision.title} delay={i * 60}>
+              <div className="glass h-full rounded-2xl p-6">
+                <span className="font-mono text-[0.68rem] uppercase tracking-wider text-green">
+                  {decision.status}
+                </span>
+                <h3 className="mt-3 text-base font-semibold text-ink">
+                  {decision.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  {decision.body}
+                </p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+        <Reveal delay={100}>
+          <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-faint">
+            Public-beta boundaries: aibill does not infer missing plan limits,
+            claim productivity or ROI, or automatically enforce a recommendation.
+            Glance remains a source preview and Workspace is not launched.
           </p>
         </Reveal>
       </section>
@@ -269,51 +363,48 @@ export default function Home() {
             </span>
             <div>
               <h2 className="text-lg font-semibold text-ink">
-                Your data never leaves your machine
+                Local by default, explicit when shared
               </h2>
               <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted">
-                The CLI reads usage locally and renders the report in your
-                terminal. No telemetry, no cloud, no keys shipped off-box.
-                It&apos;s open-source — read every line before you run it.
+                The default CLI and Glance run locally with no account,
+                telemetry, key, or upload. If you deliberately connect provider
+                billing, the env-referenced credential is sent only to that
+                provider&apos;s official API. Explicit MCP results go only to the
+                AI client you invoked and follow that client&apos;s data policy.
               </p>
             </div>
           </div>
         </Reveal>
       </section>
 
-      {/* Roadmap: weekly artifacts */}
+      {/* Delivery surfaces */}
       <section id="roadmap" className="relative z-10 mx-auto max-w-content px-6 py-16">
         <Reveal>
           <div className="text-center">
             <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
-              What&apos;s next
+              Three surfaces, one answer
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-balance text-base leading-relaxed text-muted">
-              A new artifact every week — free in the CLI, built from the logs
-              already on your machine. Nothing leaves your laptop.
+              Choose the terminal, an on-demand AI skill, or the macOS hover.
+              Every surface consumes the same evidence and Context Health contract.
             </p>
           </div>
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
               {
-                week: "week 1",
-                cmd: "aibill limits",
-                copy: "Know when you'll hit your rate cap — before it hits you."
+                week: "public beta",
+                cmd: "npx aibill",
+                copy: "Private view of available usage/spend evidence, provenance, attribution, and ranked investigations."
               },
               {
-                week: "week 2",
-                cmd: "aibill wrapped",
-                copy: "Your month with AI, as a card worth sharing."
+                week: "public beta",
+                cmd: "MCP + explicit plugin",
+                copy: "On-demand explanation from the same structured contract; never an always-on prompt."
               },
               {
-                week: "week 3",
-                cmd: "aibill context",
-                copy: "A measured context-health grade, with named culprits."
-              },
-              {
-                week: "week 4",
-                cmd: "aibill secrets",
-                copy: "Find keys leaked into your transcripts — locally."
+                week: "source preview",
+                cmd: "aibill Glance",
+                copy: "A hidden-until-hover macOS view. No signed standalone download is available yet."
               }
             ].map((item) => (
               <div key={item.cmd} className="glass rounded-2xl px-5 py-6">
@@ -321,7 +412,7 @@ export default function Home() {
                   {item.week}
                 </div>
                 <div className="mt-2 font-mono text-sm font-semibold text-ink">
-                  npx {item.cmd}
+                  {item.cmd}
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-muted">{item.copy}</p>
               </div>
@@ -341,14 +432,17 @@ export default function Home() {
         <Reveal>
           <div className="glass relative mx-auto max-w-3xl rounded-3xl px-6 py-12 text-center sm:px-12">
             <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
-              Want it running 24/7?
+              Turn local evidence into company-wide decisions
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-balance text-base leading-relaxed text-muted">
-              The hosted tier is everything the CLI can&apos;t do alone: your
-              history kept forever, burn-rate alerts while your laptop is off,
-              your receipt and Wrapped at a living share URL, multi-machine
-              merge, and team rollups. Join the beta and we&apos;ll reach out
-              as spots open.
+              The planned aibill Workspace consolidates explicit,
+              aggregate-only receipts into a shared organizational evidence
+              ledger: provider cost reports, project/client ownership, budgets,
+              anomaly routing, approvals, and evidence-backed cost per accepted
+              outcome where coverage supports it. Local mode stays free and
+              private. Join as a design partner to shape the first shared-ledger
+              alpha. Workspace is not launched; the local CLI and MCP remain
+              useful without an account.
             </p>
             <div className="mx-auto mt-8 max-w-md text-left">
               <WaitlistForm />
@@ -362,6 +456,12 @@ export default function Home() {
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
           <span>aibill — free, local-first, open-source. Also on npm as ai-spend-agent.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <a
+              href="/blog/ai-coding-context-health"
+              className="transition-colors hover:text-ink"
+            >
+              Context health
+            </a>
             <a
               href="/blog/claude-code-cost-usage-credits"
               className="transition-colors hover:text-ink"

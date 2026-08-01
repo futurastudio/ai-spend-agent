@@ -1,0 +1,6 @@
+interface:
+  display_name: "aibill Check"
+  short_description: "Check spend and context health from local aibill data"
+  default_prompt: "Use $aibill-check to inspect my current local AI usage and Context Health."
+policy:
+  allow_implicit_invocation: false

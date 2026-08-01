@@ -1,0 +1,6 @@
+interface:
+  display_name: "aibill Explain"
+  short_description: "Explain aibill evidence, gaps, and provenance"
+  default_prompt: "Use $aibill-explain to explain where each aibill value came from and what is unavailable."
+policy:
+  allow_implicit_invocation: false

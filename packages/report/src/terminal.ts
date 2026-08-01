@@ -77,8 +77,8 @@ export type PlainEnglishSummaryOptions = {
 };
 
 /**
- * Best-in-class terminal summary: a big headline spend number, a ranked
- * ACTIONABLE cut list with exact dollar savings, then a drill-down table by
+ * Best-in-class terminal summary: a clearly labeled cost/value headline, a
+ * ranked ACTIONABLE opportunity list, then a drill-down table by
  * the chosen dimension. Degrades gracefully (no color, ASCII) when not a TTY.
  */
 export function generatePlainEnglishSummary(
@@ -90,7 +90,7 @@ export function generatePlainEnglishSummary(
   const width = options.width ?? 72;
   const groupBy = options.groupBy ?? "model";
   const cutList = generateCutList(options.records);
-  // Deduplicated so the headline savings can never exceed the spend it draws
+  // Deduplicated so the modeled opportunity can never exceed the value it draws
   // from (overlapping recommendations are shown separately, non-additively).
   const plan = buildRecommendedPlan(cutList);
 
@@ -100,7 +100,7 @@ export function generatePlainEnglishSummary(
   lines.push("");
   lines.push(c.dim(rule(width)));
   lines.push(
-    `  ${c.bold("AI SPEND")}  ${c.dim("your AI spend in one view")}`
+    `  ${c.bold(headlineMetricLabel(options.mode))}  ${c.dim("evidence-labeled financial view")}`
   );
   lines.push(c.dim(rule(width)));
   lines.push("");
@@ -136,14 +136,14 @@ export function generatePlainEnglishSummary(
       `  ${c.green("PLAN")} ${c.dim(`${subscriptionPlansDetected.map((plan) => plan.planLabel).join(" · ")} — detected from your agents' local config (read-only, nothing connected)`)}`
     );
   }
-  // Subscription users' headline stat is VALUE, not spend: the dollars above
-  // are counterfactual (they pay a flat price). Lead with what the plan buys.
+  // Subscription users' headline stat is a comparison, not billed spend: the
+  // dollars above are API-equivalent estimates. Keep that boundary explicit.
   const primaryValueCheck = planChecks.find(
     (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
   );
   if (subscriptionPersona && primaryValueCheck) {
     lines.push(
-      `  ${c.green(c.bold("COVERED BY"))} ${c.bold(`${primaryValueCheck.suggestedPlan!.name} ($${primaryValueCheck.suggestedPlan!.monthlyUsd}/mo)`)} ${c.dim("— you're getting")} ${c.bold(`~${primaryValueCheck.valueMultiple}×`)} ${c.dim("what you pay")}`
+      `  ${c.green(c.bold("COMPARED WITH"))} ${c.bold(`${primaryValueCheck.suggestedPlan!.name} ($${primaryValueCheck.suggestedPlan!.monthlyUsd}/mo)`)} ${c.dim("— API-equivalent usage is")} ${c.bold(`~${primaryValueCheck.valueMultiple}×`)} ${c.dim("the listed price")}`
     );
   }
   lines.push("");
@@ -171,8 +171,8 @@ export function generatePlainEnglishSummary(
   if (options.mode === "local-logs") {
     const tldr: string[] = [];
     if (primaryValueCheck) {
-      const limits = planChecks.some((check) => check.upgradeHint) ? " — and hitting its limits" : "";
-      tldr.push(`you're getting ~${primaryValueCheck.valueMultiple}× your ${primaryValueCheck.suggestedPlan!.name} price in usage${limits}`);
+      const limits = planChecks.some((check) => check.upgradeHint) ? " — check the reported limit signal" : "";
+      tldr.push(`API-equivalent usage is ~${primaryValueCheck.valueMultiple}× the ${primaryValueCheck.suggestedPlan!.name} list price${limits}`);
     }
     const topProject = summary.byProject.find((entry) => entry.key !== "unmapped");
     if (topProject && summary.totalUsd > 0) {
@@ -201,7 +201,7 @@ export function generatePlainEnglishSummary(
   // what each block is and what to do next.
 
   // ══ 1 · DIAGNOSE ════════════════════════════════════════════════════════
-  lines.push(sectionHeader(1, "DIAGNOSE", subscriptionPersona ? "what your subscription actually buys you" : "what your coding agents actually cost", c));
+  lines.push(sectionHeader(1, "DIAGNOSE", subscriptionPersona ? "compare observed usage with plan context" : "what the available cost and usage evidence shows", c));
   lines.push("");
 
   // Where your money goes: at-a-glance bars (the screenshot).
@@ -289,10 +289,10 @@ export function generatePlainEnglishSummary(
   lines.push("");
 
   // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
-  lines.push(sectionHeader(2, "RECOMMEND", subscriptionPersona ? "Where to cut — frees up plan headroom, ranked by est. monthly value" : "Where to cut, ranked by est. monthly savings", c));
+  lines.push(sectionHeader(2, "RECOMMEND", subscriptionPersona ? "What to test — possible plan headroom, ranked by modeled monthly value" : "What to test, ranked by modeled monthly API-rate opportunity", c));
   lines.push("");
   if (cutList.length === 0) {
-    lines.push(c.dim("  No high-confidence cut found in this window. Connect more usage to surface savings."));
+    lines.push(c.dim("  No high-confidence opportunity found in this window. Collect more evidence before changing anything."));
   } else {
     // Sub-$1/mo cuts are noise on the readout (often near-duplicates of a big
     // cut) — collapse them into one line. They still count in the plan math
@@ -313,7 +313,7 @@ export function generatePlainEnglishSummary(
     const days = usageWindowDays(options.records);
     lines.push("");
     lines.push(
-      `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`recommended-plan savings (deduplicated) — a 30-day projection from ${days} day${days === 1 ? "" : "s"} of data`)}`
+      `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`modeled API-rate opportunity (deduplicated) — verify quality and the next provider report; projected from ${days} day${days === 1 ? "" : "s"} of data`)}`
     );
     if (plan.additionalSavingsUsd > 0) {
       lines.push(
@@ -335,14 +335,14 @@ export function generatePlainEnglishSummary(
     }
     // Honest framing for subscription users: when a flat-price plan covers
     // this usage, trimming doesn't return cash — it returns headroom. Saying
-    // "$224/mo savings" to someone whose marginal cost is $0 is the kind of
+    // "$224/mo cash savings" to someone whose marginal cost is $0 is the kind of
     // overclaim a technical reader will (rightly) call out.
     if (
       subscriptionPlansDetected.length > 0 ||
       planChecks.some((check) => typeof check.monthlySavingsVsApiUsd === "number")
     ) {
       lines.push(
-        `  ${c.dim(`on ${subscriptionPlansDetected.length > 0 ? "your" : "a"} flat-price plan these cuts buy rate-limit headroom and faster sessions, not cash — they become cash the day you pay per token`)}`
+        `  ${c.dim(`on ${subscriptionPlansDetected.length > 0 ? "your" : "a"} flat-price plan these changes may improve rate-limit headroom or speed; they are not cash-savings claims unless comparable provider-reported cost falls`)}`
       );
     }
   }
@@ -373,11 +373,11 @@ export function generatePlainEnglishSummary(
       `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("pay for API usage too? verify against real billing:")} ${c.bold("npx aibill connect anthropic|openai")} ${c.dim("(org admin key)")}`
+      `  ${c.cyan("›")} ${c.dim("pay for API usage too? add official provider-reported cost:")} ${c.bold("npx aibill connect anthropic|openai")} ${c.dim("(org admin key)")}`
     );
   } else {
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("connected billing is the source of truth — re-sync with")} ${c.bold("npx aibill sync-provider")} ${c.dim("after applying cuts")}`
+      `  ${c.cyan("›")} ${c.dim("re-sync official provider reporting with")} ${c.bold("npx aibill sync-provider")} ${c.dim("after the test; final invoices may still include credits, discounts, tax, or adjustments")}`
     );
   }
   lines.push("");
@@ -410,8 +410,8 @@ function dataWindowLine(records: UsageRecord[]): string {
 }
 
 function cutActionLines(action: CutAction, rank: number, c: Colors): string[] {
-  const savings = c.green(c.bold(`save ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
-  const head = `  ${c.bold(`${rank}.`)} ${c.bold(action.title)}  ${savings}`;
+  const opportunity = c.green(c.bold(`model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
+  const head = `  ${c.bold(`${rank}.`)} ${c.bold(action.title)}  ${opportunity}`;
   const detail = `     ${c.dim(action.action)}`;
   // Honest unit: local-log records are day-level session aggregates, not calls.
   const unit = action.recordUnit === "session-days"
@@ -464,8 +464,8 @@ function coverageLine(summary: SpendSummary): string {
   const estimated = breakdown.estimated ?? 0;
   const detected = breakdown.detected_unverified ?? 0;
   const parts: string[] = [];
-  if (verified > 0) parts.push(`${formatUsd(verified)} verified`);
-  if (estimated > 0) parts.push(`${formatUsd(estimated)} estimated`);
+  if (verified > 0) parts.push(`${formatUsd(verified)} provider-reported`);
+  if (estimated > 0) parts.push(`${formatUsd(estimated)} API-equivalent/estimated`);
   if (detected > 0) parts.push(`${formatUsd(detected)} detected`);
   return parts.length > 0 ? parts.join(" · ") : "no cost breakdown yet";
 }
@@ -481,7 +481,7 @@ function confidenceBadge(confidence: CostConfidence, c: Colors): string {
 function confidenceWord(confidence: CostConfidence): string {
   switch (confidence) {
     case "verified":
-      return "verified";
+      return "provider-reported";
     case "estimated":
       return "estimated";
     case "detected_unverified":
@@ -534,24 +534,30 @@ function labelOf(key: string): string {
   return key === "unmapped" ? "(unmapped)" : key;
 }
 
+function headlineMetricLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
+  if (mode === "connected") return "PROVIDER-REPORTED COST";
+  if (mode === "local-logs") return "OBSERVED API-EQUIVALENT VALUE";
+  return "ILLUSTRATIVE API-EQUIVALENT VALUE";
+}
+
 function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
   if (mode === "connected") {
     return [
-      "npx ai-spend-agent report           write a shareable Markdown + HTML report",
-      "npx ai-spend-agent --group-by agent drill into another dimension"
+      "npx aibill report           write a shareable Markdown + HTML report",
+      "npx aibill --group-by agent drill into another dimension"
     ];
   }
   if (mode === "local-logs") {
     return [
-      "npx ai-spend-agent report              write a shareable Markdown + HTML report",
-      "npx ai-spend-agent --group-by project  see which project burns the most",
-      "Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app"
+      "npx aibill report              write a shareable Markdown + HTML report",
+      "npx aibill --group-by project  see which project has the most observed activity",
+      "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app"
     ];
   }
   return [
-    "npx ai-spend-agent connect openai    pull your real OpenAI spend (org-owner admin key)",
-    "npx ai-spend-agent connect anthropic pull your real Anthropic spend (admin key)",
-    "npx ai-spend-agent report            write a shareable Markdown + HTML report"
+    "npx aibill connect openai    add official OpenAI-reported cost (org-owner admin key)",
+    "npx aibill connect anthropic add official Anthropic-reported cost (admin key)",
+    "npx aibill report            write a shareable Markdown + HTML report"
   ];
 }
 

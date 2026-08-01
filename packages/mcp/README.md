@@ -1,50 +1,57 @@
 # @agent-finops/mcp
 
-> `@agent-finops/mcp` is the internal workspace package scope; the published CLI is **`ai-spend-agent`** (`github.com/futurastudio/ai-spend-agent`).
+**aibill for MCP.** A local-first stdio server that lets Claude, Codex,
+Cursor, and other MCP clients read local Claude Code/Codex usage or add
+provider billing evidence to the same aibill report.
 
-**AI Spend Analyst — MCP server.** See your AI spend in one view, locally. A [Model Context Protocol](https://modelcontextprotocol.io) stdio server that lets Cursor, Claude Desktop, and other MCP clients scan a local folder for AI provider usage (OpenAI, Anthropic, and more), build a spend report, and suggest where to cut. Everything runs on your machine — folders are scanned read-only, secrets are redacted before output, and nothing is uploaded.
+The protocol is client-neutral. Provider ingestion currently supports OpenAI,
+Anthropic, GitHub Copilot, and Cursor. OpenAI and Anthropic are live-verified;
+Copilot and Cursor are connector-fixture verified. Local transcript support is
+Claude Code and Codex.
 
-## Install & build
+## Run from npm
 
 ```bash
-npm install
-npm run build   # produces dist/server.js (bin: ai-spend-mcp)
+npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 ```
 
-## Use it in Cursor / Claude Desktop
+MCP client configuration:
 
-Add this to Cursor (Settings → MCP, or `~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`):
-
-```json
+```jsonc
 {
   "mcpServers": {
-    "ai-spend-analyst": {
-      "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"]
+    "aibill": {
+      "command": "npx",
+      "args": ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
     }
   }
 }
 ```
 
-After `npm link` (in this package) or `npm install -g @agent-finops/mcp`, you can use the bin instead:
-
-```json
-{
-  "mcpServers": {
-    "ai-spend-analyst": { "command": "ai-spend-mcp" }
-  }
-}
-```
-
-Restart the client, then ask: *"Scan `/path/to/my-agency` for AI spend with the sample data and show me where I can cut."*
+Provider sync accepts only references such as `env:OPENAI_ADMIN_KEY`. The
+referenced variable must be inherited by the MCP server process. Raw keys are
+rejected and never persisted.
 
 ## Tools
 
 | Tool | Purpose |
 | --- | --- |
-| `scan_ai_spend` | Scan a folder for AI usage signals (run this first; `sample: true` for demo data). |
-| `list_sources` | List the read-only sources a scan registered. |
-| `get_spend_report` | Return the analyzed spend report (totals, breakdowns, anomalies, insights). |
-| `recommend_cuts` | Return scanner-backed recommendations for cutting spend. |
+| `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
+| `sync_local_agent_spend` | Build an estimated API-equivalent report from local Claude Code/Codex metadata. |
+| `sync_provider_spend` | Pull read-only provider billing evidence through an `env:NAME` reference, with billed cost, estimates, and coverage kept separate. |
+| `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. |
+| `get_context_health` | Distinguish discoverable, invoked, MCP-schema-loaded, hook-injected, and invocation-unobservable context without running hook commands. |
+| `list_sources` | List locally registered sources and verification levels. |
+| `get_spend_report` | Return the active records, data mode, and analyzed summary. |
+| `recommend_cuts` | Return report-backed recommendations, with discovery fallback. |
 
-All tools take an absolute `path`. See [`docs/MCP.md`](../../docs/MCP.md) for full configuration, tool inputs, copy-paste examples, and troubleshooting.
+State tools use an absolute project `path`; broad roots, state symlinks, and
+symlinked state files are refused. State is written only to
+`<path>/.ai-spend-agent/`. `get_usage_glance` is read-only and
+reads known Claude Code/Codex transcript metadata. See
+[`docs/MCP.md`](../../docs/MCP.md) for inputs, provider support, development
+configuration, and troubleshooting.
+
+aibill makes no telemetry or upload request. An MCP tool result is returned to
+the AI client that invoked it and follows that client's data-handling policy.
+The optional repo plugin is explicit-only and adds no lifecycle hooks.

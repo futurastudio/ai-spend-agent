@@ -96,7 +96,7 @@ function dataModeBannerLines(dataMode: SpendReportInput["dataMode"]): string[] {
   }
   if (dataMode === "local_logs") {
     return [
-      "> **Local-log estimates.** Dollar figures are priced from your Claude Code / Codex logs at API-equivalent rates — `estimated`, not `verified`. Connect a provider's billing to verify.",
+      "> **Local-log estimates.** Dollar figures are priced from your Claude Code / Codex logs at API-equivalent rates. They are usage-value comparisons, not a bill. Connect provider reporting to add official cost evidence beside them.",
       ""
     ];
   }
@@ -122,13 +122,13 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     ...dataModeBannerLines(input.dataMode),
     "## Executive summary",
     "",
-    `- Total tracked spend: ${formatUsd(input.summary.totalUsd)}`,
+    `- Tracked cost/value evidence: ${formatUsd(input.summary.totalUsd)}`,
     `- Records analyzed: ${input.summary.recordCount}`,
     `- Overall confidence: ${input.summary.confidence}`,
     `- Discovery signals: ${input.discovery?.signals.length ?? 0}`,
     `- Mapping questions: ${mappingQuestions.length}`,
-    `- Optimization impact: ${impactLine}`,
-    "- Savings math: recommendations are deduplicated by the spend they target, so the recommended-plan total never exceeds the spend it draws from; overlapping opportunities are listed separately and are not additive.",
+    `- Modeled opportunity: ${impactLine}`,
+    "- Opportunity math: recommendations are deduplicated by the records they target, so the modeled total never exceeds the cost/value evidence it draws from; overlapping opportunities are listed separately and are not additive.",
     "",
     "## Diagnose → Recommend → Apply → Verify",
     "",
@@ -137,10 +137,10 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "## Board brief",
     "",
     "- Decision needed: approve the top local optimization actions before connecting more sources.",
-    `- Current readout: ${formatUsd(input.summary.totalUsd)} tracked across ${input.summary.recordCount} local records with ${input.summary.confidence} confidence.`,
+    `- Current readout: ${formatUsd(input.summary.totalUsd)} of cost/value evidence across ${input.summary.recordCount} local records with ${input.summary.confidence} confidence.`,
     `- Biggest cost driver: ${topDriverLine(input.summary.byModel)}`,
     `- Attribution risk: ${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"} need confirmation before this becomes finance-grade.`,
-    `- Savings thesis: ${formatUsd(recommendedPlan.recommendedImpactUsd)} near-term recommended-plan impact (deduplicated) from ${recommendedPlan.recommended.length} of ${recommendations.length} local recommendations.`,
+    `- Opportunity thesis: ${formatUsd(recommendedPlan.recommendedImpactUsd)} modeled near-term impact (deduplicated) from ${recommendedPlan.recommended.length} of ${recommendations.length} local recommendations; verify against quality and the next provider report.`,
     "",
     "## Confidence breakdown",
     "",
@@ -257,7 +257,7 @@ export function generateApplyArtifactMarkdown(input: SpendReportInput): string {
   const lines = [
     "# AI Spend Apply Artifact",
     "",
-    "> Low-risk Apply artifact. Copy this into your coding agent to cut cost, then verify before rollout.",
+    "> Low-risk Apply artifact. Copy this into your coding agent to test a modeled cost opportunity, then verify before rollout.",
     "",
     "## Target workflow",
     ""
@@ -270,19 +270,19 @@ export function generateApplyArtifactMarkdown(input: SpendReportInput): string {
     lines.push(
       `- Workflow: ${top.clientId} / ${top.projectId} / ${top.workflowKey}`,
       `- Agent: ${top.agentId}`,
-      `- Current spend: ${formatUsd(top.amountUsd)} (${formatPercent(top.shareOfSpend)} of tracked spend)`,
-      `- Estimated savings: ${formatUsd(top.estimatedSavingsUsd)}`,
+      `- Current cost/value evidence: ${formatUsd(top.amountUsd)} (${formatPercent(top.shareOfSpend)} of the tracked total)`,
+      `- Modeled opportunity: ${formatUsd(top.estimatedSavingsUsd)}`,
       `- Margin at risk: ${formatUsd(top.estimatedMarginRiskUsd)}`,
       "",
       "## Copy this into your coding agent",
       "",
       "```text",
       `You are optimizing the ${top.workflowKey} workflow for client ${top.clientId} / project ${top.projectId}.`,
-      `Goal: reduce AI spend by about ${formatUsd(top.estimatedSavingsUsd)} without lowering delivery quality.`,
+      `Goal: test whether this workflow can reduce provider-reported cost or API-equivalent usage value by about ${formatUsd(top.estimatedSavingsUsd)} without lowering delivery quality.`,
       `Change request: ${top.suggestedOptimization}`,
       "Constraints: keep outputs functionally equivalent, preserve tests, do not add cloud uploads, keep the workflow local-first unless explicitly approved. Do not change user-visible quality thresholds without approval.",
       `Verification: ${top.verificationPlan}`,
-      "Return a small diff, explain expected savings, and include rollback steps.",
+      "Return a small diff, explain the expected impact and evidence needed to verify it, and include rollback steps.",
       "```",
       "",
       "## Verification plan",
@@ -313,7 +313,7 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
 
   const promptLines: string[] = [
     "You are cleaning up my coding-agent setup (Claude Code / Codex) to remove dead context and shrink heavy sessions.",
-    "I'm on a flat-price plan: the goal is rate-limit headroom and faster sessions, not cash savings.",
+    "I'm on a flat-price plan: the goal is rate-limit headroom and faster sessions, not a cash-savings claim.",
     "",
     `Measured from my local transcripts (last ${dead?.windowDays ?? 30} days):`
   ];
@@ -431,7 +431,7 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     `  targetWorkflow: ${yamlString(watch ? `${watch.clientId}/${watch.projectId}/${watch.workflowKey}` : "unmapped")}`,
     `  targetAgent: ${yamlString(watch?.agentId ?? "unmapped")}`,
     `  currentTrackedSpendUsd: ${input.summary.totalUsd.toFixed(2)}`,
-    `  expectedSavingsUsd: ${(watch?.estimatedSavingsUsd ?? topRecommendation?.estimatedImpactUsd ?? 0).toFixed(2)}`,
+    `  modeledOpportunityUsd: ${(watch?.estimatedSavingsUsd ?? topRecommendation?.estimatedImpactUsd ?? 0).toFixed(2)}`,
     "  allowedApplyModes:",
     "    - coding_agent_prompt",
     "    - policy_draft",
@@ -449,7 +449,7 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     "",
     "## Policy notes",
     "",
-    "- Treat verified spend, estimated spend, usage evidence, and missing cost data separately.",
+    "- Treat official provider-reported cost, estimated cost/value, usage evidence, and missing cost data separately.",
     "- Keep source connectors read-only until an owner explicitly approves write-capable changes.",
     "- Use the verification plan before expanding beyond the first workflow.",
     ""
@@ -461,7 +461,7 @@ export function generateVerificationPlanMarkdown(input: SpendReportInput): strin
   return [
     "# AI Spend Verification Plan",
     "",
-    "> Prove savings before rollout. This is the controller checklist for the Apply step.",
+    "> Test the modeled opportunity before rollout. This is the controller checklist for the Apply step.",
     "",
     "## Before baseline",
     "",
@@ -475,8 +475,8 @@ export function generateVerificationPlanMarkdown(input: SpendReportInput): strin
     "",
     "- Rerun the same workflow/sample window.",
     "- Compare spend, latency, error rate, and output acceptance side by side.",
-    `- Expected savings: ${watch ? formatUsd(watch.estimatedSavingsUsd) : "unknown until a workflow is mapped"}`,
-    "- Mark result as verified only if cost decreases and quality remains acceptable.",
+    `- Modeled opportunity: ${watch ? formatUsd(watch.estimatedSavingsUsd) : "unknown until a workflow is mapped"}`,
+    "- Mark the result verified only if comparable provider-reported cost or usage value decreases and quality remains acceptable.",
     "",
     "## Rollback triggers",
     "",
@@ -504,9 +504,9 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     "",
     "## What the buyer should understand in 10 seconds",
     "",
-    `- The agent found ${formatUsd(input.summary.totalUsd)} of tracked AI spend across ${input.summary.recordCount} records.`,
+    `- The agent found ${formatUsd(input.summary.totalUsd)} of labeled cost/value evidence across ${input.summary.recordCount} records.`,
     `- It generated ${input.summary.recommendations.length} ranked optimization recommendation(s).`,
-    `- It labels confidence as ${input.summary.confidence} and separates verified, estimated, usage-only, and missing cost evidence.`,
+    `- It labels confidence as ${input.summary.confidence} and separates provider-reported cost, API-equivalent estimates, usage-only evidence, and missing cost data.`,
     "- It outputs local reports and human-approved Apply/Verify artifacts before any automation.",
     "",
     "## Demo artifacts",
@@ -515,7 +515,7 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     "- `ai-spend-coding-agent-prompt.md`: copyable coding-agent task.",
     "- `ai-spend-action-plan.md`: operator action list.",
     "- `ai-spend-policy-config-draft.md`: low-risk policy/config draft.",
-    "- `ai-spend-verify-plan.md`: before/after savings and quality check.",
+    "- `ai-spend-verify-plan.md`: before/after cost/value and quality check.",
     "",
     "## QA controller checklist",
     "",
@@ -607,7 +607,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <li><span>Current readout</span><strong>${formatUsd(input.summary.totalUsd)} across ${input.summary.recordCount} records</strong></li>
           <li><span>Biggest cost driver</span><strong>${escapeHtml(topDriverLine(input.summary.byModel))}</strong></li>
           <li><span>Attribution risk</span><strong>${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"}</strong></li>
-          <li><span>Savings thesis</span><strong>${formatUsd(recommendedImpactUsd)} recommended-plan impact (deduplicated)</strong></li>
+          <li><span>Modeled opportunity</span><strong>${formatUsd(recommendedImpactUsd)} deduplicated impact to test</strong></li>
         </ul>
       </article>
 
@@ -627,7 +627,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       <div class="section-heading">
         <div>
           <div class="section-label">Evidence quality ledger</div>
-          <h2>Verified spend, estimates, usage evidence, and missing costs stay separate</h2>
+          <h2>Provider-reported cost, estimates, usage evidence, and missing costs stay separate</h2>
         </div>
         <span class="impact-pill">No silent allocation</span>
       </div>
@@ -800,7 +800,7 @@ function operatingLoopMarkdownLines(
     `1. **Diagnose the leak:** ${topInsight ? topInsight.title : topWorkflow ? `${topWorkflow.clientId} / ${topWorkflow.projectId} / ${topWorkflow.workflowKey}` : `${formatUsd(summary.totalUsd)} tracked spend baseline`}.`,
     `2. **Recommend a change:** ${topRecommendation ? topRecommendation.nextAction : "Collect more usage evidence before changing the workflow."}`,
     `3. **Apply safely:** ${topWorkflow ? workflowApplyArtifact(topWorkflow) : "Generate a human-approved Apply artifact once a workflow watch entry exists."}`,
-    `4. **Verify savings:** ${topWorkflow ? workflowVerificationPlan(topWorkflow) : "Compare before/after cost, latency, and accepted output quality before rollout."}`
+    `4. **Verify the result:** ${topWorkflow ? workflowVerificationPlan(topWorkflow) : "Compare before/after cost or usage value, latency, and accepted output quality before rollout."}`
   ];
 }
 
@@ -834,8 +834,8 @@ function operatingLoopCards(
     ),
     loopCard(
       "04",
-      "Verify savings",
-      topWorkflow ? `${formatUsd(topWorkflow.estimatedSavingsUsd)} target` : "Before/after proof",
+      "Verify the result",
+      topWorkflow ? `${formatUsd(topWorkflow.estimatedSavingsUsd)} modeled target` : "Before/after proof",
       topWorkflow ? workflowVerificationPlan(topWorkflow) : "Compare cost, latency, and accepted output quality against the baseline."
     )
   ];
@@ -909,7 +909,7 @@ function boardActionPlanLines(
       `${index + 1}. ${recommendation.nextAction} (${recommendation.priority}, ${formatUsd(recommendation.estimatedImpactUsd)} estimated impact)`
     ),
     mappingQuestionCount > 0
-      ? `4. Confirm ${mappingQuestionCount} attribution mapping question${mappingQuestionCount === 1 ? "" : "s"} so the next report can separate verified spend from estimates.`
+      ? `4. Confirm ${mappingQuestionCount} attribution mapping question${mappingQuestionCount === 1 ? "" : "s"} so the next report can separate provider-reported cost from estimates.`
       : "4. Keep the local-only report as the baseline, then connect the next source only after the action owners are assigned."
   ];
 }
@@ -929,8 +929,8 @@ function confidenceBreakdownLines(summary: SpendSummary): string[] {
 function evidenceLedgerMarkdownLines(records: UsageRecord[]): string[] {
   const ledger = buildEvidenceLedger(records);
   return [
-    `- Verified spend: ${formatUsd(ledger.verifiedSpendUsd)} across ${ledger.verifiedSpendCount} record${ledger.verifiedSpendCount === 1 ? "" : "s"}`,
-    `- Estimated spend: ${formatUsd(ledger.estimatedSpendUsd)} across ${ledger.estimatedSpendCount} record${ledger.estimatedSpendCount === 1 ? "" : "s"}`,
+    `- Provider-reported cost: ${formatUsd(ledger.verifiedSpendUsd)} across ${ledger.verifiedSpendCount} record${ledger.verifiedSpendCount === 1 ? "" : "s"}`,
+    `- Estimated cost/value: ${formatUsd(ledger.estimatedSpendUsd)} across ${ledger.estimatedSpendCount} record${ledger.estimatedSpendCount === 1 ? "" : "s"}`,
     `- Verified usage evidence: ${ledger.usageEvidenceTokens.toLocaleString("en-US")} tokens across ${ledger.usageEvidenceCount} record${ledger.usageEvidenceCount === 1 ? "" : "s"}`,
     `- Missing cost data: ${ledger.missingCostCount} record${ledger.missingCostCount === 1 ? "" : "s"} need${ledger.missingCostCount === 1 ? "s" : ""} billing/source reconciliation`
   ];
@@ -939,8 +939,8 @@ function evidenceLedgerMarkdownLines(records: UsageRecord[]): string[] {
 function evidenceLedgerHtml(records: UsageRecord[]): string {
   const ledger = buildEvidenceLedger(records);
   return [
-    evidenceLedgerCard("verified", "Verified spend", formatUsd(ledger.verifiedSpendUsd), `${ledger.verifiedSpendCount} billing-backed record${ledger.verifiedSpendCount === 1 ? "" : "s"}`),
-    evidenceLedgerCard("estimated", "Estimated spend", formatUsd(ledger.estimatedSpendUsd), `${ledger.estimatedSpendCount} estimate-backed record${ledger.estimatedSpendCount === 1 ? "" : "s"}`),
+    evidenceLedgerCard("verified", "Provider-reported cost", formatUsd(ledger.verifiedSpendUsd), `${ledger.verifiedSpendCount} official provider record${ledger.verifiedSpendCount === 1 ? "" : "s"}`),
+    evidenceLedgerCard("estimated", "Estimated cost/value", formatUsd(ledger.estimatedSpendUsd), `${ledger.estimatedSpendCount} estimate-backed record${ledger.estimatedSpendCount === 1 ? "" : "s"}`),
     evidenceLedgerCard("usage", "Verified usage evidence", `${ledger.usageEvidenceTokens.toLocaleString("en-US")} tokens`, `${ledger.usageEvidenceCount} usage record${ledger.usageEvidenceCount === 1 ? "" : "s"} without silent dollar allocation`),
     evidenceLedgerCard("missing", "Missing cost data", `${ledger.missingCostCount} record${ledger.missingCostCount === 1 ? "" : "s"}`, "Needs billing/export/source reconciliation before finance-grade reporting")
   ].join("\n");
@@ -1060,7 +1060,7 @@ function workflowWatchMarkdownLines(entries: SpendSummary["workflowWatch"]): str
     `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence})`,
     `  - Tracked spend: ${formatUsd(entry.amountUsd)} across ${entry.recordCount} records`,
     `  - Margin risk: ${formatUsd(entry.estimatedMarginRiskUsd)}`,
-    `  - Estimated savings: ${formatUsd(entry.estimatedSavingsUsd)}`,
+    `  - Modeled opportunity: ${formatUsd(entry.estimatedSavingsUsd)}`,
     `  - Suggested optimization: ${entry.suggestedOptimization}`,
     `  - Apply artifact: ${workflowApplyArtifact(entry)}`,
     `  - Verification plan: ${workflowVerificationPlan(entry)}`
@@ -1080,7 +1080,7 @@ function workflowWatchCard(entry: SpendSummary["workflowWatch"][number]): string
     <div class="workflow-bar" aria-label="${escapeHtml(formatPercent(entry.shareOfSpend))} of tracked spend"><span style="width: ${width}%"></span></div>
     <div class="workflow-facts">
       <span>Margin risk <strong>${formatUsd(entry.estimatedMarginRiskUsd)}</strong></span>
-      <span>Est. savings <strong>${formatUsd(entry.estimatedSavingsUsd)}</strong></span>
+      <span>Modeled <strong>${formatUsd(entry.estimatedSavingsUsd)}</strong></span>
       <span>Share <strong>${formatPercent(entry.shareOfSpend)}</strong></span>
     </div>
     <div class="apply-prompt"><strong>Apply artifact:</strong> ${escapeHtml(workflowApplyArtifact(entry))}</div>
@@ -1218,7 +1218,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
   const cutRows = cutList.slice(0, 4).map((cut) => {
     const unit = cut.recordCount === 1 ? cut.recordUnit.replace(/s$/, "") : cut.recordUnit;
-    return `<div class="cut"><div><strong>${escapeHtml(cut.title)}</strong><p>${escapeHtml(cut.action)}</p></div><div class="cut-v"><strong>~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo</strong><span>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</span></div></div>`;
+    return `<div class="cut"><div><strong>${escapeHtml(cut.title)}</strong><p>${escapeHtml(cut.action)}</p></div><div class="cut-v"><strong>~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled</strong><span>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</span></div></div>`;
   }).join("");
 
   const deadChips = dead
@@ -1247,15 +1247,15 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         <div class="hero">
           ${valueCheck
-            ? `<div class="hero-big g-accent">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COVERED BY <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — getting ~${valueCheck.valueMultiple}× the plan price in usage${hittingLimits ? ` <span class="warn">· hitting its limits</span>` : ""}</div>`
+            ? `<div class="hero-big g-accent">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COMPARED WITH <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — API-equivalent usage is ~${valueCheck.valueMultiple}× the listed plan price${hittingLimits ? ` <span class="warn">· check the reported limit signal</span>` : ""}</div>`
             : `<div class="hero-big g-accent">${formatUsd(summary.totalUsd)}</div><div class="hero-sub">API-equivalent usage from local Claude Code / Codex transcripts · estimated</div>`}
         </div>
 
         ${sectionHead("WHAT HAPPENED", "measured from this machine's transcripts")}
         <div class="stats">
-          ${valueCheck ? statCard("Plan value", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} price in usage`, "primary") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
+          ${valueCheck ? statCard("API-rate comparison", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} list price`, "primary") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
           ${statCard("Usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`)}
-          ${statCard("Headroom", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "reclaimable · deduplicated")}
+          ${statCard("Modeled opportunity", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "API-rate value · deduplicated")}
           ${dead ? statCard("Dead context", `${dead.deadCount} of ${dead.loadedCount}`, `never invoked in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : statCard("Dead context", "none", "all loaded tools invoked")}
         </div>
 
@@ -1266,13 +1266,13 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Dead context — loaded every turn, invoked never:</span> ${deadChips}</div>` : ""}
 
-        ${sectionHead("FIX", "ranked by est. monthly value")}
+        ${sectionHead("FIX", "ranked modeled opportunities to test")}
         ${cutRows || `<p class="dim">No cuts above the reporting threshold in this window.</p>`}
-        <p class="dim note-line">On a flat-price plan these cuts buy rate-limit headroom and speed — they become cash the day you pay per token.</p>
+        <p class="dim note-line">On a flat-price plan these may improve rate-limit headroom or speed. They are not cash-savings claims; verify with comparable provider reports and accepted output quality.</p>
 
         ${sectionHead("VERIFY", "prove it, then trust it")}
         ${planRows}
-        <p class="dim note-line">Plan read locally from the agents' own config; list prices only — no account accessed. Apply the cuts, then re-run <span class="g-accent">npx aibill</span>: dead context should read none found.</p>
+        <p class="dim note-line">Plan label detected from local metadata or supplied by the user; list prices only. This does not prove entitlement, remaining capacity, or the cheapest plan. Apply a cut, then re-run <span class="g-accent">npx aibill</span> and compare quality plus the next provider report.</p>
 
         <div class="footer">
           <span><span class="g-accent">$</span> npx aibill <span class="dim">· reproduce this</span></span>

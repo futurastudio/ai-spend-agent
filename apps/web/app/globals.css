@@ -194,19 +194,14 @@ body {
   }
 
   /* ---- aibill Glance --------------------------------------------------
-     A browser-native concept of the planned macOS rendering surface. The
-     compact pill reveals the useful part of the CLI without becoming a
-     dashboard. */
+     Browser preview of the native macOS rendering surface. One stationary
+     glass wordmark sits left of the camera; its card slides down on hover. */
   .glance-stage {
     position: relative;
     min-height: 500px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.13);
     border-radius: 42px;
     background: #0a0c12;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 36px 100px -46px rgba(0, 0, 0, 0.95);
     isolation: isolate;
   }
 
@@ -238,7 +233,7 @@ body {
     display: flex;
     height: 31px;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     padding: 0 17px;
     background: rgba(5, 6, 10, 0.3);
     color: rgba(255, 255, 255, 0.72);
@@ -266,118 +261,129 @@ body {
 
   .usage-glance {
     position: absolute;
+    inset: 0;
     z-index: 4;
-    top: 34px;
-    left: 50%;
-    width: 258px;
-    height: 54px;
-    max-width: calc(100% - 28px);
-    overflow: hidden;
-    transform: translateX(-50%);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 27px;
+    outline: none;
+    color: rgba(255, 255, 255, 0.96);
+    pointer-events: none;
+  }
+
+  .glance-trigger {
+    position: absolute;
+    top: 3px;
+    right: calc(50% + 77px);
+    display: grid;
+    width: 58px;
+    height: 20px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
     outline: none;
     background:
-      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
-      rgba(11, 13, 18, 0.78);
+      linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.045)),
+      rgba(13, 16, 22, 0.22);
+    color: rgba(255, 255, 255, 0.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 4px 14px rgba(0, 0, 0, 0.14);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    list-style: none;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    cursor: default;
+    transform: translateY(-3px);
+    transition:
+      opacity 0.16s ease,
+      visibility 0s linear 0.18s,
+      transform 0.2s ease,
+      border-color 0.18s ease,
+      background 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .glance-stage:has(.glance-menu-bar:hover) .glance-trigger,
+  .glance-stage:has(.glance-trigger:hover) .glance-trigger,
+  .glance-stage:has(.glance-trigger:focus-visible) .glance-trigger,
+  .glance-stage:has(.glance-panel:hover) .glance-trigger,
+  .glance-stage:focus-within .glance-trigger {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition-delay: 0s;
+  }
+
+  .glance-trigger:hover,
+  .glance-trigger:focus-visible {
+    border-color: rgba(255, 255, 255, 0.32);
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(94, 242, 168, 0.07)),
+      rgba(13, 16, 22, 0.28);
     color: rgba(255, 255, 255, 0.96);
+  }
+
+  .glance-trigger:focus-visible {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 0 0 2px rgba(94, 242, 168, 0.42);
+  }
+
+  .glance-panel {
+    position: absolute;
+    top: 25px;
+    left: 50%;
+    width: 452px;
+    height: 382px;
+    max-width: calc(100% - 28px);
+    overflow: hidden;
+    border-color: rgba(255, 255, 255, 0.16);
+    border-style: solid;
+    border-width: 1px;
+    border-radius: 30px;
+    background:
+      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
+      rgba(11, 13, 18, 0.62);
     -webkit-backdrop-filter: blur(34px) saturate(190%);
     backdrop-filter: blur(34px) saturate(190%);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      0 18px 50px rgba(0, 0, 0, 0.34);
-    cursor: default;
-    transition:
-      width 0.48s cubic-bezier(0.22, 1, 0.36, 1),
-      height 0.52s cubic-bezier(0.22, 1, 0.36, 1),
-      border-radius 0.42s ease,
-      box-shadow 0.42s ease;
-  }
-
-  .usage-glance:hover,
-  .usage-glance:focus-visible,
-  .usage-glance:focus-within {
-    width: 410px;
-    height: 330px;
-    border-radius: 30px;
-    box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       0 30px 85px rgba(0, 0, 0, 0.48);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate(-50%, -12px) scale(0.985);
+    transform-origin: top center;
+    transition:
+      opacity 0.2s ease,
+      visibility 0s linear 0.32s,
+      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .usage-glance:focus-visible {
-    outline: 2px solid rgba(94, 242, 168, 0.55);
-    outline-offset: 3px;
-  }
-
-  .glance-summary {
-    display: flex;
-    height: 54px;
-    align-items: center;
-    gap: 9px;
-    padding: 0 16px;
-  }
-
-  .glance-orb {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: #5ef2a8;
-    box-shadow:
-      0 0 0 4px rgba(94, 242, 168, 0.11),
-      0 0 18px rgba(94, 242, 168, 0.7);
-  }
-
-  .glance-name,
-  .glance-now {
-    font-size: 13px;
-    font-weight: 650;
-    letter-spacing: -0.02em;
-  }
-
-  .glance-now {
-    color: rgba(255, 255, 255, 0.78);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-spacer {
-    flex: 1;
-  }
-
-  .glance-chevron {
-    color: rgba(255, 255, 255, 0.42);
-    font-size: 12px;
-    transition: transform 0.4s ease;
-  }
-
-  .usage-glance:hover .glance-chevron,
-  .usage-glance:focus-visible .glance-chevron,
-  .usage-glance:focus-within .glance-chevron {
-    transform: rotate(180deg);
+  .usage-glance:has(.glance-trigger:hover) .glance-panel,
+  .usage-glance:has(.glance-trigger:focus-visible) .glance-panel,
+  .usage-glance:has(.glance-panel:hover) .glance-panel,
+  .usage-glance:focus-within .glance-panel {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
+    transition-delay: 0s;
   }
 
   .glance-detail {
-    padding: 6px 20px 20px;
-    opacity: 0;
-    transform: translateY(-8px) scale(0.98);
-    transition:
-      opacity 0.24s ease 0.05s,
-      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s;
-  }
-
-  .usage-glance:hover .glance-detail,
-  .usage-glance:focus-visible .glance-detail,
-  .usage-glance:focus-within .glance-detail {
-    opacity: 1;
-    transform: none;
-    transition-delay: 0.12s;
+    padding: 14px 18px 18px;
   }
 
   .glance-headline {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    padding: 12px 2px 17px;
+    padding: 5px 2px 6px;
   }
 
   .glance-kicker {
@@ -388,13 +394,43 @@ body {
 
   .glance-total {
     margin-top: 3px;
-    font-size: 34px;
+    font-size: 32px;
     font-weight: 660;
+    line-height: 1;
     letter-spacing: -0.055em;
     font-variant-numeric: tabular-nums;
   }
 
+  .glance-current-line {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .glance-current-line > span {
+    color: rgba(255, 255, 255, 0.48);
+    font-size: 10px;
+    font-weight: 550;
+  }
+
+  .glance-current-project {
+    margin-top: 1px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 10px;
+    font-weight: 620;
+  }
+
+  .glance-current-plan {
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.44);
+    font-size: 9px;
+    font-weight: 540;
+  }
+
   .glance-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     border: 1px solid rgba(94, 242, 168, 0.2);
     border-radius: 999px;
     background: rgba(94, 242, 168, 0.08);
@@ -404,63 +440,233 @@ body {
     font-weight: 650;
   }
 
-  .glance-meters {
-    display: grid;
-    gap: 14px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-top: 16px;
+  .glance-status > span {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: #5ef2a8;
+    box-shadow: 0 0 10px rgba(94, 242, 168, 0.72);
   }
 
-  .glance-meter-label {
+  .glance-limit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .glance-limit-card {
+    border: 1px solid rgba(255, 255, 255, 0.085);
+    border-radius: 16px;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025));
+    padding: 11px 12px 10px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .glance-limit-top {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     color: rgba(255, 255, 255, 0.64);
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 550;
   }
 
+  .glance-limit-top strong {
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 11px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
   .glance-meter-track {
-    height: 5px;
-    margin-top: 7px;
+    height: 4px;
+    margin-top: 9px;
     overflow: hidden;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.09);
   }
 
-  .glance-meter-track span {
+  .glance-meter-fill {
     display: block;
     height: 100%;
     border-radius: inherit;
+  }
+
+  .glance-meter-attention {
+    background: linear-gradient(90deg, #ffbd66, #ffd891);
+    box-shadow: 0 0 16px rgba(255, 189, 102, 0.34);
+  }
+
+  .glance-meter-healthy {
     background: linear-gradient(90deg, #5ef2a8, #64c8ff);
-    box-shadow: 0 0 18px rgba(94, 242, 168, 0.38);
+    box-shadow: 0 0 16px rgba(94, 242, 168, 0.34);
   }
 
-  .glance-project {
+  .glance-limit-card > p {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 15px;
-    background: rgba(255, 255, 255, 0.045);
-    padding: 12px 13px;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 7px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 9px;
+    font-weight: 540;
   }
 
-  .glance-project p {
-    color: rgba(255, 255, 255, 0.46);
-    font-size: 10px;
-  }
-
-  .glance-project strong,
-  .glance-project > span {
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 12px;
+  .glance-limit-card > p strong {
+    color: rgba(255, 255, 255, 0.62);
     font-weight: 620;
   }
 
-  .glance-project strong {
+  .glance-session {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.045);
+    padding: 11px 12px;
+  }
+
+  .glance-session-mark {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9px;
+    background: linear-gradient(145deg, rgba(100, 200, 255, 0.2), rgba(137, 104, 255, 0.16));
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    font-weight: 720;
+  }
+
+  .glance-session > div:nth-child(2) {
+    min-width: 0;
+  }
+
+  .glance-session p {
+    color: rgba(255, 255, 255, 0.46);
+    font-size: 9px;
+  }
+
+  .glance-session strong {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    font-weight: 620;
+  }
+
+  .glance-session > div:nth-child(2) strong {
     display: block;
     margin-top: 2px;
+  }
+
+  .glance-session > div:nth-child(2) > span {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .glance-session-value {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .glance-session-value span {
+    margin-top: 1px;
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 9px;
+  }
+
+  .glance-insight {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+    border: 1px solid rgba(255, 189, 102, 0.12);
+    border-radius: 16px;
+    background: rgba(255, 189, 102, 0.055);
+    padding: 10px 11px;
+  }
+
+  .glance-insight-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 999px;
+    background: #ffbd66;
+    box-shadow: 0 0 12px rgba(255, 189, 102, 0.52);
+  }
+
+  .glance-insight > div {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .glance-insight strong {
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 10px;
+    font-weight: 630;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .glance-insight > div span {
+    margin-top: 2px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.43);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .glance-action-copy {
+    flex: 0 0 auto;
+    border: 1px solid rgba(255, 255, 255, 0.075);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.045);
+    padding: 5px 7px;
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 8px;
+    font-weight: 630;
+  }
+
+  .glance-source-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 9px;
+    padding: 0 3px;
+    color: rgba(255, 255, 255, 0.38);
+    font-size: 9px;
+    font-weight: 540;
+  }
+
+  .glance-source-row p {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .glance-source-row strong {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.34);
+    font-weight: 560;
   }
 
   .glance-desktop-copy {
@@ -517,22 +723,19 @@ body {
     animation: none;
     opacity: 1;
   }
-  .usage-glance,
-  .glance-detail,
-  .glance-chevron {
+  .glance-panel {
     transition-duration: 0.01ms;
   }
 }
 
 @media (max-width: 640px) {
   .glance-stage {
-    min-height: 440px;
+    min-height: 550px;
     border-radius: 30px;
   }
-  .usage-glance:hover,
-  .usage-glance:focus-visible,
-  .usage-glance:focus-within {
+  .glance-panel {
     width: calc(100% - 28px);
+    height: 446px;
   }
   .glance-desktop-copy {
     right: 18px;
