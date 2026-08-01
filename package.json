@@ -14,6 +14,7 @@
     "typecheck": "tsc -b --pretty false",
     "check:adapters": "node scripts/check-plugin-adapters.mjs",
     "check:public-boundary": "node scripts/check-public-boundary.mjs",
+    "check:release-packages": "node scripts/check-release-packages.mjs",
     "benchmark:context": "npm run build && node scripts/benchmark-context-health.mjs"
   },
   "devDependencies": {

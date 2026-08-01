@@ -3,9 +3,9 @@ import type { UsageRecord } from "./schema.js";
 
 /**
  * Plan-price math: compares API-equivalent usage (from local agent logs)
- * against published subscription plan prices — the arbitrage check no
- * provider will ever show, because it's the math that tells you to pay
- * them less.
+ * against published subscription plan prices. This is comparison context,
+ * not proof of entitlement, marginal cash cost, remaining capacity, or the
+ * cheapest option for a particular account.
  *
  * Prices are mid-2026 list prices. As of 2026-06-15, programmatic/Agent-SDK
  * usage on Claude plans is metered against a separate monthly credit pool at
@@ -18,7 +18,7 @@ export type SubscriptionPlan = {
   agent: "claude-code" | "codex";
   name: string;
   monthlyUsd: number;
-  /** Rough API-equivalent monthly usage this plan comfortably covers. */
+  /** Rough API-equivalent comparison threshold; not an entitlement limit. */
   coversUpToUsd: number;
 };
 
@@ -36,19 +36,18 @@ export type PlanCheck = {
   apiEquivalentMonthlyUsd: number;
   /** Distinct days of observed usage the projection is based on. */
   windowDays: number;
-  /** Cheapest plan that comfortably covers the projected usage (if any). */
+  /** Reference plan selected by a rough API-equivalent comparison (if any). */
   suggestedPlan?: SubscriptionPlan;
   /** apiEquivalentMonthlyUsd - plan price, when positive. */
   monthlySavingsVsApiUsd?: number;
   /**
-   * API-equivalent usage ÷ plan price — "you're getting N× the plan price in
-   * usage". The number a subscription user actually wants: am I getting my
-   * money's worth? Present only when a plan covers the usage.
+   * API-equivalent usage ÷ plan price. This is a value comparison, not an
+   * account entitlement or ROI measurement.
    */
   valueMultiple?: number;
-  /** The plan actually detected on this machine (or --plan override), if any. */
+  /** Plan label detected in local metadata (or supplied via --plan), if any. */
   detectedPlan?: DetectedPlan;
-  /** Set when projected usage exceeds what the detected tier typically covers. */
+  /** Set when projection exceeds a rough comparison threshold or a limit signal exists. */
   upgradeHint?: string;
   /** One-line, render-ready verdict. */
   headline: string;
@@ -61,10 +60,9 @@ const localLogCostType = "local_agent_logs";
  * from local agent logs participate (billing-API records already have real
  * prices and a real plan behind them).
  *
- * When `detectedPlans` carries a locally detected plan (or --plan override)
- * for an agent, the check speaks in facts ("you're on Claude Max 5x") instead
- * of guesses ("Max 20x likely covers this") — and warns when projected usage
- * exceeds what the detected tier typically covers.
+ * When `detectedPlans` carries a locally detected plan label (or --plan
+ * override), the result identifies that provenance and keeps comparison math
+ * separate from provider-reported limits.
  */
 export function computePlanChecks(records: UsageRecord[], detectedPlans: DetectedPlan[] = []): PlanCheck[] {
   const localRecords = records.filter(
@@ -107,35 +105,36 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
     let effectiveSavings: number | undefined;
 
     if (detectedKnown) {
-      // FACT mode: we know the user's actual plan from local agent config.
+      // The label comes from local metadata or an explicit override. It is not
+      // independently verified against the provider account.
       valueMultiple = Math.round((monthly / detectedKnown.monthlyUsd) * 10) / 10;
       const savingsVsApi = roundMoney(monthly - detectedKnown.monthlyUsd);
       effectiveSavings = savingsVsApi > 0 ? savingsVsApi : undefined;
       headline =
-        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — you're on ${detectedKnown.name} ` +
-        `($${detectedKnown.monthlyUsd}/mo, detected locally): ~${valueMultiple}× the plan price in usage` +
-        (effectiveSavings ? `, ~$${effectiveSavings.toFixed(2)}/mo cheaper than paying per token.` : `.`);
+        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — compared with ${detectedKnown.name} ` +
+        `($${detectedKnown.monthlyUsd}/mo; label detected locally): ~${valueMultiple}× the plan price in API-equivalent usage` +
+        (effectiveSavings ? `, a ~$${effectiveSavings.toFixed(2)}/mo value difference to investigate.` : `.`);
       if (monthly > detectedKnown.coversUpToUsd) {
         const nextTier = subscriptionPlans.find(
           (plan) => plan.agent === agent && plan.coversUpToUsd > detectedKnown.coversUpToUsd
         );
         // A local limit signal upgrades "might hit limits" to hard evidence.
         const evidence = detected?.limitSignal
-          ? `your local config shows ${detected.limitSignal} — you ARE hitting your plan's limits`
-          : `if you're hitting rate limits`;
+          ? `local metadata reports ${detected.limitSignal}`
+          : `if the provider reports active rate limits`;
         upgradeHint = nextTier
-          ? `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo); ${evidence}: ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next tier; trimming context (below) buys headroom without upgrading.`
-          : `usage runs past what ${detectedKnown.name} typically covers (~$${detectedKnown.coversUpToUsd}/mo) — trimming context (below) is the main headroom lever.`;
+          ? `API-equivalent projection exceeds the rough ${detectedKnown.name} comparison threshold (~$${detectedKnown.coversUpToUsd}/mo); ${evidence}. ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next listed tier, but verify account limits before changing plans; trimming context (below) may buy headroom.`
+          : `API-equivalent projection exceeds the rough ${detectedKnown.name} comparison threshold (~$${detectedKnown.coversUpToUsd}/mo); verify account limits before changing plans. Trimming context (below) may buy headroom.`;
       } else if (detected?.limitSignal) {
-        upgradeHint = `your local config shows ${detected.limitSignal} — you're hitting your plan's limits; trimming context (below) buys headroom without upgrading.`;
+        upgradeHint = `local metadata reports ${detected.limitSignal}; verify the live provider window. Trimming context (below) may buy headroom.`;
       }
     } else if (detected) {
       // Detected a plan we can't price (e.g. an unrecognized tier): state the
       // fact, then fall back to suggestion math without pretending certainty.
       headline =
-        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — you're on ${detected.planLabel} ` +
-        `(detected locally; price not in our table)` +
-        (suggested ? `; closest known plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
+        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — compared with ${detected.planLabel} ` +
+        `(label detected locally; price not in our table)` +
+        (suggested ? `; reference listed plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
     } else {
       const covered = suggested && typeof savings === "number" && savings > 0;
       valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
@@ -143,9 +142,9 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       if (!suggested) {
         headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
       } else if (covered) {
-        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} ($${suggested.monthlyUsd}/mo) likely covers this. You're getting ~${valueMultiple}× the plan price in usage, ~$${savings.toFixed(2)}/mo cheaper than paying per token.`;
+        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} is a $${suggested.monthlyUsd}/mo reference point. That is ~${valueMultiple}× the plan price in API-equivalent usage, a ~$${savings.toFixed(2)}/mo value difference to investigate; it does not prove plan coverage.`;
       } else {
-        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — within ${suggested.name} ($${suggested.monthlyUsd}/mo); pay-as-you-go API could be cheaper if you drop the subscription.`;
+        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — below the $${suggested.monthlyUsd}/mo price of ${suggested.name}; compare account benefits and provider-reported charges before changing plans.`;
       }
     }
 

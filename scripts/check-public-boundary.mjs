@@ -12,17 +12,15 @@ const tracked = execFileSync(
   encoding: "utf8"
   }
 ).split("\0").filter(Boolean);
-const forbiddenExact = new Set([
-  "docs/ARTIFACT_ROADMAP.md",
-  "docs/AUDIT_PUBLIC_REPO_2026-07-02.md"
-]);
-const forbiddenPrefixes = [
-  "docs/research/",
-  "docs/gtm/"
+const forbiddenPathPatterns = [
+  /(^|\/)ARTIFACT_ROADMAP(?:\.[^/]*)?$/i,
+  /(^|\/)AUDIT_PUBLIC_REPO(?:_[^/]*)?(?:\.[^/]*)?$/i,
+  /(^|\/)(?:research|gtm|internal|private)(?:\/|$)/i,
+  /(^|\/)\.(?:codex|claude)(?:\/|$)/i,
+  /(^|\/)\.npmrc$/i
 ];
 const forbiddenFiles = tracked.filter((path) => (
-  forbiddenExact.has(path) ||
-  forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+  forbiddenPathPatterns.some((pattern) => pattern.test(path)) ||
   /(^|\/)\.env($|\.)/.test(path) && !path.endsWith(".env.example")
 ));
 if (forbiddenFiles.length > 0) {

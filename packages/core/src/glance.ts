@@ -2,7 +2,8 @@ import {
   type LocalAgentActivity,
   type LocalAgentCall,
   type LocalAgentLogResult,
-  type LocalAgentRateLimitWindow
+  type LocalAgentRateLimitWindow,
+  sanitizeLocalActivityText
 } from "./localAgentLogs.js";
 import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
@@ -202,8 +203,16 @@ export function buildUsageGlance(
   calls: LocalAgentCall[],
   options: BuildUsageGlanceOptions = {}
 ): UsageGlanceSnapshot {
-  const contextGeneratedAt = options.contextHealth
-    ? new Date(options.contextHealth.generatedAt)
+  // A Glance snapshot is commonly serialized directly into MCP output. Apply
+  // defense-in-depth to every string-bearing transcript/context field before
+  // any calculation so secrets cannot survive in a nested session-health or
+  // provenance field even if an upstream parser missed them.
+  const safeCalls = sanitizeStringMetadata(calls);
+  const suppliedContextHealth = options.contextHealth
+    ? sanitizeStringMetadata(options.contextHealth)
+    : undefined;
+  const contextGeneratedAt = suppliedContextHealth
+    ? new Date(suppliedContextHealth.generatedAt)
     : undefined;
   const now = options.now ??
     (contextGeneratedAt && Number.isFinite(contextGeneratedAt.getTime())
@@ -211,24 +220,25 @@ export function buildUsageGlance(
       : new Date());
   const activeWithinMinutes = options.activeWithinMinutes ?? 20;
   const focusWindowDays = options.focusWindowDays ?? 7;
-  const sessions = groupSessions(calls);
+  const sessions = groupSessions(safeCalls);
   const latest = sessions
     .slice()
     .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))[0];
   const currentSession = latest
     ? toGlanceSession(latest, now, activeWithinMinutes)
     : null;
+  const safeDetectedPlans = sanitizeStringMetadata(options.detectedPlans ?? []);
   const plan = currentSession
-    ? toGlancePlan(currentSession.agent, options.detectedPlans ?? [])
+    ? toGlancePlan(currentSession.agent, safeDetectedPlans)
     : null;
-  const limitCalls = options.limitCalls ?? calls;
+  const limitCalls = sanitizeStringMetadata(options.limitCalls ?? safeCalls);
   const limits = latestLimits(limitCalls, now).map(({ agent, window, observedAt }) =>
     toGlanceLimit(agent, window, observedAt)
   );
   const windowStart = now.getTime() - focusWindowDays * DAY_MS;
-  const windowCalls = calls.filter((call) => Date.parse(call.timestamp) >= windowStart);
+  const windowCalls = safeCalls.filter((call) => Date.parse(call.timestamp) >= windowStart);
   const focus = buildMainFocus(groupSessions(windowCalls), focusWindowDays, now);
-  const sessionHealth = options.contextHealth ?? buildContextHealth({ calls, now });
+  const sessionHealth = suppliedContextHealth ?? buildContextHealth({ calls: safeCalls, now });
   const anomaly = anomalyFromContextHealth(sessionHealth);
   const primaryAction = buildPrimaryAction({
     currentSession,
@@ -236,7 +246,7 @@ export function buildUsageGlance(
     limits,
     sessionHealth
   });
-  const detectedAgents = options.detectedAgents ?? uniqueAgents(calls);
+  const detectedAgents = options.detectedAgents ?? uniqueAgents(safeCalls);
   const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
   const limitAgents = uniqueAgents(limitCalls.filter((call) => call.rateLimits));
   const reportedWindows = (agent: LocalAgentCall["agent"]) => (
@@ -429,8 +439,8 @@ function toGlanceSession(
   return {
     status: ageMs <= activeWithinMinutes * 60 * 1_000 ? "active" : "recent",
     agent: session.agent,
-    project: session.project,
-    model: session.model,
+    project: safeActionMetadata(session.project, 80),
+    model: safeActionMetadata(session.model, 80) ?? "unknown",
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,
     durationMinutes: Math.max(1, Math.round(durationMs / 60_000)),
@@ -540,7 +550,14 @@ function buildMainFocus(
   now: Date
 ): GlanceFocus | null {
   const candidates = sessions.map((session): FocusCandidate => {
-    const activity = session.activity ?? fallbackActivity(session);
+    const rawActivity = session.activity ?? fallbackActivity(session);
+    const activity: LocalAgentActivity = {
+      ...rawActivity,
+      summary: safeActionMetadata(rawActivity.summary, 160) ?? "Working with coding agents",
+      files: rawActivity.files
+        .map((file) => safeActionMetadata(file, 100))
+        .filter((file): file is string => Boolean(file))
+    };
     const ageDays = Math.max(0, now.getTime() - Date.parse(session.lastActivityAt)) / DAY_MS;
     const recency = ageDays <= 1 ? 1.15 : ageDays <= 3 ? 1 : 0.8;
     const evidence = activity.promptCount * 3 +
@@ -579,11 +596,14 @@ function buildMainFocus(
     0
   );
   const source = lead.activity.source;
-  const project = mostWeightedValue(
+  const project = safeActionMetadata(mostWeightedValue(
     selected.candidates,
     (candidate) => candidate.session.project
+  ), 80);
+  const file = safeActionMetadata(
+    mostRelevantFile(selected.candidates, lead.activity.summary),
+    100
   );
-  const file = mostRelevantFile(selected.candidates, lead.activity.summary);
   const agents = [...new Set(selected.candidates.map((candidate) => candidate.session.agent))].sort();
   const share = totalScore > 0 ? Math.round(selected.score / totalScore * 100) : 0;
   const confidence: GlanceFocus["confidence"] = source === "user_prompts" && promptCount >= 2 && share >= 30
@@ -594,7 +614,7 @@ function buildMainFocus(
 
   return {
     windowDays,
-    summary: lead.activity.summary,
+    summary: safeActionMetadata(lead.activity.summary, 160) ?? "Working with coding agents",
     kind: lead.activity.kind,
     project,
     file,
@@ -607,9 +627,10 @@ function buildMainFocus(
 }
 
 function fallbackActivity(session: SessionGroup): LocalAgentActivity {
+  const project = safeActionMetadata(session.project, 80);
   return {
-    summary: session.project ? `Working in ${session.project}` : "Working with coding agents",
-    kind: session.project ? "project" : "agent",
+    summary: project ? `Working in ${project}` : "Working with coding agents",
+    kind: project ? "project" : "agent",
     action: "working",
     source: "project",
     promptCount: 0,
@@ -793,7 +814,9 @@ function buildPrimaryAction(input: {
     detail,
     ...(project ? { project } : {}),
     ...(focus ? { focus } : {}),
-    agentPrompt: promptLines.join("\n"),
+    agentPrompt: promptLines
+      .map((line) => sanitizeLocalActivityText(line))
+      .join("\n"),
     source: "context_health_focus_and_reported_runway",
     confidence,
     execution: "copy_prompt",
@@ -807,12 +830,28 @@ function isGenericProject(value: string): boolean {
 
 function safeActionMetadata(value: string | undefined, maxLength: number): string | undefined {
   if (!value) return undefined;
-  const safe = value
+  const safe = sanitizeLocalActivityText(value)
     .replace(/[\u0000-\u001F\u007F]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!safe) return undefined;
   return safe.length <= maxLength ? safe : `${safe.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function sanitizeStringMetadata<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizeLocalActivityText(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeStringMetadata(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, item]) => [key, sanitizeStringMetadata(item)])
+    ) as T;
+  }
+  return value;
 }
 
 function limitActionName(limit: GlanceLimit): string {

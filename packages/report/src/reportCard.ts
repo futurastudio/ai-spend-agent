@@ -10,6 +10,8 @@ export type ReportCardInput = {
   summary: SpendSummary;
   /** Records the summary was computed from — used to derive the cut list. */
   records: UsageRecord[];
+  /** Controls whether the headline is billed cost or API-equivalent value. */
+  mode?: "demo" | "connected" | "local-logs";
 };
 
 const CARD_WIDTH = 640;
@@ -19,15 +21,15 @@ const CARD_HEIGHT = 400;
  * A redacted, shareable "AI Receipt" as a standalone SVG.
  *
  * This is the growth loop: a screenshot-able artifact a founder can post. It
- * deliberately carries only NON-identifying signal — total spend, estimated
- * monthly savings, provider count, confidence, and model-level cut headlines.
+ * deliberately carries only NON-identifying signal — cost/value, modeled
+ * monthly opportunities, provider count, confidence, and model-level cut headlines.
  * Client / project / user / workspace / api-key names are never rendered, so
  * sharing the card can't leak who a spend belongs to.
  */
 export function generateReportCardSvg(input: ReportCardInput): string {
   const { summary } = input;
   const cutList = generateCutList(input.records);
-  // Deduplicated recommended-plan savings — never exceeds the spend it draws from.
+  // Deduplicated modeled opportunity — never exceeds the value it draws from.
   const monthlySavings = buildRecommendedPlan(cutList).recommendedSavingsUsd;
   const providerCount = summary.bySource.length;
   const topCuts = cutList.slice(0, 3);
@@ -37,7 +39,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
         (cut, index) =>
           `      <text x="40" y="${274 + index * 30}" class="cut">` +
           `${escapeXml(`${index + 1}. ${redactCutTitle(cut)}`)}` +
-          `<tspan class="cutSave"> ~${escapeXml(formatUsd(cut.estimatedMonthlySavingsUsd))}/mo</tspan></text>`
+          `<tspan class="cutSave"> ~${escapeXml(formatUsd(cut.estimatedMonthlySavingsUsd))}/mo modeled</tspan></text>`
       ).join("\n")
     : `      <text x="40" y="274" class="cut">No high-confidence cut in this window yet.</text>`;
 
@@ -63,10 +65,10 @@ export function generateReportCardSvg(input: ReportCardInput): string {
 
   <text x="40" y="58" class="label">AI RECEIPT</text>
 
-  <text x="40" y="120" class="label">TOTAL AI SPEND (THIS WINDOW)</text>
+  <text x="40" y="120" class="label">${headlineLabel(input.mode)}</text>
   <text x="40" y="172" class="big">${escapeXml(formatBigUsd(summary.totalUsd))}</text>
 
-  <text x="40" y="212"><tspan class="save">~${escapeXml(formatUsd(monthlySavings))}/mo</tspan><tspan class="meta" dx="10">recommended-plan savings (deduplicated)</tspan></text>
+  <text x="40" y="212"><tspan class="save">~${escapeXml(formatUsd(monthlySavings))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
 
   <text x="40" y="244" class="meta">${escapeXml(
     `${providerCount} provider${providerCount === 1 ? "" : "s"} · ${summary.recordCount} call${summary.recordCount === 1 ? "" : "s"} · ${confidenceLabel(summary.confidence)}`
@@ -83,9 +85,22 @@ ${cutLines}
 export function generateReportCardCaption(input: ReportCardInput): string {
   const monthlySavings = buildRecommendedPlan(generateCutList(input.records)).recommendedSavingsUsd;
   return (
-    `My AI receipt this month: ${formatUsd(input.summary.totalUsd)} tracked, ` +
-    `~${formatUsd(monthlySavings)}/mo in savings I can act on. Local-first, no signup: npx ai-spend-agent`
+    `My AI receipt: ${formatUsd(input.summary.totalUsd)} in ${captionBasis(input.mode)}, ` +
+    `with ~${formatUsd(monthlySavings)}/mo in modeled opportunities to test—not verified savings. ` +
+    `Local-first: npx aibill`
   );
+}
+
+function headlineLabel(mode: ReportCardInput["mode"]): string {
+  if (mode === "connected") return "PROVIDER-REPORTED COST (THIS WINDOW)";
+  if (mode === "local-logs") return "OBSERVED API-EQUIVALENT VALUE";
+  return "ILLUSTRATIVE API-EQUIVALENT VALUE";
+}
+
+function captionBasis(mode: ReportCardInput["mode"]): string {
+  if (mode === "connected") return "provider-reported cost";
+  if (mode === "local-logs") return "observed API-equivalent value";
+  return "illustrative API-equivalent value";
 }
 
 /**

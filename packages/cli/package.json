@@ -1,7 +1,7 @@
 {
   "name": "ai-spend-agent",
   "version": "0.5.6",
-  "description": "Local-first AI spend CLI and Glance data engine for Claude Code/Codex transcripts and OpenAI, Anthropic, Cursor, and Copilot billing, with ranked cuts and explicit confidence labels.",
+  "description": "Local-first financial intelligence CLI for Claude Code and Codex activity, provider-reported cost, attribution, runway, provenance, and Context Health.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,6 +21,9 @@
     "directory": "packages/cli"
   },
   "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "bugs": {
+    "url": "https://github.com/futurastudio/ai-spend-agent/issues"
+  },
   "keywords": [
     "ai",
     "spend",

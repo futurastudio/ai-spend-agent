@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,8 +36,8 @@ describe("zero-key instant demo first run", () => {
     // Headline spend number lands first.
     expect(result.stdout).toContain("$87.00");
     // Actionable, dollar-specific cut list (the wow).
-    expect(result.stdout).toContain("Where to cut");
-    expect(result.stdout).toMatch(/Move .* to .*save ~\$/);
+    expect(result.stdout).toContain("What to test");
+    expect(result.stdout).toMatch(/Move .* to .*model ~\$/);
     // Demo banner + connect CTA, no over-promise about "all four".
     expect(result.stdout).toContain("DEMO");
     expect(result.stdout).toContain("connect openai");
@@ -266,7 +266,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--plan", "claude-max-5x", "--path", dir, "--no-color"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("you're on Claude Max 5x");
+    expect(result.stdout).toContain("compared with Claude Max 5x");
     expect(result.stdout).toContain("PLAN Claude Max 5x");
   });
 
@@ -310,8 +310,8 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["report-card", "--path", dir, "--out", cardPath]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("$7.50 tracked");
-    expect(result.stdout).not.toContain("$87.00 tracked");
+    expect(result.stdout).toContain("$7.50 in observed API-equivalent value");
+    expect(result.stdout).not.toContain("$87.00 in observed API-equivalent value");
     const card = await readFile(cardPath, "utf8");
     expect(card).toContain("$7.50");
     expect(card).not.toContain("$87.00");
@@ -334,6 +334,29 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain(`receipt: ${expected}`);
     const svg = await readFile(expected, "utf8");
     expect(svg.startsWith("<svg")).toBe(true);
+  });
+
+  it("refuses default and custom report-card output symlinks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-symlink-"));
+    const outside = join(await mkdtemp(join(tmpdir(), "ai-spend-cli-card-target-")), "outside.txt");
+    await writeFile(outside, "keep-me", "utf8");
+
+    const defaultReceipt = join(dir, "ai-receipt.svg");
+    await symlink(outside, defaultReceipt);
+    const defaultResult = await runCli(["report-card", "--sample", "--path", dir, "--no-color"]);
+    expect(defaultResult.exitCode).toBe(1);
+    expect(defaultResult.stderr).toContain("symbolic link");
+    expect(await readFile(outside, "utf8")).toBe("keep-me");
+
+    await unlink(defaultReceipt);
+    const customReceipt = join(dir, "custom.svg");
+    await symlink(outside, customReceipt);
+    const customResult = await runCli([
+      "report-card", "--sample", "--path", dir, "--out", customReceipt, "--no-color"
+    ]);
+    expect(customResult.exitCode).toBe(1);
+    expect(customResult.stderr).toContain("symbolic link");
+    expect(await readFile(outside, "utf8")).toBe("keep-me");
   });
 
   it("shows persisted sample state as DEMO, never as connected/verified", async () => {
@@ -524,6 +547,37 @@ describe("minimal CLI vertical slice", () => {
     expect(discovery).not.toContain(fakeOpenAiKey);
   });
 
+  it("never follows a symlinked CLI state child on reads or writes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-state-child-"));
+    const outside = await mkdtemp(join(tmpdir(), "ai-spend-cli-state-outside-"));
+    const outsideFile = join(outside, "private.json");
+    await writeFile(outsideFile, '{"private":"must remain outside"}\n');
+    await runCli(["scan", "--sample", "--path", dir]);
+
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    await unlink(spendPath);
+    await symlink(outsideFile, spendPath);
+    const quickstart = await runCli(["--path", dir, "--no-color"]);
+    expect(quickstart.stdout).not.toContain("must remain outside");
+
+    const discoveryPath = join(dir, ".ai-spend-agent", "discovery.json");
+    await unlink(discoveryPath);
+    await symlink(outsideFile, discoveryPath);
+    await expect(runCli(["scan", "--path", dir])).rejects.toThrow(/symbolic link/);
+    expect(await readFile(outsideFile, "utf8")).toContain("must remain outside");
+  });
+
+  it("refuses a symlinked CLI state directory before reset can delete outside files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-reset-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "ai-spend-cli-reset-outside-"));
+    const outsideSpend = join(outside, "spend.json");
+    await writeFile(outsideSpend, '{"private":"must survive reset"}\n');
+    await symlink(outside, join(dir, ".ai-spend-agent"));
+
+    await expect(runCli(["reset", "--path", dir])).rejects.toThrow(/symbolic link/);
+    expect(await readFile(outsideSpend, "utf8")).toContain("must survive reset");
+  });
+
   it("refuses to scan the full home directory by default", async () => {
     const result = await runCli(["scan", "--path", homedir()]);
 
@@ -647,8 +701,11 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("AI Spend Analyst Agent sync-provider");
     expect(result.stdout).toContain("provider: openai");
-    expect(result.stdout).toContain("verified records: 1");
-    expect(result.stdout).toContain("total spend: $9.75");
+    expect(result.stdout).toContain("coverage: complete");
+    expect(result.stdout).toContain("records fetched: 1");
+    expect(result.stdout).toContain("headline basis: provider_reported_billed_cost");
+    expect(result.stdout).toContain("synced provider headline: $9.75");
+    expect(result.stdout).toContain("combined headline spend: $9.75");
     expect(result.stdout).not.toContain(fakeToken);
 
     const providerRecordsRaw = await readFile(join(dir, ".ai-spend-agent", "provider-records.json"), "utf8");
@@ -661,6 +718,79 @@ describe("minimal CLI vertical slice", () => {
     expect(JSON.parse(sourcesRaw).approvedSources).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "openai-provider-api", provider: "openai", verification: "verified", authReference: "env:OPENAI_ADMIN_KEY" })
     ]));
+  });
+
+  it("keeps Anthropic billed cost separate from Claude Code API-equivalent estimates across sync and quickstart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-anthropic-accounting-"));
+    const fakeToken = "sk-" + "admin-anthropic-fake-token-do-not-store";
+    process.env.ANTHROPIC_ADMIN_KEY = fakeToken;
+    const startTime = 1_761_955_200;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("cost_report")
+        ? {
+            data: [{
+              starting_at: new Date(startTime * 1000).toISOString(),
+              results: [{ amount: "250", currency: "USD", cost_type: "tokens" }]
+            }],
+            has_more: false
+          }
+        : {
+            data: [{
+              date: new Date(startTime * 1000).toISOString().slice(0, 10),
+              actor: { email_address: "developer@example.com" },
+              core_metrics: { num_sessions: 1 },
+              model_breakdown: [{
+                model: "claude-sonnet-4-6",
+                tokens: { input: 100, output: 20 },
+                estimated_cost: { currency: "USD", amount: 123 }
+              }]
+            }],
+            has_more: false
+          }
+    })));
+    await runCli(["init", "--path", dir]);
+
+    const sync = await runCli([
+      "sync-provider",
+      "--path",
+      dir,
+      "--provider",
+      "anthropic",
+      "--auth-reference",
+      "env:ANTHROPIC_ADMIN_KEY",
+      "--start-time",
+      String(startTime),
+      "--end-time",
+      String(startTime)
+    ]);
+    const quickstart = await runCli(["--path", dir, "--no-color"]);
+    const receiptPath = join(dir, "anthropic-receipt.svg");
+    const receipt = await runCli([
+      "report-card", "--path", dir, "--out", receiptPath, "--no-color"
+    ]);
+    const spend = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+
+    expect(sync.exitCode).toBe(0);
+    expect(sync.stdout).toContain("synced provider headline: $2.50");
+    expect(sync.stdout).toContain("API-equivalent estimate (kept separate): $1.23");
+    expect(sync.stdout).toContain("combined headline spend: $2.50");
+    expect(quickstart.stdout).toContain("$2.50");
+    expect(quickstart.stdout).not.toContain("$3.73");
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).toContain("$2.50 in provider-reported cost");
+    expect(receipt.stdout).not.toContain("$3.73");
+    const receiptSvg = await readFile(receiptPath, "utf8");
+    expect(receiptSvg).toContain("$2.50");
+    expect(receiptSvg).not.toContain("$3.73");
+    expect(spend.records).toHaveLength(2);
+    expect(spend.summary.totalUsd).toBe(2.5);
+    expect(spend.accounting.financialsByProvider.anthropic).toMatchObject({
+      providerReportedBilledUsd: 2.5,
+      apiEquivalentEstimatedUsd: 1.23,
+      headlineUsd: 2.5
+    });
   });
 
   it("rejects plaintext-looking provider auth references", async () => {
@@ -741,7 +871,7 @@ describe("minimal CLI vertical slice", () => {
     expect(markdown).toContain("## Board action plan");
     expect(markdown).toContain("## Agency margin and workflow watch");
     expect(markdown).toContain("client-beta / project-research / research_summary");
-    expect(markdown).toContain("Estimated savings: $12.80");
+    expect(markdown).toContain("Modeled opportunity: $12.80");
     expect(markdown).toContain("Copy this into your coding agent");
     expect(applyArtifact).toContain("# AI Spend Apply Artifact");
     expect(applyArtifact).toContain("client-beta / project-research / research_summary");
@@ -763,18 +893,32 @@ describe("minimal CLI vertical slice", () => {
     expect(html).toContain("AI Spend Analyst Report");
   });
 
-  it("prints a plain-English 90-second readout from sample data via quickstart", async () => {
+  it("refuses a symlinked custom report output", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-symlink-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const outside = join(await mkdtemp(join(tmpdir(), "ai-spend-cli-report-target-")), "outside.txt");
+    await writeFile(outside, "keep-me", "utf8");
+    await symlink(outside, join(dir, "custom-report.md"));
+
+    const result = await runCli(["report", "--path", dir, "--out", "custom-report"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("symbolic link");
+    expect(await readFile(outside, "utf8")).toBe("keep-me");
+  });
+
+  it("prints a plain-English local readout from sample data via quickstart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-quickstart-"));
 
     const result = await runCli(["quickstart", "--sample", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI SPEND");
+    expect(result.stdout).toContain("ILLUSTRATIVE API-EQUIVALENT VALUE");
     expect(result.stdout).toContain("$87.00");
     expect(result.stdout).toContain("tracked across 9 calls");
-    expect(result.stdout).toContain("Where to cut");
+    expect(result.stdout).toContain("What to test");
     expect(result.stdout).toContain("to gpt-5.5-mini");
-    expect(result.stdout).toMatch(/save ~\$[\d,]+\.\d{2}\/mo/);
+    expect(result.stdout).toMatch(/model ~\$[\d,]+\.\d{2}\/mo/);
     expect(result.stdout).toContain("Spend by model");
     // Human-readable terminal output, not a JSON dump.
     expect(result.stdout).not.toContain("totalUsd");
@@ -886,7 +1030,7 @@ describe("minimal CLI vertical slice", () => {
       "1762041600"
     ]);
     expect(sync.exitCode).toBe(0);
-    expect(sync.stdout).toContain("total spend: $54.50");
+    expect(sync.stdout).toContain("combined headline spend: $54.50");
     expect(sync.stdout).not.toContain(fakeToken);
 
     // quickstart without --sample must use the live provider records, not sample data.

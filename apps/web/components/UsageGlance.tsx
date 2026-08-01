@@ -47,7 +47,7 @@ export function UsageGlance() {
           <div className="glance-detail">
             <div className="glance-headline">
               <div>
-                <p className="glance-kicker">Current session · local tokens × API list rates</p>
+                <p className="glance-kicker">Current session · estimated API-equivalent value</p>
                 <div className="glance-current-line">
                   <p className="glance-total">$4.18</p>
                   <span>Codex · GPT-5.6</span>
@@ -59,7 +59,7 @@ export function UsageGlance() {
               </div>
               <span className="glance-status">
                 <span aria-hidden="true" />
-                live · 42m
+                active · 42m
               </span>
             </div>
 

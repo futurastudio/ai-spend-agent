@@ -9,7 +9,8 @@ import {
   normalizeOpenAiUsageResponse,
   normalizeAnthropicClaudeCodeUsageResponse,
   normalizeGitHubCopilotSeatResponse,
-  resolveTokenReference
+  resolveTokenReference,
+  selectProviderFinancialHeadlineRecords
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
@@ -516,8 +517,45 @@ describe("real provider connector implementations", () => {
     // Seat dollars are estimated (plan-price reconciliation), so the result
     // and source labels must say estimated — never "verified" over estimates.
     expect(result.completeness).toBe("estimated");
+    expect(result.coverage).toBe("complete");
     expect(result.source).toMatchObject({ provider: "github-copilot", verification: "estimated" });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("rejects cross-origin pagination links before forwarding provider authorization", async () => {
+    const calls: Array<{ url: string; authorization?: string }> = [];
+    const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {
+      calls.push({ url, authorization: init?.headers?.Authorization });
+      if (url.includes("/copilot/billing/seats")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { link: '<https://evil.example/steal>; rel="next"' },
+          json: async () => ({ total_seats: 1, plan_type: "business", seats: [{ assignee: { login: "alice" } }] })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ day_totals: [] }) };
+    };
+
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      fetcher
+    });
+
+    expect(calls.some((call) => call.url.startsWith("https://evil.example"))).toBe(false);
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "GitHub Copilot seats", stoppedBecause: "unsafe_next_link" })
+    ]));
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "headers.link", issue: expect.stringContaining("same-origin") })
+    ]));
   });
 
   it("normalizes Cursor Admin API spend when a real team API path is available", () => {
@@ -638,9 +676,17 @@ describe("real provider connector implementations", () => {
         note: expect.stringContaining("Stopped after 1 page")
       })
     ]));
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.financials).toMatchObject({
+      providerReportedBilledUsd: 2,
+      headlineUsd: 2,
+      headlineBasis: "provider_reported_billed_cost"
+    });
   });
 
-  it("reports zero response drift for legitimate anthropic fields and derives estimated completeness from claude-code records", async () => {
+  it("keeps official Anthropic billing separate from Claude Code API-equivalent estimates", async () => {
     const fetcher = async (url: string) => {
       if (url.includes("/organizations/cost_report")) {
         return {
@@ -666,10 +712,53 @@ describe("real provider connector implementations", () => {
     });
 
     expect(result.qa.responseDrift).toEqual([]);
-    // Mixed verified (cost report) + estimated (claude code) records: the
-    // result-level label is the weakest cost-bearing confidence — estimated.
-    expect(result.completeness).toBe("estimated");
-    expect(result.source.verification).toBe("estimated");
+    expect(result.coverage).toBe("complete");
+    expect(result.completeness).toBe("verified");
+    expect(result.source.verification).toBe("verified");
+    expect(result.financials).toEqual({
+      providerReportedBilledUsd: 2.5,
+      apiEquivalentEstimatedUsd: 1.23,
+      providerEstimatedUsd: null,
+      headlineUsd: 2.5,
+      headlineBasis: "provider_reported_billed_cost"
+    });
+    expect(selectProviderFinancialHeadlineRecords(result.records)).toEqual([
+      expect.objectContaining({ amountUsd: 2.5, costConfidence: "verified" })
+    ]);
+  });
+
+  it("marks Anthropic coverage partial when a requested date range exceeds the connector cap", async () => {
+    const startTime = 1_761_955_200;
+    const fetcher = async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("cost_report")
+        ? {
+            data: [{
+              starting_at: new Date(startTime * 1000).toISOString(),
+              results: [{ amount: "100", currency: "USD", cost_type: "tokens" }]
+            }],
+            has_more: false
+          }
+        : { data: [], has_more: false }
+    });
+
+    const result = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime,
+      endTime: startTime + 371 * 24 * 60 * 60,
+      fetcher
+    });
+
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.financials.headlineUsd).toBe(1);
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stoppedBecause: "max_range_days", note: expect.stringContaining("370-day") })
+    ]));
   });
 
   it("reports zero response drift for legitimate copilot and cursor fields", async () => {

@@ -18,8 +18,10 @@ describe("generatePlainEnglishSummary", () => {
     const text = generatePlainEnglishSummary(summary, { records, color: false });
 
     expect(text).toContain("$87.00");
-    expect(text).toContain("Where to cut");
-    expect(text).toMatch(/Move .* to .*save ~\$/);
+    expect(text).toContain("What to test");
+    expect(text).toMatch(/Move .* to .*model ~\$/);
+    expect(text).toContain("ILLUSTRATIVE API-EQUIVALENT VALUE");
+    expect(text).toContain("modeled API-rate opportunity");
     expect(text).toContain("/mo");
   });
 
@@ -28,7 +30,7 @@ describe("generatePlainEnglishSummary", () => {
     const summary = analyzeSpend(records);
     const multiDay = generatePlainEnglishSummary(summary, { records, color: false });
     // Sample spans multiple days: states the window, no short-window caveat.
-    expect(multiDay).toMatch(/30-day projection from \d+ days of data/);
+    expect(multiDay).toMatch(/projected from \d+ days of data/);
     expect(multiDay).not.toContain("pattern repeats");
 
     // Collapse to a single day -> the honesty caveat must appear.
@@ -130,7 +132,7 @@ describe("generatePlainEnglishSummary", () => {
       }]
     });
     expect(text).toContain("PLAN Claude Max 5x — detected from your agents' local config");
-    expect(text).toContain("on your flat-price plan these cuts buy rate-limit headroom");
+    expect(text).toContain("on your flat-price plan these changes may improve rate-limit headroom");
   });
 
   it("collapses sub-$1/mo cuts into one summary line", async () => {
@@ -151,7 +153,7 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("included in apply-artifact");
   });
 
-  it("leads with COVERED BY + value multiple for subscription users (value, not counterfactual dollars)", async () => {
+  it("leads with an explicit plan-price comparison for subscription users", async () => {
     const records = (await sample()).map((record) => ({
       ...record,
       providerCostType: "local_agent_logs",
@@ -170,10 +172,10 @@ describe("generatePlainEnglishSummary", () => {
         source: "test"
       }]
     });
-    expect(text).toContain("COVERED BY Claude Max 5x ($100/mo)");
-    expect(text).toMatch(/~[\d.]+× what you pay/);
-    expect(text).toContain("what your subscription actually buys you");
-    expect(text).toContain("frees up plan headroom");
+    expect(text).toContain("COMPARED WITH Claude Max 5x ($100/mo)");
+    expect(text).toMatch(/~[\d.]+× the listed price/);
+    expect(text).toContain("compare observed usage with plan context");
+    expect(text).toContain("possible plan headroom");
   });
 
   it("opens with a TL;DR on local-log readouts (value, top burner, one action)", async () => {
@@ -196,7 +198,7 @@ describe("generatePlainEnglishSummary", () => {
       }]
     });
     expect(text).toContain("TL;DR");
-    expect(text).toMatch(/getting ~[\d.]+× your Claude Max 5x price/);
+    expect(text).toMatch(/API-equivalent usage is ~[\d.]+× the Claude Max 5x list price/);
     expect(text).toContain("run npx aibill apply");
     // TL;DR comes before the detail sections.
     expect(text.indexOf("TL;DR")).toBeLessThan(text.indexOf("1 · DIAGNOSE"));

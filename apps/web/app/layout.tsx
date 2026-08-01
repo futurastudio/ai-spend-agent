@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "aibill — local AI runway for Claude Code and Codex";
+const title = "aibill — financial intelligence for AI coding agents";
 const description =
-  "Know what Claude Code and Codex are working on, whether reported limits will last, and what to do next. Run npx aibill, query the same local data through MCP, or customize the macOS Glance hover UI. Optional provider billing stays separate from API-rate estimates.";
+  "Compare Claude Code and Codex activity, detected subscription context, API-equivalent value, optional provider-reported cost, attribution, and runway in one local-first view. Run npx aibill, query through MCP, or build Glance from source.";
 
 export const metadata: Metadata = {
   title,

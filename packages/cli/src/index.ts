@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   analyzeSpend,
@@ -12,8 +12,13 @@ import {
   detectLocalCredentials,
   detectLocalPlans,
   redactSecrets,
+  readSafeStateText,
+  resolveSafeScanRoot,
+  resolveSafeStateDirectory,
   subscriptionPlans,
   unsafeScanRootReason,
+  selectProviderFinancialHeadlineRecords,
+  writeSafeStateText,
   type DetectedPlan,
   loadDeadContext,
   sampleDeadContext,
@@ -201,7 +206,10 @@ type InstantReadData = {
 
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const { records, mode, warnings } = await loadInstantReadData(args);
-  const summary = analyzeSpend(records);
+  const summaryRecords = mode === "connected"
+    ? selectProviderFinancialHeadlineRecords(records)
+    : records;
+  const summary = analyzeSpend(summaryRecords);
   // For real local-log users the by-project view is the flagship table
   // ("which project burns my plan"); demo/connected keep by-model.
   const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
@@ -260,7 +268,7 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   }
 
   const summaryText = generatePlainEnglishSummary(summary, {
-    records,
+    records: summaryRecords,
     groupBy,
     color,
     mode,
@@ -431,11 +439,11 @@ function quickstartNextSteps(
   if (detected.length > 0) {
     const names = detected.map((credential) => `${credential.provider} (${credential.hint})`).join(", ");
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
-    steps.push(`npx ai-spend-agent connect ${detected[0]!.provider}   use it — note: COST data needs an ADMIN/owner key`);
+    steps.push(`npx aibill connect ${detected[0]!.provider}   add official provider-reported cost (ADMIN/owner key)`);
   }
   steps.push("npx aibill report              write a shareable Markdown + HTML report");
-  steps.push("npx aibill --group-by project  see which project burns the most");
-  steps.push("Want this watched while your laptop is off? Hosted beta waitlist: https://ai-spend-agent.vercel.app");
+  steps.push("npx aibill --group-by project  see which project has the most observed activity");
+  steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app");
   return steps;
 }
 
@@ -539,7 +547,7 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   if (stateMode === "sample") warnings.push("sample state present — it will be shown as DEMO and cannot mask real logs; run `ai-spend-agent reset` to clear it");
   if (stateMode === "unknown legacy") warnings.push("legacy state with no data-mode tag — run `ai-spend-agent reset`, then re-scan");
   if (!hasLogs) warnings.push("no real Claude Code / Codex logs found — a first run here will show DEMO sample data");
-  if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic for VERIFIED billing (local logs stay ESTIMATED)");
+  if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic to add official provider-reported cost (local logs stay API-equivalent estimates)");
 
   const predictedMode = stateMode === "connected_provider"
     ? "connected provider billing"
@@ -578,8 +586,19 @@ async function cliVersion(): Promise<string> {
 }
 
 async function resetCommand(args: ParsedArgs): Promise<CliResult> {
-  const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
+  const rootPath = await resolveSafeScanRoot(args.path);
+  let stateDir: string;
+  try {
+    stateDir = await resolveSafeStateDirectory(rootPath);
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+    return ok([
+      "AI Spend Analyst reset",
+      `path: ${rootPath}`,
+      "nothing to clear (no persisted spend state found)",
+      "next run will re-read your real local agent logs (or demo sample if none)."
+    ].join("\n"));
+  }
   // Clear derived spend state so a prior `scan --sample` (or stale provider
   // sync) can never mask the next real local-log read. Leaves sources/audit.
   const targets = ["spend.json", "mappings.json", "provider-records.json", "watch-latest.json", "watch-history.json"];
@@ -851,7 +870,10 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     }
   }
 
-  const summary = analyzeSpend(records);
+  const headlineRecords = mode === "connected_provider"
+    ? selectProviderFinancialHeadlineRecords(records)
+    : records;
+  const summary = analyzeSpend(headlineRecords);
   const mappings = attributeUsageRecords(records);
   await writeLocalSpendState(stateDir, records, summary, mappings, mode);
 
@@ -873,7 +895,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     detail: `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
   });
 
-  return { summary, snapshot, records, mode };
+  return { summary, snapshot, records: headlineRecords, mode };
 }
 
 function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapshot): string {
@@ -1118,26 +1140,66 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       enterprise: args.enterprise,
       accountId: args.accountId
     });
+    const priorProviderState = await readOptionalJson<{
+      records: UsageRecord[];
+      qaByProvider?: Record<string, ProviderQaSummary>;
+      coverageByProvider?: Record<string, string>;
+      financialsByProvider?: Record<string, unknown>;
+    }>(join(stateDir, "provider-records.json"), { records: [] });
+    const records = [
+      ...priorProviderState.records.filter((record) => record.source.provider !== result.provider),
+      ...result.records
+    ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const registry = await readSourceRegistry(stateDir, rootPath);
     const nextRegistry = addApprovedSource(registry, result.source);
-    const summary = analyzeSpend(result.records);
-    const mappings = attributeUsageRecords(result.records);
+    const headlineRecords = selectProviderFinancialHeadlineRecords(records);
+    const summary = analyzeSpend(headlineRecords);
+    const mappings = attributeUsageRecords(records);
+    const qaByProvider = {
+      ...(priorProviderState.qaByProvider ?? {}),
+      [result.provider]: result.qa
+    };
+    const coverageByProvider = {
+      ...(priorProviderState.coverageByProvider ?? {}),
+      [result.provider]: result.coverage
+    };
+    const financialsByProvider = {
+      ...(priorProviderState.financialsByProvider ?? {}),
+      [result.provider]: result.financials
+    };
     await mkdir(stateDir, { recursive: true });
     await writeJson(join(stateDir, "sources.json"), nextRegistry);
     await writeJson(join(stateDir, "provider-records.json"), {
       provider: result.provider,
       fetchedAt: result.fetchedAt,
       completeness: result.completeness,
+      coverage: result.coverage,
+      financials: result.financials,
       sourceId: result.source.id,
-      records: result.records,
-      qa: result.qa
+      records,
+      qa: result.qa,
+      qaByProvider,
+      coverageByProvider,
+      financialsByProvider
     });
-    await writeLocalSpendState(stateDir, result.records, summary, mappings, "connected_provider");
+    await writeLocalSpendState(
+      stateDir,
+      records,
+      summary,
+      mappings,
+      "connected_provider",
+      {
+        policy: "provider_reported_billed_cost_preferred",
+        note: "Official provider-reported billed costs are the spend headline. API-equivalent estimates remain separate evidence and are not added to that total.",
+        coverageByProvider,
+        financialsByProvider
+      }
+    );
     await appendAuditEvent(stateDir, {
       timestamp: result.fetchedAt,
       action: "source_scanned",
       sourceId: result.source.id,
-      detail: `${args.provider} provider connector synced ${result.records.length} verified records. Auth reference only; no raw secrets stored.`
+      detail: `${args.provider} provider connector synced ${result.records.length} evidence records with ${result.coverage} coverage. Auth reference only; no raw secrets stored.`
     });
 
     return ok([
@@ -1145,8 +1207,14 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `provider: ${result.provider}`,
       `source: ${result.source.id}`,
       `verification: ${result.source.verification}`,
-      `verified records: ${result.records.length}`,
-      `total spend: $${summary.totalUsd.toFixed(2)}`,
+      `coverage: ${result.coverage}`,
+      `records fetched: ${result.records.length}`,
+      `headline basis: ${result.financials.headlineBasis}`,
+      `synced provider headline: $${(result.financials.headlineUsd ?? 0).toFixed(2)}`,
+      `combined headline spend: $${summary.totalUsd.toFixed(2)}`,
+      ...(result.financials.apiEquivalentEstimatedUsd !== null
+        ? [`API-equivalent estimate (kept separate): $${result.financials.apiEquivalentEstimatedUsd.toFixed(2)}`]
+        : []),
       "auth: reference-only; raw secrets were not persisted or printed"
     ].join("\n"));
   } catch (error) {
@@ -1206,8 +1274,8 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
     const markdownPath = `${outBase}.md`;
     const htmlPath = `${outBase}.html`;
-    await writeFile(markdownPath, generateMarkdownReport(reportInput), "utf8");
-    await writeFile(htmlPath, generateHtmlReport(reportInput), "utf8");
+    await writeLocalReportFile(markdownPath, generateMarkdownReport(reportInput), stateDir);
+    await writeLocalReportFile(htmlPath, generateHtmlReport(reportInput), stateDir);
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
 
     return ok([
@@ -1251,30 +1319,45 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
 }
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
-  const rootPath = resolve(args.path);
-  const { records, mode } = await loadInstantReadData(args);
+  try {
+    const rootPath = await resolveSafeScanRoot(args.path);
+    const { records, mode } = await loadInstantReadData(args);
 
-  const summary = analyzeSpend(records);
-  const outPath = await resolveReceiptPath(rootPath, args.out);
-  await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, generateReportCardSvg({ summary, records }), "utf8");
+    const headlineRecords = mode === "connected"
+      ? selectProviderFinancialHeadlineRecords(records)
+      : records;
+    const summary = analyzeSpend(headlineRecords);
+    const outPath = await resolveReceiptPath(rootPath, args.out);
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeSafeStateText(
+      dirname(outPath),
+      basename(outPath),
+      generateReportCardSvg({ summary, records: headlineRecords, mode })
+    );
 
-  const dataLine = mode === "demo"
-    ? "data: DEMO sample data — run without --sample on a machine with Claude Code/Codex logs for your own numbers."
-    : mode === "local-logs"
-      ? "data: local Claude Code/Codex logs priced at API-equivalent rates."
-      : "data: connected local spend state.";
+    const dataLine = mode === "demo"
+      ? "data: DEMO sample data — run without --sample on a machine with Claude Code/Codex logs for your own numbers."
+      : mode === "local-logs"
+        ? "data: local Claude Code/Codex logs priced at API-equivalent rates."
+        : "data: connected local spend state with provider-reported cost kept separate from API-equivalent estimates.";
 
-  return ok([
-    "Your AI Receipt — a shareable, redacted spend card (no client/project/user names).",
-    `receipt: ${outPath}`,
-    dataLine,
-    "",
-    "Caption to share:",
-    generateReportCardCaption({ summary, records }),
-    "",
-    "privacy: rendered locally; only totals, savings, and model-level cuts are included."
-  ].join("\n"));
+    return ok([
+      "Your AI Receipt — a shareable, redacted spend card (no client/project/user names).",
+      `receipt: ${outPath}`,
+      dataLine,
+      "",
+      "Caption to share:",
+      generateReportCardCaption({ summary, records: headlineRecords, mode }),
+      "",
+      "privacy: rendered locally; only totals, modeled opportunities, and model-level investigations are included."
+    ].join("\n"));
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't write the report card: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
 }
 
 async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
@@ -1396,7 +1479,9 @@ async function buildReportInput(stateDir: string, rootPath: string) {
     detectedPlans,
     // Evidence ledger is built from the SAME records as the confidence
     // breakdown so the two sections can never contradict each other.
-    allRecords: spendState.records ?? [],
+    allRecords: spendState.mode === "connected_provider"
+      ? selectProviderFinancialHeadlineRecords(spendState.records ?? [])
+      : spendState.records ?? [],
     dataMode: spendState.mode,
     discovery,
     mappings: mappings ?? [],
@@ -1413,6 +1498,7 @@ function emptyDiscovery(rootPath: string): LocalDiscoveryResult {
     rootPath,
     scannedFiles: 0,
     skippedDirectories: [],
+    skippedSymlinks: [],
     unreadablePaths: [],
     signals: [],
     secretsDetected: [],
@@ -1428,11 +1514,11 @@ async function writeApplyArtifacts(stateDir: string, reportInput: Awaited<Return
     verificationPlan: join(stateDir, "ai-spend-verify-plan.md"),
     demoPackage: join(stateDir, "demo-package.md")
   };
-  await writeFile(paths.codingPrompt, generateApplyArtifactMarkdown(reportInput), "utf8");
-  await writeFile(paths.actionPlan, generateActionPlanMarkdown(reportInput), "utf8");
-  await writeFile(paths.policyConfigDraft, generatePolicyConfigDraftMarkdown(reportInput), "utf8");
-  await writeFile(paths.verificationPlan, generateVerificationPlanMarkdown(reportInput), "utf8");
-  await writeFile(paths.demoPackage, generateDemoPackageMarkdown(reportInput), "utf8");
+  await writeSafeStateText(stateDir, basename(paths.codingPrompt), generateApplyArtifactMarkdown(reportInput));
+  await writeSafeStateText(stateDir, basename(paths.actionPlan), generateActionPlanMarkdown(reportInput));
+  await writeSafeStateText(stateDir, basename(paths.policyConfigDraft), generatePolicyConfigDraftMarkdown(reportInput));
+  await writeSafeStateText(stateDir, basename(paths.verificationPlan), generateVerificationPlanMarkdown(reportInput));
+  await writeSafeStateText(stateDir, basename(paths.demoPackage), generateDemoPackageMarkdown(reportInput));
   return paths;
 }
 
@@ -1718,9 +1804,15 @@ async function writeLocalSpendState(
   records: UsageRecord[],
   summary: SpendSummary,
   mappings: AttributionMapping[],
-  mode: PersistedDataMode
+  mode: PersistedDataMode,
+  accounting?: unknown
 ): Promise<void> {
-  await writeJson(join(stateDir, "spend.json"), { mode, records, summary });
+  await writeJson(join(stateDir, "spend.json"), {
+    mode,
+    records,
+    summary,
+    ...(accounting ? { accounting } : {})
+  });
   await writeJson(join(stateDir, "mappings.json"), mappings);
 }
 
@@ -1767,7 +1859,7 @@ async function appendAuditEvent(stateDir: string, event: ScanAuditEvent): Promis
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
+  return JSON.parse(await readSafeStateText(dirname(path), basename(path))) as T;
 }
 
 async function readOptionalJson<T>(path: string, fallback: T): Promise<T> {
@@ -1779,7 +1871,15 @@ async function readOptionalJson<T>(path: string, fallback: T): Promise<T> {
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeSafeStateText(dirname(path), basename(path), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function writeLocalReportFile(path: string, contents: string, _stateDir: string): Promise<void> {
+  await writeSafeStateText(dirname(path), basename(path), contents);
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
 function ok(stdout: string): CliResult {
@@ -1788,7 +1888,7 @@ function ok(stdout: string): CliResult {
 
 function helpText(): string {
   return [
-    "aibill — your AI spend in one view in 90 seconds",
+    "aibill — your AI cost and usage evidence in one private view",
     "",
     "Run with no command for an instant, zero-key demo:",
     "  ai-spend-agent                       Show where your AI money goes (sample/auto-detected data)",
@@ -1800,7 +1900,7 @@ function helpText(): string {
     "  ai-spend-agent connect anthropic     Self-serve in ~2 min with an Admin key",
     "  ai-spend-agent connect cursor        Upgrade: requires a Cursor team-admin key (Business plan)",
     "  ai-spend-agent connect github-copilot Upgrade: requires a GitHub billing-admin token",
-    "  ai-spend-agent sync-provider ...     Pull verified cost via a local env: reference (never a raw key)",
+    "  ai-spend-agent sync-provider ...     Pull provider cost/usage evidence via a local env: reference (never a raw key)",
     "",
     "Watch continuously (deltas + anomalies):",
     "  watch [--interval N]    Re-run analysis on an interval and report deltas/anomalies",
@@ -1813,7 +1913,7 @@ function helpText(): string {
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
     "  scan [--path <dir>]     Scan a local workspace for AI usage signals",
     "  scan --sample           Include deterministic sample spend analysis",
-    "  quickstart [--sample]   Plain-English 90-second readout (alias of the default run)",
+    "  quickstart [--sample]   Plain-English local readout (alias of the default run)",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: model",
     "  report [--out <name>]   Generate local Markdown and HTML reports",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",

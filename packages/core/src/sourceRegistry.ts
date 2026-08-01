@@ -502,7 +502,7 @@ function defaultScopeForSource(type: SourceType): string {
     return "Read-only Browser Account UI source. User logs in locally; agent never sees passwords; 2FA/CAPTCHA handoff; audit all page reads/downloads.";
   }
   if (type === "local_tool_detection") {
-    return "Read-only local CLI/tool detection path. Detection is not verified spend until account/API/export source is connected.";
+    return "Read-only local CLI/tool detection path. Detection is not official provider-reported cost; connect an account API or export to add that evidence.";
   }
   if (type === "mcp_tool" || type === "internal_system") {
     return "Read-only approved MCP/internal-system source. No writes, sends, deletes, or production changes without approval.";

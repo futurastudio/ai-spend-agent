@@ -440,4 +440,56 @@ describe("buildUsageGlance", () => {
     });
     expect(snapshot.primaryAction.label).not.toContain("(home)");
   });
+
+  it("redacts credential-shaped values from focus and the copy-ready handoff", () => {
+    const fakeOpenAiKey = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890";
+    const fakeGithubToken = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "secret-focus",
+      project: `agent-finops-${fakeGithubToken}`,
+      model: "gpt-5.1-codex",
+      timestamp: "2026-07-28T17:58:00.000Z",
+      startedAt: "2026-07-28T17:30:00.000Z",
+      usage: usage(20_000, 2_000),
+      activity: activity(`Fixing customer merger ${fakeOpenAiKey}`, 3, 2, {
+        action: "fixing",
+        files: [`merge-${fakeGithubToken}.ts`]
+      })
+    }], {
+      now: new Date("2026-07-28T18:00:00.000Z")
+    });
+
+    const serialized = JSON.stringify(snapshot);
+    expect(snapshot.focus?.summary).toContain("customer merger");
+    expect(serialized).not.toContain(fakeOpenAiKey);
+    expect(serialized).not.toContain(fakeGithubToken);
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("sk-proj-");
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("ghp_");
+  });
+
+  it("redacts user-declared plan labels before returning Glance metadata", () => {
+    const secret = "synthetic-plan-secret-that-must-not-survive";
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "plan-label-secret",
+      project: "agent-finops",
+      model: "gpt-5.6",
+      timestamp: "2026-07-28T17:58:00.000Z",
+      startedAt: "2026-07-28T17:30:00.000Z",
+      usage: usage(2_000, 200)
+    }], {
+      now: new Date("2026-07-28T18:00:00.000Z"),
+      detectedPlans: [{
+        agent: "codex",
+        provider: "openai",
+        planLabel: `CUSTOM_ACCESS_TOKEN='${secret}'`,
+        billing: "subscription",
+        source: "user declared"
+      }]
+    });
+
+    expect(JSON.stringify(snapshot)).not.toContain(secret);
+    expect(snapshot.plan?.planLabel).not.toContain("CUSTOM_ACCESS_TOKEN");
+  });
 });

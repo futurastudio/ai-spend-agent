@@ -1,0 +1,55 @@
+name: Unsupported agent or provider
+description: Request or document a new local agent format, billing source, or connector change.
+title: "[Coverage]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        aibill needs source evidence before adding coverage. Never upload a real credential or an unredacted transcript. Synthetic fixtures and links to official schemas are preferred.
+  - type: input
+    id: product
+    attributes:
+      label: Agent or provider
+      placeholder: Example agent/provider and plan type
+    validations:
+      required: true
+  - type: dropdown
+    id: source_kind
+    attributes:
+      label: Requested source
+      options:
+        - Local agent transcript or database
+        - Provider billing API or export
+        - Provider usage or limit API
+        - OpenTelemetry or observability export
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: What decision would this coverage enable?
+      description: Explain the monitoring, allocation, reconciliation, outcome, or control job—not only the fields available.
+    validations:
+      required: true
+  - type: textarea
+    id: official_docs
+    attributes:
+      label: Official documentation or schema
+      description: Link authoritative format, API, permission, pricing, and rate-limit documentation where available.
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Synthetic fixture availability
+      description: Describe a minimal redacted/synthetic sample you can contribute. Do not paste private content here.
+  - type: checkboxes
+    id: semantics
+    attributes:
+      label: Data semantics
+      options:
+        - label: I understand billed cost, subscription capacity, credits, and API-equivalent value may require separate fields.
+          required: true
+        - label: I removed credentials, raw prompts/responses, private paths, and identifying account data.
+          required: true

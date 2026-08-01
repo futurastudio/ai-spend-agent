@@ -38,7 +38,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-20",
-          dateModified: "2026-07-28",
+          dateModified: "2026-07-31",
           mainEntityOfPage: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -70,37 +70,43 @@ export default function Page() {
             before making a purchase decision.
           </P>
           <P>
-            GitHub Copilot also moved organization billing to AI Credits in
-            June. The useful takeaway is narrower than &ldquo;every plan became
-            pay-as-you-go&rdquo;: AI coding cost now mixes subscription
-            allowances, shared limits, model-specific credits, and optional
-            metered overages.
+            <a
+              href="https://github.blog/changelog/2026-06-01-updates-to-github-copilot-billing-and-plans/"
+              target="_blank"
+              rel="noreferrer"
+              className="text-ink underline decoration-white/25 underline-offset-4 hover:decoration-white/60"
+            >
+              GitHub moved Copilot usage to AI Credits on June 1, 2026
+            </a>
+            . The useful takeaway is narrower than &ldquo;every plan became
+            pay-as-you-go&rdquo;: AI coding cost now mixes subscription allowances,
+            shared limits, model-specific credits, and optional metered overages.
           </P>
         </Reveal>
 
         <Reveal>
-          <H2>Why nobody knows their real number</H2>
+          <H2>Why the total is hard to explain</H2>
           <P>
             Ask a heavy Claude Code user what their AI setup costs per month and
-            you&apos;ll usually get the subscription price. That&apos;s the
-            floor, not the number. Real usage is spread across places that
-            don&apos;t add themselves up: a subscription meter here, an API bill
-            there, a second tool with its own credit pool, and agent sessions
-            whose consumption has no dashboard at all.
+            you&apos;ll usually get the subscription price. That may be the cash
+            charge, but it does not explain capacity consumed or whether separate
+            API/provider charges exist. Those facts live in different places: a
+            subscription meter here, a provider report there, a second tool with
+            its own credit pool, and local agent-session evidence.
           </P>
           <P>
-            The raw material for the real answer already exists — Claude Code
+            The raw material for a useful comparison already exists — Claude Code
             and Codex write detailed session logs to your machine as you work.
-            Priced at published API-equivalent rates, those logs tell you what
-            your usage would cost pay-per-token, which is exactly the comparison
-            you need when a plan goes metered: is the subscription still worth
-            it, or are you paying for headroom you don&apos;t use — or burning
-            past what the plan covers?
+            Pricing supported token usage at published API-equivalent rates
+            provides one input to a plan decision. It does not prove incremental
+            spend, remaining entitlement, or what a subscription covers; combine
+            it with detected or declared plan context and provider-reported limits
+            when those limits are available.
           </P>
         </Reveal>
 
         <Reveal>
-          <H2>Check yours in 90 seconds</H2>
+          <H2>Check your local evidence</H2>
           <P>
             <span className="font-mono text-green">npx aibill</span> reads the
             session logs already on your machine — locally, no account, no keys,
@@ -108,49 +114,53 @@ export default function Page() {
           </P>
           <ul className="mt-4 space-y-3 text-base leading-relaxed text-muted">
             <li className="glass rounded-xl px-5 py-4">
-              <span className="text-ink">Your headline number</span> — total
-              usage estimated at API-equivalent rates, broken down by project
-              and model.
+              <span className="text-ink">Observed API-equivalent value</span> —
+              supported local usage priced at published rates, broken down by
+              project and model where the transcript exposes them.
             </li>
             <li className="glass rounded-xl px-5 py-4">
-              <span className="text-ink">The plan-vs-API math</span> — your
-              projected usage against subscription tiers, so you can see which
-              way of paying is actually cheapest for how you work.
+              <span className="text-ink">Plan context and comparison</span> —
+              API-rate value beside a detected or user-declared plan label. It
+              is comparison math, not proof of plan coverage or the cheapest option.
             </li>
             <li className="glass rounded-xl px-5 py-4">
-              <span className="text-ink">A ranked cut list</span> — concrete
+              <span className="text-ink">Ranked cost opportunities</span> — concrete
               changes (cheaper model for a given task, batching, caching
-              repeats) with estimated monthly savings for each.
+              repeats) with modeled monthly API-rate impact. Verify quality and
+              the next provider report before describing that impact as savings.
             </li>
             <li className="glass rounded-xl px-5 py-4">
-              <span className="text-ink">Dead context</span> — MCP tools your
-              agent loads but never calls. aibill names those entries and
-              estimates overhead where the logs contain enough evidence;
-              config-only MCP entries are clearly marked as unmeasured.
+              <span className="text-ink">Context inventory and invocation evidence</span>
+              {" "}— items that are discoverable, invoked, schema-loaded,
+              hook-injected, unmeasured, or invocation-unobservable. aibill says
+              an item was not invoked only where the transcript supports it.
             </li>
           </ul>
         </Reveal>
 
         <Reveal>
-          <H2>Estimated vs verified — an honest distinction</H2>
+          <H2>Local estimate vs provider report</H2>
           <P>
             Numbers derived from local logs are{" "}
             <span className="text-ink">estimates</span> at published API rates —
-            useful for plan decisions and cut lists, but not a bill. If you want
-            billing truth, connect an org admin/owner key (OpenAI or Anthropic,
-            a few minutes, read-only) and aibill reconciles the estimates
-            against your actual invoices. Every figure in the report is labeled
-            as one or the other. Anything it can&apos;t verify, it says so.
+            useful for comparisons and cost investigations, but not a bill. If
+            you want official provider-reported cost, connect an org admin/owner
+            key with the required read permissions. aibill keeps that report
+            beside—not merged into—the local estimate. A final invoice can still
+            include credits, discounts, tax, or adjustments. Anything the source
+            cannot establish remains labeled accordingly.
           </P>
         </Reveal>
 
         <Reveal>
-          <H2>Local-first, because it&apos;s your bill</H2>
+          <H2>Local-first, because it&apos;s your evidence</H2>
           <P>
-            Everything runs on your machine: no signup, no telemetry, nothing
-            uploaded. The code is MIT-licensed and open source — read every line
-            before you run it. The meters are multiplying; the least you can do
-            is know your own number before they do.
+            Default transcript analysis runs on your machine with no signup,
+            telemetry, or upload. A deliberate provider connection sends the
+            referenced credential only to that provider&apos;s official API; an
+            explicit MCP result goes only to the AI client you invoked. The code
+            is MIT-licensed and open source. The meters are multiplying; know
+            which number you are looking at before acting on it.
           </P>
         </Reveal>
       </article>

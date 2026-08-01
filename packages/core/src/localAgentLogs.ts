@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { estimateTokenCostUsd, type TokenUsage } from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
+import { redactSecrets } from "./discovery.js";
 
 /**
  * Local agent-session log ingestion: turns the transcript files that coding
@@ -498,7 +499,8 @@ const FOCUS_STOP_WORDS = new Set([
   "something", "sure", "than", "that", "the", "their", "them", "then", "there",
   "these", "they", "thing", "think", "this", "through", "to", "too", "use", "user",
   "users", "want", "was", "way", "we", "what", "when", "where", "which", "while",
-  "who", "why", "will", "with", "work", "working", "would", "you", "your"
+  "who", "why", "will", "with", "work", "working", "would", "you", "your",
+  "redacted"
 ]);
 
 const ACTION_WORDS: Array<{
@@ -517,12 +519,18 @@ const ACTION_WORDS: Array<{
 ];
 
 function buildLocalAgentActivity(input: ActivityInput): LocalAgentActivity | undefined {
-  const prompts = input.prompts.filter(isHumanPrompt);
+  // Prompt text is never retained, but derived topic tokens can still disclose
+  // a credential if redaction happens only at persistence/output boundaries.
+  // Sanitize before every title/topic/action derivation and again at output.
+  const prompts = input.prompts
+    .map(sanitizeLocalActivityText)
+    .filter(isHumanPrompt);
   const topic = focusTopic(prompts);
-  const title = cleanTitle(input.title);
+  const title = cleanTitle(sanitizeLocalActivityText(input.title ?? ""));
   const files = [...input.files.entries()]
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .map(([file]) => file)
+    .map(([file]) => sanitizeLocalActivityText(file))
+    .filter(Boolean)
     .slice(0, 5);
   const action = inferAction(prompts, title);
   let source: LocalAgentActivity["source"];
@@ -544,13 +552,15 @@ function buildLocalAgentActivity(input: ActivityInput): LocalAgentActivity | und
   } else if (input.project) {
     source = "project";
     kind = "project";
-    subject = input.project;
+    subject = sanitizeLocalActivityText(input.project);
   } else {
     return undefined;
   }
 
+  if (!subject) return undefined;
+
   return {
-    summary: activitySummary(action, subject, source),
+    summary: sanitizeLocalActivityText(activitySummary(action, subject, source)),
     kind,
     action,
     source,
@@ -707,7 +717,22 @@ function topicTokens(value: string): string[] {
     /(^|[\s("'=:])(?:file:\/\/)?\/[^\s)"']+/g,
     "$1"
   );
-  return promptTokens(withoutAbsolutePaths);
+  return promptTokens(sanitizeLocalActivityText(withoutAbsolutePaths));
+}
+
+/**
+ * Remove known and assignment-shaped credentials from metadata before it can
+ * become a topic, title, Glance field, MCP result, or copy-ready handoff.
+ * This intentionally favors dropping a suspicious token over displaying it.
+ */
+export function sanitizeLocalActivityText(value: string): string {
+  return redactSecrets(value)
+    .replace(/\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|secret|password|credential)\s*[:=]\s*[^\s,;]+/gi, " ")
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, " ")
+    .replace(/\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH)=\[REDACTED\]/g, " ")
+    .replace(/\[REDACTED\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isHumanPrompt(value: string): boolean {

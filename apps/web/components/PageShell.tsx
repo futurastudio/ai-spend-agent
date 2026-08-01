@@ -50,7 +50,7 @@ export function PageShell({
               href={`/?ref=${ctaRef}#beta`}
               className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
             >
-              Hosted beta
+              Workspace waitlist
             </Link>
           </nav>
         </div>
@@ -63,11 +63,11 @@ export function PageShell({
         <Reveal>
           <div className="glass mx-auto max-w-3xl rounded-3xl px-6 py-10 text-center sm:px-12">
             <h2 className="text-balance text-2xl font-semibold tracking-[-0.035em] text-ink sm:text-3xl">
-              See your own number, in 90 seconds
+              See your own evidence locally
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-balance text-sm leading-relaxed text-muted">
-              Free, open-source, local-first — nothing leaves your machine. No
-              account, no telemetry.
+              Free and open source. The default CLI runs locally with no account
+              or telemetry; provider connections and MCP sharing are always explicit.
             </p>
             <div className="mx-auto mt-6 flex max-w-md flex-col items-center gap-3">
               <CopyCommand />
@@ -77,12 +77,13 @@ export function PageShell({
               </p>
             </div>
             <p className="mt-5 text-sm text-muted">
-              Want continuous monitoring and burn-rate alerts?{" "}
+              Want to shape opt-in reconciliation, allocation, budgets,
+              approvals, and outcome evidence?{" "}
               <Link
                 href={`/?ref=${ctaRef}#beta`}
                 className="text-green underline-offset-4 hover:underline"
               >
-                Join the hosted beta →
+                Request Workspace design-partner access →
               </Link>
             </p>
           </div>

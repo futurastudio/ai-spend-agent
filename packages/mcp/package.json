@@ -1,7 +1,25 @@
 {
   "name": "@agent-finops/mcp",
   "version": "0.5.6",
-  "description": "aibill Model Context Protocol server: local Claude Code/Codex usage and verified AI-provider spend in one view.",
+  "description": "aibill MCP server for evidence-labeled Claude Code/Codex activity, Context Health, attribution, runway, and provider-reported cost.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "finops",
+    "claude-code",
+    "codex",
+    "ai-spend"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/futurastudio/ai-spend-agent.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "bugs": {
+    "url": "https://github.com/futurastudio/ai-spend-agent/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

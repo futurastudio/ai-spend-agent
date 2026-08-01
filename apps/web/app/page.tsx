@@ -4,12 +4,12 @@ import { Reveal } from "@/components/Reveal";
 import { UsageGlance } from "@/components/UsageGlance";
 
 const sources = [
-  "Claude Code logs",
-  "Codex logs",
-  "OpenAI",
-  "Anthropic",
-  "Cursor",
-  "Copilot",
+  "Claude Code · local logs",
+  "Codex · local logs",
+  "OpenAI · provider API",
+  "Anthropic · provider API",
+  "Cursor Admin API · beta",
+  "Copilot org API · beta",
 ];
 
 const features = [
@@ -19,7 +19,7 @@ const features = [
   },
   {
     title: "Your work + one decision",
-    body: "Connect observed project, file, automation, and agent activity to one Context Health action: continue, start fresh, review context sources, or collect more evidence.",
+    body: "Connect observed project, file, automation, and agent activity to one Context Health action: continue, start fresh, review context evidence, or collect more history.",
   },
   {
     title: "Every number explains itself",
@@ -31,7 +31,7 @@ const features = [
   },
   {
     title: "Billing when it actually matters",
-    body: "API-equivalent value is comparison math—not an added subscription charge. Connect OpenAI or Anthropic admin billing only when you need verified reconciliation.",
+    body: "API-equivalent value is comparison math—not an added subscription charge. Connect OpenAI or Anthropic admin billing only when you need official provider-reported cost beside it.",
   },
 ];
 
@@ -39,17 +39,50 @@ const steps = [
   {
     n: "01",
     title: "Run one command",
-    body: "npx aibill — nothing to install, configure, or sign up for. (Also on npm as ai-spend-agent.)",
+    body: "npx aibill — no global install, account, or initial configuration. (Also on npm as ai-spend-agent.)",
   },
   {
     n: "02",
-    title: "Keep the decision at a glance",
-    body: "The optional macOS hover shows current work, reported runway, freshness, and one action without becoming an always-on floating widget.",
+    title: "Preview the decision at a glance",
+    body: "The source-built macOS preview shows current work, reported runway, freshness, and one action. A signed standalone download is not available yet.",
   },
   {
     n: "03",
     title: "Ask why only when needed",
-    body: "Invoke the optional MCP/plugin for a conversational explanation, or connect provider billing for verified reconciliation. Both reuse the same local contracts.",
+    body: "Invoke the optional MCP/plugin for a conversational explanation, or connect OpenAI/Anthropic admin reporting to add official provider-reported cost beside local estimates.",
+  },
+];
+
+const decisions = [
+  {
+    status: "Available in beta",
+    title: "Separate billed cost from usage value",
+    body: "Keep official cost reports, purchased credits, subscription capacity, and API-equivalent value separate. Final invoices can still include credits, discounts, tax, or adjustments.",
+  },
+  {
+    status: "Available with source coverage",
+    title: "See available ownership",
+    body: "Use only the project, model, agent, user, workspace, or client dimensions each source exposes as inputs to allocation or rebilling decisions.",
+  },
+  {
+    status: "Available in beta",
+    title: "Assess interruption risk",
+    body: "Pair provider-reported limit windows and reset time with a separately labeled exhaustion projection. Missing windows remain unavailable instead of becoming false precision.",
+  },
+  {
+    status: "Available in beta",
+    title: "Investigate possible waste",
+    body: "Review context pressure, injected items or items with no observed invocation, repeated work, model mix, and unusual burn—then re-run the same evidence contract after an intervention.",
+  },
+  {
+    status: "Open roadmap",
+    title: "Compare cost per accepted outcome",
+    body: "Join cost to tests, review, rework, merge, and task acceptance so teams compare workflows on accepted results backed by explicit evidence—not tokens, lines of code, or invented hours saved.",
+  },
+  {
+    status: "Workspace roadmap",
+    title: "Decide what to scale or stop",
+    body: "Give engineering and finance one ledger for provider cost evidence, outcomes, budgets, approvals, and policy results—the basis for deciding whether to expand, constrain, renegotiate, or retire an AI workflow.",
   },
 ];
 
@@ -94,7 +127,7 @@ export default function Home() {
               href="#beta"
               className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
             >
-              Hosted beta
+              Workspace waitlist
             </a>
           </nav>
         </div>
@@ -113,23 +146,24 @@ export default function Home() {
         </a>
 
         <h1 className="mx-auto mt-7 max-w-4xl animate-fade-up text-balance text-[2.65rem] font-semibold leading-[0.98] tracking-[-0.06em] text-ink sm:text-[5rem]">
-          Will your AI coding session
+          Know what your AI coding agents consumed
           <br className="hidden sm:block" />{" "}
           <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
-            make it to the finish line?
+            and what it means financially.
           </span>
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-balance text-base leading-relaxed text-muted sm:text-xl">
-          Know what you&apos;re working on, whether reported limits will last,
-          and what to do next. Start in Terminal, keep it visible only on hover,
-          and ask the same local data through MCP when you need an explanation.
+          Separate local API-equivalent usage, detected subscription context,
+          and optional provider-reported cost; attribute what each source
+          exposes; and see runway risk and the next investigation—without
+          uploading raw conversations.
         </p>
 
         <div className="mt-9 flex animate-fade-up flex-col items-center gap-3">
           <CopyCommand />
           <p className="font-mono text-xs text-faint">
-            Requires Node 22+. Nothing to install or sign up for.
+            Requires Node 22+. No global install or signup.
           </p>
         </div>
 
@@ -171,7 +205,7 @@ export default function Home() {
           <div className="mb-4 flex items-center justify-between px-1 text-left">
             <div>
               <p className="text-sm font-semibold text-ink">Need the full receipt?</p>
-              <p className="mt-1 text-xs text-faint">The terminal remains the source of truth.</p>
+              <p className="mt-1 text-xs text-faint">The terminal remains the complete private baseline.</p>
             </div>
             <span className="font-mono text-xs text-green">npx aibill</span>
           </div>
@@ -198,7 +232,8 @@ export default function Home() {
             </video>
           </div>
           <p className="mt-4 text-center font-mono text-xs text-faint">
-            Illustrative sample output — demo data, not real or verified numbers.
+            Illustrative sample data. API-rate figures are modeled, not
+            provider-reported cost or verified savings.
           </p>
         </div>
       </section>
@@ -231,9 +266,51 @@ export default function Home() {
             published API rates — not a bill. Glance separately labels local
             transcript facts, local calculations, locally detected plans, and
             coding-agent-reported limits. Connect a provider with an
-            admin/owner key and aggregate spend can be{" "}
-            <span className="text-green">verified</span> against your real
-            invoices.
+            admin/owner source to add{" "}
+            <span className="text-green">official provider-reported cost</span>{" "}
+            beside those estimates. Final invoices can still include credits,
+            discounts, tax, or adjustments.
+          </p>
+        </Reveal>
+      </section>
+
+      {/* Decisions and ROI path */}
+      <section className="relative z-10 mx-auto max-w-content px-6 py-16">
+        <Reveal>
+          <div className="text-center">
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
+              A trustworthy view should change a decision
+            </h2>
+            <p className="mx-auto mt-3 max-w-2xl text-balance text-base leading-relaxed text-muted">
+              The beta establishes cost-and-capacity evidence: provider reports,
+              subscription context, API-equivalent value, ownership, coverage,
+              and what is missing. The roadmap then links that ledger to accepted
+              outcomes. ROI also requires independently measured monetary value.
+            </p>
+          </div>
+        </Reveal>
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {decisions.map((decision, i) => (
+            <Reveal key={decision.title} delay={i * 60}>
+              <div className="glass h-full rounded-2xl p-6">
+                <span className="font-mono text-[0.68rem] uppercase tracking-wider text-green">
+                  {decision.status}
+                </span>
+                <h3 className="mt-3 text-base font-semibold text-ink">
+                  {decision.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  {decision.body}
+                </p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+        <Reveal delay={100}>
+          <p className="mx-auto mt-6 max-w-2xl text-center text-sm leading-relaxed text-faint">
+            Public-beta boundaries: aibill does not infer missing plan limits,
+            claim productivity or ROI, or automatically enforce a recommendation.
+            Glance remains a source preview and Workspace is not launched.
           </p>
         </Reveal>
       </section>
@@ -289,11 +366,11 @@ export default function Home() {
                 Local by default, explicit when shared
               </h2>
               <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted">
-                The CLI reads usage locally and renders the report in your
-                terminal. No telemetry, no cloud, no keys shipped off-box.
-                Glance stays local too. If you explicitly ask an MCP-backed AI
-                client, only the structured tool result is returned to that
-                client and follows its data policy.
+                The default CLI and Glance run locally with no account,
+                telemetry, key, or upload. If you deliberately connect provider
+                billing, the env-referenced credential is sent only to that
+                provider&apos;s official API. Explicit MCP results go only to the
+                AI client you invoked and follow that client&apos;s data policy.
               </p>
             </div>
           </div>
@@ -312,27 +389,22 @@ export default function Home() {
               Every surface consumes the same evidence and Context Health contract.
             </p>
           </div>
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-10 grid gap-4 sm:grid-cols-3">
             {[
               {
-                week: "available",
-                cmd: "npx aibill context",
-                copy: "Hook-aware Context Health in human-readable or canonical JSON form."
+                week: "public beta",
+                cmd: "npx aibill",
+                copy: "Private view of available usage/spend evidence, provenance, attribution, and ranked investigations."
               },
               {
-                week: "available",
-                cmd: "$aibill-check",
-                copy: "An explicit-only plugin skill backed by the local aibill MCP."
+                week: "public beta",
+                cmd: "MCP + explicit plugin",
+                copy: "On-demand explanation from the same structured contract; never an always-on prompt."
               },
               {
-                week: "prototype",
+                week: "source preview",
                 cmd: "aibill Glance",
-                copy: "A hidden-until-hover macOS view of runway, focus, and one action."
-              },
-              {
-                week: "research next",
-                cmd: "aibill Workboard",
-                copy: "A temporary expanded view of recent work, verified changes, blockers, and resume state."
+                copy: "A hidden-until-hover macOS view. No signed standalone download is available yet."
               }
             ].map((item) => (
               <div key={item.cmd} className="glass rounded-2xl px-5 py-6">
@@ -360,14 +432,17 @@ export default function Home() {
         <Reveal>
           <div className="glass relative mx-auto max-w-3xl rounded-3xl px-6 py-12 text-center sm:px-12">
             <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
-              Want it running 24/7?
+              Turn local evidence into company-wide decisions
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-balance text-base leading-relaxed text-muted">
-              The hosted tier is everything the CLI can&apos;t do alone: your
-              history kept forever, burn-rate alerts while your laptop is off,
-              your receipt and Wrapped at a living share URL, multi-machine
-              merge, and team rollups. Join the beta and we&apos;ll reach out
-              as spots open.
+              The planned aibill Workspace consolidates explicit,
+              aggregate-only receipts into a shared organizational evidence
+              ledger: provider cost reports, project/client ownership, budgets,
+              anomaly routing, approvals, and evidence-backed cost per accepted
+              outcome where coverage supports it. Local mode stays free and
+              private. Join as a design partner to shape the first shared-ledger
+              alpha. Workspace is not launched; the local CLI and MCP remain
+              useful without an account.
             </p>
             <div className="mx-auto mt-8 max-w-md text-left">
               <WaitlistForm />

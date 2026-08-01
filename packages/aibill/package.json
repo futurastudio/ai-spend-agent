@@ -1,7 +1,7 @@
 {
   "name": "aibill",
   "version": "0.5.6",
-  "description": "Check your AI bill — short alias for ai-spend-agent, the local-first AI spend readout. Run: npx aibill",
+  "description": "Short command for ai-spend-agent, the local-first financial intelligence CLI for AI coding agents. Run: npx aibill",
   "type": "module",
   "bin": {
     "aibill": "run.js"
@@ -16,6 +16,9 @@
     "directory": "packages/aibill"
   },
   "homepage": "https://github.com/futurastudio/ai-spend-agent#readme",
+  "bugs": {
+    "url": "https://github.com/futurastudio/ai-spend-agent/issues"
+  },
   "keywords": [
     "ai",
     "spend",

@@ -32,9 +32,9 @@ jobs:
       # and verify the broad-root safety guard. Unit coverage separately
       # exercises npm-style bin symlink resolution.
       - run: node scripts/smoke-mcp.mjs
-      # A publish from a dirty tree must still ship a fresh dist (prepack).
-      - run: cd packages/cli && npm pack --dry-run
-      - run: cd packages/mcp && npm pack --dry-run
+      # The workspace build above refreshes dist; now dry-pack every
+      # publishable package and inspect its public manifest.
+      - run: npm run check:release-packages
 
   web:
     name: Waitlist app typecheck + build

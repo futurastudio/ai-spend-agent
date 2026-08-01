@@ -230,7 +230,7 @@ describe("board-style report generation", () => {
     expect(markdown).toContain("## Diagnose → Recommend → Apply → Verify");
     expect(markdown).toContain("Diagnose the leak");
     expect(markdown).toContain("Apply safely");
-    expect(markdown).toContain("Verify savings");
+    expect(markdown).toContain("Verify the result");
     expect(markdown).toContain("## Board brief");
     expect(markdown).toContain("- Decision needed: approve the top local optimization actions before connecting more sources.");
     expect(markdown).toContain("## Priority recommendations");
@@ -282,7 +282,7 @@ describe("board-style report generation", () => {
     expect(html).toContain("Diagnose the leak");
     expect(html).toContain("Recommend a change");
     expect(html).toContain("Apply safely");
-    expect(html).toContain("Verify savings");
+    expect(html).toContain("Verify the result");
     expect(html).toContain("Human-approved before rollout");
     expect(html).toContain(".operating-loop { margin-top: 16px; border-radius: 22px; padding: 24px; }");
     expect(html).toContain(".loop-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }");
@@ -320,13 +320,13 @@ describe("board-style report generation", () => {
     expect(html).toContain("font-feature-settings: \"cv01\", \"ss03\"");
   });
 
-  it("separates verified spend, estimated spend, verified usage evidence, and missing cost data in reports", () => {
+  it("separates provider-reported cost, estimated cost/value, usage evidence, and missing cost data", () => {
     const markdown = generateMarkdownReport(input);
     const html = generateHtmlReport(input);
 
     expect(markdown).toContain("## Evidence quality ledger");
-    expect(markdown).toContain("Verified spend: $25.00 across 1 record");
-    expect(markdown).toContain("Estimated spend: $1.75 across 1 record");
+    expect(markdown).toContain("Provider-reported cost: $25.00 across 1 record");
+    expect(markdown).toContain("Estimated cost/value: $1.75 across 1 record");
     expect(markdown).toContain("Verified usage evidence: 2,460 tokens across 2 records");
     expect(markdown).toContain("Missing cost data: 1 record needs billing/source reconciliation");
 
@@ -344,8 +344,8 @@ describe("board-style report generation", () => {
     expect(html).toContain("Rate limits: OpenAI costs API remaining 4 requests; retry after 2s");
     expect(html).toContain("Response drift: OpenAI usage API data[0].unexpected_bucket_key - unknown field observed in provider response");
     expect(html).toContain("Use an OpenAI admin key reference with organization usage and cost read access.");
-    expect(html).toContain("Verified spend");
-    expect(html).toContain("Estimated spend");
+    expect(html).toContain("Provider-reported cost");
+    expect(html).toContain("Estimated cost/value");
     expect(html).toContain("Verified usage evidence");
     expect(html).toContain("Missing cost data");
   });
@@ -354,9 +354,9 @@ describe("board-style report generation", () => {
     const artifact = generateApplyArtifactMarkdown(input);
 
     expect(artifact).toContain("# AI Spend Apply Artifact");
-    expect(artifact).toContain("Copy this into your coding agent to cut cost");
+    expect(artifact).toContain("Copy this into your coding agent to test a modeled cost opportunity");
     expect(artifact).toContain("client-a / project-a / strategy_brief");
-    expect(artifact).toContain("Estimated savings: $24.00");
+    expect(artifact).toContain("Modeled opportunity: $24.00");
     expect(artifact).toContain("Verification plan");
     expect(artifact).toContain("Do not change user-visible quality thresholds without approval");
   });
@@ -480,7 +480,8 @@ describe("board-style report generation", () => {
 
     // Share-first content from the readout's own engines.
     expect(html).toContain("AI Receipt");
-    expect(html).toContain("Plan value");
+    expect(html).toContain("API-rate comparison");
+    expect(html).toContain("does not prove entitlement");
     expect(html).toContain("Claude Max 5x");
     expect(html).toContain("Dead context");
     expect(html).toContain("context7");

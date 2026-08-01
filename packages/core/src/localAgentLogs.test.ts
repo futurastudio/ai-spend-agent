@@ -127,6 +127,38 @@ describe("parseClaudeCodeTranscript", () => {
       promptCount: 2
     });
   });
+
+  it("removes credential-shaped values before deriving focus metadata", () => {
+    const fakeOpenAiKey = "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890";
+    const fakeGithubToken = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";
+    const content = [
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: `Fix the customer merger using ${fakeOpenAiKey} and token=${fakeGithubToken}.`
+        }
+      }),
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: `Please finish the customer merger; Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456.`
+        }
+      }),
+      claudeLine({
+        message: {
+          id: "msg-secret-focus",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 10, output_tokens: 20 }
+        }
+      })
+    ].join("\n");
+
+    const serialized = JSON.stringify(parseClaudeCodeTranscript(content)[0]?.activity);
+    expect(serialized).toContain("customer");
+    expect(serialized).not.toContain(fakeOpenAiKey);
+    expect(serialized).not.toContain(fakeGithubToken);
+    expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+  });
 });
 
 describe("parseCodexRollout", () => {
