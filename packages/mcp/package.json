@@ -1,6 +1,6 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "aibill MCP server for evidence-labeled Claude Code/Codex activity, Context Health, attribution, runway, and provider-reported cost.",
   "keywords": [
     "mcp",
@@ -48,7 +48,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.5.6",
+    "@agent-finops/core": "0.5.7",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },

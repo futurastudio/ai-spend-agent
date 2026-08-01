@@ -24,7 +24,7 @@ zero signup, nothing leaves your laptop on this default local run. Connect a
 provider's admin cost report only when you need official provider-reported
 cost alongside the local evidence.
 
-> **Public beta boundary:** CLI and the explicit MCP/plugin ship in 0.5.6.
+> **Public beta boundary:** CLI and the explicit MCP/plugin ship in 0.5.7.
 > Glance remains a source-built macOS preview until its signed standalone
 > download passes. Workspace, automatic enforcement, and ROI measurement are not
 > shipped.

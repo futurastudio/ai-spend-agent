@@ -1,6 +1,6 @@
 {
   "name": "ai-spend-agent",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "Local-first financial intelligence CLI for Claude Code and Codex activity, provider-reported cost, attribution, runway, provenance, and Context Health.",
   "type": "module",
   "main": "./dist/index.js",
@@ -54,8 +54,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.5.6",
-    "@agent-finops/report": "0.5.6",
+    "@agent-finops/core": "0.5.7",
+    "@agent-finops/report": "0.5.7",
     "yocto-spinner": "^1.2.0"
   }
 }

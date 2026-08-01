@@ -5,9 +5,12 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
-## 0.5.6 — Unreleased
+## 0.5.7 — Unreleased
 
 MCP provider and local-log hardening.
+
+- Added side-effect-free `--version` / `-v` handling so a standard metadata
+  request never falls through to local transcript discovery.
 
 - Added one canonical, hook-aware Context Health contract shared by
   `aibill context`, the `get_context_health` MCP tool, `get_usage_glance`, and

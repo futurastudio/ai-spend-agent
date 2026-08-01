@@ -44,6 +44,15 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).not.toContain("all four");
   });
 
+  it("prints --version without scanning local data", async () => {
+    const result = await runCli(["--version"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^0\.5\.7$/);
+    expect(result.stdout).not.toContain("DATA MODE");
+    expect(result.stdout).not.toContain("YOUR USAGE");
+  });
+
   it("accepts a flag-only invocation and drills down by group-by", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-demo-"));
     const result = await runCli(["--group-by", "agent", "--no-color", "--path", dir]);

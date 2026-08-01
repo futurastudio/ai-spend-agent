@@ -1,6 +1,6 @@
 {
   "name": "aibill",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "On-demand local AI usage, spend provenance, and hook-aware Context Health through aibill MCP.",
   "author": {
     "name": "Futura Studio",

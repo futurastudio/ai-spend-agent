@@ -103,6 +103,9 @@ type ParsedArgs = {
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
+  if (argv.includes("--version") || argv.includes("-v")) {
+    return ok(await cliVersion());
+  }
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
     return ok(helpText());
   }
@@ -1891,13 +1894,13 @@ function helpText(): string {
     "aibill — your AI cost and usage evidence in one private view",
     "",
     "Run with no command for an instant, zero-key demo:",
-    "  ai-spend-agent                       Show where your AI money goes (sample/auto-detected data)",
+    "  ai-spend-agent                       Show available AI cost/value evidence (sample or local data)",
     "  ai-spend-agent --group-by agent      Drill down by source|model|client|project|agent|user|workspace|apiKey",
     "  ai-spend-agent --plan <id>           Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
     "",
-    "Connect your real spend (cost data is ADMIN/owner-gated):",
-    "  ai-spend-agent connect openai        Self-serve in ~2 min with an org-owner Admin key",
-    "  ai-spend-agent connect anthropic     Self-serve in ~2 min with an Admin key",
+    "Add official provider-reported cost (ADMIN/owner-gated):",
+    "  ai-spend-agent connect openai        Requires an org-owner Admin key",
+    "  ai-spend-agent connect anthropic     Requires an Admin key",
     "  ai-spend-agent connect cursor        Upgrade: requires a Cursor team-admin key (Business plan)",
     "  ai-spend-agent connect github-copilot Upgrade: requires a GitHub billing-admin token",
     "  ai-spend-agent sync-provider ...     Pull provider cost/usage evidence via a local env: reference (never a raw key)",
@@ -1907,6 +1910,7 @@ function helpText(): string {
     "    [--cycles N] [--group-by ...]  --cycles 0 runs forever; default 1 (cron-friendly)",
     "",
     "Other commands:",
+    "  --version, -v           Print the package version without reading local data",
     "  init [--path <dir>]     Initialize local state",
     "  doctor                  Launch-grade diagnostics: data mode, logs found, provider keys, warnings",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
