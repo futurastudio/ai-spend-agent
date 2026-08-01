@@ -5,7 +5,7 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
-## 0.5.7 — Unreleased
+## 0.5.7 — 2026-07-31
 
 MCP provider and local-log hardening.
 
