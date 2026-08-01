@@ -1,9 +1,19 @@
 # aibill public roadmap
 
-aibill is building an open, local-first financial intelligence layer for AI
-agents, beginning with software-development teams. The public roadmap follows
-one rule: each milestone must turn trustworthy evidence into a clearer decision
-without making local users surrender their data.
+aibill's vision is an open financial intelligence layer for the AI-agent
+economy. Its mission is to build the financial accountability system for the
+AI-agent workforce: connect what agents did to what they cost, who owns it,
+what outcome it produced, and what should happen next.
+
+The public beta begins with software-development teams and ships the private
+evidence layer for that mission—not the finished company system. The roadmap
+follows one rule: each milestone must turn trustworthy evidence into a clearer
+decision without making local users surrender their data.
+
+The end-to-end accountability record is:
+
+**agent work → cost/capacity → owner → evidence → accepted outcome → policy →
+approval → bounded action → verified result**
 
 Roadmap items describe direction, not a delivery guarantee. Shipped behavior is
 documented in the README and release notes.
@@ -19,6 +29,11 @@ documented in the README and release notes.
 - Optional read-only OpenAI and Anthropic billing reconciliation.
 - Cursor and GitHub Copilot connectors labeled fixture-verified beta until live
   account validation is complete.
+
+This layer can answer what observed work is driving the available cost evidence
+and what a user should investigate next. Cross-provider company ownership,
+centralized subscription reconciliation, accepted outcomes, approvals, and ROI
+remain later milestones and must stay labeled as such.
 
 ## Now: reliability, runway, and distribution
 
@@ -65,14 +80,26 @@ team policy.
 
 ## Later: opt-in aibill Workspace
 
-Workspace will be the shared organizational ledger over approved Agent
-Economics Receipts:
+Workspace will be the paid, permissioned financial teammate over a shared
+organizational ledger of approved Agent Economics Receipts:
 
 - centralized provider and subscription reconciliation;
 - project, client, user, agent, and use-case allocation;
 - retained history, budgets, anomalies, approvals, and audit records;
 - verified cost-per-outcome and rework where evidence supports it;
 - export and deletion from the first alpha.
+
+Its two role-scoped experiences will answer:
+
+- **Employees:** What am I working on, what is consuming capacity, can I
+  finish, is it attributed correctly, and what should I do next?
+- **Spend owners and finance:** What changed, who owns it, which numbers
+  reconcile, where did cost per accepted outcome regress, what needs approval,
+  and did the approved action work?
+
+Defensible ROI comes only after reconciled cost, an accepted outcome, and
+independently evidenced business value. Workspace must not turn activity or
+token volume into an invented ROI number.
 
 Local-only mode will remain free and private. Synchronization will be explicit,
 aggregate-only, inspectable before upload, and optional.

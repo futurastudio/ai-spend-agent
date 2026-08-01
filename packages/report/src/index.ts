@@ -113,7 +113,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     ? `${formatUsd(recommendedPlan.recommendedImpactUsd)} (recommended plan, deduplicated) + ${formatUsd(recommendedPlan.additionalImpactUsd)} overlapping (non-additive)`
     : `${formatUsd(recommendedPlan.recommendedImpactUsd)} (recommended plan, deduplicated)`;
   const lines = [
-    "# AI Spend Analyst Report",
+    "# aibill Evidence Report",
     "",
     `Generated: ${generatedAt}`,
     "",
@@ -134,7 +134,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "",
     ...operatingLoopMarkdownLines(input.summary, recommendations, insights),
     "",
-    "## Board brief",
+    "## Executive accountability brief",
     "",
     "- Decision needed: approve the top local optimization actions before connecting more sources.",
     `- Current readout: ${formatUsd(input.summary.totalUsd)} of cost/value evidence across ${input.summary.recordCount} local records with ${input.summary.confidence} confidence.`,
@@ -232,9 +232,9 @@ export function generateMarkdownReport(input: SpendReportInput): string {
           `  - Next action: ${recommendation.nextAction}`
         ])),
     "",
-    "## Board action plan",
+    "## Executive action plan",
     "",
-    ...boardActionPlanLines(recommendations, mappingQuestions.length),
+    ...executiveActionPlanLines(recommendations, mappingQuestions.length),
     "",
     "## Next source to connect",
     "",
@@ -490,7 +490,7 @@ export function generateVerificationPlanMarkdown(input: SpendReportInput): strin
 
 export function generateDemoPackageMarkdown(input: SpendReportInput): string {
   return [
-    "# AI Spend Analyst Demo Package",
+    "# aibill Demo Package",
     "",
     "## Demo command flow",
     "",
@@ -511,7 +511,7 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     "",
     "## Demo artifacts",
     "",
-    "- `report.md` and `report.html`: board-ready readout.",
+    "- `report.md` and `report.html`: executive accountability readout; reconcile before finance or board use.",
     "- `ai-spend-coding-agent-prompt.md`: copyable coding-agent task.",
     "- `ai-spend-action-plan.md`: operator action list.",
     "- `ai-spend-policy-config-draft.md`: low-risk policy/config draft.",
@@ -552,17 +552,17 @@ export function generateHtmlReport(input: SpendReportInput): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Spend Analyst Report</title>
+  <title>aibill Evidence Report</title>
   <style>${premiumReportCss()}</style>
 </head>
 <body>
   <main class="report-shell" aria-labelledby="report-title">
     <section class="hero-panel">
-      <div class="report-kicker">AI Spend Analyst · Local report</div>
+      <div class="report-kicker">aibill · Local evidence report</div>
       <div class="hero-grid">
         <div>
-          <h1 id="report-title">Board-ready spend readout</h1>
-          <p class="hero-copy">A client-facing artifact for deciding which AI costs to verify, optimize, and assign owners to next.</p>
+          <h1 id="report-title">Executive accountability readout</h1>
+          <p class="hero-copy">An evidence-labeled artifact for deciding which AI costs to verify, investigate, and assign owners to next.</p>
         </div>
         <div class="hero-meta" aria-label="Report metadata">
           <span>Generated</span>
@@ -601,7 +601,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
 
     <section class="artifact-grid">
       <article class="artifact-card artifact-card--wide">
-        <div class="section-label">Board brief</div>
+        <div class="section-label">Executive accountability brief</div>
         <h2>Decision needed before adding more sources</h2>
         <ul class="brief-list">
           <li><span>Current readout</span><strong>${formatUsd(input.summary.totalUsd)} across ${input.summary.recordCount} records</strong></li>
@@ -747,10 +747,10 @@ export function generateHtmlReport(input: SpendReportInput): string {
 
     <section class="artifact-grid artifact-grid--bottom">
       <article class="artifact-card">
-        <div class="section-label">Board action plan</div>
+        <div class="section-label">Executive action plan</div>
         <h2>Owner-ready next moves</h2>
         <ol class="board-action-list">
-          ${boardActionPlanLines(recommendations, mappingQuestions.length).map((line) => `<li>${escapeHtml(stripOrderedPrefix(line))}</li>`).join("\n")}
+          ${executiveActionPlanLines(recommendations, mappingQuestions.length).map((line) => `<li>${escapeHtml(stripOrderedPrefix(line))}</li>`).join("\n")}
         </ol>
       </article>
       <article class="artifact-card">
@@ -895,13 +895,13 @@ function insightCard(insight: SpendSummary["insights"][number]): string {
   </article>`;
 }
 
-function boardActionPlanLines(
+function executiveActionPlanLines(
   recommendations: SpendSummary["recommendations"],
   mappingQuestionCount: number
 ): string[] {
   const topThree = recommendations.slice(0, 3);
   if (topThree.length === 0) {
-    return ["No board actions yet. Import or scan more usage data, then rerun the local report."];
+    return ["No executive actions yet. Import or scan more usage data, then rerun the local report."];
   }
 
   return [

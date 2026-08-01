@@ -92,7 +92,7 @@ export function PageShell({
 
       <footer className="relative z-10 border-t border-white/5">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>aibill — free, local-first, open-source.</span>
+          <span>aibill — open-source financial accountability for AI-agent work.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
             <Link
               href="/blog/claude-code-cost-usage-credits"

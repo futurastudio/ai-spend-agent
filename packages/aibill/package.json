@@ -1,7 +1,7 @@
 {
   "name": "aibill",
   "version": "0.5.7",
-  "description": "Short command for ai-spend-agent, the local-first financial intelligence CLI for AI coding agents. Run: npx aibill",
+  "description": "Short command for ai-spend-agent: local financial accountability for Claude Code and Codex work, cost evidence, attribution, and next action. Run: npx aibill",
   "type": "module",
   "bin": {
     "aibill": "run.js"

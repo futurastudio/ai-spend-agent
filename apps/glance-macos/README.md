@@ -4,7 +4,9 @@ This is the native hover prototype for the small panel below the
 camera/notch. It stays fully hidden until the pointer reaches the top menu bar;
 then a stationary liquid-glass `aibill` wordmark appears immediately left of
 the camera and reveals the panel on hover. It is a rendering surface over the
-same transcript-derived Glance contract used by the CLI and MCP server.
+same transcript-derived evidence contract used by the CLI and MCP server:
+current work, cost meaning, reported runway, freshness, and one next action.
+Company accountability and ROI remain Workspace milestones, not Glance claims.
 
 ## Local prototype
 

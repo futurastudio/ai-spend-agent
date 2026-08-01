@@ -1,7 +1,7 @@
 {
   "name": "aibill",
   "version": "0.5.7",
-  "description": "On-demand local AI usage, spend provenance, and hook-aware Context Health through aibill MCP.",
+  "description": "On-demand, sourced answers about local AI-agent work, cost evidence, runway, and Context Health through aibill MCP.",
   "author": {
     "name": "Futura Studio",
     "url": "https://github.com/futurastudio"
@@ -20,8 +20,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "aibill",
-    "shortDescription": "Local AI usage and Context Health, on demand",
-    "longDescription": "Inspect local Claude Code and Codex usage, exact data provenance, plan-window availability, and hook-aware Context Health without always-on prompt injection.",
+    "shortDescription": "Local agent cost evidence and Context Health",
+    "longDescription": "Ask sourced questions about local Claude Code and Codex work, cost evidence, plan-window availability, attribution, and hook-aware Context Health without always-on prompt injection.",
     "developerName": "Futura Studio",
     "category": "Developer Tools",
     "capabilities": [

@@ -224,14 +224,14 @@ const input: SpendReportInput = {
 };
 
 describe("board-style report generation", () => {
-  it("turns spend analysis into an executive board brief and action plan", () => {
+  it("turns spend analysis into an executive accountability brief and action plan", () => {
     const markdown = generateMarkdownReport(input);
 
     expect(markdown).toContain("## Diagnose → Recommend → Apply → Verify");
     expect(markdown).toContain("Diagnose the leak");
     expect(markdown).toContain("Apply safely");
     expect(markdown).toContain("Verify the result");
-    expect(markdown).toContain("## Board brief");
+    expect(markdown).toContain("## Executive accountability brief");
     expect(markdown).toContain("- Decision needed: approve the top local optimization actions before connecting more sources.");
     expect(markdown).toContain("## Priority recommendations");
     expect(markdown).toContain("Priority: high");
@@ -270,7 +270,7 @@ describe("board-style report generation", () => {
     expect(html).toContain('class="artifact-grid"');
     expect(html).toContain('class="recommendation-card recommendation-card--high"');
     expect(html).toContain('class="board-action-list"');
-    expect(html).toContain("Board-ready spend readout");
+    expect(html).toContain("Executive accountability readout");
     expect(html).toContain("Local files only. No cloud upload.");
     expect(html).toContain("$100.00");
     expect(html).toContain("$20.00");

@@ -7,8 +7,9 @@ The short npm command for
 npx aibill
 ```
 
-It runs the exact same local-first financial-intelligence CLI as
-`npx ai-spend-agent`. See the repository
+It runs the exact same local-first financial-accountability CLI as
+`npx ai-spend-agent`: connect supported coding-agent work to cost evidence,
+attribution, runway, and one next action. See the repository
 [README](https://github.com/futurastudio/ai-spend-agent#readme) for data
 semantics, supported providers, privacy boundaries, and limitations.
 

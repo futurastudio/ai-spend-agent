@@ -21,7 +21,7 @@
     "!dist/**/*.tsbuildinfo"
   ],
   "license": "MIT",
-  "description": "Terminal renderer and shareable AI Receipt for ai-spend-agent.",
+  "description": "Terminal renderer and shareable, evidence-labeled AI Receipt for aibill.",
   "keywords": [
     "ai",
     "finops",

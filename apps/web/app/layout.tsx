@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "aibill — financial intelligence for AI coding agents";
+const title = "aibill — financial accountability for AI agents";
 const description =
-  "Compare Claude Code and Codex activity, detected subscription context, API-equivalent value, optional provider-reported cost, attribution, and runway in one local-first view. Run npx aibill, query through MCP, or build Glance from source.";
+  "Connect Claude Code and Codex work to cost evidence, attribution, runway, and one next action. Run the private local beta with npx aibill, query it through MCP, or build Glance from source.";
 
 export const metadata: Metadata = {
   title,
@@ -37,6 +37,8 @@ export const metadata: Metadata = {
     "token cost tracker",
     "ccusage alternative",
     "AI spend",
+    "AI financial accountability",
+    "AI agent workforce",
   ],
   openGraph: {
     title,

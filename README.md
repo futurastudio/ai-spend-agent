@@ -1,15 +1,19 @@
-# aibill — financial intelligence for AI coding agents
+# aibill — financial accountability for AI agents
 
 [![CI](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
 
-**Know what your AI agents consumed, where it went, what it means financially,
-and what to do next—with the evidence attached.**
+**Know what your AI agents cost, what drove it, and what to do next—with the
+evidence attached.**
 
 ```bash
 npx aibill         # short form — same CLI as `npx ai-spend-agent`
 ```
 
-The public beta consolidates observed Claude Code and Codex activity,
+aibill is building the financial accountability system for the AI-agent
+workforce: connecting what agents did to what they cost, who owns it, what
+outcome it produced, and what should happen next. The public beta establishes
+the private evidence layer for that mission. It consolidates observed Claude
+Code and Codex activity,
 subscription context, API-equivalent value, optional provider-reported cost,
 attribution, runway, and Context Health into one evidence-labeled local view.
 It separates what was billed from what was included in a plan and what was
@@ -72,18 +76,18 @@ developer, engineering leader, agency owner, or finance team does next:
 
 | Question | Decision it supports | Status |
 | --- | --- | --- |
-| What are we actually paying for? | Put official provider-reported cost beside purchased credits, subscription capacity, and API-equivalent value without adding them together as if they were the same thing. | Available in the beta; provider reporting is optional and admin-gated. Final invoices may still include credits, discounts, tax, or adjustments. |
-| Who or what owns the usage? | Use observed project, model, agent, user, workspace, or client dimensions as inputs to allocation or rebilling decisions. | Available only where the source exposes the dimension; coverage gaps stay visible. |
-| How likely is an interruption? | Use provider-reported windows and reset time with a separately labeled exhaustion projection to assess runway or investigate unusual burn. | Available when the coding agent reports the limit metadata; missing windows are never guessed. |
-| Where might capacity be avoidable? | Investigate oversized context, items with no observed invocation, repeated reads, model mix, and anomalies; then verify whether an intervention changed the next run. | Context Health and recommendations are available now; causality is not assumed. |
-| Which workflow produces the best accepted result? | Compare cost, attempts, rework, tests, review, and acceptance instead of optimizing for tokens or lines of code alone. | Next: the open Agent Economics Receipt and `aibill outcome`. |
-| What should the company scale, constrain, or stop? | Join cost evidence to accepted outcomes, budgets, ownership, approvals, and policy results. | Next: `aibill guard` and the opt-in Workspace; not claimed as shipped in this beta. |
+| Can this work finish before the reported limit? | Pair available five-hour or weekly windows with reset time, a separately labeled exhaustion projection, and one session action. | **Available** when the coding agent reports the limit metadata; missing windows are never guessed. |
+| What work is driving our AI bill? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
+| Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Partial:** observed ownership is source-dependent. The open Agent Economics Receipt and `aibill outcome` are next. |
+| Which subscriptions and provider charges never reach finance? | Keep local plan context, provider-reported cost, purchased credits, and API-equivalent value separate before reconciling them. | **Partial:** local plan context and optional provider reports exist. Centralized seat and invoice reconciliation is Workspace next. |
+| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Partial:** evidence and recommendations exist. Shared approvals and verified result history are next. |
+| Can finance defend the ROI? | Join reconciled cost to an accepted outcome and independently evidenced business value before deciding what to scale, constrain, redesign, or stop. | **Next:** the beta does not calculate productivity or ROI. |
 
 aibill's beta establishes the cost-and-capacity evidence: provider-reported
 cost, subscription context, API-equivalent value, ownership, coverage, and
-what is missing. The roadmap then links that ledger to accepted outcomes. ROI
-additionally requires independently measured monetary value; the beta does not
-calculate productivity or ROI.
+what is missing. Company-wide reconciliation, accepted outcomes, approvals,
+and ROI are next. ROI additionally requires independently measured monetary
+value; spend or token volume alone cannot prove it.
 
 ## Why
 
@@ -348,11 +352,16 @@ current form records interest, not access to a signed download.
 
 The CLI, parsers, MCP/plugin, public contracts, generated local action
 artifacts, and Glance source are MIT-licensed. Local-only mode remains useful,
-free, and private. The planned Workspace is the paid coordination layer: explicit
-aggregate-only synchronization, organizational history, provider-invoice
-reconciliation, allocation, budgets, anomaly routing, approvals, and
-evidence-backed cost per accepted outcome where coverage supports it. It will
-never be required to inspect a user's own local data.
+free, and private.
+
+**Company direction:** aibill is building the financial accountability system
+for the AI-agent workforce—connecting what agents did to what they cost, who
+owns it, what outcome it produced, and what should happen next. The planned
+Workspace is the paid, permissioned financial teammate over that ledger:
+explicit aggregate-only synchronization, organizational history,
+provider-invoice reconciliation, allocation, budgets, anomaly routing,
+approvals, and evidence-backed cost per accepted outcome where coverage
+supports it. It will never be required to inspect a user's own local data.
 
 **[Apply as a Workspace design partner →](https://ai-spend-agent.vercel.app/?ref=github-readme#beta)**
 

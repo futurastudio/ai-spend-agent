@@ -9,26 +9,26 @@ const integrations = [
   "Anthropic billing",
 ];
 
-const decisionLoop = [
+const accountabilityQuestions = [
   {
     status: "Available now",
-    title: "Measure",
-    body: "Unify agent work, usage value, reported limits, and provider-reported spend.",
+    title: "What work is driving our AI bill?",
+    body: "Attribute observed activity and cost evidence by project, model, agent, workspace, user, or client—only where the source exposes it.",
   },
   {
-    status: "Available now",
-    title: "Explain",
-    body: "Show ownership, source, freshness, evidence quality, and missing coverage.",
+    status: "Partial",
+    title: "Who owns it—and did it produce an accepted outcome?",
+    body: "Observed ownership is available where supported. Accepted-task and pull-request receipts are the next open contract.",
   },
   {
-    status: "Public beta",
-    title: "Recommend",
-    body: "Surface one bounded next action based on the evidence that is actually available.",
+    status: "Partial",
+    title: "Which subscriptions and provider charges never reach finance?",
+    body: "Local plan context and optional provider reports are available now. A centralized seat and invoice ledger is Workspace next.",
   },
   {
-    status: "Workspace next",
-    title: "Control",
-    body: "Add shared reconciliation, budgets, approvals, audit history, and accepted-outcome economics.",
+    status: "Partial · controls next",
+    title: "What changed, what needs approval, and did the action work?",
+    body: "The beta surfaces anomalies and one bounded recommendation. Shared approvals and verified results come with Workspace.",
   },
 ];
 
@@ -47,6 +47,11 @@ const faqs = [
     question: "What can I use today?",
     answer:
       "The local CLI and explicit MCP integration are in public beta. Glance can be built from source for testing; a signed Mac download and the shared Workspace are not launched yet.",
+  },
+  {
+    question: "Can finance use aibill to prove ROI?",
+    answer:
+      "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; those outcome and company-accountability layers are next.",
   },
 ];
 
@@ -112,7 +117,7 @@ export default function Home() {
           className="glass glass-interactive inline-flex min-h-11 animate-fade-up items-center gap-2 rounded-full px-4 font-mono text-xs text-muted hover:text-ink"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
-          Open source · local first · MIT
+          Financial accountability · open source · local first
         </a>
 
         <h1 className="mx-auto mt-7 max-w-5xl animate-fade-up text-balance text-[2.85rem] font-semibold leading-[0.96] tracking-[-0.065em] text-ink sm:text-[5.35rem]">
@@ -124,9 +129,9 @@ export default function Home() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-pretty text-base leading-relaxed text-muted sm:text-xl">
-          aibill turns coding-agent activity, subscriptions, and provider billing
-          into one private, sourced view of spend, runway, focus, and the next
-          action.
+          aibill connects coding-agent work to cost evidence, attribution, and
+          one next action. Today&apos;s beta runs privately on your machine; the
+          shared company accountability layer comes next.
         </p>
 
         <div className="mt-9 flex w-full animate-fade-up flex-col items-center gap-3">
@@ -222,29 +227,29 @@ export default function Home() {
       <section className="relative z-10 mx-auto max-w-content px-6 py-20">
         <div className="max-w-3xl">
           <p className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
-            From visibility to action
+            The accountability gap
           </p>
           <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            A spend view should change a decision.
+            Financial accountability starts with four questions.
           </h2>
           <p className="mt-4 max-w-2xl text-pretty text-base leading-relaxed text-muted">
-            The product moves carefully from observed evidence toward permissioned
-            financial action—without pretending today&apos;s beta is already the full
-            company control layer.
+            Today&apos;s beta answers only what local and provider evidence can
+            support. Company-wide reconciliation, accepted outcomes, approvals,
+            and ROI stay explicitly next.
           </p>
         </div>
 
-        <div className="glass mt-10 grid overflow-hidden rounded-3xl sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-white/[0.07]">
-          {decisionLoop.map((step, index) => (
+        <div className="glass mt-10 grid overflow-hidden rounded-3xl sm:grid-cols-2">
+          {accountabilityQuestions.map((step, index) => (
             <div
               key={step.title}
-              className="relative border-b border-white/[0.07] p-6 last:border-b-0 sm:[&:nth-child(3)]:border-b-0 sm:[&:nth-child(4)]:border-b-0 lg:border-b-0"
+              className="relative border-b border-white/[0.07] p-6 last:border-b-0 sm:p-8 sm:[&:nth-child(even)]:border-l sm:[&:nth-child(3)]:border-b-0 sm:[&:nth-child(4)]:border-b-0"
             >
               <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-green">
                 {step.status}
               </span>
-              <div className="mt-8 flex items-baseline justify-between gap-4">
-                <h3 className="text-xl font-semibold tracking-[-0.03em] text-ink">
+              <div className="mt-7 flex items-start justify-between gap-5">
+                <h3 className="max-w-lg text-balance text-xl font-semibold leading-tight tracking-[-0.03em] text-ink sm:text-2xl">
                   {step.title}
                 </h3>
                 <span className="font-mono text-xs text-faint">0{index + 1}</span>
@@ -269,11 +274,12 @@ export default function Home() {
             Design partners
           </span>
           <h2 className="mx-auto mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            Build the company‑wide view with us.
+            Build the financial accountability system with us.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
-            We&apos;re onboarding AI software teams to shape shared spend,
-            ownership, budgets, approvals, and cost per accepted task.
+            The planned Workspace will connect agent work to costs, owners,
+            accepted outcomes, budgets, approvals, and verified results—so
+            engineering and finance can act from the same evidence.
           </p>
           <div className="mx-auto mt-8 max-w-xl text-left">
             <WaitlistForm />
@@ -310,7 +316,7 @@ export default function Home() {
 
       <footer className="relative z-10 border-t border-white/[0.07]">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-4 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>aibill — open-source financial intelligence for AI agents.</span>
+          <span>aibill — financial intelligence for the AI-agent economy.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-3">
             <a
               href="/blog/ai-coding-context-health"

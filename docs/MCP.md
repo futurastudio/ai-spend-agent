@@ -1,8 +1,11 @@
 # aibill MCP Server
 
 `@agent-finops/mcp` is a local-first Model Context Protocol server for aibill.
-It works with any client that supports a local stdio MCP server, including
-Claude Desktop/Claude Code, Codex, Cursor, and compatible agent hosts.
+It lets compatible AI clients ask sourced questions about coding-agent work,
+cost evidence, attribution, runway, and Context Health from the same contract
+as the CLI and Glance. It works with any client that supports a local stdio
+MCP server, including Claude Desktop/Claude Code, Codex, Cursor, and compatible
+agent hosts.
 
 The MCP client and the spend provider are separate concerns:
 
