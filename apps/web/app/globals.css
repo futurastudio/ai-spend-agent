@@ -7,10 +7,12 @@
 }
 
 html {
+  overflow-x: clip;
   scroll-behavior: smooth;
 }
 
 body {
+  overflow-x: clip;
   background-color: theme("colors.bg");
   background-image:
     radial-gradient(circle at 16% -8%, rgba(108, 99, 255, 0.11), transparent 31rem),
@@ -319,32 +321,12 @@ body {
     display: flex;
     height: 48px;
     align-items: center;
-    gap: 7px;
+    gap: 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.065);
     padding: 0 18px;
   }
 
-  .tour-window-bar > span {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.14);
-  }
-
-  .tour-window-bar > span:first-child {
-    background: #ff5f57;
-  }
-
-  .tour-window-bar > span:nth-child(2) {
-    background: #febc2e;
-  }
-
-  .tour-window-bar > span:nth-child(3) {
-    background: #28c840;
-  }
-
   .tour-window-bar strong {
-    margin-left: 5px;
     color: rgba(255, 255, 255, 0.36);
     font-family: var(--font-geist-mono), ui-monospace, monospace;
     font-size: 10px;

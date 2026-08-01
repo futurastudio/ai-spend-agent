@@ -131,10 +131,7 @@ export function TerminalDemo() {
       aria-label="Current aibill terminal demonstration"
     >
       <div className="tour-window-bar">
-        <span aria-hidden="true" />
-        <span aria-hidden="true" />
-        <span aria-hidden="true" />
-        <strong>aibill · real CLI sample</strong>
+        <strong>Terminal recording · npx aibill</strong>
         {playback !== "error" && (
           <button
             type="button"

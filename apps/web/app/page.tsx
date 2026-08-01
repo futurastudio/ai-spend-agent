@@ -9,6 +9,14 @@ const integrations = [
   "Anthropic billing",
 ];
 
+const accountabilityPath = [
+  ["Agent work", "Observed"],
+  ["Cost", "Source-labeled"],
+  ["Owner", "Where exposed"],
+  ["Accepted outcome", "Workspace next"],
+  ["Controlled action", "Approval-gated next"],
+];
+
 const accountabilityQuestions = [
   {
     status: "Available now",
@@ -63,9 +71,6 @@ export default function Home() {
         aria-hidden="true"
       >
         <div className="grid-fade absolute inset-0" />
-        <div className="aurora aurora-green left-[7%] top-[-150px] h-[520px] w-[620px]" />
-        <div className="aurora aurora-cyan right-[2%] top-[180px] h-[440px] w-[540px]" />
-        <div className="aurora aurora-violet left-[42%] top-[460px] h-[360px] w-[430px]" />
       </div>
 
       <header className="sticky top-4 z-40 mx-auto max-w-content px-4 sm:px-6">
@@ -108,50 +113,78 @@ export default function Home() {
 
       <section
         id="top"
-        className="relative z-10 mx-auto flex max-w-content scroll-mt-24 flex-col items-center px-6 pb-12 pt-16 text-center sm:pt-24"
+        className="relative z-10 mx-auto max-w-content animate-fade-up scroll-mt-24 px-6 pb-12 pt-16 text-left sm:pt-24"
       >
-        <a
-          href="https://github.com/futurastudio/ai-spend-agent"
-          target="_blank"
-          rel="noreferrer"
-          className="glass glass-interactive inline-flex min-h-11 animate-fade-up items-center gap-2 rounded-full px-4 font-mono text-xs text-muted hover:text-ink"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
-          Financial accountability · open source · local first
-        </a>
-
-        <h1 className="mx-auto mt-7 max-w-5xl animate-fade-up text-balance text-[2.85rem] font-semibold leading-[0.96] tracking-[-0.065em] text-ink sm:text-[5.35rem]">
-          Know what your AI agents cost.
-          <br className="hidden sm:block" />{" "}
-          <span className="bg-gradient-to-r from-green-bright via-cyan to-[#9d8cff] bg-clip-text text-transparent">
-            Know what to do next.
-          </span>
-        </h1>
-
-        <p className="mx-auto mt-6 max-w-2xl animate-fade-up text-pretty text-base leading-relaxed text-muted sm:text-xl">
-          aibill connects coding-agent work to cost evidence, attribution, and
-          one next action. Today&apos;s beta runs privately on your machine; the
-          shared company accountability layer comes next.
-        </p>
-
-        <div className="mt-9 flex w-full animate-fade-up flex-col items-center gap-3">
-          <CopyCommand />
-          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 font-mono text-xs">
-            <span className="text-faint">Node 22+ · no signup</span>
+        <div className="grid w-full gap-12 lg:grid-cols-[minmax(0,1fr)_15rem] lg:items-end">
+          <div className="min-w-0">
             <a
-              href="#beta"
-              className="text-green transition-colors hover:text-green-bright"
+              href="https://github.com/futurastudio/ai-spend-agent"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex min-h-11 items-center gap-2 border-l border-green/60 pl-3 font-mono text-xs text-muted transition-colors hover:text-ink"
             >
-              Need a company view? Join the beta →
+              <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
+              Open source · local first ↗
             </a>
+
+            <h1 className="mt-7 max-w-5xl min-w-0 text-balance text-[2.85rem] font-semibold leading-[0.96] tracking-[-0.065em] text-ink [overflow-wrap:anywhere] sm:text-[4.25rem] lg:text-[4.65rem]">
+              Know what your AI agents cost.
+              <br className="hidden sm:block" />{" "}
+              Know what to do next.
+            </h1>
+
+            <p className="mt-6 max-w-2xl text-pretty text-base leading-relaxed text-muted sm:text-xl">
+              aibill connects coding-agent work to cost evidence, attribution, and
+              one next action. Today&apos;s beta runs privately on your machine; the
+              shared company accountability layer comes next.
+            </p>
+
+            <div className="mt-9 flex w-full flex-col items-start gap-3">
+              <CopyCommand />
+              <div className="flex flex-wrap items-center justify-start gap-x-4 gap-y-2 font-mono text-xs">
+                <span className="text-faint">Node 22+ · no signup</span>
+                <a
+                  href="#beta"
+                  className="text-green transition-colors hover:text-green-bright"
+                >
+                  Need a company view? Join the beta →
+                </a>
+              </div>
+            </div>
           </div>
+
+          <aside
+            aria-label="aibill financial accountability chain"
+            className="hidden border-y border-white/[0.09] py-4 lg:block"
+          >
+            <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-faint">
+              Accountability chain
+            </p>
+            <ol className="mt-3">
+              {accountabilityPath.map(([label, state], index) => (
+                <li
+                  key={label}
+                  className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2 border-t border-white/[0.07] py-3 first:border-t-0"
+                >
+                  <span className="font-mono text-[0.65rem] text-green">0{index + 1}</span>
+                  <span className="text-sm font-medium text-ink">{label}</span>
+                  <span className="col-start-2 mt-0.5 font-mono text-[0.65rem] text-faint">
+                    {state}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p className="mt-2 font-mono text-[0.65rem] text-faint">
+              Evidence first · gaps stay explicit
+            </p>
+          </aside>
         </div>
 
         <div className="mt-12 w-full border-y border-white/[0.07] py-5">
           <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-faint">
             Reads the tools you already use
           </p>
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-x-8 gap-y-3">
+          <div className="mt-4 flex flex-wrap items-center justify-start gap-x-8 gap-y-3">
             {integrations.map((integration) => (
               <span key={integration} className="text-sm font-medium text-muted">
                 {integration}
@@ -179,14 +212,11 @@ export default function Home() {
         id="product"
         className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-20"
       >
-        <div className="mx-auto max-w-2xl text-center">
-          <p className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
-            One source of truth
-          </p>
-          <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
+        <div className="grid gap-5 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] md:items-end">
+          <h2 className="text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
             One bill. Three ways to use it.
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
+          <p className="max-w-xl text-pretty text-base leading-relaxed text-muted md:justify-self-end">
             Each surface keeps the same evidence rules: source, freshness,
             billing class, and missing data stay explicit.
           </p>
@@ -196,7 +226,7 @@ export default function Home() {
           <ProductTour />
         </div>
 
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 font-mono text-xs">
+        <div className="mt-6 flex flex-wrap items-center justify-start gap-x-6 gap-y-3 font-mono text-xs">
           <a
             href="https://github.com/futurastudio/ai-spend-agent"
             target="_blank"
@@ -239,7 +269,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="glass mt-10 grid overflow-hidden rounded-3xl sm:grid-cols-2">
+        <div className="mt-10 grid overflow-hidden rounded-3xl border border-white/[0.08] bg-surface/80 sm:grid-cols-2">
           {accountabilityQuestions.map((step, index) => (
             <div
               key={step.title}
@@ -263,35 +293,31 @@ export default function Home() {
       </section>
 
       <section id="beta" className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-20">
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[460px]"
-          aria-hidden="true"
-        >
-          <div className="aurora aurora-green left-[22%] top-[40px] h-[340px] w-[520px] opacity-70" />
-        </div>
-        <div className="glass relative mx-auto max-w-4xl overflow-hidden rounded-[2rem] px-6 py-12 text-center sm:px-12 sm:py-16">
-          <span className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
-            Design partners
-          </span>
-          <h2 className="mx-auto mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            Build the financial accountability system with us.
-          </h2>
-          <p className="mx-auto mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
-            The planned Workspace will connect agent work to costs, owners,
-            accepted outcomes, budgets, approvals, and verified results—so
-            engineering and finance can act from the same evidence.
-          </p>
-          <div className="mx-auto mt-8 max-w-xl text-left">
-            <WaitlistForm />
+        <div className="relative mx-auto grid max-w-5xl overflow-hidden rounded-[2rem] border border-white/[0.08] bg-elevated/80 px-6 py-10 text-left shadow-2xl sm:px-10 sm:py-12 md:grid-cols-[minmax(0,1fr)_minmax(20rem,0.85fr)] md:items-center md:gap-12">
+          <div>
+            <span className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
+              Design partners
+            </span>
+            <h2 className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
+              Build the financial accountability system with us.
+            </h2>
+            <p className="mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
+              The planned Workspace will connect agent work to costs, owners,
+              accepted outcomes, budgets, approvals, and verified results—so
+              engineering and finance can act from the same evidence.
+            </p>
           </div>
-          <p className="mx-auto mt-5 max-w-xl text-xs leading-relaxed text-faint">
-            Workspace is not launched. Local mode stays free and private.
-          </p>
+          <div className="mt-8 max-w-xl md:mt-0">
+            <WaitlistForm />
+            <p className="mt-5 text-xs leading-relaxed text-faint">
+              Workspace is not launched. Local mode stays free and private.
+            </p>
+          </div>
         </div>
       </section>
 
       <section className="relative z-10 mx-auto max-w-3xl px-6 pb-24 pt-8">
-        <h2 className="text-center text-xs font-semibold uppercase tracking-[0.2em] text-faint">
+        <h2 className="text-left text-xs font-semibold uppercase tracking-[0.2em] text-faint">
           The short answers
         </h2>
         <div className="mt-7 divide-y divide-white/[0.07] border-y border-white/[0.07]">
