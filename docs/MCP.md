@@ -17,7 +17,39 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 
 ## Quick start from npm
 
-Use this server definition in a JSON-based MCP client:
+### Codex
+
+Add the server with the Codex CLI:
+
+```bash
+codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
+codex mcp list
+```
+
+Codex stores user-level MCP configuration in `~/.codex/config.toml`. The
+ChatGPT desktop app, Codex CLI, and Codex IDE extension share that
+configuration on the same host. For a trusted project-only setup, place the
+same table in `.codex/config.toml` at the project root:
+
+```toml
+[mcp_servers.aibill]
+command = "npx"
+args = ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
+```
+
+Restart the client, then use `/mcp` to confirm that `aibill` is active.
+
+### Claude Code
+
+Add a private user-level server:
+
+```bash
+claude mcp add --scope user aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
+claude mcp list
+```
+
+For a project-shared setup, put this JSON in `.mcp.json` at the project root.
+Claude Code asks for approval before using project-scoped servers:
 
 ```json
 {
@@ -35,13 +67,36 @@ Use this server definition in a JSON-based MCP client:
 }
 ```
 
-For Codex-style TOML configuration:
+### Cursor
 
-```toml
-[mcp_servers.aibill]
-command = "npx"
-args = ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
+Put the same JSON server definition in `~/.cursor/mcp.json` for all projects,
+or `.cursor/mcp.json` at a project root for project-only use:
+
+```json
+{
+  "mcpServers": {
+    "aibill": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "--package",
+        "@agent-finops/mcp@latest",
+        "ai-spend-mcp"
+      ]
+    }
+  }
+}
 ```
+
+Restart Cursor and confirm `aibill` appears under available MCP tools.
+
+### Other stdio clients
+
+Use the JSON server definition above wherever that client stores its
+`mcpServers` configuration. The command is `npx`; the four arguments are
+`--yes`, `--package`, `@agent-finops/mcp@latest`, and
+`ai-spend-mcp`. Consult that client's documentation for its exact config
+path and restart behavior.
 
 Restart the client and confirm that these eight tools appear:
 
@@ -86,7 +141,7 @@ Point the MCP client at the checkout:
     "aibill-local": {
       "command": "node",
       "args": [
-        "/ABSOLUTE/PATH/TO/agent-finops/packages/mcp/dist/server.js"
+        "/ABSOLUTE/PATH/TO/ai-spend-agent/packages/mcp/dist/server.js"
       ]
     }
   }
@@ -126,13 +181,13 @@ Discovery does not make a file a verified billing source and does not parse an
 arbitrary provider export into spend.
 
 ```json
-{ "path": "/Users/you/projects/agent-finops" }
+{ "path": "/Users/you/projects/your-project" }
 ```
 
 For a deterministic demo only:
 
 ```json
-{ "path": "/Users/you/projects/agent-finops", "sample": true }
+{ "path": "/Users/you/projects/your-project", "sample": true }
 ```
 
 ### `sync_local_agent_spend`
@@ -143,9 +198,9 @@ filter matches the aggregated project name exactly.
 
 ```json
 {
-  "path": "/Users/you/projects/agent-finops",
+  "path": "/Users/you/projects/your-project",
   "sinceDays": 30,
-  "project": "agent-finops"
+  "project": "your-project"
 }
 ```
 
@@ -171,9 +226,9 @@ Builds the read-only data contract for the native Glance UI:
 
 ```json
 {
-  "path": "/Users/you/projects/agent-finops",
+  "path": "/Users/you/projects/your-project",
   "sinceDays": 30,
-  "project": "agent-finops"
+  "project": "your-project"
 }
 ```
 
@@ -211,9 +266,9 @@ Returns the same hook-aware decision contract used by
 
 ```json
 {
-  "path": "/Users/you/projects/agent-finops",
+  "path": "/Users/you/projects/your-project",
   "sinceDays": 30,
-  "project": "agent-finops"
+  "project": "your-project"
 }
 ```
 
@@ -246,7 +301,7 @@ OpenAI:
 
 ```json
 {
-  "path": "/Users/you/projects/agent-finops",
+  "path": "/Users/you/projects/your-project",
   "provider": "openai",
   "authReference": "env:OPENAI_ADMIN_KEY",
   "startTime": 1784606400,
@@ -258,7 +313,7 @@ Anthropic:
 
 ```json
 {
-  "path": "/Users/you/projects/agent-finops",
+  "path": "/Users/you/projects/your-project",
   "provider": "anthropic",
   "authReference": "env:ANTHROPIC_ADMIN_KEY",
   "startTime": 1784606400,
@@ -275,7 +330,7 @@ metadata. Detailed records are available through `get_spend_report`.
 Lists approved sources, ingestion method, and verification level:
 
 ```json
-{ "path": "/Users/you/projects/agent-finops" }
+{ "path": "/Users/you/projects/your-project" }
 ```
 
 ### `get_spend_report`
@@ -284,7 +339,7 @@ Returns the active data mode, records, and analyzed summary after a local,
 provider, or explicit sample sync:
 
 ```json
-{ "path": "/Users/you/projects/agent-finops" }
+{ "path": "/Users/you/projects/your-project" }
 ```
 
 ### `recommend_cuts`
@@ -293,7 +348,7 @@ Uses analyzed spend recommendations when a report exists. If only discovery
 state exists, it returns clearly labeled discovery-based guidance:
 
 ```json
-{ "path": "/Users/you/projects/agent-finops" }
+{ "path": "/Users/you/projects/your-project" }
 ```
 
 ## Repeatable QA

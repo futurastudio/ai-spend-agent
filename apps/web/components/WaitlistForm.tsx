@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -8,6 +8,12 @@ export function WaitlistForm() {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
+  const [isGlanceStudy, setIsGlanceStudy] = useState(false);
+
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get("ref");
+    setIsGlanceStudy(ref?.includes("glance-study") ?? false);
+  }, []);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -67,9 +73,20 @@ export function WaitlistForm() {
           </svg>
         </span>
         <span>
-          You&apos;re on the list. We&apos;ll email{" "}
-          <span className="font-medium text-green-bright">{email}</span> when
-          Workspace design-partner access opens.
+          {isGlanceStudy ? (
+            <>
+              Thanks—we&apos;ll email{" "}
+              <span className="font-medium text-green-bright">{email}</span>{" "}
+              with study timing and the exact preview build/setup. Expect one
+              short session and a day-seven check-in.
+            </>
+          ) : (
+            <>
+              Thanks—we&apos;ll follow up at{" "}
+              <span className="font-medium text-green-bright">{email}</span>{" "}
+              about fit and onboarding for the two-week design-partner beta.
+            </>
+          )}
         </span>
       </div>
     );
@@ -103,7 +120,11 @@ export function WaitlistForm() {
           disabled={status === "loading"}
           className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-green px-6 text-sm font-semibold text-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_24px_-8px_rgba(89,212,153,0.5)] transition-[background-color,transform,box-shadow] duration-200 ease-out hover:bg-green-bright hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_12px_28px_-8px_rgba(94,242,168,0.55)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
-          {status === "loading" ? "Requesting..." : "Request design-partner access"}
+          {status === "loading"
+            ? "Submitting..."
+            : isGlanceStudy
+              ? "Volunteer for Glance study"
+              : "Request design-partner access"}
         </button>
       </div>
       {status === "error" && (
@@ -112,7 +133,9 @@ export function WaitlistForm() {
         </p>
       )}
       <p className="mt-3 text-xs text-faint">
-        No spam. One email when Workspace design-partner access opens.
+        {isGlanceStudy
+          ? "We’ll schedule one short study session and a day-seven check-in."
+          : "Includes onboarding, two weeks of real use, and one short follow-up."}
       </p>
     </form>
   );

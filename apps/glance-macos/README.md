@@ -12,14 +12,16 @@ Requirements:
 
 - macOS 14 or newer
 - Swift/Xcode command-line tools
-- Node 22 and a built local checkout of `agent-finops`
+- Node 22 and a built local checkout of this public repository
 - Apple silicon for the current local build (the public artifact should be
   built as a universal app)
 
-Build the shared engine and app:
+Clone the repository wherever you keep development projects, then build the
+shared engine and app from the checkout root:
 
 ```bash
-cd ~/agent-finops
+git clone https://github.com/futurastudio/ai-spend-agent.git
+cd ai-spend-agent
 npm run build --workspace ai-spend-agent
 ./apps/glance-macos/scripts/build-app.sh
 ```
@@ -38,17 +40,37 @@ click is required. Right-click the visible wordmark to refresh data, enable or
 disable launch at login, check for a signed update in release builds, or quit
 the app.
 
-The app resolves data in this order:
+For a source build, point Glance at the CLI in the current checkout and launch
+the app binary from the same shell:
 
-1. `AIBILL_GLANCE_COMMAND`
-2. `~/agent-finops/packages/cli/dist/index.js`
-3. a locally installed `ai-spend-agent` executable
+```bash
+export AIBILL_GLANCE_COMMAND="$PWD/packages/cli/dist/index.js"
+export AIBILL_NODE_PATH="$(command -v node)"
+"$PWD/apps/glance-macos/dist/aibill Glance.app/Contents/MacOS/AibillGlance"
+```
 
-It executes `aibill glance --since-days 30` without a shell. Nothing is
-uploaded. Transcript-reported values remain reported, API-equivalent session
-value and exhaustion remain labeled estimates, and missing limits remain
-unavailable. When local account metadata identifies a subscription, Glance
-shows the plan and makes clear that API-rate value is not an added charge.
+`AIBILL_GLANCE_COMMAND` must be a filesystem path, not a shell command or a
+string containing arguments. It may point either to the built JavaScript entry
+above or to an executable `ai-spend-agent` binary. When it points to
+JavaScript, `AIBILL_NODE_PATH` can identify the Node executable; otherwise
+Glance checks its supported standard Node locations.
+
+The current source preview resolves data in this order:
+
+1. the valid path in `AIBILL_GLANCE_COMMAND`;
+2. the original development checkout fallback at
+   `~/agent-finops/packages/cli/dist/index.js`, retained only for compatibility;
+3. an executable `ai-spend-agent` at `~/.local/bin`, `~/.npm-global/bin`,
+   `/opt/homebrew/bin`, or `/usr/local/bin`.
+
+It does not search an arbitrary shell `PATH`. For every executable candidate,
+Glance appends `glance --since-days 30`; for a JavaScript candidate it runs
+Node with the script path followed by those same arguments. It never invokes a
+shell. Nothing is uploaded. Transcript-reported values remain reported,
+API-equivalent session value and exhaustion remain labeled estimates, and
+missing limits remain unavailable. When local account metadata identifies a
+subscription, Glance shows the plan and makes clear that API-rate value is not
+an added charge.
 The Main focus row summarizes what occupied the user across observed prompts
 and tool calls; its percentage is activity share, not elapsed time or spend.
 Raw prompts never enter the Glance JSON contract.
@@ -123,6 +145,13 @@ editor extension can all render that contract without duplicating spend logic.
 ## Public distribution
 
 Users should not have to clone the repo or ask an AI to install Glance.
+
+Glance is currently an unsigned, source-built preview—not a public Mac
+download. If you actively use Claude Code or Codex and want to volunteer for
+the 8–12-person comprehension study, [register your interest through the
+design-partner form](https://ai-spend-agent.vercel.app/?ref=glance-study#beta).
+The form records study interest; it does not promise immediate access to a
+signed build.
 
 1. Publish a Developer ID-signed and Apple-notarized `.dmg` in GitHub Releases.
 2. Link the same download from the website.
