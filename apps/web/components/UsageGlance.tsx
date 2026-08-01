@@ -1,25 +1,7 @@
 "use client";
 
 import { useState } from "react";
-
-const limits = [
-  {
-    label: "5-hour limit",
-    value: "29% left",
-    projection: "Local estimate · Exhausts ~1h",
-    reset: "Codex reported · Resets in 2h",
-    width: "29%",
-    tone: "attention",
-  },
-  {
-    label: "Weekly limit",
-    value: "57% left",
-    projection: "Local estimate · Below cap",
-    reset: "Codex reported · Resets Monday",
-    width: "57%",
-    tone: "healthy",
-  },
-];
+import { PRODUCT_DEMO } from "@/lib/product-demo";
 
 /**
  * Browser preview for the native macOS companion. It deliberately renders
@@ -28,6 +10,7 @@ const limits = [
  */
 export function UsageGlance() {
   const [isOpen, setIsOpen] = useState(false);
+  const { session, limits, focus, action, evidence } = PRODUCT_DEMO;
 
   return (
     <div className="glance-stage" aria-label="Preview of aibill Glance">
@@ -64,17 +47,17 @@ export function UsageGlance() {
               <div>
                 <p className="glance-kicker">Current session · estimated API-equivalent value</p>
                 <div className="glance-current-line">
-                  <p className="glance-total">$4.18</p>
-                  <span>Codex · GPT-5.6</span>
+                  <p className="glance-total">{session.value}</p>
+                  <span>{session.agent} · {session.model}</span>
                 </div>
-                <p className="glance-current-project">agent-finops</p>
+                <p className="glance-current-project">{session.project}</p>
                 <p className="glance-current-plan">
-                  ChatGPT Pro · $200/mo · detected locally · API value ≠ added spend
+                  {session.plan} · detected locally · API value ≠ added spend
                 </p>
               </div>
               <span className="glance-status">
                 <span aria-hidden="true" />
-                active · 42m
+                active · {session.duration}
               </span>
             </div>
 
@@ -105,11 +88,11 @@ export function UsageGlance() {
               </span>
               <div>
                 <p>Main focus · 7d · local activity</p>
-                <strong>Refining Glance hover UI</strong>
-                <span>Task · agent-finops · GlanceView.swift</span>
+                <strong>{focus.label}</strong>
+                <span>{focus.kind} · {session.project} · {focus.file}</span>
               </div>
               <div className="glance-session-value">
-                <strong>68%</strong>
+                <strong>{focus.activity}</strong>
                 <span>activity</span>
               </div>
             </div>
@@ -117,16 +100,16 @@ export function UsageGlance() {
             <div className="glance-insight">
               <span className="glance-insight-dot" aria-hidden="true" />
               <div>
-                <strong>Start fresh · agent-finops</strong>
-                <span>Carry “Refining Glance hover UI” into a clean session</span>
+                <strong>{action.label}</strong>
+                <span>{action.detail}</span>
               </div>
               <span className="glance-action-copy">Copy</span>
             </div>
 
             <div className="glance-source-row">
               <span aria-hidden="true">◇</span>
-              <p>Local: Claude Code + Codex · 60 files · nothing uploaded</p>
-              <strong>Updated 12s ago</strong>
+              <p>Local: {evidence.sources} · {evidence.files} · nothing uploaded</p>
+              <strong>{evidence.freshness}</strong>
             </div>
           </div>
         </div>
