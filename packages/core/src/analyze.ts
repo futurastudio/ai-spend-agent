@@ -173,7 +173,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       id: "model-downgrade",
       title: "Review expensive model workloads for downgrade candidates",
       rationale: `${topModel.key} is the largest cost driver in the current local sample.`,
-      whyItMatters: "Premium model usage tends to become invisible once agents are running in the background. Board owners need a clear rule for which jobs deserve the expensive model.",
+      whyItMatters: "Premium model usage tends to become invisible once agents are running in the background. Spend owners need a clear rule for which jobs deserve the expensive model.",
       nextAction: `Audit the top ${topModel.key} operations and move low-risk summarization, extraction, and draft work to a cheaper model tier first.`,
       priority: "high",
       estimatedImpactUsd: roundMoney(topModel.amountUsd * impactRatios.modelDowngrade),

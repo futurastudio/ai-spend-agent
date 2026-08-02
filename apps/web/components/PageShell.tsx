@@ -48,9 +48,9 @@ export function PageShell({
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="glass glass-interactive rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink"
+              className="glass glass-interactive whitespace-nowrap rounded-xl px-2.5 py-2 text-xs font-medium text-muted hover:text-ink sm:px-3.5 sm:text-sm"
             >
-              Workspace waitlist
+              Become a design partner
             </Link>
           </nav>
         </div>
@@ -92,7 +92,7 @@ export function PageShell({
 
       <footer className="relative z-10 border-t border-white/5">
         <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>aibill — free, local-first, open-source.</span>
+          <span>aibill — open-source financial accountability for AI-agent work.</span>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
             <Link
               href="/blog/claude-code-cost-usage-credits"

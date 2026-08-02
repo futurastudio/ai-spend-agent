@@ -221,7 +221,11 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   // Persona: --plan override wins; otherwise read the plans the coding agents
   // themselves persisted locally (read-only, whitelisted fields, no network).
   let detectedPlans: DetectedPlan[];
-  if (args.plan) {
+  if (args.sample) {
+    // An explicit sample run must be deterministic and safe to record/share.
+    // Never mix the developer's real local plan into illustrative output.
+    detectedPlans = [];
+  } else if (args.plan) {
     const override = planOverrideFromFlag(args.plan);
     if (!override) {
       return {
@@ -241,7 +245,12 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
 
   // Surface auto-detected credentials so the user knows their next 2-min step,
   // without ever printing a raw secret.
-  const detection = await detectLocalCredentials({ cwd: resolve(args.path) });
+  // Sample output is designed for demos, docs, and screenshots. Keeping local
+  // credential discovery out of that path prevents even redacted machine-
+  // specific hints from leaking into a recording.
+  const detection = args.sample
+    ? { credentials: [] as DetectedCredential[], scannedFiles: [] as string[] }
+    : await detectLocalCredentials({ cwd: resolve(args.path) });
   const nextSteps = quickstartNextSteps(mode, detection.credentials);
 
   // Dead-context cost, globalized across the user's whole Claude Code setup
@@ -559,7 +568,7 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
       : "demo sample (illustrative)";
 
   const lines = [
-    "AI Spend Analyst doctor",
+    "aibill doctor",
     `node version: ${process.version}`,
     `cli version: ${await cliVersion()}`,
     "local-first mode: enabled (no cloud upload, no telemetry)",
@@ -596,7 +605,7 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
   } catch (error) {
     if (!isNodeError(error, "ENOENT")) throw error;
     return ok([
-      "AI Spend Analyst reset",
+      "aibill reset",
       `path: ${rootPath}`,
       "nothing to clear (no persisted spend state found)",
       "next run will re-read your real local agent logs (or demo sample if none)."
@@ -615,7 +624,7 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
     }
   }
   return ok([
-    "AI Spend Analyst reset",
+    "aibill reset",
     `path: ${rootPath}`,
     removed.length > 0 ? `cleared: ${removed.join(", ")}` : "nothing to clear (no persisted spend state found)",
     "next run will re-read your real local agent logs (or demo sample if none)."
@@ -629,7 +638,7 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
 
   const registry = createLocalFolderSourceRegistry(rootPath);
   await writeJson(join(stateDir, "manifest.json"), {
-    product: "AI Spend Analyst Agent",
+    product: "aibill",
     mode: "local-first-demo",
     cloudUpload: false,
     cronJobsEnabled: false,
@@ -654,7 +663,7 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
   ]));
 
   return ok([
-    "AI Spend Analyst Agent init",
+    "aibill init",
     `path: ${rootPath}`,
     "demo mode: local-first sample workflow",
     "cloud upload: disabled",
@@ -737,7 +746,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
   await writeJson(join(stateDir, "missing-sources.json"), missingSourcePrompts);
 
   const lines = [
-    "AI Spend Analyst Agent scan",
+    "aibill scan",
     `path: ${rootPath}`,
     "source registry: .ai-spend-agent/sources.json",
     "audit log: .ai-spend-agent/audit-log.json",
@@ -978,7 +987,7 @@ async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
   });
 
   return ok([
-    "AI Spend Analyst Agent add-source",
+    "aibill add-source",
     `source added: ${id}`,
     `type: ${args.sourceType}`,
     `path: ${sourcePath}`,
@@ -992,7 +1001,7 @@ async function listSourcesCommand(args: ParsedArgs): Promise<CliResult> {
   const stateDir = join(rootPath, ".ai-spend-agent");
   const registry = await readSourceRegistry(stateDir, rootPath);
   const lines = [
-    "AI Spend Analyst Agent sources",
+    "aibill sources",
     `approved sources: ${registry.approvedSources.length}`
   ];
   for (const source of registry.approvedSources) {
@@ -1055,7 +1064,7 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
   const detected = detection.credentials.find((credential) => credential.provider === provider);
 
   const lines = [
-    "AI Spend Analyst Agent connect",
+    "aibill connect",
     `connector stub: ${source.id}`,
     `provider: ${provider}`,
     `type: ${type}`,
@@ -1206,7 +1215,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     });
 
     return ok([
-      "AI Spend Analyst Agent sync-provider",
+      "aibill sync-provider",
       `provider: ${result.provider}`,
       `source: ${result.source.id}`,
       `verification: ${result.source.verification}`,
@@ -1260,7 +1269,7 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
   });
 
   return ok([
-    "AI Spend Analyst Agent confirm-mapping",
+    "aibill confirm-mapping",
     `mapping confirmed: ${mapping.id}`,
     `provider: ${mapping.provider}`,
     `target: ${[mapping.team, mapping.project, mapping.workflow].filter(Boolean).join(" / ")}`,
@@ -1282,7 +1291,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
 
     return ok([
-      "AI Spend Analyst Agent report",
+      "aibill report",
       `path: ${rootPath}`,
       `markdown: ${markdownPath}`,
       `html: ${htmlPath}`,
@@ -1374,7 +1383,7 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
     // user can copy it right here instead of hunting for a file path.
     const codingPrompt = await readFile(artifactPaths.codingPrompt, "utf8");
     return ok([
-      "AI Spend Analyst Agent apply-artifact",
+      "aibill apply-artifact",
       `path: ${rootPath}`,
       `action plan: ${artifactPaths.actionPlan}`,
       `policy/config draft: ${artifactPaths.policyConfigDraft}`,

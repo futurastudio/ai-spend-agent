@@ -1,40 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
-  <rect width="1280" height="640" fill="#070b18"/>
-  <g transform="translate(176, 30) scale(1.45)">
-
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0b1020"/>
-      <stop offset="100%" stop-color="#121a33"/>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#07090d"/>
+      <stop offset="58%" stop-color="#0b1015"/>
+      <stop offset="100%" stop-color="#07120f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(1010 130) rotate(135) scale(540 390)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#59d499" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#59d499" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="line" x1="150" y1="0" x2="1120" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#59d499"/>
+      <stop offset="0.55" stop-color="#57c1ff"/>
+      <stop offset="1" stop-color="#9d8cff"/>
     </linearGradient>
   </defs>
-  <style>
-    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .label { fill: #7c89b3; font-size: 13px; letter-spacing: 2px; }
-    .big { fill: #e8edff; font-size: 52px; font-weight: 700; }
-    .save { fill: #4ade80; font-size: 30px; font-weight: 700; }
-    .meta { fill: #9aa6d6; font-size: 14px; }
-    .cut { fill: #cdd6f7; font-size: 14px; }
-    .cutSave { fill: #4ade80; font-weight: 700; }
-    .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
-  </style>
-  <rect width="640" height="400" rx="18" fill="url(#bg)"/>
-  <rect x="0.5" y="0.5" width="639" height="399" rx="18" fill="none" stroke="#26304f"/>
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect x="70" y="54" width="1140" height="532" rx="38" fill="#ffffff" fill-opacity="0.035" stroke="#ffffff" stroke-opacity="0.12"/>
+  <rect x="71" y="55" width="1138" height="1" rx="0.5" fill="#ffffff" fill-opacity="0.16"/>
 
-  <text x="40" y="58" class="label">AI RECEIPT</text>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <rect x="118" y="100" width="40" height="40" rx="12" fill="#020504" fill-opacity="0.65" stroke="#ffffff" stroke-opacity="0.1"/>
+    <text x="138" y="128" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" fill="#59d499">$</text>
+    <text x="174" y="128" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" font-weight="650" fill="#f5f7f6">aibill</text>
 
-  <text x="40" y="120" class="label">ILLUSTRATIVE API-EQUIVALENT VALUE</text>
-  <text x="40" y="172" class="big">$87.00</text>
+    <rect x="871" y="100" width="288" height="40" rx="20" fill="#020504" fill-opacity="0.42" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="897" cy="120" r="4" fill="#59d499"/>
+    <text x="914" y="125" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" letter-spacing="1.2" fill="#a9b0ad">OPEN SOURCE · LOCAL FIRST</text>
 
-  <text x="40" y="212"><tspan class="save">~$539.70/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
+    <text x="118" y="205" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" font-weight="650" letter-spacing="2.4" fill="#59d499">FINANCIAL ACCOUNTABILITY FOR AI AGENTS</text>
+    <text x="114" y="296" font-size="62" font-weight="650" letter-spacing="-2.8" fill="#f5f7f6">Know what your AI agents cost.</text>
+    <text x="114" y="368" font-size="62" font-weight="650" letter-spacing="-2.8" fill="#f5f7f6">Know what drove it.</text>
 
-  <text x="40" y="244" class="meta">2 providers · 9 calls · detected</text>
+    <rect x="118" y="414" width="1041" height="2" rx="1" fill="url(#line)" fill-opacity="0.8"/>
+    <text x="118" y="462" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#a9b0ad">agent work → cost evidence → owner → outcome coverage → next action</text>
 
-      <text x="40" y="274" class="cut">1. Move gpt-5.5 research_summary calls to gpt-5.5-mini<tspan class="cutSave"> ~$376.80/mo</tspan></text>
-      <text x="40" y="304" class="cut">2. Move research_summary calls to the Batch API<tspan class="cutSave"> ~$320.00/mo</tspan></text>
-      <text x="40" y="334" class="cut">3. Trim oversized context on research_summary<tspan class="cutSave"> ~$144.75/mo</tspan></text>
-
-  <text x="40" y="372" class="brand">ai-spend-agent · local-first · npx ai-spend-agent</text>
-
+    <rect x="118" y="504" width="164" height="44" rx="14" fill="#59d499" fill-opacity="0.12" stroke="#59d499" stroke-opacity="0.35"/>
+    <text x="200" y="532" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" font-weight="650" fill="#72e6ad">npx aibill</text>
+    <text x="1159" y="532" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#777f7c">Claude Code + Codex · no signup</text>
   </g>
 </svg>

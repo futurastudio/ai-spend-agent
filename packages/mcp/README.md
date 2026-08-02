@@ -1,7 +1,8 @@
 # @agent-finops/mcp
 
 **aibill for MCP.** A local-first stdio server that lets Claude, Codex,
-Cursor, and other MCP clients read local Claude Code/Codex usage or add
+Cursor, and other MCP clients answer sourced questions about local Claude
+Code/Codex work, cost evidence, attribution, runway, and Context Health—or add
 provider billing evidence to the same aibill report.
 
 The protocol is client-neutral. Provider ingestion currently supports OpenAI,

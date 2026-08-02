@@ -1,6 +1,7 @@
 # Contributing to aibill
 
-Thank you for helping build an open financial intelligence layer for AI agents.
+Thank you for helping build the open evidence layer for financial
+accountability across the AI-agent workforce.
 Bug reports, source-format fixtures, pricing updates, documentation, and small
 focused pull requests are especially useful during the public beta.
 

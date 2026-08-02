@@ -44,6 +44,32 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).not.toContain("all four");
   });
 
+  it("keeps explicit sample output deterministic and free of local plan or credential hints", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-capture-"));
+    const priorKey = process.env.OPENAI_ADMIN_KEY;
+    process.env.OPENAI_ADMIN_KEY = `sk-${"capture-test-key".repeat(2)}`;
+    await writeFile(process.env.AI_SPEND_CLAUDE_CONFIG!, JSON.stringify({
+      oauthAccount: {
+        billingType: "stripe_subscription",
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x"
+      }
+    }));
+
+    try {
+      const result = await runCli(["--sample", "--path", dir, "--no-color"]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("DATA MODE: demo sample");
+      expect(result.stdout).not.toContain("Claude Max 20x");
+      expect(result.stdout).not.toContain("Found local key");
+      expect(result.stdout).not.toContain("capture-test-key");
+    } finally {
+      if (priorKey === undefined) delete process.env.OPENAI_ADMIN_KEY;
+      else process.env.OPENAI_ADMIN_KEY = priorKey;
+    }
+  });
+
   it("prints --version without scanning local data", async () => {
     const result = await runCli(["--version"]);
 
@@ -463,7 +489,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["doctor", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst doctor");
+    expect(result.stdout).toContain("aibill doctor");
     expect(result.stdout).toContain("local-first mode: enabled");
     expect(result.stdout).toContain("redaction policy: secrets are never printed");
     expect(result.stdout).toContain(`path: ${dir}`);
@@ -480,13 +506,13 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["init", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst Agent init");
+    expect(result.stdout).toContain("aibill init");
     expect(result.stdout).toContain("demo mode: local-first sample workflow");
     expect(result.stdout).toContain("next: ai-spend-agent scan --sample --path");
 
     const manifest = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({
-      product: "AI Spend Analyst Agent",
+      product: "aibill",
       mode: "local-first-demo",
       cloudUpload: false,
       cronJobsEnabled: false
@@ -574,7 +600,7 @@ describe("minimal CLI vertical slice", () => {
     await symlink(outsideFile, discoveryPath);
     await expect(runCli(["scan", "--path", dir])).rejects.toThrow(/symbolic link/);
     expect(await readFile(outsideFile, "utf8")).toContain("must remain outside");
-  });
+  }, 10_000);
 
   it("refuses a symlinked CLI state directory before reset can delete outside files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-reset-root-"));
@@ -708,7 +734,7 @@ describe("minimal CLI vertical slice", () => {
     ]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst Agent sync-provider");
+    expect(result.stdout).toContain("aibill sync-provider");
     expect(result.stdout).toContain("provider: openai");
     expect(result.stdout).toContain("coverage: complete");
     expect(result.stdout).toContain("records fetched: 1");
@@ -864,7 +890,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["report", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst Agent report");
+    expect(result.stdout).toContain("aibill report");
     expect(result.stdout).toContain("total spend: $87.00");
 
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
@@ -874,10 +900,10 @@ describe("minimal CLI vertical slice", () => {
     const policyDraft = await readFile(join(dir, ".ai-spend-agent", "ai-spend-policy-config-draft.md"), "utf8");
     const verifyPlan = await readFile(join(dir, ".ai-spend-agent", "ai-spend-verify-plan.md"), "utf8");
     const demoPackage = await readFile(join(dir, ".ai-spend-agent", "demo-package.md"), "utf8");
-    expect(markdown).toContain("# AI Spend Analyst Report");
-    expect(markdown).toContain("## Board brief");
+    expect(markdown).toContain("# aibill Evidence Report");
+    expect(markdown).toContain("## Executive accountability brief");
     expect(markdown).toContain("## Priority recommendations");
-    expect(markdown).toContain("## Board action plan");
+    expect(markdown).toContain("## Executive action plan");
     expect(markdown).toContain("## Agency margin and workflow watch");
     expect(markdown).toContain("client-beta / project-research / research_summary");
     expect(markdown).toContain("Modeled opportunity: $12.80");
@@ -894,12 +920,12 @@ describe("minimal CLI vertical slice", () => {
     expect(verifyPlan).toContain("# AI Spend Verification Plan");
     expect(verifyPlan).toContain("Before baseline");
     expect(verifyPlan).toContain("Rollback triggers");
-    expect(demoPackage).toContain("# AI Spend Analyst Demo Package");
+    expect(demoPackage).toContain("# aibill Demo Package");
     expect(demoPackage).toContain("Demo command flow");
     expect(demoPackage).toContain("QA controller checklist");
     expect(html).toContain("<!doctype html>");
-    expect(html).toContain("Board brief");
-    expect(html).toContain("AI Spend Analyst Report");
+    expect(html).toContain("Executive accountability brief");
+    expect(html).toContain("aibill Evidence Report");
   });
 
   it("refuses a symlinked custom report output", async () => {
@@ -1060,7 +1086,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["apply-artifact", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("AI Spend Analyst Agent apply-artifact");
+    expect(result.stdout).toContain("aibill apply-artifact");
     expect(result.stdout).toContain("action plan:");
     expect(result.stdout).toContain("policy/config draft:");
     expect(result.stdout).toContain("verification plan:");

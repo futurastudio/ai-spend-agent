@@ -107,10 +107,10 @@ describe("generatePlainEnglishSummary", () => {
     const records = await sample();
     const summary = analyzeSpend(records);
     const text = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs" });
-    expect(text).toContain("npx ai-spend-agent apply-artifact");
-    // No bare `ai-spend-agent <cmd>` may survive without the npx prefix.
+    expect(text).toContain("npx aibill apply-artifact");
+    // No bare `aibill <cmd>` may survive without the npx prefix.
     for (const line of text.split("\n")) {
-      const bare = line.match(/(?<!npx )ai-spend-agent (apply-artifact|watch|connect|report|sync-provider)/);
+      const bare = line.match(/(?<!npx )aibill (apply-artifact|watch|connect|report|sync-provider)/);
       expect(bare, line).toBeNull();
     }
   });

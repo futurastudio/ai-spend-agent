@@ -1,7 +1,7 @@
 {
   "name": "ai-spend-agent",
   "version": "0.5.7",
-  "description": "Local-first financial intelligence CLI for Claude Code and Codex activity, provider-reported cost, attribution, runway, provenance, and Context Health.",
+  "description": "Local-first financial accountability CLI for Claude Code and Codex work, cost evidence, attribution, runway, provenance, and Context Health.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

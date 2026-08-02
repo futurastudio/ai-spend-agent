@@ -1,7 +1,7 @@
 {
   "name": "@agent-finops/mcp",
   "version": "0.5.7",
-  "description": "aibill MCP server for evidence-labeled Claude Code/Codex activity, Context Health, attribution, runway, and provider-reported cost.",
+  "description": "aibill MCP server for sourced answers about Claude Code/Codex work, cost evidence, attribution, runway, and Context Health.",
   "keywords": [
     "mcp",
     "model-context-protocol",

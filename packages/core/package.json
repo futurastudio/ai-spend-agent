@@ -20,7 +20,7 @@
     "!dist/**/*.tsbuildinfo"
   ],
   "license": "MIT",
-  "description": "Canonical aibill engine for local agent activity, billing semantics, attribution, provenance, runway, and Context Health.",
+  "description": "Canonical aibill evidence engine for agent work, billing semantics, attribution, provenance, runway, and Context Health.",
   "keywords": [
     "ai",
     "finops",
