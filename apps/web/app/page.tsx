@@ -307,7 +307,7 @@ export default function Home() {
               engineering and finance can act from the same evidence.
             </p>
           </div>
-          <div className="mt-8 max-w-xl md:mt-0">
+          <div className="mt-8 min-w-0 max-w-xl md:mt-0">
             <WaitlistForm />
             <p className="mt-5 text-xs leading-relaxed text-faint">
               Workspace is not launched. Local mode stays free and private.
