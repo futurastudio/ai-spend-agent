@@ -9,7 +9,7 @@ final class GlancePanelController: NSObject {
   private let store: GlanceStore
   private let triggerPanel: NSPanel
   private let detailPanel: NSPanel
-  private let hostScreen: NSScreen
+  private var hostScreen: NSScreen
   private let launchAtLogin = LaunchAtLoginController()
   private let updater: GlanceUpdaterController
   private var hoverTimer: Timer?
@@ -155,7 +155,13 @@ final class GlancePanelController: NSObject {
 
   @objc private func updateHoverState() {
     let mouse = NSEvent.mouseLocation
-    let overMenuBar = menuBarActivationFrame().contains(mouse)
+    let hoveredMenuBarScreen = NSScreen.screens.first {
+      menuBarActivationFrame(for: $0).contains(mouse)
+    }
+    if let hoveredMenuBarScreen, hoveredMenuBarScreen != hostScreen {
+      movePanels(to: hoveredMenuBarScreen)
+    }
+    let overMenuBar = hoveredMenuBarScreen != nil
     let overTrigger = triggerPanel.frame.contains(mouse)
     let overDetail = expanded
       && detailPanel.frame.insetBy(dx: -10, dy: -14).contains(mouse)
@@ -268,25 +274,41 @@ final class GlancePanelController: NSObject {
       x = hostScreen.frame.midX - Self.triggerSize.width - 82
     }
 
-    let menuBarHeight = currentMenuBarHeight()
+    let menuBarHeight = currentMenuBarHeight(for: hostScreen)
     let y = hostScreen.frame.maxY
       - menuBarHeight
       + (menuBarHeight - Self.triggerSize.height) / 2
     return NSRect(origin: NSPoint(x: x, y: y), size: Self.triggerSize)
   }
 
-  private func menuBarActivationFrame() -> NSRect {
-    let height = currentMenuBarHeight()
+  private func menuBarActivationFrame(for screen: NSScreen) -> NSRect {
+    Self.menuBarActivationFrame(
+      screenFrame: screen.frame,
+      visibleFrame: screen.visibleFrame
+    )
+  }
+
+  static func menuBarActivationFrame(
+    screenFrame: NSRect,
+    visibleFrame: NSRect
+  ) -> NSRect {
+    let height = max(24, screenFrame.maxY - visibleFrame.maxY)
     return NSRect(
-      x: hostScreen.frame.minX,
-      y: hostScreen.frame.maxY - height,
-      width: hostScreen.frame.width,
+      x: screenFrame.minX,
+      y: screenFrame.maxY - height,
+      width: screenFrame.width,
       height: height
     )
   }
 
-  private func currentMenuBarHeight() -> CGFloat {
-    max(24, hostScreen.frame.maxY - hostScreen.visibleFrame.maxY)
+  private func currentMenuBarHeight(for screen: NSScreen) -> CGFloat {
+    max(24, screen.frame.maxY - screen.visibleFrame.maxY)
+  }
+
+  private func movePanels(to screen: NSScreen) {
+    hostScreen = screen
+    triggerPanel.setFrame(triggerFrame(), display: true)
+    detailPanel.setFrame(detailFrame(), display: true)
   }
 
   private func detailFrame() -> NSRect {
