@@ -5,6 +5,25 @@ are documented here. Versions follow [semver](https://semver.org); every
 release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
 git.
 
+## 0.5.8 — 2026-08-03
+
+Launch-day attribution and product-truth release.
+
+- Current Codex Desktop nested `exec` envelopes now contribute their explicit
+  working directories to project attribution without evaluating transcript
+  code. Home-launched work can therefore resolve to the observed project
+  instead of remaining in the fallback bucket.
+- Home-directory fallbacks are no longer promoted to a real project or an
+  automatic 98%-confidence mapping. Any unresolved remainder is labeled
+  `Unattributed` with its evidence limitation stated in the terminal.
+- Local-log breakdowns now label their aggregate count as `Records`, explain
+  the day + agent + model + project unit, and describe an unattributed leading
+  share directly instead of saying that “Home” consumed it.
+- Includes the public onboarding, discoverable MCP setup, deterministic sample
+  privacy, financial-accountability copy, focused landing page, interactive
+  product tour, and production design-partner form improvements landed after
+  0.5.7.
+
 ## 0.5.7 — 2026-07-31
 
 MCP provider and local-log hardening.

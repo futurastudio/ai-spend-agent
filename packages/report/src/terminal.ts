@@ -154,11 +154,18 @@ export function generatePlainEnglishSummary(
     const focusedEntries = breakdownFor(summary, groupBy);
     lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
     if (groupBy === "project" && options.mode === "local-logs") {
-      lines.push(`  ${c.dim("project = the folder the session ran in; (home) = sessions launched from your home directory")}`);
+      lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
     lines.push(`  ${c.dim(dataWindowLine(options.records))}`);
     lines.push("");
-    lines.push(indentBlock(renderBreakdownTable(focusedEntries, summary.totalUsd, c, useColor), "  "));
+    lines.push(indentBlock(renderBreakdownTable(
+      focusedEntries,
+      summary.totalUsd,
+      c,
+      useColor,
+      options.mode === "local-logs" ? "Records" : "Calls",
+      groupBy === "project" && options.mode === "local-logs"
+    ), "  "));
     lines.push("");
     lines.push(`  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
     lines.push("");
@@ -174,9 +181,14 @@ export function generatePlainEnglishSummary(
       const limits = planChecks.some((check) => check.upgradeHint) ? " — check the reported limit signal" : "";
       tldr.push(`API-equivalent usage is ~${primaryValueCheck.valueMultiple}× the ${primaryValueCheck.suggestedPlan!.name} list price${limits}`);
     }
-    const topProject = summary.byProject.find((entry) => entry.key !== "unmapped");
+    const topProject = summary.byProject[0];
     if (topProject && summary.totalUsd > 0) {
-      tldr.push(`${labelOf(topProject.key)} eats ${Math.round((topProject.amountUsd / summary.totalUsd) * 100)}% of it`);
+      const share = Math.round((topProject.amountUsd / summary.totalUsd) * 100);
+      tldr.push(
+        isUnattributedProjectKey(topProject.key)
+          ? `${share}% is not yet attributable to a project · sessions launched from home need stronger folder evidence`
+          : `${labelOf(topProject.key)} accounts for ${share}% of it`
+      );
     }
     const dcCount = options.deadContext && options.deadContext.hasData && !options.deadContext.isSample ? options.deadContext.deadCount : 0;
     const topCut = cutList[0];
@@ -282,10 +294,17 @@ export function generatePlainEnglishSummary(
   const entries = breakdownFor(summary, groupBy);
   lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
   if (groupBy === "project" && options.mode === "local-logs") {
-    lines.push(`  ${c.dim("project = the folder the session ran in; (home) = sessions launched from your home directory")}`);
+    lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
   lines.push("");
-  lines.push(indentBlock(renderBreakdownTable(entries, summary.totalUsd, c, useColor), "  "));
+  lines.push(indentBlock(renderBreakdownTable(
+    entries,
+    summary.totalUsd,
+    c,
+    useColor,
+    options.mode === "local-logs" ? "Records" : "Calls",
+    groupBy === "project" && options.mode === "local-logs"
+  ), "  "));
   lines.push("");
 
   // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
@@ -427,14 +446,16 @@ function renderBreakdownTable(
   entries: SpendBreakdownEntry[],
   total: number,
   c: Colors,
-  useColor: boolean
+  useColor: boolean,
+  recordLabel = "Calls",
+  labelUnattributedProject = false
 ): string {
   if (entries.length === 0) {
     return c.dim("(no breakdown available for this dimension)");
   }
 
   const table = new Table({
-    head: [c.bold(""), c.bold("Spend"), c.bold("Share"), c.bold("Calls"), c.bold("Confidence")],
+    head: [c.bold(""), c.bold("Spend"), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
       ? { head: [], border: ["dim"] }
@@ -445,7 +466,9 @@ function renderBreakdownTable(
   for (const entry of entries.slice(0, 10)) {
     const share = total > 0 ? entry.amountUsd / total : 0;
     table.push([
-      labelOf(entry.key),
+      labelUnattributedProject && isUnattributedProjectKey(entry.key)
+        ? "Unattributed"
+        : labelOf(entry.key),
       formatUsd(entry.amountUsd),
       `${bar(share, c)} ${formatPercent(share)}`,
       String(entry.recordCount),
@@ -454,6 +477,14 @@ function renderBreakdownTable(
   }
 
   return table.toString();
+}
+
+function isUnattributedProjectKey(key: string): boolean {
+  return ["unmapped", "(home)", "home", "unattributed", "unknown"].includes(key.trim().toLowerCase());
+}
+
+function localProjectDefinition(): string {
+  return "project = observed working folder; Unattributed = no reliable project evidence (often launched from home); Records = day + agent + model + project aggregates";
 }
 
 // --- formatting helpers ---------------------------------------------------

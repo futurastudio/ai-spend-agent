@@ -229,6 +229,12 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
         const normalized = resolve(workdir);
         toolWorkdirs.set(normalized, (toolWorkdirs.get(normalized) ?? 0) + 1);
       }
+      // Current Codex Desktop records the orchestration wrapper as a custom
+      // `exec` call whose input is JavaScript containing nested tool calls.
+      // Extract only quoted absolute workdir/cwd values; never evaluate it.
+      if (payload.type === "custom_tool_call" && stringOf(payload.name) === "exec") {
+        collectEmbeddedToolWorkdirs(stringOf(payload.input), toolWorkdirs);
+      }
       collectToolFiles(args, fileCounts);
       collectPatchFiles(
         stringOf(args?.patch) ?? stringOf(args?.input) ?? stringOf(payload.input),
@@ -282,6 +288,25 @@ export function parseCodexRollout(content: string): LocalAgentCall[] {
       cacheReadTokens: cached
     }
   }];
+}
+
+function collectEmbeddedToolWorkdirs(
+  input: string | undefined,
+  toolWorkdirs: Map<string, number>
+): void {
+  if (!input) return;
+  const fieldPattern = /(?:^|[^A-Za-z0-9_])["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*")/g;
+  for (const match of input.matchAll(fieldPattern)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(match[1]!);
+    } catch {
+      continue;
+    }
+    if (typeof value !== "string" || !isAbsolute(value)) continue;
+    const normalized = resolve(value);
+    toolWorkdirs.set(normalized, (toolWorkdirs.get(normalized) ?? 0) + 1);
+  }
 }
 
 function parseCodexRateLimits(
@@ -404,7 +429,10 @@ export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
       outputTokens: usage.outputTokens,
       amountUsd: priced ? amountUsd : null,
       costConfidence: priced ? "estimated" : "missing",
-      projectId: project === "unattributed" ? undefined : project,
+      // `(home)` is an attribution fallback, not a real project. Keep it on
+      // LocalAgentCall for Glance/session context, but do not promote it to a
+      // high-confidence project id in receipts or the attribution engine.
+      projectId: project === "unattributed" || project === "(home)" ? undefined : project,
       agentId: agent,
       providerCostType: "local_agent_logs",
       quantity: groupCalls.length,

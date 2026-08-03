@@ -86,4 +86,14 @@ describe("attribution heuristic engine", () => {
     expect(mapping?.status).toBe("unmapped");
     expect(mapping?.selected).toBeUndefined();
   });
+
+  it("never treats generic placeholders as high-confidence entity ids", () => {
+    const [mapping] = attributeUsageRecords([
+      usage({ id: "usage-home", projectId: "(home)", clientId: "unknown" })
+    ]);
+
+    expect(mapping?.status).toBe("unmapped");
+    expect(mapping?.selected).toBeUndefined();
+    expect(mapping?.candidates).toEqual([]);
+  });
 });

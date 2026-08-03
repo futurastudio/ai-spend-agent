@@ -74,7 +74,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.5\.7$/);
+    expect(result.stdout).toMatch(/^0\.5\.8$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
