@@ -10,6 +10,10 @@ import {
   createScanAuditLog,
   detectLocalPlans,
   fetchProviderUsageRecords,
+  generateCutList,
+  hasModeledWorkloadEvidence,
+  isBundledSampleUsage,
+  latestObservedWorkingDirectory,
   loadContextHealth,
   loadLocalAgentUsage,
   loadSampleUsageData,
@@ -150,7 +154,7 @@ export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
     const records = await loadSampleUsageData();
     const summary = analyzeSpend(records);
     const mappings = attributeUsageRecords(records);
-    await writeJson(join(stateDir, "spend.json"), { records, summary });
+    await writeJson(join(stateDir, "spend.json"), { mode: "sample", records, summary });
     await writeJson(join(stateDir, "mappings.json"), mappings);
   }
 
@@ -165,7 +169,10 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
   const rootPath = await resolveSafeScanRoot(input.path);
   const stateDir = await resolveSafeStateDirectory(rootPath);
   const persisted = parsePersistedSpendState(await readJson<unknown>(join(stateDir, "spend.json")));
-  const records = persisted.records.map(sanitizePersistedRecord);
+  const records = recordsForMode(
+    persisted.records.map(sanitizePersistedRecord),
+    persisted.mode
+  );
   const headlineRecords = persisted.mode === "connected_provider"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -183,7 +190,18 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
     accounting: {
       policy: persisted.mode === "connected_provider"
         ? "provider_reported_billed_cost_preferred"
-        : "record_confidence_as_reported",
+        : persisted.mode === "local_logs"
+          ? "local_api_equivalent_value_not_billed_spend"
+          : persisted.mode === "sample"
+            ? "demo_sample_not_user_data"
+            : "mode_and_accounting_basis_unverified",
+      anomalyBasis: persisted.mode === "local_logs"
+        ? "unavailable_no_comparable_call_level_records"
+        : persisted.mode === "sample"
+          ? "demo_only_not_user_anomaly_evidence"
+          : persisted.mode === "connected_provider"
+            ? "record_confidence_as_reported"
+            : "unavailable_mode_unverified",
       financialsByProvider
     },
     provenance: {
@@ -205,16 +223,87 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
   const spendState = await readJson<unknown>(join(stateDir, "spend.json"))
     .then(parsePersistedSpendState)
     .catch(() => undefined);
-  const safeRecords = spendState?.records.map(sanitizePersistedRecord) ?? [];
-  const analyzedRecommendations = safeRecords.length > 0
-    ? analyzeSpend(
-        spendState?.mode === "connected_provider"
-          ? selectProviderFinancialHeadlineRecords(safeRecords)
-          : safeRecords
-      ).recommendations.map(
-    (recommendation) => `${recommendation.title}: ${recommendation.nextAction}`
-      )
+  const safeRecords = recordsForMode(
+    spendState?.records.map(sanitizePersistedRecord) ?? [],
+    spendState?.mode
+  );
+  if (spendState?.mode === "sample") {
+    return {
+      source: "spend_report",
+      recommendations: [
+        "DEMO ONLY: the persisted report contains bundled illustrative sample data, not this user's logs, provider account, bill, project, client, or workflow. No real cut or Apply action is supported. Collect real local-agent or connected provider evidence first; rerunning the sample cannot verify savings or an operational result."
+      ]
+    };
+  }
+  const localEvidence = spendState?.mode === "local_logs" || (
+    safeRecords.length > 0 && safeRecords.every((record) => record.providerCostType === "local_agent_logs")
+  );
+  if (localEvidence) {
+    const candidates = generateCutList(safeRecords)
+      .filter((candidate) => candidate.impactBasis === "observed_value_no_counterfactual")
+      .slice(0, 5)
+      .map((candidate) => {
+        const unit = candidate.recordCount === 1
+          ? candidate.recordUnit.replace(/s$/, "")
+          : candidate.recordUnit;
+        return [
+          `${candidate.title}: ${candidate.recordCount} ${unit} carry $${candidate.affectedSpendUsd.toFixed(2)} of observed API-equivalent value in this window`,
+          "reduction and cash savings are unproven",
+          candidate.action,
+          "Inspect read-only evidence first; use `npx aibill apply` for explicit approval, rollback, and matched future-session verification."
+        ].join(". ");
+      });
+    return {
+      source: "spend_report",
+      recommendations: candidates.length > 0
+        ? candidates
+        : [
+            "No scoped reduction candidate is supported by the current local transcript aggregates. Collect per-session/context evidence or run `npx aibill apply` to inspect Context Health and configuration evidence; do not infer a change or savings."
+          ]
+    };
+  }
+  const recommendationRecords = spendState?.mode === "connected_provider"
+    ? safeRecords.filter(hasModeledWorkloadEvidence)
     : [];
+  const modeledCandidates = spendState?.mode === "connected_provider"
+    ? generateCutList(recommendationRecords)
+      .filter((candidate) => candidate.impactBasis === "modeled_savings" && candidate.recordIds.length > 0)
+      .slice(0, 5)
+    : [];
+  if (spendState?.mode === "connected_provider" && safeRecords.length > 0 && modeledCandidates.length === 0) {
+    const summary = analyzeSpend(selectProviderFinancialHeadlineRecords(safeRecords));
+    const missingReason = recommendationRecords.length === 0
+      ? "the available records are billing/usage aggregates, seats, or otherwise lack explicit call/invocation granularity plus a named workload"
+      : "call/invocation records exist, but their declared workload semantics do not support a canonical routing, caching, batching, or context counterfactual";
+    return {
+      source: "spend_report",
+      recommendations: [
+        [
+          `NO MODELED CUT: connected provider evidence spans ${observedEvidenceWindow(safeRecords)} with ${summary.confidence} confidence across ${safeRecords.length} provider record${safeRecords.length === 1 ? "" : "s"}`,
+          missingReason,
+          "use them to reconcile and attribute cost, then collect schema-validated call/invocation evidence before proposing routing, caching, batching, or context changes",
+          "read-only diagnosis is allowed; any later change still requires a candidate ID, explicit approval, rollback, and matched future accepted-outcome plus provider-cost verification"
+        ].join(". ")
+      ]
+    };
+  }
+  const analyzedRecommendations = modeledCandidates.map((candidate) => {
+    const candidateIds = new Set(candidate.recordIds);
+    const candidateRecords = recommendationRecords.filter((record) => candidateIds.has(record.id));
+    const sources = [...new Set(candidateRecords.map((record) =>
+      `${record.source.provider}/${record.source.id}`
+    ))].sort().join(",") || "unavailable";
+    const costBasis = [...new Set(candidateRecords.map((record) =>
+      `${record.providerCostType ?? "unclassified"}/${record.costConfidence}/${record.usageGranularity ?? "unclassified"}`
+    ))].sort().join(",") || "unavailable";
+    return [
+      `[MODELED CANDIDATE; candidate=${candidate.id}; evidence=explicit call/invocation connected records; sources=${sources}; cost_basis=${costBasis}; window=${observedEvidenceWindow(candidateRecords)}; confidence=${candidate.confidence}; records=${candidate.recordCount}; unit=${candidate.recordUnit}; record_ids=${candidate.recordIds.join(",")}] ${candidate.title}`,
+      `Hypothesis: ${candidate.action}`,
+      `Affected observed provider cost/value: $${candidate.affectedSpendUsd.toFixed(2)}; modeled monthly opportunity: $${candidate.estimatedMonthlySavingsUsd.toFixed(2)}; not verified savings, final-invoice impact, or ROI`,
+      "Inspect the source records and implementation surface read-only first; do not mutate files, routing, budgets, providers, policy, or production until the user approves one candidate",
+      "After one approved reversible change, compare at least 3 matched future workloads for accepted outcomes, latency/rework, usage, and provider-reported cost; roll back on regression"
+    ].join(". ");
+  });
   if (analyzedRecommendations.length > 0) {
     return { source: "spend_report", recommendations: analyzedRecommendations };
   }
@@ -222,8 +311,10 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
   const discovery = await readDiscovery(input.path);
   const providers = Array.from(new Set(discovery.signals.map((signal) => signal.provider))).sort();
   const recommendations = providers.length === 0
-    ? ["Connect or import an AI provider usage export before recommending cuts."]
-    : providers.map((provider) => `Review ${provider} usage signals for model downgrade, prompt/context trimming, caching, or batching opportunities.`);
+    ? ["Collect local-agent or provider usage evidence before proposing a change; discovery alone does not support a cut or savings claim."]
+    : [
+        `${providers.join(", ")} ${providers.length === 1 ? "signal was" : "signals were"} discovered, but no usage/cost records support a change yet. Sync or import evidence first; do not infer downgrade, caching, batching, or savings from discovery alone.`
+      ];
   return { source: "scanner", recommendations };
 }
 
@@ -339,6 +430,8 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
   filesParsed: number;
   recordCount: number;
   projectFilter?: string;
+  valueBasis: "local_api_equivalent_value_not_billed_spend";
+  anomalyBasis: "unavailable_no_comparable_call_level_records";
   summary: SpendSummary;
 }> {
   const rootPath = await resolveSafeScanRoot(input.path);
@@ -392,6 +485,8 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
     filesParsed: logs.filesParsed,
     recordCount: records.length,
     ...(input.project ? { projectFilter: input.project } : {}),
+    valueBasis: "local_api_equivalent_value_not_billed_spend",
+    anomalyBasis: "unavailable_no_comparable_call_level_records",
     summary
   };
 }
@@ -399,18 +494,19 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
 export async function getUsageGlanceTool(
   input: GetUsageGlanceInput = {}
 ): Promise<UsageGlanceSnapshot> {
-  const projectDir = input.path
-    ? await resolveSafeScanRoot(input.path)
-    : process.cwd();
   const sinceDays = input.sinceDays ?? 30;
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString()
+    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
+    collectCodexInvocationEvidence: true
   });
   const calls = input.project
     ? logs.calls.filter((call) => call.project === input.project)
     : logs.calls;
+  const projectDir = input.path
+    ? await resolveSafeScanRoot(input.path)
+    : latestObservedWorkingDirectory(calls) ?? process.cwd();
   const contextHealth = await loadContextHealth(calls, {
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
@@ -420,7 +516,8 @@ export async function getUsageGlanceTool(
     claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
     projectDir,
     sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
-    windowDays: sinceDays
+    windowDays: sinceDays,
+    codexInvocationFiles: logs.codexInvocationFiles
   });
   const detectedPlans = await detectLocalPlans({
     claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
@@ -448,7 +545,8 @@ export async function getContextHealthTool(
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    sinceIso
+    sinceIso,
+    collectCodexInvocationEvidence: true
   });
   const calls = input.project
     ? logs.calls.filter((call) => call.project === input.project)
@@ -462,7 +560,8 @@ export async function getContextHealthTool(
     claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
     projectDir: rootPath,
     sinceIso,
-    windowDays: sinceDays
+    windowDays: sinceDays,
+    codexInvocationFiles: logs.codexInvocationFiles
   });
 }
 
@@ -517,11 +616,37 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
   const mode = value.mode === "sample" || value.mode === "local_logs" || value.mode === "connected_provider"
     ? value.mode
     : undefined;
+  const records = value.records.map((record) => parseUsageRecord(record));
   return {
-    mode,
-    records: value.records.map((record) => parseUsageRecord(record)),
+    mode: mode ?? (isBundledSampleUsage(records) ? "sample" : undefined),
+    records,
     summary: analyzeSpend([])
   };
+}
+
+function recordsForMode(
+  records: UsageRecord[],
+  mode: PersistedSpendState["mode"]
+): UsageRecord[] {
+  if (mode !== "local_logs") {
+    return records;
+  }
+  // The persisted data mode is authoritative for legacy local snapshots that
+  // predate providerCostType. Restoring the explicit marker prevents those
+  // day aggregates from entering provider/call-level recommendation math.
+  return records.map((record) => ({
+    ...record,
+    providerCostType: "local_agent_logs"
+  }));
+}
+
+function observedEvidenceWindow(records: UsageRecord[]): string {
+  const timestamps = records
+    .map((record) => Date.parse(record.timestamp))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  if (timestamps.length === 0) return "unavailable";
+  return `${new Date(timestamps[0]!).toISOString()} through ${new Date(timestamps[timestamps.length - 1]!).toISOString()}`;
 }
 
 function parseProviderRecordsState(value: unknown): ProviderRecordsState {

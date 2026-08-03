@@ -19,6 +19,40 @@ export const spendSourceSchema = z.object({
 });
 export type SpendSource = z.infer<typeof spendSourceSchema>;
 
+/**
+ * What one normalized usage record represents.
+ *
+ * Only `call` and `invocation` are precise enough to support per-workload
+ * counterfactuals such as model routing, result caching, Batch API moves, or
+ * prompt trimming. The remaining values are still useful financial evidence,
+ * but must never be silently treated as individual calls.
+ */
+export const usageGranularityValues = [
+  "call",
+  "invocation",
+  "session",
+  "daily_aggregate",
+  "usage_bucket",
+  "billing_bucket",
+  "seat",
+  "user_aggregate"
+] as const;
+
+export const usageGranularitySchema = z.enum(usageGranularityValues);
+export type UsageGranularity = z.infer<typeof usageGranularitySchema>;
+
+/**
+ * Explicit adapter attestations for workload-specific optimization advice.
+ * These fields are intentionally absent by default: an operation label alone
+ * does not prove identical inputs, latency tolerance, or downgrade safety.
+ */
+export const workloadSemanticsSchema = z.object({
+  stableInputFingerprint: z.string().min(8).max(128).regex(/^[a-zA-Z0-9:_-]+$/).optional(),
+  batchEligible: z.boolean().optional(),
+  downgradeSafe: z.boolean().optional()
+}).strict();
+export type WorkloadSemantics = z.infer<typeof workloadSemanticsSchema>;
+
 export const usageRecordSchema = z.object({
   id: z.string().min(1),
   timestamp: z.string().datetime({ offset: true }),
@@ -36,7 +70,9 @@ export const usageRecordSchema = z.object({
   providerCostType: z.string().min(1).optional(),
   quantity: z.number().nonnegative().optional(),
   agentId: z.string().min(1).optional(),
-  operation: z.string().min(1).optional()
+  operation: z.string().min(1).optional(),
+  usageGranularity: usageGranularitySchema.optional(),
+  workloadSemantics: workloadSemanticsSchema.optional()
 }).superRefine((record, context) => {
   if (record.costConfidence === "missing" && record.amountUsd !== null) {
     context.addIssue({
@@ -55,6 +91,69 @@ export const usageRecordSchema = z.object({
   }
 });
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
+
+/**
+ * True only when a record can honestly ground a modeled workload change.
+ *
+ * A provider billing row, usage bucket, seat, user total, or unlabelled legacy
+ * row may describe real spend, but it does not prove that one row was one
+ * optimizable call. Requiring both explicit call/invocation provenance and a
+ * named operation keeps aggregate connector data in accounting views without
+ * manufacturing per-call savings advice from it.
+ */
+export function hasModeledWorkloadEvidence(record: UsageRecord): boolean {
+  return (
+    hasCallLevelProvenance(record) &&
+    typeof record.operation === "string" &&
+    record.operation.trim().length > 0 &&
+    hasPricedEvidence(record)
+  );
+}
+
+/** Explicit one-call / one-model-invocation provenance, never inferred. */
+export function hasCallLevelProvenance(record: UsageRecord): boolean {
+  return record.usageGranularity === "call" || record.usageGranularity === "invocation";
+}
+
+/** A positive priced observation from which a dollar counterfactual can be modeled. */
+export function hasPricedEvidence(record: UsageRecord): boolean {
+  return (
+    typeof record.amountUsd === "number" &&
+    record.amountUsd > 0 &&
+    record.costConfidence !== "missing"
+  );
+}
+
+/**
+ * Recognize the bundled demo records written by releases that predate the
+ * persisted `mode` field. The marker is deliberately narrow: every record
+ * must come from the shipped sample CSV and use a sample source identifier.
+ * This lets newer clients recover the demo boundary without guessing that an
+ * arbitrary unlabeled state is real local or connected evidence.
+ */
+export function isBundledSampleUsage(records: UsageRecord[]): boolean {
+  return records.length > 0 && records.every((record) =>
+    record.source.observedFrom === "sample_csv" &&
+    /(?:^|-)sample$/i.test(record.source.id)
+  );
+}
+
+/**
+ * Stable financial cohort for period-over-period comparisons. Missing shape
+ * provenance returns `undefined`; unknown rows must not be pooled into a fake
+ * comparable series.
+ */
+export function spendComparisonKey(record: UsageRecord): string | undefined {
+  if (!record.providerCostType || !record.usageGranularity) {
+    return undefined;
+  }
+  return [
+    record.source.id,
+    record.source.provider,
+    record.providerCostType,
+    record.usageGranularity
+  ].map((part) => encodeURIComponent(part)).join("|");
+}
 
 export const attributionCandidateSchema = z.object({
   entityType: z.enum(["client", "project", "agent", "user", "workspace", "api_key"]),
@@ -84,6 +183,7 @@ export type SpendBreakdownEntry = z.infer<typeof spendBreakdownEntrySchema>;
 export const spendAnomalySchema = z.object({
   kind: z.enum(["day_over_day_spike", "week_over_week_spike"]),
   key: z.string().min(1),
+  comparisonKey: z.string().min(1).optional(),
   previousAmountUsd: z.number().nonnegative(),
   currentAmountUsd: z.number().nonnegative(),
   multiplier: z.number().nonnegative(),

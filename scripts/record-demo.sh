@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Regenerates the landing-page terminal demo from the REAL CLI, so the demo
-# can never drift from the product. Requires: vhs (brew install vhs), ffmpeg.
+# Regenerates the landing-page terminal demo from the real CLI. The checked-in
+# media are release snapshots, not self-updating assets: rerun this script after
+# any user-visible terminal-copy or sample-output change.
+# Requires: vhs (brew install vhs), ffmpeg.
 #
 # Usage: npm run build && bash scripts/record-demo.sh
 #
@@ -26,13 +28,15 @@ trap 'rm -rf "$AIBILL_DEMO_TMP"' EXIT
 mkdir -p "$AIBILL_DEMO_TMP/cwd"
 (cd "$AIBILL_DEMO_TMP/cwd" && FORCE_COLOR=1 node "$CLI" --sample --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
 grep -q "DATA MODE: demo sample" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing sample banner — aborting" >&2; exit 1; }
+grep -q "ILLUSTRATIVE COST / VALUE EVIDENCE" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the mixed-basis sample label — aborting" >&2; exit 1; }
+grep -q "NON-EXECUTABLE DEMO" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the sample Apply safety boundary — aborting" >&2; exit 1; }
 
 # The CLI emits some lines wider than the recording terminal; hard column
 # wraps break mid-word on camera. Word-wrap at 100 visible columns, ANSI-aware.
 python3 - "$AIBILL_DEMO_TMP/demo.raw" > "$AIBILL_DEMO_TMP/demo.ans" <<'EOF'
 import re, sys
 
-LIMIT, INDENT = 88, "       "
+LIMIT, INDENT = 100, "       "
 ansi = re.compile(r"\x1b\[[0-9;]*m")
 
 def visible_len(s):
@@ -42,7 +46,7 @@ for raw in open(sys.argv[1], encoding="utf-8"):
     line = raw.rstrip("\n")
     while visible_len(line) > LIMIT:
         # walk to the last space before the visible-column limit
-        col = 0; i = 0; break_at = -1
+        col = 0; i = 0; break_at = -1; hard_break_at = -1
         while i < len(line):
             m = ansi.match(line, i)
             if m:
@@ -50,13 +54,21 @@ for raw in open(sys.argv[1], encoding="utf-8"):
             if line[i] == " " and col <= LIMIT:
                 break_at = i
             col += 1
+            if col == LIMIT:
+                hard_break_at = i + 1
             if col > LIMIT and break_at > 0:
                 break
             i += 1
+        # A deeply indented long token can leave the only candidate break in
+        # the continuation indent. Reusing that point makes no progress and
+        # loops forever, so hard-wrap the visible token instead.
+        if break_at <= len(INDENT):
+            break_at = hard_break_at
         if break_at <= 0:
             break
         print(line[:break_at])
-        line = INDENT + line[break_at + 1 :]
+        remainder = line[break_at:]
+        line = INDENT + remainder.lstrip(" ")
     print(line)
 EOF
 
@@ -83,7 +95,7 @@ cat > "$AIBILL_DEMO_TMP/demo.tape" <<EOF
 Output "$AIBILL_DEMO_TMP/demo.webm"
 Output "$AIBILL_DEMO_TMP/demo.mp4"
 Set Shell bash
-Set FontSize 30
+Set FontSize 29
 Set Width 2000
 Set Height 1400
 Set Padding 48

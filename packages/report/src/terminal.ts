@@ -106,15 +106,25 @@ export function generatePlainEnglishSummary(
   lines.push("");
   // Local-log records are day-level session aggregates — calling them "calls"
   // overstates precision to the audience most likely to check.
-  const recordNoun = options.mode === "local-logs" ? "session-day record" : "call";
-  lines.push(`  ${c.bold(c.cyan(formatBigUsd(summary.totalUsd)))}  ${c.dim(`tracked across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`)}`);
+  const recordNoun = options.mode === "local-logs"
+    ? "session-day record"
+    : options.mode === "demo"
+      ? "illustrative record"
+      : "provider record";
+  const totalDescription = options.mode === "demo"
+    ? `combined illustrative evidence across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`
+    : `tracked across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`;
+  lines.push(`  ${c.bold(c.cyan(formatBigUsd(summary.totalUsd)))}  ${c.dim(totalDescription)}`);
   lines.push(
     `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(coverageLine(summary))}`
   );
   if (options.mode === "demo") {
     lines.push("");
     lines.push(
-      `  ${c.yellow("DEMO")} ${c.dim("sample data — run")} ${c.bold("npx aibill connect openai")} ${c.dim("for your real numbers")}`
+      `  ${c.yellow("DEMO")} ${c.dim("sample data — combined cost/value evidence, not one invoice or homogeneous spend basis")}`
+    );
+    lines.push(
+      `  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("without --sample for your local evidence")}`
     );
   }
   if (options.mode === "local-logs") {
@@ -152,7 +162,7 @@ export function generatePlainEnglishSummary(
   // just the answer (table + definition + data window), not the whole loop.
   if (options.view === "breakdown") {
     const focusedEntries = breakdownFor(summary, groupBy);
-    lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+    lines.push(c.bold(`  ${evidenceBreakdownLabel(options.mode)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
     if (groupBy === "project" && options.mode === "local-logs") {
       lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
@@ -163,7 +173,8 @@ export function generatePlainEnglishSummary(
       summary.totalUsd,
       c,
       useColor,
-      options.mode === "local-logs" ? "Records" : "Calls",
+      evidenceAmountColumnLabel(options.mode),
+      options.mode === "demo" ? "Illustrative records" : "Records",
       groupBy === "project" && options.mode === "local-logs"
     ), "  "));
     lines.push("");
@@ -193,9 +204,17 @@ export function generatePlainEnglishSummary(
     const dcCount = options.deadContext && options.deadContext.hasData && !options.deadContext.isSample ? options.deadContext.deadCount : 0;
     const topCut = cutList[0];
     if (topCut || dcCount > 0) {
-      const cutPhrase = topCut?.kind === "context_trim" ? "trim heavy context" : topCut ? topCut.title.toLowerCase() : "";
+      const cutPhrase = topCut?.impactBasis === "observed_value_no_counterfactual"
+        ? "investigate cumulative context"
+        : topCut?.kind === "context_trim"
+          ? "trim heavy context"
+          : topCut
+            ? topCut.title.toLowerCase()
+            : "";
       const parts = [
-        dcCount > 0 ? `remove ${dcCount} dead tool${dcCount === 1 ? "" : "s"}` : "",
+        dcCount > 0
+          ? `inspect ${dcCount} context candidate${dcCount === 1 ? "" : "s"} with no matching invocation`
+          : "",
         cutPhrase
       ].filter(Boolean);
       tldr.push(`one action: ${parts.join(" + ")} — run npx aibill apply`);
@@ -216,40 +235,39 @@ export function generatePlainEnglishSummary(
   lines.push(sectionHeader(1, "DIAGNOSE", subscriptionPersona ? "compare observed usage with plan context" : "what the available cost and usage evidence shows", c));
   lines.push("");
 
-  // Where your money goes: at-a-glance bars (the screenshot).
+  // Basis-aware source bars: at-a-glance evidence without implying a mixed
+  // sample total is one invoice or one homogeneous spend basis.
   const spendBars = renderSpendBars(summary.bySource, summary.totalUsd, c);
   if (spendBars.length > 0) {
-    lines.push(c.bold("  Where your money goes") + c.dim("  (by source)"));
+    lines.push(c.bold(`  ${sourceBreakdownLabel(options.mode)}`) + c.dim("  (by source)"));
     lines.push("");
     lines.push(...spendBars);
     lines.push("");
   }
 
-  // --- Dead context: tools configured but never invoked ------------------
+  // --- Context candidates: configured/catalogued, no matching invocation --
   // Count-led (the defensible, shareable part). A token/$ figure shows ONLY
   // for items we measured (skills/agents); MCP servers are counted, not priced.
   const dc = options.deadContext;
   if (dc && dc.hasData && dc.deadCount > 0) {
     const pct = Math.round(dc.wastePercent * 100);
-    const header = c.bold("  Dead context") + c.dim("  (configured, never invoked in 30 days)");
+    const header = c.bold("  Context candidates") + c.dim(`  (configured/catalogued, no matching invocation in ${dc.windowDays} days)`);
     lines.push(dc.isSample ? `${header}  ${c.yellow("SAMPLE")}` : header);
     lines.push("");
     lines.push(
-      `  ${c.bold(`${dc.deadCount} of ${dc.loadedCount}`)} ${c.dim(`loaded tools never invoked (${pct}%)`)}`
+      `  ${c.bold(`${dc.deadCount} of ${dc.loadedCount}`)} ${c.dim(`observable inventory items had no matching invocation (${pct}%)`)}`
     );
     if (dc.measuredDeadCount > 0 && dc.monthlyDeadTokens > 0) {
       const plural = dc.measuredDeadCount === 1 ? "" : "s";
       lines.push(
-        `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} dead tokens/mo`))} ` +
-          c.dim(`from ${dc.measuredDeadCount} unused skill${plural}/agent${plural} · honest cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
+        `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} modeled catalog tokens/mo`))} ` +
+          c.dim(`from ${dc.measuredDeadCount} skill${plural}/agent${plural} with no matching invocation · modeled context cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
       );
     }
     if (dc.unmeasuredDeadCount > 0) {
       const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
-      // Honest hint: nothing can size MCP token weight from config alone
-      // (definitions load at runtime) — the lever is removing unused servers.
       lines.push(
-        `  ${c.dim(`${dc.unmeasuredDeadCount} unused MCP server${plural} — token weight not measurable from config; removing them from .mcp.json still trims every turn's context`)}`
+        `  ${c.dim(`${dc.unmeasuredDeadCount} configured MCP server${plural} had no matching invocation — schema loading and token weight are unmeasured; verify host loading and future need before changing config`)}`
       );
     }
     if (dc.isSample) {
@@ -258,10 +276,10 @@ export function generatePlainEnglishSummary(
     lines.push("");
   } else if (dc && dc.hasData && dc.deadCount === 0 && !dc.isSample) {
     // A genuinely clean setup gets congratulated, never shown fabricated waste.
-    lines.push(c.bold("  Dead context") + c.dim("  (configured, never invoked in 30 days)"));
+    lines.push(c.bold("  Context candidates") + c.dim(`  (configured/catalogued, no matching invocation in ${dc.windowDays} days)`));
     lines.push("");
     lines.push(
-      `  ${c.green("none found")} ${c.dim(`— all ${dc.loadedCount} loaded tool${dc.loadedCount === 1 ? "" : "s"} were invoked in the last ${dc.windowDays} days. Clean setup.`)}`
+      `  ${c.green("none found")} ${c.dim(`— every one of ${dc.loadedCount} observable inventory item${dc.loadedCount === 1 ? "" : "s"} had matching use in the last ${dc.windowDays} days.`)}`
     );
     lines.push("");
   }
@@ -292,7 +310,7 @@ export function generatePlainEnglishSummary(
 
   // Drill-down table — the last diagnostic block.
   const entries = breakdownFor(summary, groupBy);
-  lines.push(c.bold(`  Spend by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+  lines.push(c.bold(`  ${evidenceBreakdownLabel(options.mode)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
   if (groupBy === "project" && options.mode === "local-logs") {
     lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
@@ -302,13 +320,25 @@ export function generatePlainEnglishSummary(
     summary.totalUsd,
     c,
     useColor,
-    options.mode === "local-logs" ? "Records" : "Calls",
+    evidenceAmountColumnLabel(options.mode),
+    options.mode === "demo" ? "Illustrative records" : "Records",
     groupBy === "project" && options.mode === "local-logs"
   ), "  "));
   lines.push("");
 
   // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
-  lines.push(sectionHeader(2, "RECOMMEND", subscriptionPersona ? "What to test — possible plan headroom, ranked by modeled monthly value" : "What to test, ranked by modeled monthly API-rate opportunity", c));
+  lines.push(sectionHeader(
+    2,
+    "RECOMMEND",
+    options.mode === "local-logs"
+      ? "What to investigate — evidence first; reduction is not yet established"
+      : options.mode === "demo"
+        ? "Illustrative hypotheses only — not recommendations for this user"
+      : subscriptionPersona
+        ? "What to test — possible plan headroom, ranked by modeled monthly value"
+        : "What to test, ranked by modeled monthly API-rate opportunity",
+    c
+  ));
   lines.push("");
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence opportunity found in this window. Collect more evidence before changing anything."));
@@ -316,11 +346,17 @@ export function generatePlainEnglishSummary(
     // Sub-$1/mo cuts are noise on the readout (often near-duplicates of a big
     // cut) — collapse them into one line. They still count in the plan math
     // and still ship in the apply-artifact.
-    const visibleCuts = cutList.filter((action) => action.estimatedMonthlySavingsUsd >= 1);
-    const minorCuts = cutList.filter((action) => action.estimatedMonthlySavingsUsd < 1);
+    const visibleCuts = cutList.filter((action) => (
+      action.impactBasis === "observed_value_no_counterfactual" ||
+      action.estimatedMonthlySavingsUsd >= 1
+    ));
+    const minorCuts = cutList.filter((action) => (
+      action.impactBasis === "modeled_savings" &&
+      action.estimatedMonthlySavingsUsd < 1
+    ));
     const shown = visibleCuts.length > 0 ? visibleCuts : cutList;
     for (const [index, action] of shown.slice(0, 5).entries()) {
-      lines.push(...cutActionLines(action, index + 1, c));
+      lines.push(...cutActionLines(action, index + 1, c, options.mode));
     }
     if (visibleCuts.length > 0 && minorCuts.length > 0) {
       const minorTotal = minorCuts.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
@@ -331,9 +367,25 @@ export function generatePlainEnglishSummary(
     }
     const days = usageWindowDays(options.records);
     lines.push("");
-    lines.push(
-      `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`modeled API-rate opportunity (deduplicated) — verify quality and the next provider report; projected from ${days} day${days === 1 ? "" : "s"} of data`)}`
-    );
+    if (options.mode === "local-logs") {
+      const observedValue = cutList
+        .filter((action) => action.impactBasis === "observed_value_no_counterfactual")
+        .reduce((total, action) => total + action.affectedSpendUsd, 0);
+      lines.push(
+        `  ${c.cyan(c.bold(formatUsd(observedValue)))} ${c.dim(`API-equivalent value observed in flagged daily aggregates — potential reduction and cash savings are not established`)}`
+      );
+      lines.push(
+        `  ${c.dim(`apply one approved change, then compare matched future sessions and accepted output; the ${days}-day evidence window is a baseline, not a monthly forecast`)}`
+      );
+    } else if (options.mode === "demo") {
+      lines.push(
+        `  ${c.yellow(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim("illustrative modeled opportunity from bundled sample records — not this user's savings, bill, or ROI")}`
+      );
+    } else {
+      lines.push(
+        `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`modeled API-rate opportunity (deduplicated) — verify quality and the next provider report; projected from ${days} day${days === 1 ? "" : "s"} of data`)}`
+      );
+    }
     if (plan.additionalSavingsUsd > 0) {
       lines.push(
         `  ${c.dim(`+ ~${formatUsd(plan.additionalSavingsUsd)}/mo more from overlapping opportunities (not additive — they target the same spend)`)}`
@@ -361,38 +413,61 @@ export function generatePlainEnglishSummary(
       planChecks.some((check) => typeof check.monthlySavingsVsApiUsd === "number")
     ) {
       lines.push(
-        `  ${c.dim(`on ${subscriptionPlansDetected.length > 0 ? "your" : "a"} flat-price plan these changes may improve rate-limit headroom or speed; they are not cash-savings claims unless comparable provider-reported cost falls`)}`
+        `  ${c.dim("for agents with a detected flat-price subscription, an approved change may improve rate-limit headroom or speed; it is not a cash-savings claim unless comparable provider-reported cost falls")}`
       );
     }
   }
   lines.push("");
 
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
-  lines.push(sectionHeader(3, "APPLY", "make the cuts (copy, don't retype)", c));
+  lines.push(sectionHeader(
+    3,
+    "APPLY",
+    options.mode === "demo"
+      ? "disabled for sample data — collect the user's evidence first"
+      : "inspect, approve, and test one change",
+    c
+  ));
   lines.push("");
   // Every command is npx-prefixed: most users run via `npx aibill`
   // and have NO `aibill` on PATH — a bare command is a guaranteed
   // "command not found" for exactly the person who just got motivated.
-  lines.push(
-    `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a ready-to-paste prompt + action plan for your coding agent")}`
-  );
-  lines.push(
-    `  ${c.dim("    paste it into Claude Code / Codex — it bundles the cuts above with guardrails (long form: npx aibill apply-artifact)")}`
-  );
+  if (options.mode === "demo") {
+    lines.push(
+      `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a NON-EXECUTABLE DEMO boundary; it does not authorize or propose a user change")}`
+    );
+    lines.push(
+      `  ${c.dim("    run npx aibill without --sample, or connect a provider, before generating an evidence-scoped Apply plan (long form: npx aibill apply-artifact)")}`
+    );
+  } else {
+    lines.push(
+      `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a paste-ready evidence, approval, rollback, and verification plan")}`
+    );
+    lines.push(
+      `  ${c.dim("    paste it into Claude Code / Codex — it carries the candidates above without authorizing a change (long form: npx aibill apply-artifact)")}`
+    );
+  }
   lines.push("");
 
   // ══ 4 · VERIFY ══════════════════════════════════════════════════════════
-  lines.push(sectionHeader(4, "VERIFY", "prove the cuts worked before trusting them", c));
+  lines.push(sectionHeader(4, "VERIFY", "prove the approved change worked before trusting it", c));
   lines.push("");
   lines.push(
     `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx aibill")} ${c.dim("after a few days and compare — or")} ${c.bold("npx aibill watch")} ${c.dim("to track deltas per cycle")}`
   );
-  if (options.mode === "local-logs" || options.mode === "demo") {
+  if (options.mode === "local-logs") {
     lines.push(
       `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
     );
     lines.push(
       `  ${c.cyan("›")} ${c.dim("pay for API usage too? add official provider-reported cost:")} ${c.bold("npx aibill connect anthropic|openai")} ${c.dim("(org admin key)")}`
+    );
+  } else if (options.mode === "demo") {
+    lines.push(
+      `  ${c.cyan("›")} ${c.dim("these are illustrative SAMPLE API-equivalent estimates — no local logs or account data were used")}`
+    );
+    lines.push(
+      `  ${c.cyan("›")} ${c.dim("want your own evidence? run without --sample, or add official provider-reported cost:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")} ${c.dim("(org admin/owner key)")}`
     );
   } else {
     lines.push(
@@ -428,17 +503,29 @@ function dataWindowLine(records: UsageRecord[]): string {
   return `window: ${days.length} day${days.length === 1 ? "" : "s"} of data (${span})`;
 }
 
-function cutActionLines(action: CutAction, rank: number, c: Colors): string[] {
-  const opportunity = c.green(c.bold(`model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
+function cutActionLines(
+  action: CutAction,
+  rank: number,
+  c: Colors,
+  mode: PlainEnglishSummaryOptions["mode"]
+): string[] {
+  const opportunity = mode === "demo"
+    ? c.yellow(c.bold(`illustrative model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`))
+    : action.impactBasis === "observed_value_no_counterfactual"
+    ? c.yellow(c.bold("reduction unproven"))
+    : c.green(c.bold(`model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
   const head = `  ${c.bold(`${rank}.`)} ${c.bold(action.title)}  ${opportunity}`;
   const detail = `     ${c.dim(action.action)}`;
   // Honest unit: local-log records are day-level session aggregates, not calls.
-  const unit = action.recordUnit === "session-days"
-    ? `session-day${action.recordCount === 1 ? "" : "s"}`
+  const unit = action.recordUnit === "daily-aggregates"
+    ? `daily aggregate${action.recordCount === 1 ? "" : "s"}`
     : action.recordUnit === "tools"
       ? `tool${action.recordCount === 1 ? "" : "s"}`
       : `call${action.recordCount === 1 ? "" : "s"}`;
-  const grounding = `     ${c.dim(`${action.recordCount} ${unit} · ${formatUsd(action.affectedSpendUsd)} in window · ${confidenceWord(action.confidence)}`)}`;
+  const valueLabel = action.impactBasis === "observed_value_no_counterfactual"
+    ? `${formatUsd(action.affectedSpendUsd)} API-equivalent value observed in window`
+    : `${formatUsd(action.affectedSpendUsd)} in window`;
+  const grounding = `     ${c.dim(`${action.recordCount} ${unit} · ${valueLabel} · ${confidenceWord(action.confidence)}`)}`;
   return [head, detail, grounding, ""];
 }
 
@@ -447,6 +534,7 @@ function renderBreakdownTable(
   total: number,
   c: Colors,
   useColor: boolean,
+  amountLabel = "Evidence",
   recordLabel = "Calls",
   labelUnattributedProject = false
 ): string {
@@ -455,7 +543,7 @@ function renderBreakdownTable(
   }
 
   const table = new Table({
-    head: [c.bold(""), c.bold("Spend"), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
+    head: [c.bold(""), c.bold(amountLabel), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
       ? { head: [], border: ["dim"] }
@@ -497,7 +585,7 @@ function coverageLine(summary: SpendSummary): string {
   const parts: string[] = [];
   if (verified > 0) parts.push(`${formatUsd(verified)} provider-reported`);
   if (estimated > 0) parts.push(`${formatUsd(estimated)} API-equivalent/estimated`);
-  if (detected > 0) parts.push(`${formatUsd(detected)} detected`);
+  if (detected > 0) parts.push(`${formatUsd(detected)} detected/unverified`);
   return parts.length > 0 ? parts.join(" · ") : "no cost breakdown yet";
 }
 
@@ -516,7 +604,7 @@ function confidenceWord(confidence: CostConfidence): string {
     case "estimated":
       return "estimated";
     case "detected_unverified":
-      return "detected";
+      return "detected/unverified";
     default:
       return "missing";
   }
@@ -568,7 +656,25 @@ function labelOf(key: string): string {
 function headlineMetricLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
   if (mode === "connected") return "PROVIDER-REPORTED COST";
   if (mode === "local-logs") return "OBSERVED API-EQUIVALENT VALUE";
-  return "ILLUSTRATIVE API-EQUIVALENT VALUE";
+  return "ILLUSTRATIVE COST / VALUE EVIDENCE";
+}
+
+function evidenceBreakdownLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
+  if (mode === "connected") return "Provider-reported cost";
+  if (mode === "local-logs") return "API-equivalent value";
+  return "Cost/value evidence";
+}
+
+function evidenceAmountColumnLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
+  if (mode === "connected") return "Cost";
+  if (mode === "local-logs") return "Value";
+  return "Evidence";
+}
+
+function sourceBreakdownLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
+  if (mode === "connected") return "Where provider-reported cost goes";
+  if (mode === "local-logs") return "Where observed API-equivalent value goes";
+  return "Cost/value evidence by source";
 }
 
 function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {

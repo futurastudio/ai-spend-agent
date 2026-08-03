@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/futurastudio/ai-spend-agent/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/ai-spend-agent)](https://www.npmjs.com/package/ai-spend-agent) [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](package.json)
 
-**Know what your AI agents cost, what drove it, and what to do next—with the
-evidence attached.**
+**Know what cost evidence exists for your AI agents, what drove it, and what
+to do next—with the source and limits attached.**
 
 ```bash
 npx aibill         # short form — same CLI as `npx ai-spend-agent`
@@ -22,13 +22,15 @@ becoming another misleading meter.
 
 If you use **Claude Code or Codex**, that one command reads the session logs
 already on your machine and shows observed usage estimated at API-equivalent
-rates, where it goes by project/model, ranked cost opportunities with
-verification steps, and detected or user-declared **plan context**. Zero keys,
+rates, where it goes by project/model where supported, ranked evidence to
+investigate, and detected or user-declared **plan context**. Dollar savings
+appear only when the source supports a counterfactual; local cumulative usage
+stays observed exposure until matched future evidence verifies an effect. Zero keys,
 zero signup, nothing leaves your laptop on this default local run. Connect a
 provider's admin cost report only when you need official provider-reported
 cost alongside the local evidence.
 
-> **Public beta boundary:** CLI and the explicit MCP/plugin ship in 0.5.8.
+> **Public beta boundary:** CLI and the explicit MCP/plugin ship publicly.
 > Glance remains a source-built macOS preview until its signed standalone
 > download passes. Workspace, automatic enforcement, and ROI measurement are not
 > shipped.
@@ -39,19 +41,24 @@ key. Availability depends on the permissions of that provider account.
 
 ![Terminal recording of npx aibill rendering the spend report on sample data](docs/assets/demo.gif)
 
-*Illustrative sample output — demo data and modeled API-rate opportunities, not
-provider-reported cost, an invoice, or verified savings. Regenerated from the
-real CLI by `scripts/record-demo.sh` so it can't drift from the product.*
+*Illustrative sample output — demo cost/value evidence with clearly separated
+bases, not your provider-reported cost, invoice, or verified savings. Regenerate
+it from the real CLI with `scripts/record-demo.sh` for every release that changes
+terminal copy.*
 
 ## Get started
 
 1. **Establish the private baseline:** `npx aibill`
 2. **Get the current session decision:** `npx aibill context`
-3. **Optional—add official provider-reported cost:** `npx aibill connect
+3. **Draft one evidence-constrained action from real local evidence:**
+   `npx aibill apply`. Inspect the candidate evidence, approve at most one
+   bounded change, then verify matched future sessions before calling the
+   result savings. In sample mode, Apply is an explicitly non-executable demo.
+4. **Optional—add official provider-reported cost:** `npx aibill connect
    openai` or `npx aibill connect anthropic`. The provider report remains
    separate from local API-equivalent estimates.
-4. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
-5. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
+5. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
+6. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
    caption without client, project, or user names.
 
 ## Who this is for
@@ -77,10 +84,10 @@ developer, engineering leader, agency owner, or finance team does next:
 | Question | Decision it supports | Status |
 | --- | --- | --- |
 | Can this work finish before the reported limit? | Pair available five-hour or weekly windows with reset time, a separately labeled exhaustion projection, and one session action. | **Available** when the coding agent reports the limit metadata; missing windows are never guessed. |
-| What work is driving our AI bill? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
+| What work is driving the available usage and cost evidence? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
 | Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Partial:** observed ownership is source-dependent. The open Agent Economics Receipt and `aibill outcome` are next. |
 | Which subscriptions and provider charges never reach finance? | Keep local plan context, provider-reported cost, purchased credits, and API-equivalent value separate before reconciling them. | **Partial:** local plan context and optional provider reports exist. Centralized seat and invoice reconciliation is Workspace next. |
-| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Partial:** evidence and recommendations exist. Shared approvals and verified result history are next. |
+| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Available locally:** Apply drafts candidate-specific inspection, approval, rollback, and matched verification. Shared approvals and verified company history are next. |
 | Can finance defend the ROI? | Join reconciled cost to an accepted outcome and independently evidenced business value before deciding what to scale, constrain, redesign, or stop. | **Next:** the beta does not calculate productivity or ROI. |
 
 aibill's beta establishes the cost-and-capacity evidence: provider-reported
@@ -105,21 +112,30 @@ investigate and how to verify it.
 - **Evidence ledger**: provider-reported cost, local API-equivalent value,
   detected subscription context, missing cost, source, freshness, and coverage
   stay visibly separate.
-- **Cost opportunities**: ranked records worth investigating, with modeled
-  API-rate impact and a verification step. These are not verified savings;
-  confirm quality and the next provider report before claiming a result.
+- **Evidence-constrained action plan (public beta)**: on real local evidence,
+  `npx aibill apply` turns supported findings into candidate IDs, read-only
+  inspection steps, an approval gate, rollback, and matched-session
+  verification. Local cumulative usage is observed exposure with no invented
+  savings. Connected provider buckets, daily aggregates, seats, and user totals
+  stay reconciliation evidence—not call-level optimization advice. A modeled
+  routing, cache, Batch, or context candidate requires an explicit
+  schema-validated call/invocation record plus a named workload. The user still
+  approves the change and judges the future evidence; aibill does not claim the
+  result was automatically verified. Bundled sample Apply is non-executable.
 - **Context inventory and invocation evidence**: shows what is discoverable,
-  explicitly invoked, MCP-schema-loaded, hook-injected, unmeasured, or
-  invocation-unobservable. It says an item was not invoked only where the host
-  transcript format supports that conclusion, and estimates overhead only
+  configured, explicitly always-loaded, hook-injected, unmeasured, or
+  invocation-unobservable. Configuration proves availability, not that an MCP
+  schema loaded every turn. It says no matching invocation was observed only
+  where the host transcript supports that conclusion, and prices overhead only
   where the relevant context size is measurable.
 - **Hook-aware Context Health**: `npx aibill context` distinguishes context
-  that is merely discoverable, explicitly invoked, MCP-schema-loaded, or
+  that is merely discoverable, configured, explicitly invoked, or
   injected by an installed lifecycle hook. Hook commands are never executed
-  and their runtime payload stays `unmeasured`; the session action is based on
-  this user's same-agent transcript history, not a generic threshold. Items
+  and their runtime payload stays `unmeasured`; the session action prioritizes
+  explicit compaction evidence and otherwise compares latest-turn input context
+  with comparable local sessions—never cumulative session lifetime totals. Items
   whose host transcript does not expose an invocation event are labeled
-  invocation-unobservable and excluded from “never invoked.”
+  invocation-unobservable and excluded from “no matching invocation” findings.
 - **Plan context and comparison**: compares local usage valued at published API
   rates with a plan label detected from whitelisted local account metadata or
   supplied with `--plan`. This is comparison math—not proof of incremental
@@ -132,8 +148,9 @@ investigate and how to verify it.
   API calls.
 - **Shareable AI Receipt**: `report-card` writes a redacted SVG (no client/
   project/user names) + a paste-ready caption.
-- **Honest confidence labels**: every number is tagged verified / estimated /
-  detected_unverified / missing so you know what evidence supports it.
+- **Honest confidence labels**: each financial value carries a source and a
+  verified / estimated / detected-unverified / missing label. The structured
+  contract uses the enum `detected_unverified`.
 
 ![Sample AI Receipt — illustrative demo data and modeled opportunities, not provider-reported cost](docs/assets/report-card-sample.svg)
 
@@ -142,8 +159,8 @@ data. Modeled opportunities require verification before they can be called savin
 
 ## Local estimates and provider reports
 
-Every number carries a confidence label so you never mistake an estimate for a
-bill:
+Each financial value carries a confidence label. Other displayed metrics retain
+their source, basis, or provenance so an estimate is not mistaken for a bill:
 
 | Label | What it means |
 | --- | --- |
@@ -152,18 +169,19 @@ bill:
 | `detected_unverified` | A local signal was detected but **not** reconciled against billing. |
 | `missing` | Usage exists but there's no cost basis to price it. |
 
-Numbers read from your local **Claude Code / Codex** logs are always
-`estimated` at API-equivalent rates — never `verified`. Connecting provider
-billing adds official provider-reported cost beside the local API-rate
-estimate. It does not convert a transcript estimate into an invoice line item.
+Priced financial values calculated from your local **Claude Code / Codex** logs
+are `estimated` at API-equivalent rates — never `verified`. Records without a
+supported cost basis stay `missing`. Connecting provider billing adds official
+provider-reported cost beside the local API-rate estimate. It does not convert a
+transcript estimate into an invoice line item.
 
 ## Data sources
 
 | Source | What | Status |
 | --- | --- | --- |
 | Claude Code logs (local) | Observed transcript usage, priced at published API rates | ✅ Reads supported fields from your machine's transcripts |
-| Codex logs (local) | Observed rollout usage, priced at published API rates | ✅ Reads supported fields from your machine's rollouts |
-| OpenAI Costs/Usage API | Admin-gated billing, per project/key | ✅ Implemented and live-verified |
+| Codex logs (local) | Observed rollout usage, priced at published API rates | ✅ Binds each rollout to its root session, subtracts inherited parent history from forked subagents, and deduplicates only identical root-session snapshots |
+| OpenAI Costs/Usage API | Admin-gated billing, per project/key | 🟡 Live auth/endpoint exercised; non-empty cost reconciliation pending |
 | Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented and live-verified |
 | Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Fixture-verified beta; live account QA pending |
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Fixture-verified beta; live account QA pending |
@@ -203,9 +221,10 @@ env:NAME`) — the tool never stores or prints a raw key.
 | `connect <provider>` | Connect a provider's cost data (admin-gated) |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
 | `context [--project <name>] [--since-days N]` | Human-readable hook-aware Context Health (`--json` emits the canonical contract) |
-| `glance [--project <name>] [--plan <id>]` | Emit the local machine-readable Glance snapshot |
+| `glance [--project <name>] [--plan <id>] [--since-days N]` | Emit the local machine-readable Glance snapshot |
+| `apply [--sample] [--since-days N]` | Print a paste-ready, evidence-constrained inspection and approval prompt and save its local artifact bundle under the selected project's `.ai-spend-agent/`; explicit `--sample` is a non-executable, share-safe demo path that does not read live transcripts, account metadata, credentials, or persisted spend state |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
-| `report [--out <name>]` | Generate local Markdown + HTML reports |
+| `report [--out <name>] [--since-days N]` | Generate local Markdown + HTML reports and action sidecars under the selected project's `.ai-spend-agent/` from the same evidence window; no external system is changed |
 | `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
 | `scan [--path <dir>]` | Scan a local workspace for AI usage signals |
 | `doctor` | Check local runtime and safety posture |
@@ -214,12 +233,16 @@ Run `npx aibill --help` for the full list.
 
 ## Choose your interface
 
-All three interfaces consume the same core data and Context Health contract:
+All three interfaces share parsers, evidence semantics, and Context Health
+fields where their sources overlap. Their available sources and actions differ
+deliberately: CLI Apply is a full inspection, approval, and verification plan;
+Glance is local-only and Copy creates a current-session handoff; MCP may also
+read an explicitly connected provider report.
 
 | Interface | Best for | Command / install |
 | --- | --- | --- |
-| Terminal | Private, scriptable inspection with no AI-client handoff | `npx aibill` and `npx aibill context` |
-| MCP/plugin | Asking an AI client to explain the same structured result on demand | Install the optional aibill plugin or configure `@agent-finops/mcp` |
+| Terminal | Complete private inspection plus an evidence-constrained AI-client action plan | `npx aibill`, `npx aibill context`, and `npx aibill apply` |
+| MCP/plugin | Asking an AI client to explain compatible structured evidence on demand | Install the optional aibill plugin or configure `@agent-finops/mcp` |
 | macOS Glance | A hover-only monitor with one focus-aware, copy-to-agent next move | Build the current prototype from `apps/glance-macos` |
 
 Contract tests compare terminal JSON, MCP, and Glance decision fields. Custom
@@ -234,13 +257,16 @@ The interfaces work best as one local loop:
    attribution, plan context, and API-equivalent value.
 2. Run `npx aibill context` when deciding whether to continue the current
    session or start fresh before a new task.
-3. Keep the optional macOS Glance companion running for current work, reported
+3. Run `npx aibill apply` when you want the coding agent to inspect the ranked
+   evidence, draft one reversible change, wait for approval, and verify it
+   against matched future sessions.
+4. Keep the optional macOS Glance companion running for current work, reported
    five-hour/weekly runway, reset or projected exhaustion, freshness, and one
    action. Click its compact action only when you want to copy a project-aware
    handoff into your coding agent.
-4. Invoke the optional MCP/plugin only when you want an AI client to explain
-   the same structured result conversationally.
-5. Connect OpenAI or Anthropic only when official provider-reported cost is
+5. Invoke the optional MCP/plugin only when you want an AI client to explain
+   the compatible evidence available to that tool conversationally.
+6. Connect OpenAI or Anthropic only when official provider-reported cost is
    needed; local estimates, subscription context, and provider reports remain
    separate.
 
@@ -309,7 +335,7 @@ Each Glance field carries its own provenance instead of inheriting one vague
 | Exhaustion time | Reported headroom + reset time | Calculates a separate local pace estimate |
 | Main focus | Local prompt/tool activity | Returns a short activity summary, never raw prompt text |
 | Context Health | This user's prior same-agent sessions + local skill/MCP/plugin configuration and transcript invocations | Reuses the canonical CLI/MCP decision; hook commands are not run and hook payload size is not inferred |
-| Next move | Canonical Context Health + Main focus + transcript-reported runway | Shows one compact action and copies a verification-first handoff; never auto-runs an agent |
+| Next move | Canonical Context Health + Main focus + transcript-reported runway | Shows one compact session action and copies a verification-first handoff; it is not the CLI financial Apply plan and never auto-runs an agent |
 
 The machine-readable snapshot includes the same mapping under `provenance`,
 including the price-table date and `uploaded: false`, so custom UIs do not
@@ -317,7 +343,9 @@ have to infer trust from display copy.
 
 Glance refreshes its local snapshot every 30 seconds while running. The footer
 shows the age of the last successful update, changes to stale after 75 seconds,
-and keeps the last good result visibly labeled if refresh fails. Launch at
+keeps the last good result visibly labeled if refresh fails, and disables Copy
+until a fresh snapshot exists. The local command times out after 75 seconds
+instead of leaving a stale panel silently blocked. Launch at
 login is available in source builds. Signed Sparkle updates remain disabled
 unless a release embeds a valid feed and key; no signed public build exists yet.
 
@@ -346,11 +374,12 @@ current form records interest, not access to a signed download.
   request.
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
-- **Estimates labeled as estimates.** Log-derived numbers use published API
-  rates and are always tagged `estimated`. OpenAI and Anthropic cost-report
-  numbers are `verified`; Copilot seat-price reconciliation and the beta
-  Cursor connector are honestly tagged `estimated` until reconciled against a
-  real invoice.
+- **Estimates labeled as estimates.** Log-derived financial values with a
+  supported price basis use published API rates and are tagged `estimated`;
+  unsupported cost bases stay `missing`. OpenAI and Anthropic cost-report
+  numbers are `verified`; Copilot seat-price reconciliation and the beta Cursor
+  connector are honestly tagged `estimated` until reconciled against a real
+  invoice.
 
 ## Open core, optional Workspace
 

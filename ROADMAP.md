@@ -25,8 +25,19 @@ documented in the README and release notes.
   API-equivalent value, and missing cost bases.
 - Project/model attribution, source coverage, freshness, and provenance.
 - Context Health and one evidence-backed session action.
+- A public-beta `aibill apply` loop that turns scoped evidence into read-only
+  inspection, one explicitly approved reversible change, and a matched
+  future-session verification plan. The user still performs and judges that
+  verification; the beta does not claim autonomous or guaranteed savings.
+- Provider billing buckets, daily aggregates, seat rows, and user totals stay
+  reconciliation evidence. A modeled routing, cache, Batch, downgrade, or
+  context change requires an explicitly call/invocation-level record plus the
+  workload semantics that support that specific counterfactual; otherwise
+  Apply returns the missing evidence instead of inventing a cut.
 - A shared data contract across CLI, MCP/plugin, and the Glance source preview.
-- Optional read-only OpenAI and Anthropic billing reconciliation.
+- Optional read-only billing reconciliation: Anthropic is live-verified;
+  OpenAI auth and endpoint access are exercised, with non-empty cost
+  reconciliation still pending.
 - Cursor and GitHub Copilot connectors labeled fixture-verified beta until live
   account validation is complete.
 

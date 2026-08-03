@@ -163,6 +163,8 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
       let hookInjectedItems: Int
       let lifecycleHooks: Int
       let mcpSchemaLoadedItems: Int
+      let mcpConfiguredItems: Int?
+      let mcpAlwaysLoadedItems: Int?
       let unmeasuredItems: Int
       let invocationUnobservableItems: Int?
     }
@@ -177,6 +179,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
   }
 
   struct PrimaryAction: Decodable, Sendable {
+    let kind: String?
     let intent: String
     let label: String
     let detail: String
@@ -187,6 +190,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let confidence: String
     let execution: String
     let requiresUserConfirmation: Bool
+    let evidenceWindowDays: Int?
   }
 }
 

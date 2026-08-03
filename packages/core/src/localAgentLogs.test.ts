@@ -1,7 +1,17 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { aggregateCalls, parseClaudeCodeTranscript, parseCodexRollout } from "./localAgentLogs.js";
+import {
+  aggregateCalls,
+  dedupeCumulativeSessionCalls,
+  latestObservedWorkingDirectory,
+  parseClaudeCodeTranscript,
+  parseCodexRollout
+} from "./localAgentLogs.js";
+import {
+  createCodexInvocationCollector,
+  parseCodexInvocations
+} from "./toolInvocations.js";
 import { estimateTokenCostUsd } from "./modelPricing.js";
 import { usageRecordSchema } from "./schema.js";
 
@@ -27,12 +37,40 @@ const claudeLine = (overrides: Record<string, unknown> = {}, usage: Record<strin
     ...overrides
   });
 
+describe("latestObservedWorkingDirectory", () => {
+  it("uses the newest transcript cwd and ignores a newer call without one", () => {
+    expect(latestObservedWorkingDirectory([
+      {
+        agent: "codex",
+        model: "gpt-5.6",
+        timestamp: "2026-08-03T12:00:00.000Z",
+        workingDirectory: "/tmp/older-project",
+        usage: { inputTokens: 1, outputTokens: 1 }
+      },
+      {
+        agent: "claude-code",
+        model: "claude-opus-4-8",
+        timestamp: "2026-08-03T13:00:00.000Z",
+        workingDirectory: "/tmp/latest-project",
+        usage: { inputTokens: 1, outputTokens: 1 }
+      },
+      {
+        agent: "codex",
+        model: "gpt-5.6",
+        timestamp: "2026-08-03T14:00:00.000Z",
+        usage: { inputTokens: 1, outputTokens: 1 }
+      }
+    ])).toBe("/tmp/latest-project");
+  });
+});
+
 describe("parseClaudeCodeTranscript", () => {
   it("extracts assistant usage with cache breakdown and project from cwd", () => {
     const calls = parseClaudeCodeTranscript(claudeLine());
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model).toBe("claude-opus-4-8");
     expect(calls[0]!.project).toBe("agent-finops");
+    expect(calls[0]!.workingDirectory).toBe("/Users/jose/agent-finops");
     expect(calls[0]!.usage).toEqual({
       inputTokens: 100,
       outputTokens: 200,
@@ -159,13 +197,71 @@ describe("parseClaudeCodeTranscript", () => {
     expect(serialized).not.toContain(fakeGithubToken);
     expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
+
+  it("scopes prompt and file activity to each project when one transcript changes cwd", () => {
+    const content = [
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-08-03T10:00:00.000Z",
+        cwd: "/Users/jose/project-alpha",
+        sessionId: "mixed-project-session",
+        message: { content: "Please launch the landing page." }
+      }),
+      claudeLine({
+        timestamp: "2026-08-03T10:01:00.000Z",
+        cwd: "/Users/jose/project-alpha",
+        sessionId: "mixed-project-session",
+        requestId: "req-project-alpha",
+        message: {
+          id: "msg-project-alpha",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 10, output_tokens: 20 },
+          content: [{ type: "tool_use", input: { file_path: "/Users/jose/project-alpha/page.tsx" } }]
+        }
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-08-03T11:00:00.000Z",
+        cwd: "/Users/jose/project-beta",
+        sessionId: "mixed-project-session",
+        message: { content: "Please test the MCP feature." }
+      }),
+      claudeLine({
+        timestamp: "2026-08-03T11:01:00.000Z",
+        cwd: "/Users/jose/project-beta",
+        sessionId: "mixed-project-session",
+        requestId: "req-project-beta",
+        message: {
+          id: "msg-project-beta",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 30, output_tokens: 40 },
+          content: [{ type: "tool_use", input: { file_path: "/Users/jose/project-beta/mcp.test.ts" } }]
+        }
+      })
+    ].join("\n");
+
+    const calls = parseClaudeCodeTranscript(content);
+    expect(calls.map((call) => ({
+      project: call.project,
+      summary: call.activity?.summary,
+      files: call.activity?.files
+    }))).toEqual([{
+      project: "project-alpha",
+      summary: "Publishing landing page",
+      files: ["page.tsx"]
+    }, {
+      project: "project-beta",
+      summary: "Testing MCP feature",
+      files: ["mcp.test.ts"]
+    }]);
+  });
 });
 
 describe("parseCodexRollout", () => {
   const rollout = [
     JSON.stringify({ type: "session_meta", payload: { id: "codex-sess", cwd: "/Users/jose/pitcht-com", timestamp: "2026-06-01T17:25:37.000Z" } }),
     JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.1-codex" } }),
-    JSON.stringify({ type: "event_msg", timestamp: "2026-06-01T17:30:00.000Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_000, cached_input_tokens: 4_000, output_tokens: 100 } } } }),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-06-01T17:30:00.000Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_000, cached_input_tokens: 4_000, output_tokens: 100 }, last_token_usage: { input_tokens: 4_000, cached_input_tokens: 3_000, output_tokens: 100, total_tokens: 4_100 } } } }),
     JSON.stringify({
       type: "event_msg",
       timestamp: "2026-06-01T17:40:00.000Z",
@@ -176,6 +272,13 @@ describe("parseCodexRollout", () => {
             input_tokens: 25_035,
             cached_input_tokens: 5_504,
             output_tokens: 365
+          },
+          last_token_usage: {
+            input_tokens: 27_419,
+            cached_input_tokens: 22_400,
+            output_tokens: 78,
+            reasoning_output_tokens: 8,
+            total_tokens: 27_497
           }
         },
         rate_limits: {
@@ -202,11 +305,20 @@ describe("parseCodexRollout", () => {
     expect(calls[0]!.agent).toBe("codex");
     expect(calls[0]!.model).toBe("gpt-5.1-codex");
     expect(calls[0]!.project).toBe("pitcht-com");
+    expect(calls[0]!.workingDirectory).toBe("/Users/jose/pitcht-com");
     expect(calls[0]!.startedAt).toBe("2026-06-01T17:25:37.000Z");
     expect(calls[0]!.timestamp).toBe("2026-06-01T17:40:00.000Z");
     expect(calls[0]!.usage.inputTokens).toBe(25_035 - 5_504);
     expect(calls[0]!.usage.cacheReadTokens).toBe(5_504);
     expect(calls[0]!.usage.outputTokens).toBe(365);
+    expect(calls[0]!.latestTurnUsage).toEqual({
+      inputTokens: 5_019,
+      outputTokens: 78,
+      cacheReadTokens: 22_400,
+      contextTokens: 27_419,
+      totalTokens: 27_497,
+      source: "transcript_last_token_usage"
+    });
     expect(calls[0]!.rateLimits).toEqual({
       observedAt: "2026-06-01T17:40:00.000Z",
       limitId: "codex",
@@ -228,6 +340,30 @@ describe("parseCodexRollout", () => {
         }
       ]
     });
+  });
+
+  it("collects identical privacy-safe invocation evidence during the usage parse", () => {
+    const content = [
+      rollout,
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T17:40:01.000Z",
+        payload: {
+          type: "function_call",
+          name: "read_file",
+          arguments: JSON.stringify({ path: "/private/customer/roadmap.md" })
+        }
+      })
+    ].join("\n");
+    const collector = createCodexInvocationCollector();
+
+    expect(parseCodexRollout(content, collector.consume)).toHaveLength(1);
+    const sharedPass = collector.finish();
+    expect(sharedPass).toEqual(parseCodexInvocations(content));
+    expect(sharedPass.contextSignal.fileReads).toEqual([
+      { name: "roadmap.md", count: 1 }
+    ]);
+    expect(JSON.stringify(sharedPass)).not.toContain("/private/customer");
   });
 
   it("attributes a home-launched Codex session to its dominant tool workdir", () => {
@@ -276,7 +412,10 @@ describe("parseCodexRollout", () => {
       })
     ].join("\n");
 
-    expect(parseCodexRollout(homeLaunched)[0]?.project).toBe("agent-finops");
+    expect(parseCodexRollout(homeLaunched)[0]).toMatchObject({
+      project: "agent-finops",
+      workingDirectory: projectRoot
+    });
   });
 
   it("recovers workdirs from the current nested Codex exec envelope without evaluating it", () => {
@@ -321,7 +460,10 @@ describe("parseCodexRollout", () => {
       })
     ].join("\n");
 
-    expect(parseCodexRollout(nestedExec)[0]?.project).toBe("agent-finops");
+    expect(parseCodexRollout(nestedExec)[0]).toMatchObject({
+      project: "agent-finops",
+      workingDirectory: projectRoot
+    });
   });
 
   it("summarizes Codex prompts and marks delegated sessions", () => {
@@ -335,6 +477,15 @@ describe("parseCodexRollout", () => {
           thread_source: "subagent",
           parent_thread_id: "codex-parent",
           source: { subagent: { other: "worker" } }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-07-28T16:00:00.000Z",
+        payload: {
+          type: "task_started",
+          started_at: Date.parse("2026-07-28T16:00:00.000Z") / 1_000,
+          turn_id: "codex-subagent-turn"
         }
       }),
       JSON.stringify({
@@ -389,6 +540,117 @@ describe("parseCodexRollout", () => {
     });
   });
 
+  it("does not turn screenshot attachment prose or filenames into a work topic", () => {
+    const attachmentOnly = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-attachment-noise",
+          cwd: "/Users/jose/agent-finops",
+          timestamp: "2026-08-03T15:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: "Also here is the screenshot from earlier: Screenshot 2026-08-03 at 11.15.49 AM.png"
+          }]
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: "This attached image is the one I mentioned above, codex-clipboard-pm.png"
+          }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 250_000,
+              cached_input_tokens: 220_000,
+              output_tokens: 3_000
+            },
+            last_token_usage: {
+              input_tokens: 42_000,
+              cached_input_tokens: 38_000,
+              output_tokens: 300,
+              total_tokens: 42_300
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(attachmentOnly)[0]?.activity).toMatchObject({
+      summary: "Working in agent-finops",
+      source: "project",
+      promptCount: 2
+    });
+  });
+
+  it("keeps a recognized aibill prompt topic while dropping its attachment filename", () => {
+    const promptReview = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-aibill-prompt",
+          cwd: "/Users/jose/agent-finops",
+          timestamp: "2026-08-03T15:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: "Here is the prompt from my personal aibill analysis in Screenshot 2026-08-03 PM.png"
+          }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 250_000,
+              cached_input_tokens: 220_000,
+              output_tokens: 3_000
+            },
+            last_token_usage: {
+              input_tokens: 42_000,
+              cached_input_tokens: 38_000,
+              output_tokens: 300,
+              total_tokens: 42_300
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(promptReview)[0]?.activity).toMatchObject({
+      summary: "Working aibill prompt",
+      source: "user_prompts",
+      promptCount: 1
+    });
+  });
+
   it("keeps temporary screenshot paths out of the user-facing focus summary", () => {
     const rollout = [
       JSON.stringify({
@@ -431,12 +693,223 @@ describe("parseCodexRollout", () => {
     );
   });
 
+  it("keeps the first/root identity and subtracts inherited parent usage for a fork", () => {
+    const rootStartedAt = "2026-08-03T15:00:00.000Z";
+    const forked = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: rootStartedAt,
+        payload: {
+          id: "child-root",
+          cwd: "/Users/jose/project-alpha",
+          timestamp: rootStartedAt,
+          thread_source: "subagent",
+          parent_thread_id: "parent-root",
+          source: { subagent: { other: "reviewer" } }
+        }
+      }),
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-03T15:00:00.100Z",
+        payload: {
+          id: "parent-root",
+          cwd: "/Users/jose/project-beta",
+          timestamp: "2026-08-03T09:00:00.000Z",
+          thread_source: "user"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-03T15:00:00.200Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Please test the MCP feature." }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:00:00.300Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1_000,
+              cached_input_tokens: 700,
+              output_tokens: 100
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: {
+          type: "task_started",
+          started_at: Date.parse(rootStartedAt) / 1_000,
+          turn_id: "root-turn"
+        }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-08-03T15:00:01.000Z",
+        payload: { model: "gpt-5.6-sol", cwd: "/Users/jose/project-beta" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-03T15:00:02.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Please launch the landing page." }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1_500,
+              cached_input_tokens: 1_000,
+              output_tokens: 160
+            },
+            last_token_usage: {
+              input_tokens: 500,
+              cached_input_tokens: 300,
+              output_tokens: 60,
+              total_tokens: 560
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(forked)[0]).toMatchObject({
+      sessionId: "child-root",
+      startedAt: rootStartedAt,
+      project: "project-alpha",
+      workingDirectory: "/Users/jose/project-alpha",
+      usage: {
+        inputTokens: 200,
+        cacheReadTokens: 300,
+        outputTokens: 60
+      },
+      latestTurnUsage: {
+        inputTokens: 200,
+        cacheReadTokens: 300,
+        outputTokens: 60,
+        contextTokens: 500,
+        totalTokens: 560
+      },
+      activity: {
+        summary: "Publishing landing page",
+        isSubagent: true,
+        parentSessionId: "parent-root"
+      }
+    });
+  });
+
+  it("omits ambiguous forks without post-boundary root usage instead of charging parent history", () => {
+    const rootStartedAt = "2026-08-03T15:00:00.000Z";
+    const rootMeta = JSON.stringify({
+      type: "session_meta",
+      timestamp: rootStartedAt,
+      payload: {
+        id: "child-root",
+        timestamp: rootStartedAt,
+        thread_source: "subagent",
+        parent_thread_id: "parent-root",
+        source: { subagent: { other: "reviewer" } }
+      }
+    });
+    const inheritedTotal = JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-03T15:00:00.100Z",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 1_000,
+            cached_input_tokens: 700,
+            output_tokens: 100
+          }
+        }
+      }
+    });
+    const boundary = JSON.stringify({
+      type: "event_msg",
+      timestamp: rootStartedAt,
+      payload: {
+        type: "task_started",
+        started_at: Date.parse(rootStartedAt) / 1_000,
+        turn_id: "root-turn"
+      }
+    });
+
+    expect(parseCodexRollout([rootMeta, inheritedTotal, boundary].join("\n"))).toEqual([]);
+    expect(parseCodexRollout([rootMeta, inheritedTotal].join("\n"))).toEqual([]);
+  });
+
   it("returns nothing for rollouts without token counts", () => {
     expect(parseCodexRollout(JSON.stringify({ type: "session_meta", payload: {} }))).toHaveLength(0);
   });
 });
 
 describe("aggregateCalls", () => {
+  it("keeps only the latest Codex cumulative snapshot for one session", () => {
+    const early = {
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-03T10:00:00.000Z",
+      project: "agent-finops",
+      sessionId: "same-session",
+      usageScope: "session_cumulative" as const,
+      usage: { inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 9_000 }
+    };
+    const latest = {
+      ...early,
+      timestamp: "2026-08-03T11:00:00.000Z",
+      usage: { inputTokens: 2_000, outputTokens: 200, cacheReadTokens: 18_000 }
+    };
+
+    expect(dedupeCumulativeSessionCalls([early, latest])).toEqual([latest]);
+    const records = aggregateCalls([early, latest]);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.quantity).toBe(1);
+    expect(records[0]!.inputTokens).toBe(20_000);
+  });
+
+  it("never dedupes distinct root session ids that share inherited parent history", () => {
+    const first = {
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-03T10:00:00.000Z",
+      sessionId: "fork-root-a",
+      usageScope: "session_cumulative" as const,
+      usage: { inputTokens: 1_000, outputTokens: 100, cacheReadTokens: 9_000 },
+      activity: {
+        summary: "Working in agent-finops",
+        kind: "project" as const,
+        action: "working" as const,
+        source: "project" as const,
+        promptCount: 0,
+        toolCallCount: 0,
+        files: [],
+        isSubagent: true,
+        parentSessionId: "shared-parent"
+      }
+    };
+    const second = {
+      ...first,
+      timestamp: "2026-08-03T10:01:00.000Z",
+      sessionId: "fork-root-b"
+    };
+
+    expect(dedupeCumulativeSessionCalls([first, second])).toHaveLength(2);
+  });
+
   it("groups by day+agent+model+project, prices via the rule table, and passes schema", () => {
     const calls = [
       ...parseClaudeCodeTranscript(claudeLine()),
@@ -449,6 +922,7 @@ describe("aggregateCalls", () => {
     expect(record.agentId).toBe("claude-code");
     expect(record.projectId).toBe("agent-finops");
     expect(record.quantity).toBe(2);
+    expect(record.usageGranularity).toBe("daily_aggregate");
     expect(record.costConfidence).toBe("estimated");
     expect(record.amountUsd).toBeGreaterThan(0);
   });

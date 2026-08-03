@@ -22,26 +22,43 @@ const CARD_HEIGHT = 400;
  *
  * This is the growth loop: a screenshot-able artifact a founder can post. It
  * deliberately carries only NON-identifying signal — cost/value, modeled
- * monthly opportunities, provider count, confidence, and model-level cut headlines.
+ * monthly opportunities, provider count, confidence, and generic candidate
+ * categories. Candidate titles are intentionally regenerated from a fixed
+ * vocabulary instead of redacted after the fact: operations and project names
+ * can contain arbitrary private text.
  * Client / project / user / workspace / api-key names are never rendered, so
  * sharing the card can't leak who a spend belongs to.
  */
 export function generateReportCardSvg(input: ReportCardInput): string {
   const { summary } = input;
   const cutList = generateCutList(input.records);
-  // Deduplicated modeled opportunity — never exceeds the value it draws from.
-  const monthlySavings = buildRecommendedPlan(cutList).recommendedSavingsUsd;
-  const providerCount = summary.bySource.length;
+  const opportunity = summarizeOpportunity(input.records, cutList);
+  const providerCount = new Set(input.records.map((record) => record.source.provider)).size;
   const topCuts = cutList.slice(0, 3);
+  const recordCountLabel = input.mode === "local-logs"
+    ? `${summary.recordCount} daily aggregate${summary.recordCount === 1 ? "" : "s"}`
+    : input.mode === "demo"
+      ? `${summary.recordCount} illustrative record${summary.recordCount === 1 ? "" : "s"}`
+      : `${summary.recordCount} provider record${summary.recordCount === 1 ? "" : "s"}`;
 
   const cutLines = topCuts.length > 0
-    ? topCuts.map(
-        (cut, index) =>
+    ? topCuts.map((cut, index) => {
+        const impact = cut.impactBasis === "observed_value_no_counterfactual"
+          ? `${formatUsd(cut.affectedSpendUsd)} observed exposure`
+          : `~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled`;
+        return (
           `      <text x="40" y="${274 + index * 30}" class="cut">` +
-          `${escapeXml(`${index + 1}. ${redactCutTitle(cut)}`)}` +
-          `<tspan class="cutSave"> ~${escapeXml(formatUsd(cut.estimatedMonthlySavingsUsd))}/mo modeled</tspan></text>`
-      ).join("\n")
+          `${escapeXml(`${index + 1}. ${genericCutTitle(cut)}`)}` +
+          `<tspan class="cutSave"> ${escapeXml(impact)}</tspan></text>`
+        );
+      }).join("\n")
     : `      <text x="40" y="274" class="cut">No high-confidence cut in this window yet.</text>`;
+
+  const opportunityLine = opportunity.modeledMonthlySavingsUsd > 0
+    ? `<tspan class="save">~${escapeXml(formatUsd(opportunity.modeledMonthlySavingsUsd))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan>`
+    : opportunity.observedExposureUsd > 0
+      ? `<tspan class="save">${escapeXml(formatUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
+      : `<tspan class="save">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="AI receipt">
   <defs>
@@ -68,51 +85,85 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   <text x="40" y="120" class="label">${headlineLabel(input.mode)}</text>
   <text x="40" y="172" class="big">${escapeXml(formatBigUsd(summary.totalUsd))}</text>
 
-  <text x="40" y="212"><tspan class="save">~${escapeXml(formatUsd(monthlySavings))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
+  <text x="40" y="212">${opportunityLine}</text>
 
   <text x="40" y="244" class="meta">${escapeXml(
-    `${providerCount} provider${providerCount === 1 ? "" : "s"} · ${summary.recordCount} call${summary.recordCount === 1 ? "" : "s"} · ${confidenceLabel(summary.confidence)}`
+    `${providerCount} provider${providerCount === 1 ? "" : "s"} · ${recordCountLabel} · ${confidenceLabel(summary.confidence)}`
   )}</text>
 
 ${cutLines}
 
-  <text x="40" y="372" class="brand">ai-spend-agent · local-first · npx ai-spend-agent</text>
+  <text x="40" y="372" class="brand">aibill · local-first · npx aibill</text>
 </svg>
 `;
 }
 
 /** A one-line, copy-pasteable caption to share alongside the card. */
 export function generateReportCardCaption(input: ReportCardInput): string {
-  const monthlySavings = buildRecommendedPlan(generateCutList(input.records)).recommendedSavingsUsd;
+  const cutList = generateCutList(input.records);
+  const opportunity = summarizeOpportunity(input.records, cutList);
+  const opportunityText = opportunity.modeledMonthlySavingsUsd > 0
+    ? (
+      `with ~${formatUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings` +
+      (opportunity.observedExposureUsd > 0
+        ? `; ${formatUsd(opportunity.observedExposureUsd)} is observed API-equivalent exposure with savings unavailable without a matched counterfactual`
+        : "")
+    )
+    : opportunity.observedExposureUsd > 0
+      ? `with ${formatUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
+      : "with no supported savings model in this window";
   return (
     `My AI receipt: ${formatUsd(input.summary.totalUsd)} in ${captionBasis(input.mode)}, ` +
-    `with ~${formatUsd(monthlySavings)}/mo in modeled opportunities to test—not verified savings. ` +
+    `${opportunityText}. ` +
     `Local-first: npx aibill`
   );
+}
+
+function summarizeOpportunity(records: UsageRecord[], cutList: CutAction[]): {
+  modeledMonthlySavingsUsd: number;
+  observedExposureUsd: number;
+} {
+  const modeledMonthlySavingsUsd = buildRecommendedPlan(cutList).recommendedSavingsUsd;
+  const observedRecordIds = new Set(
+    cutList
+      .filter((cut) => cut.impactBasis === "observed_value_no_counterfactual")
+      .flatMap((cut) => cut.recordIds)
+  );
+  const observedExposureUsd = Math.round(
+    records.reduce(
+      (total, record) => total + (observedRecordIds.has(record.id) ? record.amountUsd ?? 0 : 0),
+      0
+    ) * 100
+  ) / 100;
+  return { modeledMonthlySavingsUsd, observedExposureUsd };
 }
 
 function headlineLabel(mode: ReportCardInput["mode"]): string {
   if (mode === "connected") return "PROVIDER-REPORTED COST (THIS WINDOW)";
   if (mode === "local-logs") return "OBSERVED API-EQUIVALENT VALUE";
-  return "ILLUSTRATIVE API-EQUIVALENT VALUE";
+  return "ILLUSTRATIVE COST / VALUE EVIDENCE";
 }
 
 function captionBasis(mode: ReportCardInput["mode"]): string {
   if (mode === "connected") return "provider-reported cost";
   if (mode === "local-logs") return "observed API-equivalent value";
-  return "illustrative API-equivalent value";
+  return "illustrative cost/value evidence";
 }
 
-/**
- * Strip any entity name a cut headline might reference so the card stays
- * shareable. Cut titles are model/operation oriented, but we defensively
- * remove anything after a "for "/"on "/"in " clause that could name a client.
- */
-function redactCutTitle(cut: CutAction): string {
-  return cut.title
-    .replace(/\s+for\s+[^.,]+/i, "")
-    .replace(/\s+\(client[^)]*\)/i, "")
-    .trim();
+/** Fixed, non-identifying labels for the public receipt. */
+function genericCutTitle(cut: CutAction): string {
+  switch (cut.kind) {
+    case "model_downgrade":
+      return "Investigate a model-routing candidate";
+    case "context_trim":
+      return cut.impactBasis === "observed_value_no_counterfactual"
+        ? "Inspect cumulative coding-agent context"
+        : "Inspect oversized context";
+    case "cache":
+      return "Investigate a repeated-work cache candidate";
+    case "batch":
+      return "Investigate an asynchronous batch candidate";
+  }
 }
 
 function confidenceLabel(confidence: SpendSummary["confidence"]): string {
@@ -122,7 +173,7 @@ function confidenceLabel(confidence: SpendSummary["confidence"]): string {
     case "estimated":
       return "estimated";
     case "detected_unverified":
-      return "detected";
+      return "detected/unverified";
     default:
       return "unconfirmed";
   }

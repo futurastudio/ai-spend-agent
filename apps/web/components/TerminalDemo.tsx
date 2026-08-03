@@ -171,8 +171,8 @@ export function TerminalDemo() {
 
       <p id="terminal-demo-description" className="sr-only">
         The recording types npx aibill, labels the numbers as illustrative
-        sample data, then reveals spend by source and model, context overhead,
-        ranked recommendations, and verification guidance. No personal data is
+        sample data, then reveals cost/value evidence by source and model,
+        context candidates, ranked tests, and verification guidance. No personal data is
         present in the recording.
       </p>
     </div>

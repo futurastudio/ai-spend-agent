@@ -68,7 +68,9 @@ struct GlanceView: View {
       }
 
       focusRow
-      primaryActionRow
+      TimelineView(.periodic(from: .now, by: 1)) { timeline in
+        primaryActionRow(at: timeline.date)
+      }
 
       TimelineView(.periodic(from: .now, by: 1)) { timeline in
         footer(at: timeline.date)
@@ -213,11 +215,28 @@ struct GlanceView: View {
     .help(focusSourceHelp)
   }
 
-  private var primaryActionRow: some View {
+  private func primaryActionRow(at now: Date) -> some View {
     let health = store.snapshot?.sessionHealth
     let color = contextHealthColor(health?.status)
     let action = store.snapshot?.primaryAction
-    return Button(action: copyPrimaryAction) {
+    let refresh = store.refreshPresentation(at: now)
+    let canCopy = action != nil && refresh.allowsEvidenceCopy
+    let affordance = GlancePrimaryActionPresentation.build(
+      actionAvailable: action != nil,
+      actionCopied: actionCopied,
+      refresh: refresh,
+      isRefreshing: store.isRefreshing
+    )
+    return Button {
+      switch affordance.intent {
+      case .copy:
+        copyPrimaryAction()
+      case .refresh:
+        Task { await store.refresh() }
+      case .none:
+        break
+      }
+    } label: {
       HStack(spacing: 10) {
         Circle()
           .fill(color)
@@ -229,7 +248,7 @@ struct GlanceView: View {
             .font(.system(size: 10, weight: .semibold, design: .rounded))
             .foregroundStyle(.white.opacity(0.87))
             .lineLimit(1)
-          Text(action?.detail ?? "Glance will suggest one verified next move.")
+          Text(action?.detail ?? "Glance will suggest one evidence-backed next move.")
             .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(.white.opacity(0.4))
             .lineLimit(1)
@@ -238,11 +257,11 @@ struct GlanceView: View {
         Spacer()
 
         HStack(spacing: 4) {
-          Image(systemName: actionCopied ? "checkmark" : "doc.on.doc")
-          Text(actionCopied ? "Copied" : "Copy")
+          Image(systemName: affordance.symbol)
+          Text(affordance.label)
         }
         .font(.system(size: 8, weight: .semibold, design: .rounded))
-        .foregroundStyle(.white.opacity(action == nil ? 0.3 : 0.62))
+        .foregroundStyle(.white.opacity(affordance.isEnabled ? 0.62 : 0.3))
         .padding(.horizontal, 7)
         .padding(.vertical, 5)
         .background(Color.white.opacity(0.045), in: Capsule())
@@ -250,7 +269,7 @@ struct GlanceView: View {
       }
     }
     .buttonStyle(.plain)
-    .disabled(action == nil)
+    .disabled(!affordance.isEnabled)
     .padding(.horizontal, 11)
     .frame(height: 52)
     .background(color.opacity(health?.status == "healthy" ? 0.018 : 0.04), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
@@ -258,13 +277,24 @@ struct GlanceView: View {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(color.opacity(health?.status == "healthy" ? 0.07 : 0.14), lineWidth: 1)
     }
-    .help(primaryActionSourceHelp)
-    .accessibilityLabel(action.map { "\($0.label). \($0.detail)" } ?? "No next move available")
-    .accessibilityHint(action == nil ? "" : "Copies a project-aware handoff prompt. Nothing runs automatically.")
+    .help(canCopy
+      ? primaryActionSourceHelp
+      : "Refresh Glance before copying a handoff; stale or failed snapshots are never copied as current evidence. \(refresh.help)")
+    .accessibilityLabel(canCopy
+      ? action.map { "\($0.label). \($0.detail)" } ?? "No next move available"
+      : "Refresh aibill Glance")
+    .accessibilityHint(canCopy
+      ? "Copies a project-aware handoff prompt. Nothing runs automatically."
+      : affordance.isEnabled
+        ? "Refreshes the local evidence now."
+        : "Wait for the current local refresh to finish.")
   }
 
   private func copyPrimaryAction() {
-    guard let prompt = store.snapshot?.primaryAction?.agentPrompt else {
+    guard
+      store.refreshPresentation(at: Date()).allowsEvidenceCopy,
+      let prompt = store.snapshot?.primaryAction?.agentPrompt
+    else {
       return
     }
     NSPasteboard.general.clearContents()
@@ -415,7 +445,7 @@ struct GlanceView: View {
     guard let action = store.snapshot?.primaryAction else {
       return "Glance is waiting for enough local evidence to produce a next move."
     }
-    return "Built locally from the same Context Health, Main focus, and transcript-reported runway used by CLI and MCP. Click to copy a handoff prompt for any coding agent; Glance never runs it automatically. Confidence: \(action.confidence)."
+    return "This is a local session handoff—not the CLI financial apply plan. It uses the canonical Context Health contract, Main focus, and transcript-reported runway also exposed to CLI and MCP. Click to copy; Glance never runs it automatically. Confidence: \(action.confidence)."
   }
 
   private var footerSourceHelp: String {

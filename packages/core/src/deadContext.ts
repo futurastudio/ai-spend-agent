@@ -1,23 +1,33 @@
-import { loadAgentInventory, type AgentInventoryOptions, type InventoryItem } from "./agentInventory.js";
+import {
+  loadAgentInventory,
+  type AgentInventoryOptions,
+  type InventoryHost,
+  type InventoryItem
+} from "./agentInventory.js";
 import { findPricingRule } from "./modelPricing.js";
-import { loadToolInvocations, type InvocationSummary, type ToolInvocationOptions } from "./toolInvocations.js";
+import {
+  loadToolInvocations,
+  type HostInvocationEvidence,
+  type InvocationSummary,
+  type ToolInvocationOptions
+} from "./toolInvocations.js";
 import type { CutAction } from "./cutList.js";
 
 /**
- * Dead-context: the tools an agent LOADS into context but NEVER calls. Compares
- * the local agent inventory (skills, subagents, slash commands, MCP
- * servers — {@link loadAgentInventory}) against what real transcripts show was
- * invoked ({@link loadToolInvocations}).
+ * Inventory-use evidence: compare locally configured/discoverable agent items
+ * with explicit invocations in supported transcripts. Configuration alone does
+ * not prove an item's full payload was loaded, and absence of an observed call
+ * does not prove that an item has no future value.
  *
  * ACCURACY CONTRACT (this is the credibility lever — read before changing):
  *  - The COUNT + utilization % is always defensible and is the headline.
  *  - A token/$ magnitude is ONLY computed from items whose weight we actually
  *    MEASURED — skill/subagent/command frontmatter (weightConfidence
  *    "estimated"). We never price items whose weight we could not measure.
- *  - MCP servers have NO readable schemas in local config, so their real
- *    weight is unknown. They are COUNTED as dead but NEVER assigned a $/token
- *    figure — to size them we'd have to query each server's tools/list. They
- *    surface as `unmeasuredDeadCount` so the renderer can say "not measurable".
+ *  - MCP config has no runtime schemas and current hosts can defer tool loading.
+ *    Configured servers are counted as not-observed candidates but NEVER
+ *    assigned a $/token figure. Explicit alwaysLoad is preserved as activation
+ *    evidence while its payload size remains unmeasured.
  *  - Pricing is cache-aware (one cache write/session + a read/turn), never the
  *    inflated full-input-rate-every-turn number.
  *  - Items whose host transcript does not expose matchable invocation evidence
@@ -34,11 +44,15 @@ const DEFAULT_PRICING_MODEL = "claude-sonnet-4";
 export type DeadContextItem = {
   kind: InventoryItem["kind"];
   name: string;
+  scope: InventoryItem["scope"];
+  activation: InventoryItem["activation"];
+  host?: InventoryItem["host"];
+  invocationTracking: InventoryItem["invocationTracking"];
   alwaysLoadedTokens: number;
   weightConfidence: InventoryItem["weightConfidence"];
-  /** Config file the item is loaded from — the place to remove it. */
+  /** Config/catalog file where the item was observed. */
   path?: string;
-  /** Project dirs that load this item (where `claude mcp remove` must run). */
+  /** Owning project dirs when scope is local or project. */
   ownerDirs?: string[];
 };
 
@@ -49,7 +63,7 @@ export type DeadContextResult = {
   isSample?: boolean;
   /** Prunable inventory items considered (built-ins excluded upstream). */
   loadedCount: number;
-  /** Items never invoked across the parsed window (the defensible headline). */
+  /** Observable items with no matching invocation in the parsed window. */
   deadCount: number;
   /** Dead items whose token weight we MEASURED (skills/subagents/commands). */
   measuredDeadCount: number;
@@ -65,7 +79,7 @@ export type DeadContextResult = {
   monthlyUsd: number;
   /** Upper bound (no prompt caching), measured items only. */
   monthlyUsdUpperBound: number;
-  /** The never-used items, heaviest first. */
+  /** The not-observed candidates, measured weight first. */
   deadItems: DeadContextItem[];
   sessions: number;
   totalTurns: number;
@@ -88,8 +102,10 @@ export type DeadContextOptions = AgentInventoryOptions &
 
 /** Load inventory + invocations from disk (or use injected ones) and price the waste. */
 export async function loadDeadContext(options: DeadContextOptions = {}): Promise<DeadContextResult> {
-  const inventory = options.inventory ?? (await loadAgentInventory(options));
-  const invocations = options.invocations ?? (await loadToolInvocations(options));
+  const [inventory, invocations] = await Promise.all([
+    options.inventory ?? loadAgentInventory(options),
+    options.invocations ?? loadToolInvocations(options)
+  ]);
   return computeDeadContext(inventory.items, invocations, {
     windowDays: options.windowDays ?? DEFAULT_WINDOW_DAYS,
     pricingModel: options.pricingModel ?? DEFAULT_PRICING_MODEL
@@ -134,15 +150,6 @@ export function computeDeadContext(
   const sessions = invocations.sessions;
   const totalTurns = invocations.totalAssistantTurns;
 
-  const usedSkills = new Set(invocations.invokedSkills);
-  const usedSubagents = new Set(invocations.invokedSubagents);
-  const usedCommands = new Set(invocations.invokedCommands);
-  const usedMcpTools = new Set(invocations.invokedMcpTools);
-  // An MCP server counts as "used" if any invoked mcp tool belongs to it.
-  const usedMcpServers = new Set(
-    invocations.invokedMcpTools.map((tool) => tool.split("__")[1]).filter((id): id is string => Boolean(id))
-  );
-
   const dead: DeadContextItem[] = [];
   let loadedCount = 0;
   for (const item of items) {
@@ -150,13 +157,28 @@ export function computeDeadContext(
     // runtime output cannot be inferred from config and they cannot be called
     // like a skill/tool, so classifying them as "never invoked" would be false.
     if (item.kind === "hook" || item.invocationTracking === "not_observable") continue;
+    const evidence = invocationEvidenceFor(item.host, invocations);
+    const hasMatchingHostCoverage = evidence.sessions > 0 && evidence.totalAssistantTurns > 0;
+    // Once host-isolated evidence is available, another host's transcripts are
+    // never an observation opportunity for this item and do not enter the
+    // candidate denominator. Hostless legacy fixtures keep the old global
+    // inventory-count behavior while still producing no candidate without data.
+    if (item.host && invocations.byHost && !hasMatchingHostCoverage) continue;
     loadedCount += 1;
-    if (!isDead(item, { usedSkills, usedSubagents, usedCommands, usedMcpTools, usedMcpServers })) {
+    // Configuration without an observed assistant turn in the selected window
+    // is inventory, not evidence that an item went unused. Keep the configured
+    // count available for coverage reporting, but do not classify candidates.
+    if (!hasMatchingHostCoverage) continue;
+    if (!isDead(item, invocationSets(evidence))) {
       continue;
     }
     dead.push({
       kind: item.kind,
       name: item.name,
+      scope: item.scope,
+      activation: item.activation,
+      host: item.host,
+      invocationTracking: item.invocationTracking,
       alwaysLoadedTokens: item.alwaysLoadedTokens,
       weightConfidence: item.weightConfidence,
       path: item.path,
@@ -170,14 +192,41 @@ export function computeDeadContext(
   const measuredDead = dead.filter((item) => item.weightConfidence === "estimated");
   const unmeasuredDead = dead.filter((item) => item.weightConfidence !== "estimated");
   const measuredTokens = measuredDead.reduce((total, item) => total + item.alwaysLoadedTokens, 0);
-  const hasData = items.length > 0 && sessions > 0 && dead.length > 0;
+  const hasData = loadedCount > 0 && dead.length > 0;
 
   const rates = pricingRates(config.pricingModel);
-  // Cached: one cache write per session + a cache read on every later turn.
-  const cacheReads = Math.max(0, totalTurns - sessions);
-  const windowCachedUsd = (measuredTokens * (sessions * rates.write5mPerM + cacheReads * rates.cacheReadPerM)) / 1_000_000;
-  const windowUncachedUsd = (measuredTokens * totalTurns * rates.inputPerM) / 1_000_000;
   const monthFactor = DEFAULT_WINDOW_DAYS / windowDays;
+  let windowCachedUsd = 0;
+  let windowUncachedUsd = 0;
+  let monthlyDeadTokens = 0;
+  const measuredByCoverage = new Map<string, {
+    tokens: number;
+    evidence: HostInvocationEvidence;
+  }>();
+  for (const item of measuredDead) {
+    const key = item.host && invocations.byHost ? item.host : "global";
+    const current = measuredByCoverage.get(key) ?? {
+      tokens: 0,
+      evidence: invocationEvidenceFor(item.host, invocations)
+    };
+    current.tokens += item.alwaysLoadedTokens;
+    measuredByCoverage.set(key, current);
+  }
+  for (const { tokens, evidence } of measuredByCoverage.values()) {
+    // Cached: one cache write per same-host session + a cache read on every
+    // later same-host turn. Cross-host turns never price this inventory.
+    const cacheReads = Math.max(0, evidence.totalAssistantTurns - evidence.sessions);
+    windowCachedUsd += (
+      tokens * (
+        evidence.sessions * rates.write5mPerM +
+        cacheReads * rates.cacheReadPerM
+      )
+    ) / 1_000_000;
+    windowUncachedUsd += (
+      tokens * evidence.totalAssistantTurns * rates.inputPerM
+    ) / 1_000_000;
+    monthlyDeadTokens += tokens * evidence.totalAssistantTurns * monthFactor;
+  }
 
   return {
     hasData,
@@ -186,7 +235,7 @@ export function computeDeadContext(
     measuredDeadCount: measuredDead.length,
     unmeasuredDeadCount: unmeasuredDead.length,
     deadTokens: measuredTokens,
-    monthlyDeadTokens: Math.round(measuredTokens * totalTurns * monthFactor),
+    monthlyDeadTokens: Math.round(monthlyDeadTokens),
     wastePercent: loadedCount > 0 ? dead.length / loadedCount : 0,
     monthlyUsd: roundMoney(windowCachedUsd * monthFactor),
     monthlyUsdUpperBound: roundMoney(windowUncachedUsd * monthFactor),
@@ -210,12 +259,13 @@ export function deadContextCutAction(result: DeadContextResult): CutAction | nul
   const pct = Math.round(result.wastePercent * 100);
   return {
     id: "dead-context",
-    title: `Trim ${result.measuredDeadCount} loaded tool${result.measuredDeadCount === 1 ? "" : "s"} your agent never calls`,
+    title: `Review ${result.measuredDeadCount} discoverable item${result.measuredDeadCount === 1 ? "" : "s"} with no observed invocation`,
     action:
-      `Remove or lazy-load ${result.deadCount} of ${result.loadedCount} loaded item${result.loadedCount === 1 ? "" : "s"} ` +
-      `(${pct}% never invoked) to reclaim ~${result.deadTokens.toLocaleString("en-US")} tokens of dead context per turn.`,
+      `Inspect ${result.deadCount} of ${result.loadedCount} observable inventory item${result.loadedCount === 1 ? "" : "s"} ` +
+      `(${pct}% had no matching invocation) before proposing a scoped disable, lazy-load, or removal.`,
     estimatedMonthlySavingsUsd: result.monthlyUsd,
     affectedSpendUsd: result.monthlyUsd,
+    impactBasis: "modeled_savings",
     recordCount: result.deadCount,
     recordUnit: "tools",
     // Dead-context savings come from inventory, not priced usage records, so
@@ -223,6 +273,43 @@ export function deadContextCutAction(result: DeadContextResult): CutAction | nul
     recordIds: [],
     confidence: "estimated",
     kind: "context_trim"
+  };
+}
+
+function invocationEvidenceFor(
+  host: InventoryHost | undefined,
+  invocations: InvocationSummary
+): HostInvocationEvidence {
+  if (host && invocations.byHost) return invocations.byHost[host];
+  return {
+    sessions: invocations.sessions,
+    totalAssistantTurns: invocations.totalAssistantTurns,
+    sessionTurnCounts: invocations.sessionTurnCounts,
+    invokedMcpTools: invocations.invokedMcpTools,
+    invokedSkills: invocations.invokedSkills,
+    invokedSubagents: invocations.invokedSubagents,
+    invokedCommands: invocations.invokedCommands
+  };
+}
+
+function invocationSets(evidence: HostInvocationEvidence): {
+  usedSkills: Set<string>;
+  usedSubagents: Set<string>;
+  usedCommands: Set<string>;
+  usedMcpTools: Set<string>;
+  usedMcpServers: Set<string>;
+} {
+  return {
+    usedSkills: new Set(evidence.invokedSkills),
+    usedSubagents: new Set(evidence.invokedSubagents),
+    usedCommands: new Set(evidence.invokedCommands),
+    usedMcpTools: new Set(evidence.invokedMcpTools),
+    // An MCP server counts as used only when a same-host MCP tool belongs to it.
+    usedMcpServers: new Set(
+      evidence.invokedMcpTools
+        .map((tool) => tool.split("__")[1])
+        .filter((id): id is string => Boolean(id))
+    )
   };
 }
 

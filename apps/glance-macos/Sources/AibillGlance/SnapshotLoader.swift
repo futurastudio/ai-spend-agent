@@ -4,6 +4,7 @@ enum SnapshotLoaderError: LocalizedError {
   case commandNotFound
   case commandFailed(String)
   case invalidOutput(String)
+  case timedOut
 
   var errorDescription: String? {
     switch self {
@@ -13,11 +14,19 @@ enum SnapshotLoaderError: LocalizedError {
       "aibill glance failed: \(message)"
     case .invalidOutput(let message):
       "aibill returned invalid Glance data: \(message)"
+    case .timedOut:
+      "aibill glance did not finish within \(SnapshotLoader.timeoutSeconds) seconds. The previous snapshot is now stale; retry after checking the local CLI."
     }
   }
 }
 
 enum SnapshotLoader {
+  // A first scan can parse a large local transcript corpus before filesystem
+  // caches are warm. Keep the last good snapshot visible while it runs and
+  // allow enough time for the measured cold path instead of turning a healthy
+  // local data source into a false timeout.
+  static let timeoutSeconds = 75
+
   private struct Command {
     let executable: URL
     let arguments: [String]
@@ -40,8 +49,13 @@ enum SnapshotLoader {
     process.standardOutput = stdout
     process.standardError = stderr
 
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
     try process.run()
-    process.waitUntilExit()
+    if finished.wait(timeout: .now() + .seconds(timeoutSeconds)) == .timedOut {
+      process.terminate()
+      throw SnapshotLoaderError.timedOut
+    }
 
     let output = stdout.fileHandleForReading.readDataToEndOfFile()
     let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()

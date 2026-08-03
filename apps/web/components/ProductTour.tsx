@@ -11,21 +11,21 @@ const surfaces = [
     label: "Glance",
     eyebrow: "Stay in flow",
     title: "See risk before it interrupts you.",
-    body: "Hover at the menu bar for spend, runway, focus, freshness, and one next action.",
+    body: "Hover at the menu bar for session value, reported runway, focus, freshness, and one next action.",
   },
   {
     id: "terminal",
     label: "Terminal",
     eyebrow: "Inspect the receipt",
     title: "Keep the complete private view.",
-    body: "Run one command for the full evidence, provenance, attribution, and missing coverage.",
+    body: "Inspect the full private receipt, then use Apply for one approval-gated, reversible action.",
   },
   {
     id: "mcp",
     label: "Ask aibill",
     eyebrow: "Understand why",
-    title: "Question the same evidence.",
-    body: "Invoke MCP only when you want a sourced explanation inside your AI client.",
+    title: "Question compatible evidence.",
+    body: "Invoke MCP only when you want a sourced explanation inside your AI client; connected provider evidence may also be available there.",
   },
 ] as const;
 
@@ -127,8 +127,11 @@ export function ProductTour() {
       </div>
 
       <p className="product-tour-note">
-        Glance and Ask aibill share one illustrative receipt. Terminal replays
-        the real CLI with deterministic sample data. Estimated value,
+        Glance and Ask aibill share overlapping fields in this illustrative
+        receipt. Terminal replays the real CLI with deterministic sample data;
+        in sample mode, Apply is a non-executable demonstration. On real local
+        evidence, npx aibill apply adds read-only checks, explicit approval,
+        rollback, and matched future-session verification. Estimated value,
         provider-reported cost, detected plans, and missing limits remain
         visibly separate.
       </p>

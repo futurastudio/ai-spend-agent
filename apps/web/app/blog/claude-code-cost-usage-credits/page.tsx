@@ -124,16 +124,20 @@ export default function Page() {
               is comparison math, not proof of plan coverage or the cheapest option.
             </li>
             <li className="glass rounded-xl px-5 py-4">
-              <span className="text-ink">Ranked cost opportunities</span> — concrete
-              changes (cheaper model for a given task, batching, caching
-              repeats) with modeled monthly API-rate impact. Verify quality and
-              the next provider report before describing that impact as savings.
+              <span className="text-ink">Evidence-ranked action candidates</span>
+              {" "}— local transcript aggregates are treated as observed exposure,
+              not invented monthly savings. Apply asks the coding agent to inspect
+              the exact source, propose one reversible change, wait for approval,
+              and compare matched future sessions. A dollar result requires a
+              source-supported counterfactual and, for a cash claim, provider cost.
             </li>
             <li className="glass rounded-xl px-5 py-4">
               <span className="text-ink">Context inventory and invocation evidence</span>
-              {" "}— items that are discoverable, invoked, schema-loaded,
-              hook-injected, unmeasured, or invocation-unobservable. aibill says
-              an item was not invoked only where the transcript supports it.
+              {" "}— items that are discoverable, invoked, MCP-configured,
+              explicitly requested as always-loaded, hook-injected, unmeasured,
+              or invocation-unobservable. Configuration alone does not prove a
+              schema payload was loaded; aibill reports no matching invocation
+              only where the transcript supports it.
             </li>
           </ul>
         </Reveal>

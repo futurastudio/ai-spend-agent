@@ -1,4 +1,10 @@
-import type { CostConfidence, UsageRecord } from "./schema.js";
+import {
+  hasCallLevelProvenance,
+  hasModeledWorkloadEvidence,
+  hasPricedEvidence,
+  type CostConfidence,
+  type UsageRecord
+} from "./schema.js";
 
 /**
  * Actionable, dollar-specific "cut" suggestions.
@@ -14,7 +20,11 @@ export type CutAction = {
   title: string;
   /** One-line, copy-pasteable instruction with the exact target. */
   action: string;
-  /** Estimated monthly savings in USD for this single action. */
+  /**
+   * Estimated monthly savings in USD for this single action. Zero means the
+   * evidence identifies value worth investigating but contains no observed
+   * counterfactual from which a savings amount can be earned.
+   */
   estimatedMonthlySavingsUsd: number;
   /** Spend (in the analyzed window) this action touches. */
   affectedSpendUsd: number;
@@ -25,7 +35,9 @@ export type CutAction = {
    * aggregate a day of sessions into one record, so calling those "calls"
    * overstates precision to the exact audience that will check.
    */
-  recordUnit: "calls" | "session-days" | "tools";
+  recordUnit: "calls" | "daily-aggregates" | "tools";
+  /** Whether the number is an intervention model or only observed exposure. */
+  impactBasis: "modeled_savings" | "observed_value_no_counterfactual";
   /** Lowest confidence of the underlying records (drives how we caveat $). */
   confidence: CostConfidence;
   kind: "model_downgrade" | "context_trim" | "cache" | "batch";
@@ -140,22 +152,39 @@ const downgradeSafeOperation = /triage|extract|classif|summary|summari|draft|rep
  */
 const batchSafeOperation = /summar|extract|classif|embed|enrich|index|backfill|digest|report|translat|transcri|batch/i;
 
-/** Fraction of cost retained on the Batch API (both providers price it at 50%). */
-const batchCostRetained = 0.5;
+/** Published retained-cost fraction for providers whose Batch pricing we explicitly support. */
+const batchCostRetainedByProvider: Readonly<Record<string, number>> = {
+  openai: 0.5,
+  anthropic: 0.5
+};
 
 export function generateCutList(records: UsageRecord[]): CutAction[] {
+  // Connected-provider rows are commonly billing buckets, usage aggregates,
+  // seats, or user totals. They may be real financial evidence, but they are
+  // not individual calls. Modeled cuts require an adapter to explicitly attest
+  // `call`/`invocation` granularity and provide a named workload operation.
+  // Local transcript aggregates remain eligible only for the observed-only
+  // context exposure path below; they never earn a modeled savings number.
+  const callLevelRecords = records.filter(hasModeledWorkloadEvidence);
+  const contextEvidenceRecords = records.filter((record) =>
+    isLocalAgentRecord(record) || (hasCallLevelProvenance(record) && hasPricedEvidence(record))
+  );
   const actions: CutAction[] = [
-    ...modelDowngradeActions(records),
-    ...contextTrimActions(records),
-    ...cacheActions(records),
-    ...batchActions(records)
+    ...modelDowngradeActions(callLevelRecords),
+    ...contextTrimActions(contextEvidenceRecords),
+    ...cacheActions(callLevelRecords),
+    ...batchActions(callLevelRecords)
   ];
 
   return actions
-    .filter((action) => action.estimatedMonthlySavingsUsd >= 0.5)
+    .filter((action) => (
+      action.impactBasis === "observed_value_no_counterfactual" ||
+      action.estimatedMonthlySavingsUsd >= 0.5
+    ))
     .sort(
       (left, right) =>
         right.estimatedMonthlySavingsUsd - left.estimatedMonthlySavingsUsd ||
+        right.affectedSpendUsd - left.affectedSpendUsd ||
         left.id.localeCompare(right.id)
     );
 }
@@ -170,13 +199,13 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
   const groups = new Map<string, UsageRecord[]>();
   for (const record of records) {
     const rule = downgradeRules.find((candidate) => candidate.match.test(record.model));
-    if (!rule) {
+    if (!rule || !record.operation || record.workloadSemantics?.downgradeSafe !== true) {
       continue;
     }
-    const operation = record.operation ?? "general";
-    // Only suggest downgrades for clearly downgrade-safe operations, OR when
-    // the operation is unknown (we still flag it, but caveat via confidence).
-    if (record.operation && !downgradeSafeOperation.test(operation)) {
+    const operation = record.operation;
+    // A named, clearly downgrade-safe workload is required. Unknown operations
+    // are not sufficient evidence for a routing counterfactual.
+    if (!downgradeSafeOperation.test(operation)) {
       continue;
     }
     const key = `${record.model}::${operation}::${rule.target}`;
@@ -197,7 +226,8 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
-      recordUnit: groupRecords.every(isLocalAgentRecord) ? "session-days" : "calls",
+      recordUnit: groupRecords.every(isLocalAgentRecord) ? "daily-aggregates" : "calls",
+      impactBasis: "modeled_savings",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "model_downgrade"
@@ -207,7 +237,6 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
 }
 
 function contextTrimActions(records: UsageRecord[]): CutAction[] {
-  const window = windowDays(records);
   const heavy = records.filter((record) => record.inputTokens >= 100_000);
   if (heavy.length === 0) {
     return [];
@@ -215,32 +244,41 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
   const byOperation = new Map<string, UsageRecord[]>();
   for (const record of heavy) {
     const operation = record.operation ?? "large-context calls";
-    byOperation.set(operation, [...(byOperation.get(operation) ?? []), record]);
+    const key = isLocalAgentRecord(record)
+      ? `local::${record.agentId ?? "unknown-agent"}::${record.projectId ?? "unattributed"}`
+      : `connected::${operation}`;
+    byOperation.set(key, [...(byOperation.get(key) ?? []), record]);
   }
 
   const actions: CutAction[] = [];
-  for (const [operation, groupRecords] of byOperation) {
+  for (const [key, groupRecords] of byOperation) {
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
-    // Trimming oversized retrieval/context conservatively recovers ~25% of the
-    // input-token cost on these large calls.
-    const windowSavings = affectedSpendUsd * 0.25;
-    const monthlySavings = roundMoney(toMonthly(windowSavings, window));
     const sessionAggregates = groupRecords.every(isLocalAgentRecord);
+    const operation = sessionAggregates
+      ? groupRecords[0]?.operation ?? "coding-agent activity"
+      : key.replace(/^connected::/, "");
     const count = groupRecords.length;
+    const agent = groupRecords[0]?.agentId ?? "coding-agent";
+    const project = groupRecords[0]?.projectId;
+    // Large token volume proves exposure, not that context is removable or
+    // what quality/cost delta a change would produce. Context remains an
+    // inspect-only action until matched before/after evidence exists.
+    const monthlySavings = 0;
     actions.push({
-      id: `trim-${slug(operation)}`,
+      id: sessionAggregates
+        ? `inspect-context-${slug(agent)}-${slug(project ?? "unattributed")}`
+        : `inspect-context-${slug(operation)}`,
       title: sessionAggregates
-        ? `Trim heavy context in ${operation}`
-        : `Trim oversized context on ${operation}`,
-      // Coding-agent sessions are aggregated per day — the honest levers are
-      // the context loaded every turn, not "prompt size" on a single call.
+        ? `Investigate cumulative context in ${agent}${project ? ` · ${project}` : " · Unattributed"}`
+        : `Inspect oversized context on ${operation}`,
       action: sessionAggregates
-        ? `${count} session-day${count === 1 ? "" : "s"} averaged >=100k input tokens per record. Cut dead context first (unused MCP servers/skills — see above), keep CLAUDE.md/AGENTS.md lean, and avoid pulling whole directories into context.`
-        : `Cap retrieval/prompt size on ${count} large ${operation} call${count === 1 ? "" : "s"} (>=100k input tokens) before they fan out.`,
+        ? `${count} day + agent + model + project aggregate${count === 1 ? "" : "s"} contained at least 100k summed input/cache tokens. Inspect per-session context, compactions, repeated reads, and measured instruction-file size before proposing one reversible change.`
+        : `${count} call-level ${operation} record${count === 1 ? "" : "s"} exceeded 100k input tokens. Inspect retrieved chunks and prompt history, then run a matched before/after before claiming savings.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: count,
-      recordUnit: sessionAggregates ? "session-days" : "calls",
+      recordUnit: sessionAggregates ? "daily-aggregates" : "calls",
+      impactBasis: "observed_value_no_counterfactual",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "context_trim"
@@ -251,9 +289,10 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
 
 function cacheActions(records: UsageRecord[]): CutAction[] {
   const window = windowDays(records);
-  const counts = new Map<string, UsageRecord[]>();
+  const counts = new Map<string, { operation: string; records: UsageRecord[] }>();
   for (const record of records) {
-    if (!record.operation) {
+    const fingerprint = record.workloadSemantics?.stableInputFingerprint;
+    if (!record.operation || !fingerprint) {
       continue;
     }
     // Local agent logs aggregate interactive sessions under one operation
@@ -263,26 +302,38 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
     if (isLocalAgentRecord(record)) {
       continue;
     }
-    counts.set(record.operation, [...(counts.get(record.operation) ?? []), record]);
+    const key = JSON.stringify([record.source.provider, record.model, record.operation, fingerprint]);
+    const current = counts.get(key);
+    counts.set(key, {
+      operation: record.operation,
+      records: [...(current?.records ?? []), record]
+    });
   }
 
   const actions: CutAction[] = [];
-  for (const [operation, groupRecords] of counts) {
-    if (groupRecords.length < 3) {
+  for (const [key, group] of counts) {
+    const { operation, records: groupRecords } = group;
+    if (groupRecords.length < 2) {
       continue;
     }
+    const chronological = [...groupRecords].sort(
+      (left, right) => left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id)
+    );
+    // The first observation is the canonical miss. Only subsequent calls with
+    // the same explicit fingerprint are modeled as avoidable cache hits.
+    const avoidableRecords = chronological.slice(1);
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
-    // Caching repeated identical-ish operations conservatively recovers ~20%.
-    const windowSavings = affectedSpendUsd * 0.2;
+    const windowSavings = sumRecords(avoidableRecords);
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
     actions.push({
-      id: `cache-${slug(operation)}`,
+      id: `cache-${slug(operation)}-${stableSuffix(key)}`,
       title: `Cache repeated ${operation} calls`,
-      action: `Add a result cache for ${operation} (${groupRecords.length} repeated call${groupRecords.length === 1 ? "" : "s"}) so identical inputs do not re-bill.`,
+      action: `Keep the earliest ${operation} call as the canonical miss and cache the ${avoidableRecords.length} subsequent call${avoidableRecords.length === 1 ? "" : "s"} with the same adapter-provided input fingerprint.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
       recordUnit: "calls",
+      impactBasis: "modeled_savings",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "cache"
@@ -293,30 +344,48 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
 
 function batchActions(records: UsageRecord[]): CutAction[] {
   const window = windowDays(records);
-  const byOperation = new Map<string, UsageRecord[]>();
+  const byOperation = new Map<string, { operation: string; records: UsageRecord[] }>();
   for (const record of records) {
-    if (!record.operation || !batchSafeOperation.test(record.operation)) {
+    if (
+      !record.operation ||
+      record.workloadSemantics?.batchEligible !== true ||
+      batchCostRetainedByProvider[record.source.provider] === undefined ||
+      !batchSafeOperation.test(record.operation)
+    ) {
       continue;
     }
-    byOperation.set(record.operation, [...(byOperation.get(record.operation) ?? []), record]);
+    const key = JSON.stringify([
+      record.source.id,
+      record.source.provider,
+      record.model,
+      record.operation
+    ]);
+    const current = byOperation.get(key);
+    byOperation.set(key, {
+      operation: record.operation,
+      records: [...(current?.records ?? []), record]
+    });
   }
 
   const actions: CutAction[] = [];
-  for (const [operation, groupRecords] of byOperation) {
+  for (const [key, group] of byOperation) {
+    const { operation, records: groupRecords } = group;
     if (groupRecords.length < 3) {
       continue;
     }
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
-    const windowSavings = affectedSpendUsd * (1 - batchCostRetained);
+    const retainedCost = batchCostRetainedByProvider[groupRecords[0]!.source.provider]!;
+    const windowSavings = affectedSpendUsd * (1 - retainedCost);
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
     actions.push({
-      id: `batch-${slug(operation)}`,
+      id: `batch-${slug(operation)}-${stableSuffix(key)}`,
       title: `Move ${operation} calls to the Batch API`,
       action: `Submit ${groupRecords.length} ${operation} call${groupRecords.length === 1 ? "" : "s"} through the provider's Batch API (flat 50% off; results within 24h, fine for offline work).`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
       recordUnit: "calls",
+      impactBasis: "modeled_savings",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
       kind: "batch"
@@ -365,6 +434,15 @@ function combinedConfidence(confidences: CostConfidence[]): CostConfidence {
 
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
+}
+
+function stableSuffix(value: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function roundMoney(value: number): number {

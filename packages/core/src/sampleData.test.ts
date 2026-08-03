@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadSampleUsageData, parseUsageCsv } from "./sampleData.js";
+import { isBundledSampleUsage } from "./schema.js";
 
 describe("sample data loader", () => {
   it("loads deterministic normalized usage records", async () => {
@@ -8,6 +9,11 @@ describe("sample data loader", () => {
     expect(records).toHaveLength(9);
     expect(records[0]?.id).toBe("oai-001");
     expect(records.every((record) => record.source.observedFrom === "sample_csv")).toBe(true);
+    expect(records.every((record) => record.usageGranularity === "call")).toBe(true);
+    expect(records.filter((record) => record.operation === "research_summary").every(
+      (record) => record.workloadSemantics?.batchEligible === true
+    )).toBe(true);
+    expect(isBundledSampleUsage(records)).toBe(true);
   });
 
   it("keeps sample totals stable", async () => {
@@ -27,5 +33,6 @@ describe("sample data loader", () => {
 
     expect(records[0]?.amountUsd).toBeNull();
     expect(records[0]?.costConfidence).toBe("missing");
+    expect(isBundledSampleUsage(records)).toBe(false);
   });
 });

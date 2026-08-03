@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { usageRecordSchema, type UsageRecord } from "./schema.js";
+import {
+  usageRecordSchema,
+  type UsageRecord,
+  type WorkloadSemantics
+} from "./schema.js";
 
 // One level up from dist/ = the package root, where samples/ ships (see
 // "files" in package.json). Must survive npm installation — never resolve
@@ -63,11 +67,39 @@ export function parseUsageCsv(contents: string): UsageRecord[] {
       userId: optionalValue(row.user_id),
       workspaceId: optionalValue(row.workspace_id),
       apiKeyId: optionalValue(row.api_key_id),
-      operation: optionalValue(row.operation)
+      providerCostType: optionalValue(row.provider_cost_type),
+      operation: optionalValue(row.operation),
+      usageGranularity: optionalValue(row.usage_granularity),
+      workloadSemantics: workloadSemantics(row)
     });
   });
 }
 
 function optionalValue(value: string): string | undefined {
   return value === "" ? undefined : value;
+}
+
+function workloadSemantics(row: CsvRow): WorkloadSemantics | undefined {
+  const stableInputFingerprint = optionalValue(row.stable_input_fingerprint);
+  const batchEligible = optionalBoolean(row.batch_eligible);
+  const downgradeSafe = optionalBoolean(row.downgrade_safe);
+  if (
+    stableInputFingerprint === undefined &&
+    batchEligible === undefined &&
+    downgradeSafe === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(stableInputFingerprint ? { stableInputFingerprint } : {}),
+    ...(batchEligible !== undefined ? { batchEligible } : {}),
+    ...(downgradeSafe !== undefined ? { downgradeSafe } : {})
+  };
+}
+
+function optionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`Expected true/false CSV value, received ${JSON.stringify(value)}.`);
 }

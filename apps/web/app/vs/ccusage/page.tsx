@@ -13,26 +13,27 @@ export const metadata: Metadata = {
 };
 
 const rows: Array<[string, string, string]> = [
+  ["Local agent coverage", "Claude Code + Codex", "15 local sources; Codex support is experimental"],
   ["Claude Code session logs", "Yes", "Yes"],
   ["Codex session logs", "Yes", "Yes — documented as beta"],
   ["Estimates usage at API-equivalent rates", "Yes", "Yes"],
   [
     "Primary focus",
-    "Spend decisions and recommended cuts",
+    "Evidence-constrained spend decisions",
     "Detailed local usage and cost reporting",
   ],
   [
     "Adds official provider cost reports (OpenAI/Anthropic admin key)",
-    "Yes — kept separate from local estimates",
+    "Anthropic live-verified; OpenAI auth/endpoint exercised, non-empty reconciliation pending",
     "Not a stated focus",
   ],
   [
     "Subscription-vs-API plan math",
-    "Yes — projects your usage against plan tiers",
+    "API-rate comparison beside detected/declared plan; no entitlement inference",
     "Block, quota, and usage reporting",
   ],
-  ["Ranked cost opportunities with modeled $/mo impact", "Yes", "—"],
-  ["Dead-context detection and measured estimates", "Yes", "—"],
+  ["Evidence-ranked action candidates", "Observed exposure locally; modeled $ only with a source-supported counterfactual", "—"],
+  ["Context inventory and invocation coverage", "Yes — loading/overhead stays unmeasured where the host does not expose it", "—"],
   ["Local-first, no telemetry", "Yes", "Yes"],
   ["Open source", "MIT", "MIT"],
   ["Install", "npx aibill", "npx ccusage"],
@@ -63,8 +64,8 @@ export default function Page() {
             <span className="text-ink">
               okay, that&apos;s the number. Now what?
             </span>{" "}
-            It adds plan-vs-API decision math, ranked cost opportunities that
-            require verification, hook-aware Context Health, and optional
+            It adds API-rate comparison beside plan context, evidence-ranked
+            candidates with approval and matched verification, hook-aware Context Health, and optional
             official provider cost reports kept separate from local estimates.
           </p>
         </Reveal>

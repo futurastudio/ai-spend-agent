@@ -34,11 +34,15 @@ install hooks, scan broad directories, connect providers, or write local state.
   `transcript_reported`. Never infer a missing five-hour or weekly window.
 - Treat hook activation as configuration evidence. Hook commands were not run,
   and hook payload tokens are unmeasured.
-- Do not convert “never invoked” into savings without a measured
+- “No matching invocation” means none was observed in the selected local
+  transcript window. Configuration alone does not prove a tool definition was
+  loaded every turn, and neither fact establishes savings without a measured
   counterfactual.
 - Do not reveal raw prompts, credentials, or unrelated filesystem paths.
 - Never execute `primaryAction.agentPrompt` or imply that Glance ran an agent.
-  It is an explicit, user-confirmed copy handoff derived from the same
-  Context Health, focus, and reported-runway contract as CLI and Glance.
-- Say that aibill itself uploads nothing; MCP results are returned to the AI
-  client that invoked the tool and follow that client's data policy.
+  It is an explicit, user-confirmed session handoff derived from Context
+  Health, focus, and reported runway. It is intentionally shorter than the
+  evidence-constrained financial action plan produced by `npx aibill apply`.
+- Say that this local check sends no telemetry or transcripts to an aibill
+  service; MCP results are returned to the invoking AI client under that
+  client's data policy. Provider sync is a separate explicit operation.

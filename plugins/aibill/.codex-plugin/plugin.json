@@ -1,7 +1,7 @@
 {
   "name": "aibill",
-  "version": "0.5.8",
-  "description": "On-demand, sourced answers about local AI-agent work, cost evidence, runway, and Context Health through aibill MCP.",
+  "version": "0.5.9",
+  "description": "On-demand, sourced answers about AI-agent work, cost evidence, runway, and Context Health through local aibill MCP; provider sync is explicit and optional.",
   "author": {
     "name": "Futura Studio",
     "url": "https://github.com/futurastudio"
@@ -20,13 +20,15 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "aibill",
-    "shortDescription": "Local agent cost evidence and Context Health",
-    "longDescription": "Ask sourced questions about local Claude Code and Codex work, cost evidence, plan-window availability, attribution, and hook-aware Context Health without always-on prompt injection.",
+    "shortDescription": "Agent cost evidence and Context Health",
+    "longDescription": "Ask sourced questions about local Claude Code and Codex work, cost evidence, plan-window availability, attribution, and hook-aware Context Health without always-on prompt injection. Optional provider billing sync runs only when explicitly requested.",
     "developerName": "Futura Studio",
     "category": "Developer Tools",
     "capabilities": [
-      "Read-only",
-      "Local data",
+      "No automatic actions",
+      "Local-first",
+      "Read-only provider APIs",
+      "Explicit provider sync",
       "MCP"
     ],
     "websiteURL": "https://ai-spend-agent.vercel.app",

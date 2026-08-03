@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-const expectedVersion = "0.5.8";
+const expectedVersion = "0.5.9";
 const packages = [
   { directory: "packages/core", name: "@agent-finops/core" },
   { directory: "packages/report", name: "@agent-finops/report" },

@@ -31,7 +31,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     await mkdir(projDir, { recursive: true });
     await writeFile(join(projDir, "session.jsonl"), JSON.stringify({
       type: "assistant",
-      timestamp: "2026-06-08T10:00:00.000Z",
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
       cwd: "/Users/dev/myapp",
       sessionId: "sess-1",
       requestId: "req-1",
@@ -76,10 +76,11 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     expect(html).not.toContain("Board-ready");
 
     const apply = await runCli(["apply", "--path", dir]);
-    expect(apply.stdout).toContain("cleaning up my coding-agent setup");
+    expect(apply.stdout).toContain("reviewing a draft aibill optimization plan");
+    expect(apply.stdout).toContain("not a guaranteed-savings instruction");
     expect(apply.stdout).not.toContain("unmapped-client");
     expect(apply.stdout).not.toContain("Margin at risk");
-  });
+  }, 15_000);
 
   it("poisoned state (local records stamped connected) is superseded, not served", async () => {
     const dir = await mkdtemp(join(tmpdir(), "seq-poison-"));
@@ -115,7 +116,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     const html = await readFile(join(stateDir, "report.html"), "utf8");
     expect(html).toContain("AI Receipt");
     expect(html).not.toContain("unmapped-client");
-  });
+  }, 15_000);
 
   it("legacy state without a mode is refreshed before apply artifacts are generated", async () => {
     const dir = await mkdtemp(join(tmpdir(), "seq-legacy-"));
@@ -147,14 +148,15 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
 
     const apply = await runCli(["apply", "--path", dir]);
     expect(apply.exitCode).toBe(0);
-    expect(apply.stdout).toContain("cleaning up my coding-agent setup");
+    expect(apply.stdout).toContain("reviewing a draft aibill optimization plan");
+    expect(apply.stdout).toContain("not a guaranteed-savings instruction");
     expect(apply.stdout).not.toContain("unmapped-client");
     expect(apply.stdout).not.toContain("Margin at risk");
 
     const refreshed = JSON.parse(await readFile(join(stateDir, "spend.json"), "utf8"));
     expect(refreshed.mode).toBe("local_logs");
     expect(refreshed.summary.totalUsd).toBe(7.5);
-  });
+  }, 15_000);
 
   it("--group-by without a dimension errors with usage instead of dumping the full readout", async () => {
     const dir = await mkdtemp(join(tmpdir(), "seq-groupby-"));

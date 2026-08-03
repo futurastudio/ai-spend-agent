@@ -12,7 +12,7 @@ instructions.
 - `$aibill-help`: choose CLI, MCP/plugin, or macOS Glance.
 - Eight MCP tools, including `get_usage_glance` and `get_context_health`.
 
-The plugin launches `@agent-finops/mcp@0.5.8` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.5.9` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository
@@ -30,7 +30,11 @@ local structured result.
 
 ## Privacy boundary
 
-The aibill process does not upload files, prompts, credentials, or telemetry.
-CLI and Glance stay on the Mac. When a user explicitly invokes an MCP-backed
-skill, the selected structured result is returned to that AI client and is
-subject to the client's own data-handling policy.
+aibill sends no telemetry or transcripts to an aibill service. CLI transcript
+analysis and the source-built Glance preview run locally. Scan, sync, and report
+tools may write explicit local state under the selected project's
+`.ai-spend-agent/` directory; they do not make an automatic external change.
+An explicitly requested provider sync sends the referenced credential only to
+the selected provider's official read-only API; raw credentials are never
+persisted or returned. An invoked MCP skill returns the selected structured
+result to that AI client under the client's own data-handling policy.

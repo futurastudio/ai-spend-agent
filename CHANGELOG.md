@@ -1,9 +1,52 @@
 # Changelog
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
-are documented here. Versions follow [semver](https://semver.org); every
-release is tagged `vX.Y.Z` so what npm serves is always reconstructible from
-git.
+are documented here. Versions follow [semver](https://semver.org). Public
+release tags identify the Git source for tagged npm releases; 0.5.6 is the
+historical untagged exception.
+
+## 0.5.9 — 2026-08-03
+
+Recommendation-truth hotfix for the public beta.
+
+- Bound Codex usage to the first/root session identity and subtract inherited
+  cumulative baselines from supported forked subagents before child-specific
+  work. Identical root IDs are deduplicated; ambiguous legacy forks and missing
+  post-boundary totals remain omitted rather than assigned to a project.
+- Added explicit record granularity and workload-semantics gates. Only priced
+  `call`/`invocation` records with a named operation can enter modeled action
+  math, and model routing, cache, or Batch candidates also require the relevant
+  adapter attestation. Billing/usage buckets, seats, users, and local daily
+  aggregates remain reconciliation or observed-exposure evidence.
+- Rebuilt `npx aibill apply` as an evidence-constrained, billing-aware plan with
+  source/window/candidate IDs, read-only inspection, explicit approval, one
+  reversible change, rollback, and matched future accepted-outcome plus cost
+  verification. API-equivalent value is never presented as billed spend,
+  guaranteed cash savings, or ROI.
+- Made bundled sample Apply and all sample sidecars explicitly non-executable.
+  Explicit `apply --sample` is now a strict share-safe privacy boundary: it
+  reads no live transcripts, account metadata, credentials, or persisted spend
+  state and omits absolute local paths from terminal output.
+  MCP now persists and returns `mode: sample`, recovers narrowly identifiable
+  legacy mode-less bundled samples, and returns demo-only guidance. Any other
+  unlabeled legacy state fails closed instead of becoming a connected action.
+- Connected MCP recommendations now preserve a stable candidate ID, record IDs,
+  provider/source, accounting basis, candidate-specific UTC window, confidence,
+  approval boundary, rollback, and matched verification. Aggregate provider
+  rows return `NO MODELED CUT` rather than manufactured call-level advice.
+- Corrected Context Health and inventory semantics across host/project scopes:
+  configured definitions, explicit always-load requests, hook activation, and
+  observed invocations remain separate; hooks are never executed or assigned a
+  guessed payload; undated coverage and cross-project focus are excluded.
+- Glance copies a compact project-aware session handoff, not the full financial
+  Apply plan. Stale/failed snapshots disable Copy, retry is real, snapshot
+  generation is bounded at 75 seconds, missing limits remain unavailable, and
+  reported reset is separate from projected exhaustion.
+- Corrected report/card/terminal cost-vs-value wording, aggregate record units,
+  `detected/unverified` display labels, package/plugin/privacy descriptions, and
+  provider readiness: Anthropic is live-verified; OpenAI auth and endpoint access
+  are exercised, while non-empty cost reconciliation remains pending. Copilot
+  and Cursor remain fixture-verified pending live-account QA.
 
 ## 0.5.8 — 2026-08-03
 
@@ -118,8 +161,9 @@ MCP provider and local-log hardening.
   whether only a weekly window was present instead of silently showing a dash.
 - The CLI help header now uses the public `aibill` name consistently.
 - Provider syncs merge by provider instead of silently replacing the previous
-  provider's records. OpenAI and Anthropic were live-verified through stdio;
-  Copilot and Cursor remain fixture-verified pending account QA.
+  provider's records. Anthropic was live-verified through stdio; OpenAI auth and
+  endpoint access were exercised but non-empty cost reconciliation remained
+  pending. Copilot and Cursor remain fixture-verified pending account QA.
 - The MCP server reports its actual package version, returns structured tool
   content, carries accurate safety annotations, refuses broad roots on reads
   and writes, and no longer starts as a side effect of a library import.

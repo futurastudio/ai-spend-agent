@@ -6,7 +6,7 @@ import { SITE_URL } from "@/lib/site";
 
 const title = "AI coding context health: hooks, MCP tools, and fresh sessions";
 const description =
-  "Measure discoverable, invoked, MCP-schema-loaded, and hook-injected AI coding context locally. Learn when to continue, review hooks, trim tools, or start a fresh session.";
+  "Measure discoverable, invoked, MCP-configured, and hook-injected AI coding context locally. Learn when to continue, review hooks, inspect tools, or start a fresh session.";
 
 export const metadata: Metadata = {
   title,
@@ -44,7 +44,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-29",
-          dateModified: "2026-07-29",
+          dateModified: "2026-08-03",
           mainEntityOfPage: `${SITE_URL}/blog/ai-coding-context-health`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -60,10 +60,11 @@ export default function Page() {
           </h1>
           <P>
             Your coding agent can carry more context than the visible chat
-            suggests. Skill descriptions may be discoverable, MCP tool schemas
-            can be loaded, lifecycle hooks can inject instructions, and a long
-            session can keep accumulating history. Those are different states,
-            so one generic &ldquo;context used&rdquo; number is not enough.
+            suggests. Skill descriptions may be discoverable, an MCP server may
+            be configured or explicitly requested as always-loaded, lifecycle
+            hooks can inject instructions, and a long session can keep
+            accumulating history. Those are different states, so one generic
+            &ldquo;context used&rdquo; number is not enough.
           </P>
         </Reveal>
 
@@ -79,27 +80,31 @@ export default function Page() {
             runtime context without appearing as a normal tool call.
           </P>
           <P>
-            aibill now separates four observable states: discoverable,
-            explicitly invoked, MCP-schema-loaded, and hook-injected. It reads
-            installed hook configuration as metadata, but never executes the
-            command and never guesses the emitted token payload.
+            aibill separates discoverable, explicitly invoked, MCP-configured,
+            explicit always-load requests, hook-injected, and
+            invocation-unobservable states. MCP configuration proves
+            availability or intent—not the schema payload loaded at runtime.
+            It reads installed hook configuration as metadata, but never
+            executes the command and never guesses the emitted token payload.
           </P>
         </Reveal>
 
         <Reveal>
           <H2>One decision, backed by your own history</H2>
           <P>
-            Context Health compares the current session&apos;s local transcript
-            token total with prior sessions from the same coding agent. A
-            substantially larger session can produce a &ldquo;start
-            fresh&rdquo; recommendation before a new task. Otherwise the action
-            may be to review configured hooks, trim inventory that was not
-            invoked in the selected window, continue, or collect more history.
+            Context Health prioritizes directly observed compaction evidence.
+            Where the transcript exposes it, it otherwise compares latest-turn
+            input context with comparable prior sessions from the same coding
+            agent and project—not cumulative lifetime totals. The action may be
+            to preserve a checkpoint and start fresh, inspect configured hooks
+            or inventory with no matching invocation, continue, or collect more
+            history.
           </P>
           <P>
             That is a workflow signal, not a universal efficiency claim. Token
             volume does not prove code quality, latency, or money saved, and a
-            never-invoked item may still be valuable tomorrow.
+            configured item with no matching invocation may still be valuable
+            tomorrow.
           </P>
         </Reveal>
 
@@ -110,7 +115,7 @@ export default function Page() {
               ["Terminal", "npx aibill context"],
               ["Structured terminal", "npx aibill context --json"],
               ["AI client", "$aibill-check through the optional MCP plugin"],
-              ["macOS", "aibill Glance, hidden until menu-bar hover"],
+              ["macOS", "source-built aibill Glance preview, hidden until menu-bar hover"],
             ].map(([label, command]) => (
               <div className="glass rounded-xl px-5 py-4" key={label}>
                 <span className="text-ink">{label}</span>
