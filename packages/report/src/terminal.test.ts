@@ -20,7 +20,11 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("$87.00");
     expect(text).toContain("What to test");
     expect(text).toMatch(/Move .* to .*model ~\$/);
-    expect(text).toContain("ILLUSTRATIVE API-EQUIVALENT VALUE");
+    expect(text).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
+    expect(text).toContain("Cost/value evidence by source");
+    expect(text).toContain("Cost/value evidence by model");
+    expect(text).toContain("Evidence");
+    expect(text).not.toContain("Spend by model");
     expect(text).toContain("modeled API-rate opportunity");
     expect(text).toContain("/mo");
   });
@@ -63,7 +67,7 @@ describe("generatePlainEnglishSummary", () => {
     const records = await sample();
     const summary = analyzeSpend(records);
     const text = generatePlainEnglishSummary(summary, { records, color: false, groupBy: "agent" });
-    expect(text).toContain("Spend by agent");
+    expect(text).toContain("Cost/value evidence by agent");
     expect(text).toContain("agent-analyst");
   });
 
@@ -72,7 +76,7 @@ describe("generatePlainEnglishSummary", () => {
     const summary = analyzeSpend(records);
     for (const dimension of groupByDimensions) {
       const text = generatePlainEnglishSummary(summary, { records, color: false, groupBy: dimension });
-      expect(text).toContain("Spend by");
+      expect(text).toContain("Cost/value evidence by");
     }
   });
 
@@ -82,6 +86,17 @@ describe("generatePlainEnglishSummary", () => {
     const text = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
     expect(text).toContain("DEMO");
     expect(text).toContain("connect");
+    expect(text).toContain("not one invoice or homogeneous spend basis");
+    expect(text).toContain("combined illustrative evidence");
+    expect(text).toContain("illustrative SAMPLE API-equivalent estimates");
+    expect(text).toContain("no local logs or account data were used");
+    expect(text).toContain("Illustrative hypotheses only");
+    expect(text).toContain("not this user's savings, bill, or ROI");
+    expect(text).toContain("disabled for sample data");
+    expect(text).toContain("NON-EXECUTABLE DEMO");
+    expect(text).toContain("does not authorize or propose a user change");
+    expect(text).not.toContain("ESTIMATES from local logs");
+    expect(text).not.toContain("paste it into Claude Code / Codex — it carries the candidates above");
   });
 
   it("structures the readout as the diagnose/recommend/apply/verify loop, in order", async () => {
@@ -132,20 +147,22 @@ describe("generatePlainEnglishSummary", () => {
       }]
     });
     expect(text).toContain("PLAN Claude Max 5x — detected from your agents' local config");
-    expect(text).toContain("on your flat-price plan these changes may improve rate-limit headroom");
+    expect(text).toContain("for agents with a detected flat-price subscription");
   });
 
   it("collapses sub-$1/mo cuts into one summary line", async () => {
     const records = await sample();
-    // Add a tiny second operation that yields a <$1/mo cut alongside big ones.
-    // Sized so the trim cut lands between the $0.50 cut-list floor and the
-    // $1/mo display threshold: 3×$0.09 × 25% trim / 3-day window × 30 ≈ $0.68.
+    // Add a tiny explicit call-level routing candidate that yields a <$1/mo
+    // modeled cut alongside the larger sample candidates.
     const tiny = records.slice(0, 3).map((record, index) => ({
       ...record,
       id: `tiny-${index}`,
-      operation: "tiny leftover op",
-      amountUsd: 0.09,
-      inputTokens: 120_000
+      model: "gpt-4.1",
+      operation: "tiny_summary",
+      amountUsd: 0.03,
+      inputTokens: 100,
+      usageGranularity: "call" as const,
+      workloadSemantics: { downgradeSafe: true }
     }));
     const all = [...records, ...tiny];
     const text = generatePlainEnglishSummary(analyzeSpend(all), { records: all, color: false });
@@ -175,7 +192,7 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("COMPARED WITH Claude Max 5x ($100/mo)");
     expect(text).toMatch(/~[\d.]+× the listed price/);
     expect(text).toContain("compare observed usage with plan context");
-    expect(text).toContain("possible plan headroom");
+    expect(text).toContain("evidence first; reduction is not yet established");
   });
 
   it("opens with a TL;DR on local-log readouts (value, top burner, one action)", async () => {
@@ -204,13 +221,46 @@ describe("generatePlainEnglishSummary", () => {
     expect(text.indexOf("TL;DR")).toBeLessThan(text.indexOf("1 · DIAGNOSE"));
   });
 
+  it("treats no-matching-invocation inventory as candidates, never removal proof", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code" as const
+    }));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      deadContext: {
+        hasData: true,
+        loadedCount: 3,
+        deadCount: 1,
+        measuredDeadCount: 0,
+        unmeasuredDeadCount: 1,
+        deadTokens: 0,
+        monthlyDeadTokens: 0,
+        wastePercent: 1 / 3,
+        monthlyUsd: 0,
+        monthlyUsdUpperBound: 0,
+        deadItems: [],
+        sessions: 2,
+        totalTurns: 5,
+        pricingModel: "claude-sonnet-4",
+        windowDays: 30
+      }
+    });
+
+    expect(text).toContain("inspect 1 context candidate with no matching invocation");
+    expect(text).not.toMatch(/remove .*dead tool/i);
+  });
+
   it("labels local-log records as session-day records, not calls", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);
     const local = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs" });
     expect(local).toMatch(/tracked across \d+ session-day records/);
     const demo = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
-    expect(demo).toMatch(/tracked across \d+ calls/);
+    expect(demo).toMatch(/combined illustrative evidence across \d+ illustrative records/);
   });
 
   it("renders home-launched project usage as unattributed with an honest record unit", () => {

@@ -22,8 +22,11 @@ import {
   type DetectedPlan,
   loadDeadContext,
   sampleDeadContext,
+  latestObservedWorkingDirectory,
+  isBundledSampleUsage,
   loadLocalAgentUsage,
   loadSampleUsageData,
+  parseUsageRecord,
   scanLocalUsageSignals,
   buildMissingSourcePrompts,
   confirmMapping,
@@ -43,7 +46,8 @@ import {
   type SpendSummary,
   type UsageRecord,
   type ProviderQaSummary,
-  type ContextHealthResult
+  type ContextHealthResult,
+  type ParsedInvocationFile
 } from "@agent-finops/core";
 import {
   generateActionPlanMarkdown,
@@ -57,7 +61,8 @@ import {
   generateReportCardSvg,
   generateVerificationPlanMarkdown,
   groupByDimensions,
-  type GroupByDimension
+  type GroupByDimension,
+  type SpendReportInput
 } from "@agent-finops/report";
 
 export type CliResult = {
@@ -70,6 +75,7 @@ type ParsedArgs = {
   command?: string;
   sample: boolean;
   path: string;
+  pathExplicit?: boolean;
   out?: string;
   sourcePath?: string;
   sourceType?: SourceType;
@@ -205,10 +211,13 @@ type InstantReadData = {
   records: UsageRecord[];
   mode: InstantReadMode;
   warnings: string[];
+  codexInvocationFiles?: ParsedInvocationFile[];
 };
 
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
-  const { records, mode, warnings } = await loadInstantReadData(args);
+  const sinceDays = args.sinceDays ?? 30;
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+  const { records, mode, warnings, codexInvocationFiles } = await loadInstantReadData(args);
   const summaryRecords = mode === "connected"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -250,7 +259,10 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   // specific hints from leaking into a recording.
   const detection = args.sample
     ? { credentials: [] as DetectedCredential[], scannedFiles: [] as string[] }
-    : await detectLocalCredentials({ cwd: resolve(args.path) });
+    : await detectLocalCredentials({
+        cwd: resolve(args.path),
+        home: process.env.AI_SPEND_CLAUDE_HOME_DIR
+      });
   const nextSteps = quickstartNextSteps(mode, detection.credentials);
 
   // Dead-context cost, globalized across the user's whole Claude Code setup
@@ -269,8 +281,9 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
         claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
         projectDir: resolve(args.path),
         includeAllProjectMcp: true,
-        sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-        windowDays: 30
+        sinceIso: sinceIsoForDays(sinceDays),
+        windowDays: sinceDays,
+        codexInvocationFiles
       }).catch(() => undefined);
   // Sample dead-context is shown ONLY on the demo readout. A real readout
   // (local logs / connected billing) never gets fabricated waste injected —
@@ -298,21 +311,20 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
-  if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: "--since-days must be a whole number between 1 and 365"
-    };
-  }
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString()
+    sinceIso: sinceIsoForDays(sinceDays),
+    collectCodexInvocationEvidence: true
   });
   const calls = args.project
     ? logs.calls.filter((call) => call.project === args.project)
     : logs.calls;
+  const latestWorkingDirectory = latestObservedWorkingDirectory(calls);
+  const contextProjectDir = args.pathExplicit
+    ? resolve(args.path)
+    : latestWorkingDirectory ?? resolve(args.path);
   let detectedPlans: DetectedPlan[];
   if (args.plan) {
     const override = planOverrideFromFlag(args.plan);
@@ -337,9 +349,10 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
     codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
     claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
     claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
-    projectDir: resolve(args.path),
-    sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
-    windowDays: sinceDays
+    projectDir: contextProjectDir,
+    sinceIso: sinceIsoForDays(sinceDays),
+    windowDays: sinceDays,
+    codexInvocationFiles: logs.codexInvocationFiles
   });
   const snapshot = buildUsageGlance(calls, {
     filesParsed: logs.filesParsed,
@@ -353,20 +366,13 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
-  if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: "--since-days must be a whole number between 1 and 365"
-    };
-  }
-  const sinceIso = new Date(
-    Date.now() - sinceDays * 24 * 60 * 60 * 1_000
-  ).toISOString();
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+  const sinceIso = sinceIsoForDays(sinceDays);
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    sinceIso
+    sinceIso,
+    collectCodexInvocationEvidence: true
   });
   const calls = args.project
     ? logs.calls.filter((call) => call.project === args.project)
@@ -380,7 +386,8 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
     claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
     projectDir: resolve(args.path),
     sinceIso,
-    windowDays: sinceDays
+    windowDays: sinceDays,
+    codexInvocationFiles: logs.codexInvocationFiles
   });
   return ok(args.json ? JSON.stringify(health) : renderContextHealth(health));
 }
@@ -397,21 +404,24 @@ function renderContextHealth(health: ContextHealthResult): string {
     `Confidence: ${health.confidence}`,
     "",
     "Activation",
-    `  Discoverable: ${activation.discoverableItems}  Invoked: ${activation.explicitlyInvokedItems}  MCP schema-loaded: ${activation.mcpSchemaLoadedItems}`,
+    `  Discoverable: ${activation.discoverableItems}  Invoked: ${activation.explicitlyInvokedItems}  MCP configured: ${activation.mcpConfiguredItems}`,
+    `  MCP always-load requested: ${activation.mcpAlwaysLoadedItems}  Legacy schema-loaded label: ${activation.mcpSchemaLoadedItems}`,
     `  Hook-injected: ${activation.hookInjectedItems}  Other lifecycle hooks: ${activation.lifecycleHooks}  Unmeasured weight: ${activation.unmeasuredItems}`,
     `  Invocation-unobservable: ${activation.invocationUnobservableItems}`,
     "",
-    `Never invoked among observable inventory (${dead.windowDays}d): ${dead.neverInvokedItems}/${dead.loadedItems} ` +
+    `No matching invocation among observable inventory (${dead.windowDays}d): ${dead.neverInvokedItems}/${dead.loadedItems} ` +
       `(${dead.measuredNeverInvokedItems} measured, ${dead.unmeasuredNeverInvokedItems} unmeasured)`
   ];
   if (health.currentSession) {
     const session = health.currentSession;
     lines.push(
-      `Session: ${session.agent}${session.project ? ` · ${session.project}` : ""} · ` +
-      `${session.totalTokens.toLocaleString("en-US")} tokens · ` +
-      (session.ratioToMedian === null
-        ? "no same-agent baseline"
-        : `${session.ratioToMedian}× median (${session.comparisonSessions} prior)`)
+      `Latest turn: ${session.agent}${session.project ? ` · ${session.project}` : ""} · ` +
+      (session.usageSource === "not_available"
+        ? "input context unavailable; cumulative lifetime usage excluded"
+        : `${session.contextTokens.toLocaleString("en-US")} input context tokens · ` +
+          (session.ratioToMedian === null
+            ? `${session.comparisonSessions} comparable prior session${session.comparisonSessions === 1 ? "" : "s"}; baseline not yet sufficient`
+            : `${session.ratioCapped ? "at least " : ""}${session.ratioToMedian}× comparable median (${session.comparisonSessions} prior)`))
     );
   }
   const churn = health.contextChurn;
@@ -495,7 +505,9 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   const logs = await loadLocalAgentUsage({
     // Env overrides keep tests (and unusual installs) isolated from $HOME.
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso: sinceIsoForDays(args.sinceDays ?? 30),
+    collectCodexInvocationEvidence: true
   }).catch(() => undefined);
   if (logs && logs.records.length > 0) {
     // Persisted local_logs state (written by report/apply-artifact) is the
@@ -504,7 +516,12 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider" && persisted.mode !== "local_logs") {
       warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `ai-spend-agent reset` to clear it, or pass --ignore-state.");
     }
-    return { records: logs.records, mode: "local-logs", warnings };
+    return {
+      records: logs.records,
+      mode: "local-logs",
+      warnings,
+      codexInvocationFiles: logs.codexInvocationFiles
+    };
   }
 
   // No real logs. Persisted sample/legacy state may still be shown, but only as
@@ -544,7 +561,10 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   const codexFound = detected.includes("codex");
   const hasLogs = claudeFound || codexFound;
 
-  const detection = await detectLocalCredentials({ cwd: rootPath }).catch(() => ({ credentials: [] as DetectedCredential[] }));
+  const detection = await detectLocalCredentials({
+    cwd: rootPath,
+    home: process.env.AI_SPEND_CLAUDE_HOME_DIR
+  }).catch(() => ({ credentials: [] as DetectedCredential[] }));
   const providerRefs = detection.credentials.map((credential) => `${credential.provider} (${credential.hint})`);
 
   const plans = await detectLocalPlans({
@@ -1060,7 +1080,10 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
   });
 
   // Auto-detect a local key for this provider (never prints the raw value).
-  const detection = await detectLocalCredentials({ cwd: rootPath });
+  const detection = await detectLocalCredentials({
+    cwd: rootPath,
+    home: process.env.AI_SPEND_CLAUDE_HOME_DIR
+  });
   const detected = detection.credentials.find((credential) => credential.provider === provider);
 
   const lines = [
@@ -1282,7 +1305,9 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
   const stateDir = join(rootPath, ".ai-spend-agent");
 
   try {
-    const reportInput = await buildReportInput(stateDir, rootPath);
+    const sinceDays = args.sinceDays ?? 30;
+    if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+    const reportInput = await buildReportInput(stateDir, rootPath, sinceDays);
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
     const markdownPath = `${outBase}.md`;
     const htmlPath = `${outBase}.html`;
@@ -1300,8 +1325,8 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `policy/config draft: ${artifactPaths.policyConfigDraft}`,
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
-      `total spend: $${reportInput.summary.totalUsd.toFixed(2)}`,
-      "privacy: local files only; no cloud upload performed",
+      `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
+      "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
@@ -1361,7 +1386,7 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
       "Caption to share:",
       generateReportCardCaption({ summary, records: headlineRecords, mode }),
       "",
-      "privacy: rendered locally; only totals, modeled opportunities, and model-level investigations are included."
+      "privacy: rendered locally; only totals, generic candidate categories, and evidence labels are included."
     ].join("\n"));
   } catch (error) {
     return {
@@ -1377,11 +1402,31 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
   const stateDir = join(rootPath, ".ai-spend-agent");
 
   try {
-    const reportInput = await buildReportInput(stateDir, rootPath);
+    const sinceDays = args.sinceDays ?? 30;
+    if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+    // `--sample` is a privacy boundary, not presentation sugar. It must never
+    // fall through to live transcript, plan, credential, or persisted-state
+    // discovery — regardless of where the flag appears after the command.
+    const reportInput = args.sample
+      ? await buildExplicitSampleReportInput(rootPath)
+      : await buildReportInput(stateDir, rootPath, sinceDays);
+    await mkdir(stateDir, { recursive: true });
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
     // The prompt IS the product of this command — print it so a terminal
     // user can copy it right here instead of hunting for a file path.
     const codingPrompt = await readFile(artifactPaths.codingPrompt, "utf8");
+    if (args.sample) {
+      return ok([
+        "aibill apply-artifact",
+        "data: DEMO sample data (illustrative — not your logs, account, bill, project, or workflow)",
+        "artifacts: .ai-spend-agent/ (non-executable demo files)",
+        "safety: no live transcripts, account metadata, credentials, or persisted spend state were read",
+        "",
+        "──── non-executable demo prompt (also saved under .ai-spend-agent/) ────",
+        "",
+        codingPrompt.trimEnd()
+      ].join("\n"));
+    }
     return ok([
       "aibill apply-artifact",
       `path: ${rootPath}`,
@@ -1404,12 +1449,56 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
   }
 }
 
-async function buildReportInput(stateDir: string, rootPath: string) {
+async function buildExplicitSampleReportInput(rootPath: string): Promise<SpendReportInput> {
+  const records = await loadSampleUsageData();
+  return {
+    // Fixed alongside the bundled fixture so repeated demo runs stay stable
+    // and cannot absorb this machine's clock or account state into an asset.
+    generatedAt: "2026-05-20T00:00:00.000Z",
+    summary: analyzeSpend(records),
+    allRecords: records,
+    dataMode: "sample",
+    discovery: emptyDiscovery(rootPath),
+    mappings: attributeUsageRecords(records),
+    missingSourcePrompts: [],
+    confirmedMappings: [],
+    providerRecords: [],
+    providerQa: [],
+    deadContext: sampleDeadContext(),
+    detectedPlans: []
+  };
+}
+
+async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 30) {
+  // One anchor for logs, Context Health, the paste-ready prompt, and every
+  // supporting Apply artifact. This prevents millisecond window drift between
+  // files generated by the same command.
+  const generatedAt = new Date();
+  const sinceIso = sinceIsoForDays(sinceDays, generatedAt);
+  let freshLocalCalls: Awaited<ReturnType<typeof loadLocalAgentUsage>>["calls"] | undefined;
+  let freshCodexInvocationFiles: ParsedInvocationFile[] | undefined;
   let spendState = await readOptionalJson<{ summary: SpendSummary; records?: UsageRecord[]; mode?: PersistedDataMode } | undefined>(
     join(stateDir, "spend.json"),
     undefined
   );
   let mappings = await readOptionalJson<AttributionMapping[] | undefined>(join(stateDir, "mappings.json"), undefined);
+
+  // Never trust a persisted summary or an absent mode. Re-parse the records,
+  // recover the narrowly identifiable bundled sample written by older
+  // releases, and recompute decision output under the current evidence rules.
+  // Any other unlabeled state remains unlabeled and therefore non-executable.
+  if (spendState?.records && spendState.records.length > 0) {
+    const records = spendState.records.map((record) => parseUsageRecord(record));
+    const mode = spendState.mode ?? (isBundledSampleUsage(records) ? "sample" : undefined);
+    const headlineRecords = mode === "connected_provider"
+      ? selectProviderFinancialHeadlineRecords(records)
+      : records;
+    spendState = {
+      records,
+      mode,
+      summary: analyzeSpend(headlineRecords)
+    };
+  }
 
   // Local-log state is a CACHE, not a source of truth: the quickstart always
   // re-reads the logs fresh, so report/apply must too — otherwise yesterday's
@@ -1433,9 +1522,13 @@ async function buildReportInput(stateDir: string, rootPath: string) {
   if (needsFreshLogs) {
     const logs = await loadLocalAgentUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      sinceIso,
+      collectCodexInvocationEvidence: true
     }).catch(() => undefined);
     if (logs && logs.records.length > 0) {
+      freshLocalCalls = logs.calls;
+      freshCodexInvocationFiles = logs.codexInvocationFiles;
       const records = logs.records;
       const summary = analyzeSpend(records);
       const liveMappings = attributeUsageRecords(records);
@@ -1473,8 +1566,9 @@ async function buildReportInput(stateDir: string, rootPath: string) {
         claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
         projectDir: rootPath,
         includeAllProjectMcp: true,
-        sinceIso: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-        windowDays: 30
+        sinceIso,
+        windowDays: sinceDays,
+        codexInvocationFiles: freshCodexInvocationFiles
       }).catch(() => undefined)
     : undefined;
 
@@ -1485,10 +1579,31 @@ async function buildReportInput(stateDir: string, rootPath: string) {
       }).catch(() => [] as DetectedPlan[])
     : [];
 
+  // Report/apply and Glance consume the same canonical Context Health result.
+  // If live transcript calls are unavailable, omit it instead of fabricating a
+  // session-level recommendation from day-aggregate spend records.
+  const contextHealth = spendState.mode === "local_logs" && freshLocalCalls
+    ? await loadContextHealth(freshLocalCalls, {
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+        projectDir: rootPath,
+        includeAllProjectMcp: true,
+        sinceIso,
+        windowDays: sinceDays,
+        codexInvocationFiles: freshCodexInvocationFiles
+      }).catch(() => undefined)
+    : undefined;
+
   return {
+    generatedAt: generatedAt.toISOString(),
     summary: spendState.summary,
     deadContext,
     detectedPlans,
+    contextHealth,
     // Evidence ledger is built from the SAME records as the confidence
     // breakdown so the two sections can never contradict each other.
     allRecords: spendState.mode === "connected_provider"
@@ -1505,6 +1620,22 @@ async function buildReportInput(stateDir: string, rootPath: string) {
   };
 }
 
+function validSinceDays(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 365;
+}
+
+function sinceIsoForDays(value: number, now = new Date()): string {
+  return new Date(now.getTime() - value * 24 * 60 * 60 * 1_000).toISOString();
+}
+
+function invalidSinceDaysResult(): CliResult {
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: "--since-days must be a whole number between 1 and 365"
+  };
+}
+
 function emptyDiscovery(rootPath: string): LocalDiscoveryResult {
   return {
     rootPath,
@@ -1518,7 +1649,7 @@ function emptyDiscovery(rootPath: string): LocalDiscoveryResult {
   };
 }
 
-async function writeApplyArtifacts(stateDir: string, reportInput: Awaited<ReturnType<typeof buildReportInput>>) {
+async function writeApplyArtifacts(stateDir: string, reportInput: SpendReportInput) {
   const paths = {
     codingPrompt: join(stateDir, "ai-spend-coding-agent-prompt.md"),
     actionPlan: join(stateDir, "ai-spend-action-plan.md"),
@@ -1607,6 +1738,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       const next = rest[index + 1];
       if (next) {
         parsed.path = next;
+        parsed.pathExplicit = true;
         index += 1;
       }
       continue;
@@ -1926,20 +2058,20 @@ function helpText(): string {
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
     "  scan [--path <dir>]     Scan a local workspace for AI usage signals",
     "  scan --sample           Include deterministic sample spend analysis",
-    "  quickstart [--sample]   Plain-English local readout (alias of the default run)",
-    "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: model",
-    "  report [--out <name>]   Generate local Markdown and HTML reports",
+    "  quickstart [--sample] [--since-days N] Plain-English local readout (default 30 days)",
+    "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: project for local logs; model otherwise",
+    "  report [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
-    "  glance [--project <name>] [--plan <id>] Emit the local, machine-readable Glance snapshot JSON",
+    "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",
     "    [--json]              Emit the same canonical Context Health object used by MCP and Glance",
-    "  apply                   Print the paste-ready coding-agent prompt + write action/policy/verification plans",
+    "  apply [--sample] [--since-days N]  Print an evidence-constrained inspection/approval prompt + verification plans",
     "  apply-artifact          Same as `apply` (long form)",
     "",
     "Cron (production watch): add a crontab entry such as:",
     "  0 * * * * cd /path/to/workspace && ai-spend-agent watch --interval 3600 --cycles 1 >> ai-spend-watch.log 2>&1",
     "",
-    "Privacy: local-first. No files, credentials, or spend data are uploaded. Secrets are never printed."
+    "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference; secrets are never printed or persisted."
   ].join("\n");
 }
 

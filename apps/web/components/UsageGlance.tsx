@@ -117,7 +117,7 @@ export function UsageGlance() {
 
       <div className="glance-desktop-copy" id="glance-sample-note">
         <span>Product concept · sample data</span>
-        <strong>Live Glance never guesses a missing limit.</strong>
+        <strong>The source-built Glance preview never guesses a missing limit.</strong>
       </div>
     </div>
   );

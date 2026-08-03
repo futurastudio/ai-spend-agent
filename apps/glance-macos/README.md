@@ -78,15 +78,24 @@ and tool calls; its percentage is activity share, not elapsed time or spend.
 Raw prompts never enter the Glance JSON contract.
 
 The footer shows `Updated 12s ago` from the last successful local snapshot.
+Refresh attempts start on a 30-second cadence; the next attempt subtracts the
+time spent generating the prior snapshot instead of waiting another 30 seconds.
 After 75 seconds it changes to an explicit stale state. A failed refresh keeps
 the last good snapshot visible and labels its age; a first-run failure says
-that no current data is available. Right-click the wordmark to retry.
+that no current data is available. Copy is disabled for stale or failed
+evidence, and the local CLI subprocess fails visibly after 75 seconds instead
+of blocking forever. Use the row's Refresh action or right-click the wordmark
+to retry.
 
 The final compact row renders one focus-aware next move derived from the
 canonical hook-aware Context Health result, Main focus, and any
 transcript-reported runway. It stays to two short lines plus a small Copy
 affordance; the complete handoff prompt is never displayed in the hover card.
-Clicking copies that prompt for any coding agent. Glance does not launch an
+Clicking copies a project-aware **session handoff** for any coding agent. That
+handoff includes its evidence window, current session value/meaning, focus,
+Context Health confidence, the reported reset time, and a separately labeled
+projected exhaustion time when available. It is deliberately not the fuller financial optimization plan from
+`npx aibill apply`. Glance does not launch an
 agent, execute the prompt, run a hook command, or invent a hook's runtime token
 payload.
 
@@ -136,7 +145,8 @@ Keep these trust invariants in customized versions:
   session threshold or hook-cost estimate in the UI.
 - Render `primaryAction` from the shared contract. Keep its full `agentPrompt`
   out of the compact card and require a deliberate copy/paste before an agent
-  can act.
+  can act. Treat `kind: session_handoff` separately from the CLI Apply plan.
+- Do not allow stale or failed snapshots to be copied as current evidence.
 - Render missing limits as unavailable instead of guessing.
 - Do not upload transcripts or invoke the data command through a shell.
 

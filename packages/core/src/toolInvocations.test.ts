@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -132,6 +132,26 @@ describe("parseClaudeCodeInvocations", () => {
     expect(after.assistantTurns).toBe(0);
     expect(after.invocations).toEqual([]);
   });
+
+  it("excludes undated Claude entries from selected-window coverage", () => {
+    const parsed = parseClaudeCodeInvocations(JSON.stringify({
+      type: "assistant",
+      sessionId: "undated-claude",
+      requestId: "undated-request",
+      message: {
+        id: "undated-message",
+        model: "claude-opus-4-8",
+        content: [{
+          type: "tool_use",
+          name: "mcp__private__lookup",
+          input: {}
+        }]
+      }
+    }), Date.parse("2026-08-01T00:00:00.000Z"));
+
+    expect(parsed.assistantTurns).toBe(0);
+    expect(parsed.invocations).toEqual([]);
+  });
 });
 
 describe("parseCodexInvocations", () => {
@@ -231,6 +251,165 @@ describe("parseCodexInvocations", () => {
     });
     expect(JSON.stringify(parsed.contextSignal)).not.toContain("/private/project");
   });
+
+  it("keeps nested metadata separate and excludes inherited parent evidence from a fork", () => {
+    const rootStartedAt = "2026-08-03T15:00:00.000Z";
+    const forked = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: rootStartedAt,
+        payload: {
+          id: "child-root",
+          timestamp: rootStartedAt,
+          thread_source: "subagent",
+          parent_thread_id: "parent-root",
+          source: { subagent: { other: "reviewer" } }
+        }
+      }),
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-03T15:00:00.100Z",
+        payload: {
+          id: "parent-root",
+          timestamp: "2026-08-03T09:00:00.000Z",
+          thread_source: "user"
+        }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-08-03T15:00:00.200Z",
+        payload: { model: "gpt-5.6-sol", turn_id: "inherited-turn" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-03T15:00:00.300Z",
+        payload: {
+          type: "function_call",
+          name: "mcp__github__get_issue",
+          arguments: "{}"
+        }
+      }),
+      JSON.stringify({
+        type: "compacted",
+        timestamp: "2026-08-03T15:00:00.400Z",
+        payload: { type: "compacted" }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: {
+          type: "task_started",
+          started_at: Date.parse(rootStartedAt) / 1_000,
+          turn_id: "root-turn"
+        }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-08-03T15:00:01.000Z",
+        payload: { model: "gpt-5.6-sol", turn_id: "root-turn" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-03T15:00:02.000Z",
+        payload: {
+          type: "function_call",
+          name: "read_file",
+          arguments: JSON.stringify({ path: "/private/child/root.ts" })
+        }
+      }),
+      JSON.stringify({
+        type: "compacted",
+        timestamp: "2026-08-03T15:00:03.000Z",
+        payload: { type: "compacted" }
+      })
+    ].join("\n");
+
+    const parsed = parseCodexInvocations(forked);
+    expect(parsed.assistantTurns).toBe(1);
+    expect(parsed.invocations).toEqual([{ name: "read_file", count: 1 }]);
+    expect(parsed.invokedMcpTools).toEqual([]);
+    expect(parsed.contextSignal).toMatchObject({
+      sessionId: "child-root",
+      isSubagent: true,
+      parentSessionId: "parent-root",
+      compactionEvents: 1,
+      fileReads: [{ name: "root.ts", count: 1 }],
+      nestedSessions: [{
+        sessionId: "parent-root",
+        isSubagent: false
+      }]
+    });
+  });
+
+  it("keeps older-format forks without a root task boundary out of coverage", () => {
+    const parsed = parseCodexInvocations([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-03T15:00:00.000Z",
+        payload: {
+          id: "older-child",
+          timestamp: "2026-08-03T15:00:00.000Z",
+          thread_source: "subagent",
+          parent_thread_id: "older-parent",
+          source: { subagent: { other: "reviewer" } }
+        }
+      }),
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-03T15:00:00.100Z",
+        payload: { id: "older-parent", thread_source: "user" }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-08-03T15:00:00.200Z",
+        payload: { model: "gpt-5.6-sol", turn_id: "inherited-turn" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-03T15:00:00.300Z",
+        payload: {
+          type: "function_call",
+          name: "mcp__github__get_issue",
+          arguments: "{}"
+        }
+      })
+    ].join("\n"));
+
+    expect(parsed.assistantTurns).toBe(0);
+    expect(parsed.invocations).toEqual([]);
+    expect(parsed.invokedMcpTools).toEqual([]);
+    expect(parsed.contextSignal).toMatchObject({
+      sessionId: "older-child",
+      isSubagent: true,
+      parentSessionId: "older-parent",
+      nestedSessions: [{ sessionId: "older-parent", isSubagent: false }]
+    });
+  });
+
+  it("excludes undated Codex entries from selected-window coverage", () => {
+    const parsed = parseCodexInvocations([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-02T00:00:00.000Z",
+        payload: { id: "dated-root", timestamp: "2026-08-02T00:00:00.000Z" }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        payload: { model: "gpt-5.6-sol", turn_id: "undated-turn" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "mcp__private__lookup",
+          arguments: "{}"
+        }
+      })
+    ].join("\n"), Date.parse("2026-08-01T00:00:00.000Z"));
+
+    expect(parsed.assistantTurns).toBe(0);
+    expect(parsed.invocations).toEqual([]);
+  });
 });
 
 describe("loadToolInvocations", () => {
@@ -274,6 +453,26 @@ describe("loadToolInvocations", () => {
     expect(byName.Skill).toBe(1);
     expect(summary.invokedSkills).toEqual(["verify"]);
     expect(summary.sourceSessions).toEqual({ claudeCode: 2, codex: 0 });
+    expect(summary.byHost).toEqual({
+      "claude-code": {
+        sessions: 2,
+        totalAssistantTurns: 3,
+        sessionTurnCounts: [2, 1],
+        invokedMcpTools: [],
+        invokedSkills: ["verify"],
+        invokedSubagents: [],
+        invokedCommands: []
+      },
+      codex: {
+        sessions: 0,
+        totalAssistantTurns: 0,
+        sessionTurnCounts: [],
+        invokedMcpTools: [],
+        invokedSkills: [],
+        invokedSubagents: [],
+        invokedCommands: []
+      }
+    });
   });
 
   it("returns an empty summary for a missing dir without throwing", async () => {
@@ -291,7 +490,141 @@ describe("loadToolInvocations", () => {
       totalAssistantTurns: 0,
       sessionTurnCounts: [],
       sourceSessions: { claudeCode: 0, codex: 0 },
+      byHost: {
+        "claude-code": {
+          sessions: 0,
+          totalAssistantTurns: 0,
+          sessionTurnCounts: [],
+          invokedMcpTools: [],
+          invokedSkills: [],
+          invokedSubagents: [],
+          invokedCommands: []
+        },
+        codex: {
+          sessions: 0,
+          totalAssistantTurns: 0,
+          sessionTurnCounts: [],
+          invokedMcpTools: [],
+          invokedSkills: [],
+          invokedSubagents: [],
+          invokedCommands: []
+        }
+      },
       sessionSignals: []
     });
+  });
+
+  it("uses fresh pre-parsed Codex evidence without rescanning the rollout directory", async () => {
+    const parsed = parseCodexInvocations([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-06-16T11:59:59.000Z",
+        payload: { id: "shared-pass" }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-06-16T12:00:00.000Z",
+        payload: { model: "gpt-5.6-codex" }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-16T12:00:01.000Z",
+        payload: {
+          type: "function_call",
+          name: "mcp__github__get_issue",
+          arguments: "{}"
+        }
+      })
+    ].join("\n"));
+
+    const summary = await loadToolInvocations({
+      claudeProjectsDir: join(dir, "missing-claude"),
+      codexSessionsDir: join(dir, "missing-codex"),
+      codexInvocationFiles: [parsed]
+    });
+
+    expect(summary).toMatchObject({
+      sessions: 1,
+      totalAssistantTurns: 1,
+      invokedMcpTools: ["mcp__github__get_issue"],
+      sourceSessions: { claudeCode: 0, codex: 1 }
+    });
+  });
+
+  it("does not count stale Claude or Codex files as in-window coverage", async () => {
+    const staleRoot = await mkdtemp(join(tmpdir(), "tool-inv-stale-"));
+    const claudeDir = join(staleRoot, "claude");
+    const codexDir = join(staleRoot, "codex");
+    await mkdir(claudeDir, { recursive: true });
+    await mkdir(codexDir, { recursive: true });
+    try {
+      await writeFile(join(claudeDir, "old-session.jsonl"), assistantLine(
+        "old-claude",
+        "old-request",
+        [{ type: "tool_use", id: "old-tool", name: "mcp__framer__inspect", input: {} }]
+      ), "utf8");
+      await writeFile(join(codexDir, "rollout-old.jsonl"), [
+        JSON.stringify({
+          type: "session_meta",
+          timestamp: "2026-06-16T11:59:59.000Z",
+          payload: { id: "old-codex" }
+        }),
+        JSON.stringify({
+          type: "turn_context",
+          timestamp: "2026-06-16T12:00:00.000Z",
+          payload: { model: "gpt-5.6-codex" }
+        }),
+        JSON.stringify({
+          type: "response_item",
+          timestamp: "2026-06-16T12:00:01.000Z",
+          payload: {
+            type: "function_call",
+            name: "mcp__framer__inspect",
+            arguments: "{}"
+          }
+        })
+      ].join("\n"), "utf8");
+
+      const summary = await loadToolInvocations({
+        claudeProjectsDir: claudeDir,
+        codexSessionsDir: codexDir,
+        sinceIso: "2026-06-17T00:00:00.000Z"
+      });
+
+      expect(summary).toEqual({
+        invocations: [],
+        invokedMcpTools: [],
+        invokedSkills: [],
+        invokedSubagents: [],
+        invokedCommands: [],
+        sessions: 0,
+        totalAssistantTurns: 0,
+        sessionTurnCounts: [],
+        sourceSessions: { claudeCode: 0, codex: 0 },
+        byHost: {
+          "claude-code": {
+            sessions: 0,
+            totalAssistantTurns: 0,
+            sessionTurnCounts: [],
+            invokedMcpTools: [],
+            invokedSkills: [],
+            invokedSubagents: [],
+            invokedCommands: []
+          },
+          codex: {
+            sessions: 0,
+            totalAssistantTurns: 0,
+            sessionTurnCounts: [],
+            invokedMcpTools: [],
+            invokedSkills: [],
+            invokedSubagents: [],
+            invokedCommands: []
+          }
+        },
+        sessionSignals: []
+      });
+    } finally {
+      await rm(staleRoot, { recursive: true, force: true });
+    }
   });
 });

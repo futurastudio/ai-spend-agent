@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateCutList } from "./cutList.js";
 import {
   createProviderConnection,
   fetchProviderUsageRecords,
@@ -46,6 +47,7 @@ describe("real provider connector implementations", () => {
         userId: "user_jose",
         apiKeyId: "key_platform_sales",
         providerCostType: "openai_usage_evidence",
+        usageGranularity: "usage_bucket",
         quantity: 42,
         operation: "OpenAI completions usage evidence"
       })
@@ -84,6 +86,7 @@ describe("real provider connector implementations", () => {
         userId: "dev@example.com",
         projectId: "org_123",
         providerCostType: "anthropic_claude_code_usage",
+        usageGranularity: "daily_aggregate",
         quantity: 8,
         operation: "Claude Code sessions: 8; LOC +420/-90; commits 3; PRs 1"
       })
@@ -108,6 +111,7 @@ describe("real provider connector implementations", () => {
         costConfidence: "estimated",
         projectId: "futurastudio",
         providerCostType: "copilot_seat_reconciliation",
+        usageGranularity: "seat",
         operation: "GitHub Copilot business seat; last activity 2026-05-02T12:00:00Z"
       }),
       expect.objectContaining({
@@ -171,6 +175,7 @@ describe("real provider connector implementations", () => {
         projectId: "proj_sales",
         apiKeyId: "key_platform_sales",
         quantity: 12345,
+        usageGranularity: "billing_bucket",
         source: expect.objectContaining({
           id: "openai-provider-api",
           provider: "openai",
@@ -397,6 +402,7 @@ describe("real provider connector implementations", () => {
         costConfidence: "verified",
         projectId: "wrk_sales",
         providerCostType: "tokens",
+        usageGranularity: "billing_bucket",
         operation: "Claude Sonnet 4 output tokens",
         source: expect.objectContaining({ provider: "anthropic", confidence: "verified" })
       })
@@ -448,13 +454,15 @@ describe("real provider connector implementations", () => {
         costConfidence: "missing",
         operation: "chat",
         providerCostType: "copilot_usage_metrics",
+        usageGranularity: "daily_aggregate",
         projectId: "futurastudio"
       }),
       expect.objectContaining({
         model: "github-copilot-cli",
         inputTokens: 1000,
         outputTokens: 250,
-        providerCostType: "copilot_cli_metrics"
+        providerCostType: "copilot_cli_metrics",
+        usageGranularity: "daily_aggregate"
       })
     ]));
   });
@@ -791,5 +799,27 @@ describe("real provider connector implementations", () => {
     expect(cursor.qa.responseDrift).toEqual([]);
     // Cursor is spec-built, not live-verified: never labeled verified.
     expect(cursor.completeness).toBe("estimated");
+    expect(cursor.records[0]).toMatchObject({ usageGranularity: "user_aggregate" });
+  });
+
+  it("keeps real adapter aggregate shapes out of call-level cut modeling", () => {
+    const options = { sourceId: "provider", observedFrom: "provider API", accountId: "org" };
+    const records = [
+      ...normalizeOpenAiCostResponse({ data: [{ start_time: 1761955200, results: [{ amount: { value: 40, currency: "usd" }, line_item: "gpt-5.5 input tokens" }] }] }, options),
+      ...normalizeOpenAiUsageResponse({ data: [{ start_time: 1761955200, results: [{ input_tokens: 200_000, output_tokens: 1_000, num_model_requests: 20, model: "gpt-5.5" }] }] }, options),
+      ...normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-05-01T00:00:00Z", results: [{ amount: "4000", currency: "USD", cost_type: "tokens", description: "research_summary", model: "claude-fable-5" }] }] }, options),
+      ...normalizeAnthropicClaudeCodeUsageResponse({ data: [{ date: "2026-05-01", actor: { id: "dev" }, core_metrics: { num_sessions: 3 }, model_breakdown: [{ model: "claude-fable-5", tokens: { input: 200_000, output: 1_000 }, estimated_cost: { amount: 4000, currency: "USD" } }] }] }, options),
+      ...normalizeGitHubCopilotSeatResponse({ plan_type: "business", seats: [{ assignee: { login: "dev" } }] }, options),
+      ...normalizeCursorSpendResponse({ users: [{ email: "dev@example.com", spendCents: 4_000 }] }, options)
+    ];
+
+    expect(new Set(records.map((record) => record.usageGranularity))).toEqual(new Set([
+      "billing_bucket",
+      "usage_bucket",
+      "daily_aggregate",
+      "seat",
+      "user_aggregate"
+    ]));
+    expect(generateCutList(records)).toEqual([]);
   });
 });

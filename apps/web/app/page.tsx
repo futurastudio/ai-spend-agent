@@ -5,8 +5,8 @@ import { WaitlistForm } from "@/components/WaitlistForm";
 const integrations = [
   "Claude Code",
   "Codex",
-  "OpenAI billing",
-  "Anthropic billing",
+  "Anthropic billing · live-verified",
+  "OpenAI billing · reconciliation pending",
 ];
 
 const accountabilityPath = [
@@ -20,7 +20,7 @@ const accountabilityPath = [
 const accountabilityQuestions = [
   {
     status: "Available now",
-    title: "What work is driving our AI bill?",
+    title: "What work is driving the available usage and cost evidence?",
     body: "Attribute observed activity and cost evidence by project, model, agent, workspace, user, or client—only where the source exposes it.",
   },
   {
@@ -34,9 +34,9 @@ const accountabilityQuestions = [
     body: "Local plan context and optional provider reports are available now. A centralized seat and invoice ledger is Workspace next.",
   },
   {
-    status: "Partial · controls next",
+    status: "Local action available",
     title: "What changed, what needs approval, and did the action work?",
-    body: "The beta surfaces anomalies and one bounded recommendation. Shared approvals and verified results come with Workspace.",
+    body: "Apply turns local evidence into read-only checks, one approval-gated reversible change, rollback, and matched future-session verification. Shared approvals and verified company history come with Workspace.",
   },
 ];
 
@@ -128,7 +128,7 @@ export default function Home() {
             </a>
 
             <h1 className="mt-7 max-w-5xl min-w-0 text-balance text-[2.85rem] font-semibold leading-[0.96] tracking-[-0.065em] text-ink [overflow-wrap:anywhere] sm:text-[4.25rem] lg:text-[4.65rem]">
-              Know what your AI agents cost.
+              Know the cost evidence behind your AI agents.
               <br className="hidden sm:block" />{" "}
               Know what to do next.
             </h1>
@@ -198,7 +198,7 @@ export default function Home() {
             ["Local by default", "Raw transcripts stay on-device."],
             ["Source linked", "Every number names its origin."],
             ["Honest gaps", "Missing data stays missing."],
-            ["One contract", "CLI, Glance, and MCP agree."],
+            ["Shared semantics", "Overlapping evidence agrees."],
           ].map(([title, body]) => (
             <div key={title} className="px-0 sm:px-5">
               <p className="text-sm font-semibold text-ink">{title}</p>
@@ -214,11 +214,12 @@ export default function Home() {
       >
         <div className="grid gap-5 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] md:items-end">
           <h2 className="text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            One bill. Three ways to use it.
+            One evidence layer. Three ways to use it.
           </h2>
           <p className="max-w-xl text-pretty text-base leading-relaxed text-muted md:justify-self-end">
-            Each surface keeps the same evidence rules: source, freshness,
-            billing class, and missing data stay explicit.
+            Each surface keeps the same evidence rules. Available sources and
+            actions differ deliberately; source, freshness, billing class, and
+            missing data stay explicit.
           </p>
         </div>
 

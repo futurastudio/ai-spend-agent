@@ -12,9 +12,10 @@ The MCP client and the spend provider are separate concerns:
 - **MCP clients:** any stdio-compatible agent can call the tools.
 - **Local usage:** Claude Code and Codex transcript metadata.
 - **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
-- **Live verification:** OpenAI and Anthropic were exercised against their
-  read-only billing/usage APIs on 2026-07-28. Copilot and Cursor have fixture
-  and failure-path coverage but still require a live account QA pass.
+- **Live verification:** Anthropic is implemented and live-verified. OpenAI
+  authentication and endpoint access were exercised on 2026-07-28, while a
+  non-empty cost reconciliation is still pending. Copilot and Cursor have
+  fixture and failure-path coverage but still require a live account QA pass.
 
 Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 
@@ -195,8 +196,8 @@ For a deterministic demo only:
 
 ### `sync_local_agent_spend`
 
-Reads local Claude Code and Codex transcript metadata, estimates
-API-equivalent model cost, and writes a local report. The optional project
+Reads local Claude Code and Codex transcript metadata, calculates
+API-equivalent usage value, and writes a local report. The optional project
 filter matches the aggregated project name exactly.
 
 ```json
@@ -207,8 +208,13 @@ filter matches the aggregated project name exactly.
 }
 ```
 
-Returned totals are estimates, not provider invoices or subscription quota
-consumption.
+Returned totals are estimates, not provider invoices, billed spend, or
+subscription quota consumption. The response labels this as
+`valueBasis: local_api_equivalent_value_not_billed_spend`; any deterministic
+day-over-day anomaly is unavailable because daily transcript aggregates are not
+comparable call-level records. The response reports
+`anomalyBasis: unavailable_no_comparable_call_level_records` instead of
+manufacturing a billing or usage spike.
 
 ### `get_usage_glance`
 
@@ -226,6 +232,11 @@ Builds the read-only data contract for the native Glance UI:
 - one `primaryAction` derived from canonical Context Health, Main focus, and
   reported runway. It includes a compact label/detail plus a copy-ready agent
   handoff; it is never executed automatically.
+
+When `path` is supplied, project-scoped inventory uses that approved root. When
+it is omitted, MCP matches the CLI and scopes read-only inventory to the latest
+absolute working directory observed in the selected transcript calls; only when
+no transcript cwd is available does it fall back to the MCP server's cwd.
 
 ```json
 {
@@ -280,7 +291,9 @@ It distinguishes:
 - discoverable skills, commands, and subagents;
 - items explicitly invoked where the local Claude Code or Codex transcript
   exposes a matchable event;
-- MCP schema-loaded items;
+- MCP servers observed in configuration, including an explicit always-load
+  request when the config proves it (schema payload and runtime overhead remain
+  unmeasured);
 - context-injecting lifecycle events such as `SessionStart`,
   `UserPromptSubmit`, and `SubagentStart`; and
 - other lifecycle hooks that are configured but not treated as prompt
@@ -290,11 +303,11 @@ Installed hook configuration is read as metadata only. aibill never executes a
 hook command, never reads its runtime stdout, and never assigns it a token or
 dollar value. The recommendation precedence is deterministic: a large
 same-agent session can recommend starting fresh; otherwise hook review,
-never-invoked inventory, a healthy continue decision, or insufficient history
+inventory with no matching invocation, a healthy continue decision, or insufficient history
 is returned with evidence and caveats.
 Configured items whose host transcript does not expose explicit invocation
 evidence are counted as `invocationUnobservableItems` and excluded from
-never-invoked totals.
+no-matching-invocation totals.
 
 ### `sync_provider_spend`
 
@@ -345,10 +358,28 @@ provider, or explicit sample sync:
 { "path": "/Users/you/projects/your-project" }
 ```
 
+An explicit sample remains `mode: sample` after persistence. Its accounting
+policy is `demo_sample_not_user_data`; it is never silently reclassified as
+connected provider evidence.
+
 ### `recommend_cuts`
 
-Uses analyzed spend recommendations when a report exists. If only discovery
-state exists, it returns clearly labeled discovery-based guidance:
+The tool name is retained for compatibility. A modeled recommendation requires
+schema-validated `call` or `invocation` granularity, a named operation, priced
+evidence, and the action-specific workload semantics needed for its
+counterfactual (for example an adapter-attested downgrade-safe workload, Batch
+eligibility, or stable input fingerprint). Its
+response keeps the evidence window, confidence, modeled/not-verified status,
+approval boundary, rollback, and matched-verification requirement. Provider
+cost buckets, usage aggregates, seats, and user totals remain useful for
+reconciliation and attribution but do not support call-level cuts. Bundled
+sample state returns demo-only guidance; local Claude Code/Codex day aggregates
+return observed API-equivalent exposure candidates—or a collect-more-evidence
+result—because they do not prove an individual call, a safe change, or a
+savings counterfactual. Discovery-only state never invents downgrade, cache,
+batch, or savings advice. For the complete local workflow, run `npx aibill
+apply` to get read-only checks, an explicit approval gate, rollback, and matched
+future-session verification.
 
 ```json
 { "path": "/Users/you/projects/your-project" }

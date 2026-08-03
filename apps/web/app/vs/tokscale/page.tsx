@@ -18,16 +18,16 @@ const rows: Array<[string, string, string]> = [
   ["Interactive TUI and contribution graphs", "Terminal receipt + SVG card", "Yes"],
   [
     "Live subscription quota views",
-    "Detected plan + projected plan math",
+    "Reported windows when exposed + detected/declared plan context",
     "Yes — multiple providers",
   ],
   [
     "Adds official provider cost reports (OpenAI/Anthropic admin key)",
-    "Yes — kept separate from local estimates",
+    "Anthropic live-verified; OpenAI auth/endpoint exercised, non-empty reconciliation pending",
     "Quota display; not independently reconciled",
   ],
-  ["Ranked cost opportunities with modeled $/mo impact", "Yes", "—"],
-  ["Dead-context detection and measured estimates", "Yes", "—"],
+  ["Evidence-ranked action candidates", "Observed exposure locally; modeled $ only with a source-supported counterfactual", "—"],
+  ["Context inventory and invocation coverage", "Yes — loading/overhead stays unmeasured where the host does not expose it", "—"],
   ["Optional public leaderboard", "No", "Yes — opt-in submission"],
   ["Local-first by default", "Yes", "Yes"],
   ["Open source", "MIT", "Yes"],
@@ -57,8 +57,9 @@ export default function Page() {
             reads your Claude Code and Codex logs the same way — locally, no
             account — then adds the layers you need to act:{" "}
             <span className="text-ink">
-              plan-vs-API math, ranked cost opportunities with a verification
-              step, hook-aware Context Health, and official provider cost
+              API-rate comparison beside plan context, evidence-ranked candidates
+              with approval and matched verification, hook-aware Context Health,
+              and official provider cost
               reports kept separate from local estimates
             </span>{" "}
             when you connect an admin key.
@@ -109,8 +110,9 @@ export default function Page() {
           <p className="mt-4 text-base leading-relaxed text-muted">
             Use tokscale when you want broad tool coverage, live quota views,
             a TUI, or social usage graphs. Use aibill when the question behind
-            the number is what to do next: which plan fits, what to investigate,
-            and how local estimates compare with provider cost reports. Both are free;
+            the number is what to do next: what plan evidence exists, what to
+            investigate, and how API-equivalent value compares with detected or
+            declared plan context and provider cost reports. Both are free;
             trying both takes two npx commands.
           </p>
         </Reveal>

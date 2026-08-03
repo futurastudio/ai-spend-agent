@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 final class GlanceStore: ObservableObject {
+  static let refreshInterval: TimeInterval = 30
+
   @Published private(set) var snapshot: UsageGlanceSnapshot?
   @Published private(set) var isRefreshing = false
   @Published private(set) var errorMessage: String?
@@ -16,9 +18,19 @@ final class GlanceStore: ObservableObject {
     guard !refreshLoopStarted else { return }
     refreshLoopStarted = true
     while !Task.isCancelled {
+      let cycleStartedAt = Date()
       await refresh()
-      try? await Task.sleep(for: .seconds(30))
+      let delay = Self.nextRefreshDelay(
+        elapsedSeconds: Date().timeIntervalSince(cycleStartedAt)
+      )
+      if delay > 0 {
+        try? await Task.sleep(for: .seconds(delay))
+      }
     }
+  }
+
+  static func nextRefreshDelay(elapsedSeconds: TimeInterval) -> TimeInterval {
+    max(0, refreshInterval - max(0, elapsedSeconds))
   }
 
   func refresh() async {
@@ -52,6 +64,49 @@ final class GlanceStore: ObservableObject {
   }
 }
 
+struct GlancePrimaryActionPresentation: Equatable {
+  enum Intent: Equatable {
+    case copy
+    case refresh
+    case none
+  }
+
+  let intent: Intent
+  let label: String
+  let symbol: String
+  let isEnabled: Bool
+
+  static func build(
+    actionAvailable: Bool,
+    actionCopied: Bool,
+    refresh: GlanceRefreshPresentation,
+    isRefreshing: Bool
+  ) -> Self {
+    if actionAvailable && refresh.allowsEvidenceCopy {
+      return Self(
+        intent: .copy,
+        label: actionCopied ? "Copied" : "Copy",
+        symbol: actionCopied ? "checkmark" : "doc.on.doc",
+        isEnabled: true
+      )
+    }
+    if isRefreshing {
+      return Self(
+        intent: .none,
+        label: "Updating",
+        symbol: "arrow.clockwise",
+        isEnabled: false
+      )
+    }
+    return Self(
+      intent: .refresh,
+      label: "Refresh",
+      symbol: "arrow.clockwise",
+      isEnabled: true
+    )
+  }
+}
+
 struct GlanceRefreshPresentation: Equatable {
   enum State: Equatable {
     case loading
@@ -66,6 +121,8 @@ struct GlanceRefreshPresentation: Equatable {
   let label: String
   let help: String
   let symbol: String
+
+  var allowsEvidenceCopy: Bool { state == .fresh }
 
   static func build(
     now: Date,

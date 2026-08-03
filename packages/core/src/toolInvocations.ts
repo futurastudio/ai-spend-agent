@@ -26,6 +26,22 @@ import { homedir } from "node:os";
 
 export type ToolInvocationCount = { name: string; count: number };
 
+export type HostInvocationEvidence = {
+  sessions: number;
+  totalAssistantTurns: number;
+  sessionTurnCounts: number[];
+  invokedMcpTools: string[];
+  invokedSkills: string[];
+  invokedSubagents: string[];
+  invokedCommands: string[];
+};
+
+export type NestedSessionMetadata = {
+  sessionId?: string;
+  isSubagent: boolean;
+  parentSessionId?: string;
+};
+
 export type SessionContextSignal = {
   agent: "claude-code" | "codex";
   sessionId?: string;
@@ -41,6 +57,8 @@ export type SessionContextSignal = {
   /** Whether this transcript is a Claude sidechain/subagent transcript. */
   isSubagent: boolean;
   parentSessionId?: string;
+  /** Embedded/fork-history metadata, kept separate from this file's root identity. */
+  nestedSessions?: NestedSessionMetadata[];
   /**
    * Coverage is intentionally narrow. Shell commands are not parsed as file
    * reads because doing so would turn arbitrary command text into a heuristic.
@@ -59,7 +77,7 @@ export type InvocationSummary = {
   invokedSubagents: string[];
   /** distinct slash-command names invoked, if detectable; else [] */
   invokedCommands: string[];
-  /** number of transcript files parsed (≈ sessions) */
+  /** transcript files with at least one assistant turn in the selected window */
   sessions: number;
   /** total assistant turns across all sessions (post-dedupe) */
   totalAssistantTurns: number;
@@ -70,8 +88,24 @@ export type InvocationSummary = {
     claudeCode: number;
     codex: number;
   };
+  /** Host-isolated coverage and matchable invocation evidence. */
+  byHost?: {
+    "claude-code": HostInvocationEvidence;
+    codex: HostInvocationEvidence;
+  };
   /** Per-transcript compaction/read evidence used by Context Health. */
   sessionSignals?: SessionContextSignal[];
+};
+
+/** Privacy-safe per-file result; it never contains prompt text or local paths. */
+export type ParsedInvocationFile = {
+  invocations: ToolInvocationCount[];
+  invokedMcpTools: string[];
+  invokedSkills: string[];
+  invokedSubagents: string[];
+  invokedCommands: string[];
+  assistantTurns: number;
+  contextSignal: SessionContextSignal;
 };
 
 export type ToolInvocationOptions = {
@@ -81,18 +115,19 @@ export type ToolInvocationOptions = {
   codexSessionsDir?: string;
   /** optional: only count turns at/after this time */
   sinceIso?: string;
+  /**
+   * Fresh Codex summaries collected while usage parsed the same files. Supplying
+   * these skips a second rollout read/JSON parse in the same command. The
+   * summaries contain counts and basenames only, never raw transcript text.
+   */
+  codexInvocationFiles?: ParsedInvocationFile[];
 };
 
 /** Parse ONE transcript's content. Exported for tests. Returns the per-file pieces the aggregator needs. */
-export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
-  invocations: ToolInvocationCount[];
-  invokedMcpTools: string[];
-  invokedSkills: string[];
-  invokedSubagents: string[];
-  invokedCommands: string[];
-  assistantTurns: number;
-  contextSignal: SessionContextSignal;
-} {
+export function parseClaudeCodeInvocations(
+  content: string,
+  sinceMs?: number
+): ParsedInvocationFile {
   const counts = new Map<string, number>();
   const mcpTools = new Set<string>();
   const skills = new Set<string>();
@@ -124,10 +159,12 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
       lastActivityAt = timestamp;
     }
 
-    // sinceIso filter: skip lines older than the cutoff when a timestamp exists.
+    // A selected window requires dated evidence. Undated lines cannot prove an
+    // invocation occurred inside that window and must not create removal-safe
+    // coverage by accident.
     if (typeof sinceMs === "number") {
       const ts = Date.parse(stringOf(entry.timestamp) ?? "");
-      if (Number.isFinite(ts) && ts < sinceMs) continue;
+      if (!Number.isFinite(ts) || ts < sinceMs) continue;
     }
     if (isClaudeCompactionEntry(entry)) compactionEvents += 1;
 
@@ -196,14 +233,31 @@ export function parseClaudeCodeInvocations(content: string, sinceMs?: number): {
 }
 
 /** Parse ONE Codex rollout's tool/skill/subagent invocations. */
-export function parseCodexInvocations(content: string, sinceMs?: number): {
-  invocations: ToolInvocationCount[];
-  invokedMcpTools: string[];
-  invokedSkills: string[];
-  invokedSubagents: string[];
-  invokedCommands: string[];
-  assistantTurns: number;
-  contextSignal: SessionContextSignal;
+export function parseCodexInvocations(
+  content: string,
+  sinceMs?: number
+): ParsedInvocationFile {
+  const collector = createCodexInvocationCollector(sinceMs);
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isRecord(entry)) collector.consume(entry);
+  }
+  return collector.finish();
+}
+
+/**
+ * Stateful Codex invocation parser used to share localAgentLogs' JSONL pass.
+ * One collector is created per rollout file and discarded after `finish()`.
+ */
+export function createCodexInvocationCollector(sinceMs?: number): {
+  consume: (entry: Record<string, unknown>) => void;
+  finish: () => ParsedInvocationFile;
 } {
   const counts = new Map<string, number>();
   const mcpTools = new Set<string>();
@@ -213,31 +267,73 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
   const fileReads = new Map<string, number>();
   let assistantTurns = 0;
   let sessionId: string | undefined;
+  let rootSessionMetaSeen = false;
+  let rootStartedAtMs: number | undefined;
+  let rootTaskStarted = false;
   let lastActivityAt: string | undefined;
   let compactionEvents = 0;
+  let isSubagent = false;
+  let parentSessionId: string | undefined;
+  const nestedSessions = new Map<string, NestedSessionMetadata>();
 
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
+  const resetObservedEvidence = (): void => {
+    counts.clear();
+    mcpTools.clear();
+    skills.clear();
+    subagents.clear();
+    commands.clear();
+    fileReads.clear();
+    assistantTurns = 0;
+    compactionEvents = 0;
+  };
+
+  const consume = (entry: Record<string, unknown>): void => {
+    const payload = isRecord(entry.payload) ? entry.payload : undefined;
+    if (entry.type === "session_meta" && payload) {
+      const metadata = codexSessionMetadata(payload);
+      if (!rootSessionMetaSeen) {
+        // Forked rollouts can contain a complete parent history after the
+        // first line. Bind this file to its first/root metadata exactly once.
+        rootSessionMetaSeen = true;
+        sessionId = metadata.sessionId;
+        isSubagent = metadata.isSubagent;
+        parentSessionId = metadata.parentSessionId;
+        rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
+      } else if (
+        metadata.sessionId !== sessionId ||
+        metadata.parentSessionId !== parentSessionId ||
+        metadata.isSubagent !== isSubagent
+      ) {
+        const key = [
+          metadata.sessionId ?? "",
+          metadata.parentSessionId ?? "",
+          metadata.isSubagent ? "subagent" : "session"
+        ].join("\u0000");
+        nestedSessions.set(key, metadata);
+      }
     }
-    if (!isRecord(entry)) continue;
+    if (
+      isSubagent &&
+      !rootTaskStarted &&
+      payload?.type === "task_started" &&
+      isRootSpecificTaskStart(payload.started_at, rootStartedAtMs)
+    ) {
+      // Everything before this boundary is inherited parent history copied
+      // into the fork. It is useful nested provenance, but it is not evidence
+      // that the child invoked those tools or incurred those compactions.
+      rootTaskStarted = true;
+      resetObservedEvidence();
+      lastActivityAt = stringOf(entry.timestamp) ?? lastActivityAt;
+    }
     const timestampValue = stringOf(entry.timestamp);
     if (timestampValue && (!lastActivityAt || timestampValue > lastActivityAt)) {
       lastActivityAt = timestampValue;
     }
     if (typeof sinceMs === "number") {
       const timestamp = Date.parse(stringOf(entry.timestamp) ?? "");
-      if (Number.isFinite(timestamp) && timestamp < sinceMs) continue;
+      if (!Number.isFinite(timestamp) || timestamp < sinceMs) return;
     }
-    const payload = isRecord(entry.payload) ? entry.payload : undefined;
-    if (!payload) continue;
-    if (entry.type === "session_meta") {
-      sessionId = stringOf(payload.id) ?? sessionId;
-    }
+    if (!payload) return;
     // Codex writes both a top-level `compacted` entry and a separate
     // `context_compacted` event for one compaction. Count only the former.
     if (entry.type === "compacted") compactionEvents += 1;
@@ -245,7 +341,7 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
     // Codex emits one turn_context per model turn.
     if (entry.type === "turn_context") {
       assistantTurns += 1;
-      continue;
+      return;
     }
 
     if (payload.type === "message" && payload.role === "user") {
@@ -253,14 +349,14 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
         const command = /^\s*\/([A-Za-z0-9:_-]+)/.exec(text)?.[1];
         if (command) commands.add(command);
       }
-      continue;
+      return;
     }
 
     if (payload.type !== "function_call" && payload.type !== "custom_tool_call") {
-      continue;
+      return;
     }
     const name = stringOf(payload.name);
-    if (!name) continue;
+    if (!name) return;
     counts.set(name, (counts.get(name) ?? 0) + 1);
     const input = codexToolInput(payload);
     if (name.startsWith("mcp__")) {
@@ -278,26 +374,36 @@ export function parseCodexInvocations(content: string, sinceMs?: number): {
     }
     const file = input && explicitReadFile(name, input);
     if (file) fileReads.set(file, (fileReads.get(file) ?? 0) + 1);
-  }
-
-  return {
-    invocations: [...counts.entries()]
-      .map(([name, count]) => ({ name, count }))
-      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
-    invokedMcpTools: [...mcpTools].sort(),
-    invokedSkills: [...skills].sort(),
-    invokedSubagents: [...subagents].sort(),
-    invokedCommands: [...commands].sort(),
-    assistantTurns,
-    contextSignal: buildSessionContextSignal({
-      agent: "codex",
-      sessionId,
-      lastActivityAt,
-      compactionEvents,
-      fileReads,
-      isSubagent: false
-    })
   };
+
+  const finish = (): ParsedInvocationFile => {
+    // Without a recognized root task boundary, an older-format child file is
+    // indistinguishable from copied parent history. Preserve nested metadata,
+    // but do not manufacture child invocation/turn coverage from it.
+    if (isSubagent && !rootTaskStarted) resetObservedEvidence();
+    return {
+      invocations: [...counts.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
+      invokedMcpTools: [...mcpTools].sort(),
+      invokedSkills: [...skills].sort(),
+      invokedSubagents: [...subagents].sort(),
+      invokedCommands: [...commands].sort(),
+      assistantTurns,
+      contextSignal: buildSessionContextSignal({
+        agent: "codex",
+        sessionId,
+        lastActivityAt,
+        compactionEvents,
+        fileReads,
+        isSubagent,
+        parentSessionId,
+        nestedSessions: [...nestedSessions.values()]
+      })
+    };
+  };
+
+  return { consume, finish };
 }
 
 /** Scan this machine's Claude Code + Codex transcripts and aggregate invocations. */
@@ -314,6 +420,10 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   const commands = new Set<string>();
   const sessionTurnCounts: number[] = [];
   const sessionSignals: SessionContextSignal[] = [];
+  const hostEvidence = {
+    "claude-code": createHostInvocationAccumulator(),
+    codex: createHostInvocationAccumulator()
+  };
   let sessions = 0;
   let claudeCodeSessions = 0;
   let codexSessions = 0;
@@ -321,11 +431,17 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   for (const file of await listJsonlFiles(claudeDir)) {
     const content = await readFile(file, "utf8").catch(() => "");
     if (!content) continue;
+    const parsed = parseClaudeCodeInvocations(content, sinceMs);
+    // A transcript file is not coverage for the selected window merely
+    // because it exists on disk. Without an in-window assistant turn there
+    // was no opportunity to observe an invocation, so counting the file would
+    // manufacture configured-without-invocation findings from stale history.
+    if (parsed.assistantTurns === 0) continue;
     sessions += 1;
     claudeCodeSessions += 1;
-    const parsed = parseClaudeCodeInvocations(content, sinceMs);
     sessionTurnCounts.push(parsed.assistantTurns);
     sessionSignals.push(parsed.contextSignal);
+    addHostInvocationEvidence(hostEvidence["claude-code"], parsed);
     for (const { name, count } of parsed.invocations) {
       counts.set(name, (counts.get(name) ?? 0) + count);
     }
@@ -334,15 +450,23 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
     for (const s of parsed.invokedSubagents) subagents.add(s);
     for (const c of parsed.invokedCommands) commands.add(c);
   }
-  for (const file of await listJsonlFiles(codexDir)) {
-    if (!file.split(/[\\/]/).pop()?.startsWith("rollout-")) continue;
-    const content = await readFile(file, "utf8").catch(() => "");
-    if (!content) continue;
+  const codexInvocationFiles = options.codexInvocationFiles ?? await (async () => {
+    const parsedFiles: ParsedInvocationFile[] = [];
+    for (const file of await listJsonlFiles(codexDir)) {
+      if (!file.split(/[\\/]/).pop()?.startsWith("rollout-")) continue;
+      const content = await readFile(file, "utf8").catch(() => "");
+      if (!content) continue;
+      parsedFiles.push(parseCodexInvocations(content, sinceMs));
+    }
+    return parsedFiles;
+  })();
+  for (const parsed of codexInvocationFiles) {
+    if (parsed.assistantTurns === 0) continue;
     sessions += 1;
     codexSessions += 1;
-    const parsed = parseCodexInvocations(content, sinceMs);
     sessionTurnCounts.push(parsed.assistantTurns);
     sessionSignals.push(parsed.contextSignal);
+    addHostInvocationEvidence(hostEvidence.codex, parsed);
     for (const { name, count } of parsed.invocations) {
       counts.set(name, (counts.get(name) ?? 0) + count);
     }
@@ -369,7 +493,54 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
       claudeCode: claudeCodeSessions,
       codex: codexSessions
     },
+    byHost: {
+      "claude-code": finishHostInvocationEvidence(hostEvidence["claude-code"]),
+      codex: finishHostInvocationEvidence(hostEvidence.codex)
+    },
     sessionSignals
+  };
+}
+
+type HostInvocationAccumulator = {
+  sessionTurnCounts: number[];
+  mcpTools: Set<string>;
+  skills: Set<string>;
+  subagents: Set<string>;
+  commands: Set<string>;
+};
+
+function createHostInvocationAccumulator(): HostInvocationAccumulator {
+  return {
+    sessionTurnCounts: [],
+    mcpTools: new Set<string>(),
+    skills: new Set<string>(),
+    subagents: new Set<string>(),
+    commands: new Set<string>()
+  };
+}
+
+function addHostInvocationEvidence(
+  accumulator: HostInvocationAccumulator,
+  parsed: ParsedInvocationFile
+): void {
+  accumulator.sessionTurnCounts.push(parsed.assistantTurns);
+  parsed.invokedMcpTools.forEach((value) => accumulator.mcpTools.add(value));
+  parsed.invokedSkills.forEach((value) => accumulator.skills.add(value));
+  parsed.invokedSubagents.forEach((value) => accumulator.subagents.add(value));
+  parsed.invokedCommands.forEach((value) => accumulator.commands.add(value));
+}
+
+function finishHostInvocationEvidence(
+  accumulator: HostInvocationAccumulator
+): HostInvocationEvidence {
+  return {
+    sessions: accumulator.sessionTurnCounts.length,
+    totalAssistantTurns: accumulator.sessionTurnCounts.reduce((sum, count) => sum + count, 0),
+    sessionTurnCounts: accumulator.sessionTurnCounts,
+    invokedMcpTools: [...accumulator.mcpTools].sort(),
+    invokedSkills: [...accumulator.skills].sort(),
+    invokedSubagents: [...accumulator.subagents].sort(),
+    invokedCommands: [...accumulator.commands].sort()
   };
 }
 
@@ -482,6 +653,7 @@ function buildSessionContextSignal(input: {
   fileReads: Map<string, number>;
   isSubagent: boolean;
   parentSessionId?: string;
+  nestedSessions?: NestedSessionMetadata[];
 }): SessionContextSignal {
   const fileReads = [...input.fileReads.entries()]
     .map(([name, count]) => ({ name, count }))
@@ -495,8 +667,44 @@ function buildSessionContextSignal(input: {
     repeatedFileReads: fileReads.filter((file) => file.count > 1),
     isSubagent: input.isSubagent,
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+    ...(input.nestedSessions && input.nestedSessions.length > 0
+      ? { nestedSessions: input.nestedSessions }
+      : {}),
     readCoverage: "explicit_read_tools_only"
   };
+}
+
+function codexSessionMetadata(payload: Record<string, unknown>): NestedSessionMetadata {
+  return {
+    ...(stringOf(payload.id) ? { sessionId: stringOf(payload.id) } : {}),
+    isSubagent: stringOf(payload.thread_source) === "subagent" ||
+      isRecord(payload.source) && "subagent" in payload.source,
+    ...(stringOf(payload.parent_thread_id)
+      ? { parentSessionId: stringOf(payload.parent_thread_id) }
+      : {})
+  };
+}
+
+const ROOT_TASK_CLOCK_TOLERANCE_MS = 5_000;
+
+function isRootSpecificTaskStart(value: unknown, rootStartedAtMs: number | undefined): boolean {
+  const taskStartedAtMs = timestampMilliseconds(value);
+  return typeof rootStartedAtMs === "number" &&
+    typeof taskStartedAtMs === "number" &&
+    taskStartedAtMs >= rootStartedAtMs - ROOT_TASK_CLOCK_TOLERANCE_MS;
+}
+
+function timestampMilliseconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1_000 : value;
+  }
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return numeric < 1_000_000_000_000 ? numeric * 1_000 : numeric;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

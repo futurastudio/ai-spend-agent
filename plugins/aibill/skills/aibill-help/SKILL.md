@@ -12,21 +12,26 @@ the user also asks for their current data.
 
 - Terminal: use `npx aibill` for the spend readout,
   `npx aibill context` for human-readable Context Health, and
-  `npx aibill context --json` for the canonical structured contract.
+  `npx aibill context --json` for the canonical structured contract. Use
+  `npx aibill apply` for the complete evidence-constrained action plan: verify
+  candidates, request approval, make one bounded change, and compare matched
+  future sessions before claiming an improvement.
 - MCP/plugin: install the aibill plugin when the user wants an AI client to
   fetch the same contract on demand. The skills are explicit-only and the
   plugin has no lifecycle hooks.
-- macOS Glance: use the optional native app for a hover-only compact view. It
-  shells out to `aibill glance`, so it renders the same local snapshot rather
-  than maintaining a separate data store.
+- macOS Glance: build the optional source preview for a hover-only compact view.
+  It launches a local `aibill glance` subprocess, so it renders the same local
+  snapshot rather than maintaining a separate data store. A signed public Mac
+  download is not available yet.
 
 ## Choosing
 
-- Recommend terminal for private, scriptable inspection with no AI-client
-  handoff.
+- Recommend terminal for the most complete private workflow, including the
+  copy-ready Apply plan for an AI coding agent.
 - Recommend MCP/plugin for conversational analysis inside a supported AI
   client.
 - Recommend Glance for passive awareness of session value, reported limits,
-  focus, and one Context Health action on macOS.
-- Users can install more than one surface; their decision and provenance fields
+  focus, and one Context Health session handoff on macOS. Its compact Copy
+  action is project-aware but is not a replacement for the full Apply plan.
+- Users can use more than one surface; their decision and provenance fields
   remain aligned through the shared core contract.

@@ -14,11 +14,11 @@ import { homedir } from "node:os";
  *  - Skills use *progressive disclosure*: only the YAML frontmatter (`name` +
  *    `description`) is always loaded — the body loads only when invoked. So a
  *    skill's alwaysLoadedTokens reflects ONLY name + description, never the body.
- *  - MCP tools: the FULL tool definition (name + description + JSON input schema)
- *    is always loaded — the heavy weight. Local host config almost never carries
- *    tool schemas, so MCP enumeration is usually limited to server names;
- *    those items are flagged "estimated_understated" because the real weight is
- *    larger than what we can see.
+ *  - MCP servers: configuration proves that a server is available, not that its
+ *    tool schemas were loaded into a model request. Current Claude Code defers
+ *    schemas by default through Tool Search. We therefore keep configured and
+ *    explicitly-always-loaded states separate and never invent a token weight
+ *    from config alone.
  *  - Subagents / slash commands: estimate from their description/frontmatter line
  *    only (what is surfaced in the always-loaded list), not the whole file body.
  *  - Built-in tools (Read/Edit/Bash/Glob/Grep/etc.) are EXCLUDED entirely: always
@@ -35,11 +35,16 @@ export type InventoryKind =
 
 export type InventoryActivation =
   | "discoverable"
+  | "mcp_configured"
+  | "mcp_always_loaded"
+  /** Legacy fixture/adapter value. New inventory does not emit this. */
   | "mcp_schema_loaded"
   | "hook_injected"
   | "lifecycle_hook";
 
 export type InventoryHost = "claude-code" | "codex";
+
+export type InventoryScope = "user" | "local" | "project";
 
 export type InventoryItem = {
   kind: InventoryKind;
@@ -48,7 +53,7 @@ export type InventoryItem = {
    * the server id; skill/subagent/command: their declared name.
    */
   name: string;
-  scope: "user" | "project";
+  scope: InventoryScope;
   /** e.g. mcp server name for an mcp_tool, plugin name for a plugin skill. */
   group?: string;
   /** How the host makes this item available to the model/runtime. */
@@ -114,13 +119,7 @@ export function estimateTokensFromText(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/**
- * Conservative floor for an MCP server's always-loaded token weight when its
- * tool schemas aren't readable from config. A single tool's
- * name+description+JSON-schema is commonly ~300–800 tokens and servers usually
- * expose several; 700 is a deliberately low estimate, always paired with
- * weightConfidence "estimated_understated" so we under-claim, never over-claim.
- */
+/** @deprecated Config alone cannot prove that MCP schemas were loaded. */
 export const MCP_SERVER_TOKEN_FLOOR = 700;
 
 /** Scan this machine's (and the project's) agent inventory. Never throws. */
@@ -285,31 +284,39 @@ export async function loadAgentInventory(
     }
   }
 
-  // --- MCP servers (from ~/.claude.json: top-level + per-project map) ---
+  // --- MCP servers -------------------------------------------------------
+  // Claude Code's active MCP configuration lives in ~/.claude.json (user and
+  // local scopes) plus <project>/.mcp.json (project scope). settings.json is
+  // intentionally NOT treated as an active MCP source: legacy/stale mcpServers
+  // keys there must not turn into removal advice.
   const serverScopes = new Map<string, {
     id: string;
-    scope: "user" | "project";
+    scope: InventoryScope;
     ownerDirs: string[];
     path: string;
     host: InventoryHost;
+    alwaysLoad: boolean;
   }>();
-  for (const sourcePath of [...new Set([configPath, settingsPath])]) {
-    const config = await readJson(sourcePath);
-    for (const server of collectMcpServers(
-      config,
-      projectDir,
-      options.includeAllProjectMcp ?? false
-    )) {
-      const key = `claude-code:${server.scope}:${server.id}`;
-      const prior = serverScopes.get(key);
-      if (prior) {
-        for (const ownerDir of server.ownerDirs) {
-          if (!prior.ownerDirs.includes(ownerDir)) prior.ownerDirs.push(ownerDir);
-        }
-      } else {
-        serverScopes.set(key, { ...server, path: sourcePath, host: "claude-code" });
-      }
-    }
+  const claudeConfig = await readJson(configPath);
+  for (const server of collectMcpServers(
+    claudeConfig,
+    projectDir,
+    options.includeAllProjectMcp ?? false
+  )) {
+    mergeServerScope(serverScopes, {
+      ...server,
+      path: configPath,
+      host: "claude-code"
+    });
+  }
+  const projectMcpPath = join(projectDir, ".mcp.json");
+  const projectMcpConfig = await readJson(projectMcpPath);
+  for (const server of collectProjectMcpServers(projectMcpConfig, projectDir)) {
+    mergeServerScope(serverScopes, {
+      ...server,
+      path: projectMcpPath,
+      host: "claude-code"
+    });
   }
   const codexConfigPath = join(codexHome, "config.toml");
   const codexConfigText = await readFile(codexConfigPath, "utf8").catch(() => "");
@@ -321,28 +328,33 @@ export async function loadAgentInventory(
         scope: "user",
         ownerDirs: [],
         path: codexConfigPath,
-        host: "codex"
+        host: "codex",
+        alwaysLoad: false
       });
     }
   }
-  for (const { id, scope, ownerDirs, path, host } of serverScopes.values()) {
+  for (const { id, scope, ownerDirs, path, host, alwaysLoad } of serverScopes.values()) {
     scanned.mcpServers += 1;
-    // We almost never have tool schemas from config, so we can't measure the
-    // real weight (full tool definitions). Use a conservative published-typical
-    // FLOOR per server instead of the bare id — a single MCP tool's
-    // name+description+JSON schema is commonly several hundred tokens, and
-    // servers usually expose multiple tools. Flagged "estimated_understated":
-    // the true weight is almost certainly higher, never lower.
+    // Claude transcripts identify an invoked MCP server by name, not by the
+    // concrete local config entry that supplied it. When same-named entries
+    // from multiple project roots were merged above, treating the aggregate as
+    // observable could produce one ambiguous action spanning several owners.
+    // Keep it visible as inventory, but exclude it from never-invoked actions.
+    const invocationTracking = host === "claude-code" && ownerDirs.length <= 1
+      ? "observable" as const
+      : "not_observable" as const;
     items.push({
       kind: "mcp_server",
       name: id,
       scope,
       group: id,
-      activation: "mcp_schema_loaded",
+      activation: alwaysLoad ? "mcp_always_loaded" : "mcp_configured",
       host,
-      invocationTracking: host === "claude-code" ? "observable" : "not_observable",
-      alwaysLoadedTokens: MCP_SERVER_TOKEN_FLOOR,
-      weightConfidence: "estimated_understated",
+      invocationTracking,
+      // Config has no tool schema payload. Even alwaysLoad proves intent, not
+      // the connected server's runtime schema size.
+      alwaysLoadedTokens: 0,
+      weightConfidence: "unmeasured",
       path,
       ownerDirs
     });
@@ -350,6 +362,69 @@ export async function loadAgentInventory(
 
   // --- Installed lifecycle hooks (metadata only; commands are NEVER run) ---
   const seenHooks = new Set<string>();
+
+  // Ordinary Claude settings can register hooks without an installed plugin.
+  // Read only a fixed allowlist of event and hook-type categories. Matcher,
+  // command, prompt, URL, headers, environment, and all other runtime payloads
+  // are deliberately neither copied nor surfaced in inventory metadata.
+  const seenSettingsPaths = new Set<string>();
+  for (const source of [
+    {
+      configPath: settingsPath,
+      scope: "user" as const,
+      sourceId: "user",
+      label: "Claude user settings"
+    },
+    {
+      configPath: join(projectClaude, "settings.json"),
+      scope: "project" as const,
+      sourceId: "project",
+      label: "Claude project settings"
+    },
+    {
+      configPath: join(projectClaude, "settings.local.json"),
+      scope: "local" as const,
+      sourceId: "project-local",
+      label: "Claude project-local settings"
+    }
+  ]) {
+    const resolvedPath = resolve(source.configPath);
+    if (seenSettingsPaths.has(resolvedPath)) continue;
+    seenSettingsPaths.add(resolvedPath);
+
+    const settings = await readJson(source.configPath);
+    if (!isRecord(settings) || !isRecord(settings.hooks)) continue;
+    const events = Object.entries(settings.hooks)
+      .filter(([event, registrations]) =>
+        isKnownClaudeHookEvent(event) && hasConfiguredHookRegistration(registrations)
+      )
+      .map(([event]) => event);
+    if (events.length === 0) continue;
+    scanned.hookManifests += 1;
+
+    for (const event of events) {
+      const key = `claude-code:settings:${source.sourceId}:${event}`;
+      if (seenHooks.has(key)) continue;
+      seenHooks.add(key);
+      scanned.hooks += 1;
+      items.push({
+        kind: "hook",
+        name: `claude-settings:${source.sourceId}:${event}`,
+        scope: source.scope,
+        group: source.label,
+        activation: contextInjectingEvent(event) ? "hook_injected" : "lifecycle_hook",
+        host: "claude-code",
+        event,
+        invocationTracking: "not_observable",
+        alwaysLoadedTokens: 0,
+        weightConfidence: "unmeasured",
+        // contextHealth surfaces this field as provenance. Use a fixed label,
+        // never an absolute user/project path.
+        path: source.label
+      });
+    }
+  }
+
   for (const pluginRoot of pluginRoots) {
     for (const manifestPath of await pluginManifestPaths(pluginRoot.root)) {
       const manifest = await readJson(manifestPath);
@@ -552,6 +627,57 @@ function contextInjectingEvent(event: string): boolean {
     event === "SubagentStart";
 }
 
+// Claude rejects unknown event names, and accepting arbitrary object keys here
+// would let instruction-like config keys flow into MCP/context-health output.
+// Keep this list explicit and update it alongside supported Claude hook events.
+const KNOWN_CLAUDE_HOOK_EVENTS = new Set([
+  "PreToolUse",
+  "PermissionRequest",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "Notification",
+  "UserPromptSubmit",
+  "SessionStart",
+  "SessionEnd",
+  "Stop",
+  "SubagentStart",
+  "SubagentStop",
+  "PreCompact",
+  "Setup",
+  "TeammateIdle",
+  "TaskCompleted",
+  "ConfigChange",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "InstructionsLoaded",
+  "Elicitation",
+  "ElicitationResult"
+]);
+
+const KNOWN_CLAUDE_HOOK_TYPES = new Set([
+  "command",
+  "prompt",
+  "agent",
+  "http"
+]);
+
+function isKnownClaudeHookEvent(event: string): boolean {
+  return KNOWN_CLAUDE_HOOK_EVENTS.has(event);
+}
+
+function hasConfiguredHookRegistration(registrations: unknown): boolean {
+  if (!Array.isArray(registrations)) return false;
+  return registrations.some((registration) =>
+    isRecord(registration) &&
+    Array.isArray(registration.hooks) &&
+    registration.hooks.some((hook) =>
+      isRecord(hook) &&
+      typeof hook.type === "string" &&
+      KNOWN_CLAUDE_HOOK_TYPES.has(hook.type)
+    )
+  );
+}
+
 function isWithinRoot(path: string, root: string): boolean {
   const resolvedPath = resolve(path);
   const resolvedRoot = resolve(root);
@@ -572,29 +698,31 @@ function collectMcpServers(
   config: unknown,
   projectDir: string,
   includeAllProjectMcp: boolean
-): Array<{ id: string; scope: "user" | "project"; ownerDirs: string[] }> {
+): Array<{ id: string; scope: "user" | "local"; ownerDirs: string[]; alwaysLoad: boolean }> {
   if (!isRecord(config)) return [];
-  const byKey = new Map<string, { id: string; scope: "user" | "project"; ownerDirs: string[] }>();
+  const byKey = new Map<string, { id: string; scope: "user" | "local"; ownerDirs: string[]; alwaysLoad: boolean }>();
 
-  const add = (id: string, scope: "user" | "project", ownerDir?: string) => {
-    // Dedupe by id across all scopes so a server configured in several projects
-    // is counted once in the global view — but keep EVERY owning project dir,
-    // because that's where `claude mcp remove` has to run.
-    const key = includeAllProjectMcp ? id : `${scope}:${id}`;
+  const add = (id: string, value: unknown, scope: "user" | "local", ownerDir?: string) => {
+    // Keep user and local configurations separate. A same-named user server and
+    // local override have different ownership, precedence, and rollback.
+    const key = `${scope}:${id}`;
+    const alwaysLoad = isRecord(value) && value.alwaysLoad === true;
     const existing = byKey.get(key);
     if (existing) {
       if (ownerDir && !existing.ownerDirs.includes(ownerDir)) existing.ownerDirs.push(ownerDir);
+      existing.alwaysLoad ||= alwaysLoad;
       return;
     }
-    byKey.set(key, { id, scope, ownerDirs: ownerDir ? [ownerDir] : [] });
+    byKey.set(key, { id, scope, ownerDirs: ownerDir ? [ownerDir] : [], alwaysLoad });
   };
 
   // Top-level mcpServers are user-scope (global).
   if (isRecord(config.mcpServers)) {
-    for (const id of Object.keys(config.mcpServers)) add(id, "user");
+    for (const [id, value] of Object.entries(config.mcpServers)) add(id, value, "user");
   }
 
-  // Per-project mcpServers live under projects[<absolute dir>].mcpServers.
+  // Per-project entries in ~/.claude.json are Claude's LOCAL scope (private to
+  // the user and active only from that working directory), not project scope.
   // Global view: collect every project's servers; otherwise just this project's.
   if (isRecord(config.projects)) {
     const entries = includeAllProjectMcp
@@ -602,12 +730,55 @@ function collectMcpServers(
       : ([[projectDir, config.projects[projectDir]]] as Array<[string, unknown]>);
     for (const [dir, projectEntry] of entries) {
       if (isRecord(projectEntry) && isRecord(projectEntry.mcpServers)) {
-        for (const id of Object.keys(projectEntry.mcpServers)) add(id, "project", dir);
+        for (const [id, value] of Object.entries(projectEntry.mcpServers)) add(id, value, "local", dir);
       }
     }
   }
 
   return [...byKey.values()];
+}
+
+function collectProjectMcpServers(
+  config: unknown,
+  projectDir: string
+): Array<{ id: string; scope: "project"; ownerDirs: string[]; alwaysLoad: boolean }> {
+  if (!isRecord(config) || !isRecord(config.mcpServers)) return [];
+  return Object.entries(config.mcpServers).map(([id, value]) => ({
+    id,
+    scope: "project",
+    ownerDirs: [projectDir],
+    alwaysLoad: isRecord(value) && value.alwaysLoad === true
+  }));
+}
+
+function mergeServerScope(
+  target: Map<string, {
+    id: string;
+    scope: InventoryScope;
+    ownerDirs: string[];
+    path: string;
+    host: InventoryHost;
+    alwaysLoad: boolean;
+  }>,
+  server: {
+    id: string;
+    scope: InventoryScope;
+    ownerDirs: string[];
+    path: string;
+    host: InventoryHost;
+    alwaysLoad: boolean;
+  }
+): void {
+  const key = `${server.host}:${server.scope}:${server.id}`;
+  const prior = target.get(key);
+  if (!prior) {
+    target.set(key, server);
+    return;
+  }
+  for (const ownerDir of server.ownerDirs) {
+    if (!prior.ownerDirs.includes(ownerDir)) prior.ownerDirs.push(ownerDir);
+  }
+  prior.alwaysLoad ||= server.alwaysLoad;
 }
 
 // --------------------------------------------------------------------------

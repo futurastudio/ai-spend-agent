@@ -1,4 +1,7 @@
 import {
+  hasCallLevelProvenance,
+  hasPricedEvidence,
+  spendComparisonKey,
   type CostConfidence,
   type EvidenceItem,
   type SpendBreakdownEntry,
@@ -40,25 +43,39 @@ export function generateSpendInsights(records: UsageRecord[], summary: SpendSumm
 
 function spikeInsights(records: UsageRecord[], summary: SpendSummary): SpendInsight[] {
   return summary.anomalies.map((anomaly) => {
-    const currentRecords = records.filter((record) => record.timestamp.slice(0, 10) === anomaly.key);
+    const currentRecords = records.filter((record) =>
+      record.timestamp.slice(0, 10) === anomaly.key &&
+      (anomaly.comparisonKey === undefined || spendComparisonKey(record) === anomaly.comparisonKey)
+    );
     const topAgent = topBreakdown(currentRecords, (record) => record.agentId);
     const topClient = topBreakdown(currentRecords, (record) => record.clientId);
     const topProject = topBreakdown(currentRecords, (record) => record.projectId);
     const topModels = breakdown(currentRecords, (record) => record.model).slice(0, 2).map((entry) => entry.key);
     const deltaUsd = roundMoney(anomaly.currentAmountUsd - anomaly.previousAmountUsd);
-    const likelyDriver = topAgent?.key ?? topProject?.key ?? topClient?.key ?? "unmapped usage";
+    const likelyOwner = topAgent?.key ?? topProject?.key ?? topClient?.key ?? "an unassigned owner";
+    const cohortSuffix = stableSuffix(anomaly.comparisonKey ?? "legacy");
+    const isProviderBilledCost = currentRecords.length > 0 && currentRecords.every((record) =>
+      record.usageGranularity === "billing_bucket" &&
+      record.costConfidence === "verified"
+    );
+    const isAggregateCohort = currentRecords.some((record) => !hasCallLevelProvenance(record));
+    const evidenceLabel = isProviderBilledCost ? "Spend" : "Cost/value evidence";
+    const evidenceBasis = uniqueStrings(currentRecords.map((record) =>
+      `${record.source.provider} · ${record.providerCostType ?? "unclassified"} · ${record.usageGranularity ?? "unclassified"}`
+    )).join(", ");
 
     return {
-      id: `spike-${anomaly.key}`,
+      id: `spike-${anomaly.key}-${cohortSuffix}`,
       kind: "spike_explanation" as const,
       severity: deltaUsd >= 25 || anomaly.multiplier >= 3 ? "critical" as const : "high" as const,
-      title: `Spend spike on ${anomaly.key} needs owner review`,
-      summary: `${anomaly.key} spend rose ${formatMultiplier(anomaly.multiplier)} day over day, from ${formatUsd(anomaly.previousAmountUsd)} to ${formatUsd(anomaly.currentAmountUsd)}. The likely driver is ${likelyDriver}, so this needs owner review before the pattern repeats.`,
+      title: `${evidenceLabel} spike on ${anomaly.key} needs owner review`,
+      summary: `${anomaly.key} ${evidenceLabel.toLowerCase()} in one comparable provider cohort rose ${formatMultiplier(anomaly.multiplier)} day over day, from ${formatUsd(anomaly.previousAmountUsd)} to ${formatUsd(anomaly.currentAmountUsd)}. ${likelyOwner} is the best available ownership lead; ${isAggregateCohort ? "this aggregate bucket does not identify causal runs" : "this cohort change does not by itself prove a cause"}.`,
       evidence: compactEvidence([
-        { label: "Previous day spend", value: formatUsd(anomaly.previousAmountUsd) },
-        { label: "Current day spend", value: formatUsd(anomaly.currentAmountUsd) },
-        { label: "Increase", value: formatUsd(deltaUsd), detail: `${formatMultiplier(anomaly.multiplier)} day-over-day multiplier` },
-        topAgent ? { label: "Likely driver", value: topAgent.key, detail: `${formatUsd(topAgent.amountUsd)} across ${topAgent.recordCount} records` } : undefined,
+        evidenceBasis ? { label: "Comparison basis", value: evidenceBasis } : undefined,
+        { label: `Previous cohort ${isProviderBilledCost ? "spend" : "value"}`, value: formatUsd(anomaly.previousAmountUsd) },
+        { label: `Current cohort ${isProviderBilledCost ? "spend" : "value"}`, value: formatUsd(anomaly.currentAmountUsd) },
+        { label: `${evidenceLabel} increase`, value: formatUsd(deltaUsd), detail: `${formatMultiplier(anomaly.multiplier)} day-over-day multiplier` },
+        topAgent ? { label: "Ownership lead", value: topAgent.key, detail: `${formatUsd(topAgent.amountUsd)} across ${topAgent.recordCount} cohort records` } : undefined,
         topClient ? { label: "Client concentration", value: topClient.key, detail: `${formatUsd(topClient.amountUsd)} on spike day` } : undefined,
         topModels.length > 0 ? { label: "Dominant models", value: topModels.join(", ") } : undefined
       ]),
@@ -68,8 +85,10 @@ function spikeInsights(records: UsageRecord[], summary: SpendSummary): SpendInsi
       affectedModels: keysFrom(currentRecords, (record) => record.model),
       estimatedImpactUsd: deltaUsd,
       confidence: anomaly.confidence,
-      recommendedAction: `Review the ${likelyDriver} runs from ${anomaly.key}, set a temporary warning threshold for this owner, and pause expansion until the largest calls have an expected budget range.`,
-      verificationNeeded: "Verify the spike against the provider billing export before treating the dollar amount as finance-grade."
+      recommendedAction: `Review and reconcile the provider-cohort records from ${anomaly.key}, confirm the accountable owner, and obtain run-level evidence before diagnosing behavior or changing a policy.`,
+      verificationNeeded: isAggregateCohort
+        ? "Verify both periods against the same provider report shape; aggregate buckets do not identify causal calls or savings."
+        : "Verify both periods use the same call-level schema and inspect the underlying workloads before attributing cause or savings."
     };
   });
 }
@@ -88,33 +107,37 @@ function agentCostDriverInsights(records: UsageRecord[], summary: SpendSummary):
 
   const topOperation = topBreakdown(agentRecords, (record) => record.operation);
   const topModel = topBreakdown(agentRecords, (record) => record.model);
-  const estimatedImpactUsd = roundMoney(topAgent.amountUsd * 0.15);
+  const hasRunLevelEvidence = agentRecords.length > 0 && agentRecords.every(hasCallLevelProvenance);
 
   return [{
-    id: `agent-cost-driver-${topAgent.key}`,
-    kind: "agent_runaway",
-    severity: share >= 0.5 ? "high" : "medium",
-    title: `${topAgent.key} is the dominant autonomous spend driver`,
-    summary: `${topAgent.key} accounts for ${formatPercent(share)} of tracked spend. That is the agent to cap first because one runaway workflow can consume budget before invoice review.`,
+    id: `agent-spend-concentration-${topAgent.key}`,
+    kind: "optimization_opportunity",
+    severity: "medium",
+    title: `${topAgent.key} spend concentration needs owner and budget review`,
+    summary: `${topAgent.key} is attached to ${formatPercent(share)} of tracked spend. Concentration alone does not prove abnormal behavior or an avoidable dollar amount${hasRunLevelEvidence ? "." : "; the evidence is aggregate rather than run-level."}`,
     evidence: compactEvidence([
-      { label: "Agent spend", value: formatUsd(topAgent.amountUsd), detail: `${topAgent.recordCount} records` },
+      { label: "Attributed spend", value: formatUsd(topAgent.amountUsd), detail: `${topAgent.recordCount} ${hasRunLevelEvidence ? "call-level" : "aggregate"} record${topAgent.recordCount === 1 ? "" : "s"}` },
       { label: "Share of tracked spend", value: formatPercent(share) },
-      topModel ? { label: "Dominant model", value: topModel.key, detail: `${formatUsd(topModel.amountUsd)} inside this agent` } : undefined,
-      topOperation ? { label: "Dominant operation", value: topOperation.key, detail: `${formatUsd(topOperation.amountUsd)} inside this agent` } : undefined
+      topModel ? { label: "Dominant model or billing label", value: topModel.key, detail: `${formatUsd(topModel.amountUsd)} in this concentration` } : undefined,
+      topOperation ? { label: "Operation label", value: topOperation.key, detail: hasRunLevelEvidence ? "Call-level attribution" : "Not verified as one call or run" } : undefined
     ]),
     affectedClients: keysFrom(agentRecords, (record) => record.clientId),
     affectedProjects: keysFrom(agentRecords, (record) => record.projectId),
     affectedAgents: [topAgent.key],
     affectedModels: keysFrom(agentRecords, (record) => record.model),
-    estimatedImpactUsd,
+    estimatedImpactUsd: 0,
     confidence: topAgent.confidence,
-    recommendedAction: `Set a local warning threshold and hard cap for ${topAgent.key}, then require approval when a run exceeds its expected spend range.`,
-    verificationNeeded: "Confirm whether this agent has an approved budget owner and expected daily range."
+    recommendedAction: `Confirm who owns ${topAgent.key}, reconcile the spend to its approved budget, and collect behavioral evidence before setting a cap or savings target.`,
+    verificationNeeded: "Confirm the budget owner and expected range; concentration alone is not behavioral evidence."
   }];
 }
 
 function contextBloatInsights(records: UsageRecord[]): SpendInsight[] {
-  const highInputRecords = records.filter((record) => record.inputTokens >= 100_000);
+  const highInputRecords = records.filter((record) =>
+    hasCallLevelProvenance(record) &&
+    hasPricedEvidence(record) &&
+    record.inputTokens >= 100_000
+  );
   if (highInputRecords.length === 0) {
     return [];
   }
@@ -135,8 +158,8 @@ function contextBloatInsights(records: UsageRecord[]): SpendInsight[] {
     id: `context-bloat-${slug(operationLabel)}`,
     kind: "context_bloat",
     severity: scopedSpend >= 60 ? "high" : "medium",
-    title: `${operationLabel} is carrying oversized context`,
-    summary: `${operationLabel} includes ${scopedRecords.length} high-input calls and ${formatNumber(totalInputTokens)} input tokens. This is a strong signal that retrieval or prompt context can be trimmed without changing the product surface.`,
+    title: `${operationLabel} needs context inspection`,
+    summary: `${operationLabel} includes ${scopedRecords.length} high-input calls and ${formatNumber(totalInputTokens)} input tokens. This proves context exposure, not that any particular context is removable or that quality will hold after a cut.`,
     evidence: [
       { label: "High-input calls", value: String(scopedRecords.length), detail: "Calls at or above 100,000 input tokens" },
       { label: "Input tokens", value: formatNumber(totalInputTokens) },
@@ -147,10 +170,10 @@ function contextBloatInsights(records: UsageRecord[]): SpendInsight[] {
     affectedProjects: keysFrom(scopedRecords, (record) => record.projectId),
     affectedAgents: keysFrom(scopedRecords, (record) => record.agentId),
     affectedModels: keysFrom(scopedRecords, (record) => record.model),
-    estimatedImpactUsd: roundMoney(scopedSpend * 0.18),
+    estimatedImpactUsd: 0,
     confidence: combinedConfidence(scopedRecords.map((record) => record.costConfidence)),
-    recommendedAction: `Sample the largest ${operationLabel} prompts, cap retrieved chunks, and require justification before agents include full documents or long histories.`,
-    verificationNeeded: "Inspect representative prompts locally to confirm whether the large context is necessary for output quality."
+    recommendedAction: `Inspect representative ${operationLabel} prompts locally and run a matched before/after with the same acceptance criteria before proposing one reversible context change.`,
+    verificationNeeded: "Measure token and quality deltas on matched calls; no savings counterfactual is present yet."
   }];
 }
 
@@ -177,6 +200,10 @@ function breakdown(records: UsageRecord[], select: (record: UsageRecord) => stri
 
 function keysFrom(records: UsageRecord[], select: (record: UsageRecord) => string | undefined): string[] {
   return Array.from(new Set(records.map(select).filter((value): value is string => value !== undefined)));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)].sort();
 }
 
 function compactEvidence(items: Array<EvidenceItem | undefined>): EvidenceItem[] {
@@ -215,6 +242,15 @@ function formatNumber(value: number): string {
 
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_]+/g, "-").replace(/^-|-$/g, "") || "unknown";
+}
+
+function stableSuffix(value: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function roundMoney(value: number): number {

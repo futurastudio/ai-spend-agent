@@ -20,16 +20,16 @@
 
   <text x="40" y="58" class="label">AI RECEIPT</text>
 
-  <text x="40" y="120" class="label">ILLUSTRATIVE API-EQUIVALENT VALUE</text>
+  <text x="40" y="120" class="label">ILLUSTRATIVE COST / VALUE EVIDENCE</text>
   <text x="40" y="172" class="big">$87.00</text>
 
   <text x="40" y="212"><tspan class="save">~$539.70/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
 
-  <text x="40" y="244" class="meta">2 providers · 9 calls · detected</text>
+  <text x="40" y="244" class="meta">2 providers · 9 illustrative records · detected/unverified</text>
 
-      <text x="40" y="274" class="cut">1. Move gpt-5.5 research_summary calls to gpt-5.5-mini<tspan class="cutSave"> ~$376.80/mo modeled</tspan></text>
-      <text x="40" y="304" class="cut">2. Move research_summary calls to the Batch API<tspan class="cutSave"> ~$320.00/mo modeled</tspan></text>
-      <text x="40" y="334" class="cut">3. Trim oversized context on research_summary<tspan class="cutSave"> ~$144.75/mo modeled</tspan></text>
+      <text x="40" y="274" class="cut">1. Investigate a model-routing candidate<tspan class="cutSave"> ~$376.80/mo modeled</tspan></text>
+      <text x="40" y="304" class="cut">2. Investigate an asynchronous batch candidate<tspan class="cutSave"> ~$320.00/mo modeled</tspan></text>
+      <text x="40" y="334" class="cut">3. Inspect oversized context<tspan class="cutSave"> ~$144.75/mo modeled</tspan></text>
 
-  <text x="40" y="372" class="brand">ai-spend-agent · local-first · npx ai-spend-agent</text>
+  <text x="40" y="372" class="brand">aibill · local-first · npx aibill</text>
 </svg>

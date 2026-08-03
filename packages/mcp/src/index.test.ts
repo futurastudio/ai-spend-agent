@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, realpath, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -120,17 +120,182 @@ describe("MCP analyst tools", () => {
     const result = await recommendCutsTool({ path: dir });
 
     expect(result.recommendations[0]).toContain("anthropic");
+    expect(result.recommendations[0]).toContain("no usage/cost records support a change yet");
+    expect(result.recommendations[0]).not.toMatch(/model downgrade|prompt\/context trimming|caching or batching/i);
     expect(result.source).toBe("scanner");
   });
 
-  it("returns analyzed recommendations when a spend report exists", async () => {
+  it("keeps persisted sample mode demo-only instead of turning it into a real cut", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-report-recs-"));
     await scanAiSpendTool({ path: dir, sample: true });
 
     const result = await recommendCutsTool({ path: dir });
+    const report = await getSpendReportTool({ path: dir }) as {
+      mode?: string;
+      accounting: { policy: string; anomalyBasis: string };
+    };
 
     expect(result.source).toBe("spend_report");
-    expect(result.recommendations.length).toBeGreaterThan(0);
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]).toContain("DEMO ONLY");
+    expect(result.recommendations[0]).toContain("not this user's logs");
+    expect(result.recommendations[0]).not.toMatch(/move .* to|batch API|result cache/i);
+    expect(report).toMatchObject({
+      mode: "sample",
+      accounting: {
+        policy: "demo_sample_not_user_data",
+        anomalyBasis: "demo_only_not_user_anomaly_evidence"
+      }
+    });
+  });
+
+  it("recovers a legacy mode-less bundled sample as sample after persistence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-legacy-sample-"));
+    await scanAiSpendTool({ path: dir, sample: true });
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    delete state.mode;
+    await writeFile(statePath, JSON.stringify(state));
+
+    const report = await getSpendReportTool({ path: dir }) as {
+      mode?: string;
+      accounting: { policy: string };
+    };
+    const result = await recommendCutsTool({ path: dir });
+
+    expect(report.mode).toBe("sample");
+    expect(report.accounting.policy).toBe("demo_sample_not_user_data");
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]).toContain("DEMO ONLY");
+    expect(result.recommendations[0]).not.toMatch(/move .* to|batch API|result cache/i);
+  });
+
+  it("returns observed candidates rather than modeled cuts for local transcript aggregates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-recs-"));
+    await scanAiSpendTool({ path: dir });
+    await writeFile(join(dir, ".ai-spend-agent", "spend.json"), JSON.stringify({
+      mode: "local_logs",
+      records: [{
+        id: "local-heavy",
+        timestamp: "2026-08-03T12:00:00.000Z",
+        source: {
+          id: "local-agent-logs",
+          name: "Local agent session logs",
+          provider: "openai",
+          confidence: "estimated",
+          observedFrom: "test transcript"
+        },
+        model: "gpt-5.5",
+        inputTokens: 200_000,
+        outputTokens: 1_000,
+        amountUsd: 80,
+        costConfidence: "estimated",
+        agentId: "codex",
+        projectId: "mcp-project",
+        // Legacy local snapshots did not always persist providerCostType. The
+        // authoritative local_logs mode must still keep this out of modeled math.
+        operation: "research_summary"
+      }]
+    }));
+
+    const result = await recommendCutsTool({ path: dir });
+    const report = await getSpendReportTool({ path: dir }) as {
+      summary: { workflowWatch: unknown[]; recommendations: unknown[]; insights: unknown[] };
+      accounting: { policy: string; anomalyBasis: string };
+    };
+    const text = result.recommendations.join("\n");
+
+    expect(result.source).toBe("spend_report");
+    expect(text).toContain("observed API-equivalent value");
+    expect(text).toContain("reduction and cash savings are unproven");
+    expect(text).toContain("npx aibill apply");
+    expect(text).not.toMatch(/move .* to .*mini|batch API|result cache|~\$.*\/mo/i);
+    expect(report.summary.workflowWatch).toEqual([]);
+    expect(report.summary.recommendations).toEqual([]);
+    expect(report.summary.insights).toEqual([]);
+    expect(report.accounting).toMatchObject({
+      policy: "local_api_equivalent_value_not_billed_spend",
+      anomalyBasis: "unavailable_no_comparable_call_level_records"
+    });
+  });
+
+  it("preserves modeled recommendations for provider call-level cost evidence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-recs-"));
+    await scanAiSpendTool({ path: dir });
+    await writeFile(join(dir, ".ai-spend-agent", "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "provider-call",
+        timestamp: "2026-08-03T12:00:00.000Z",
+        source: {
+          id: "openai-costs",
+          name: "OpenAI costs",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "provider API"
+        },
+        model: "gpt-5.5",
+        inputTokens: 150_000,
+        outputTokens: 1_000,
+        amountUsd: 30,
+        costConfidence: "verified",
+        operation: "research_summary",
+        providerCostType: "openai_cost",
+        usageGranularity: "call",
+        workloadSemantics: { downgradeSafe: true }
+      }]
+    }));
+
+    const result = await recommendCutsTool({ path: dir });
+    const text = result.recommendations.join("\n");
+
+    expect(result.source).toBe("spend_report");
+    expect(text).toContain("Move gpt-5.5 research_summary calls to gpt-5.5-mini");
+    expect(text).toContain("MODELED CANDIDATE");
+    expect(text).toContain("candidate=downgrade-gpt-5-5-research-summary");
+    expect(text).toContain("explicit call/invocation connected records");
+    expect(text).toContain("sources=openai/openai-costs");
+    expect(text).toContain("cost_basis=openai_cost/verified/call");
+    expect(text).toContain("window=2026-08-03T12:00:00.000Z through 2026-08-03T12:00:00.000Z");
+    expect(text).toContain("confidence=verified");
+    expect(text).toContain("record_ids=provider-call");
+    expect(text).toContain("not verified savings, final-invoice impact, or ROI");
+    expect(text).toContain("do not mutate");
+    expect(text).toContain("3 matched future workloads");
+  });
+
+  it("does not manufacture call-level cuts from connected billing buckets", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-bucket-"));
+    await scanAiSpendTool({ path: dir });
+    await writeFile(join(dir, ".ai-spend-agent", "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "openai-daily-cost-bucket",
+        timestamp: "2026-08-02T00:00:00.000Z",
+        source: {
+          id: "openai-costs",
+          name: "OpenAI costs",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "OpenAI organization costs API"
+        },
+        model: "Responses API",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: 300,
+        costConfidence: "verified",
+        operation: "research_summary",
+        providerCostType: "openai_cost"
+      }]
+    }));
+
+    const result = await recommendCutsTool({ path: dir });
+    const text = result.recommendations.join("\n");
+
+    expect(text).toContain("NO MODELED CUT");
+    expect(text).toContain("lack explicit call/invocation granularity plus a named workload");
+    expect(text).toContain("candidate ID, explicit approval, rollback");
+    expect(text).not.toMatch(/Review expensive model|move .* to .*mini|Batch API|result cache/i);
   });
 
   it("schema-validates persisted records, recomputes recommendations, and removes instruction-shaped metadata", async () => {
@@ -213,14 +378,20 @@ describe("MCP analyst tools", () => {
     const report = await getSpendReportTool({ path: dir }) as {
       mode: string;
       records: unknown[];
-      summary: { totalUsd: number };
+      summary: { totalUsd: number; workflowWatch: unknown[]; recommendations: unknown[]; insights: unknown[] };
     };
 
     expect(result.agentsDetected).toContain("claude-code");
     expect(result.projectFilter).toBe(project);
+    expect(result.valueBasis).toBe("local_api_equivalent_value_not_billed_spend");
+    expect(result.anomalyBasis).toBe("unavailable_no_comparable_call_level_records");
+    expect(result.summary.anomalies).toEqual([]);
     expect(report.mode).toBe("local_logs");
     expect(report.records).toHaveLength(1);
     expect(report.summary.totalUsd).toBeGreaterThan(0);
+    expect(report.summary.workflowWatch).toEqual([]);
+    expect(report.summary.recommendations).toEqual([]);
+    expect(report.summary.insights).toEqual([]);
     expect(glance).toMatchObject({
       dataMode: "local_transcripts",
       currentSession: {
@@ -246,6 +417,63 @@ describe("MCP analyst tools", () => {
     expect(glanceGeneratedAt).toEqual(expect.any(String));
     expect(contextGeneratedAt).toEqual(expect.any(String));
     expect(glanceContract).toEqual(contextContract);
+  });
+
+  it("scopes implicit Glance inventory to the latest observed transcript cwd, matching CLI", async () => {
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-codex-"));
+    const claudeHome = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-claude-home-"));
+    const codexHome = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-codex-home-"));
+    const olderProject = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-older-"));
+    const latestProject = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-latest-"));
+    const latestSkill = join(latestProject, ".agents", "skills", "latest-only");
+    await mkdir(latestSkill, { recursive: true });
+    await writeFile(join(latestSkill, "SKILL.md"), [
+      "---",
+      "name: latest-only",
+      "description: visible only from the latest transcript project",
+      "---",
+      "fixture"
+    ].join("\n"));
+
+    const now = Date.now();
+    const transcript = (cwd: string, sessionId: string, timestamp: string) => JSON.stringify({
+      type: "assistant",
+      timestamp,
+      cwd,
+      sessionId,
+      requestId: `request-${sessionId}`,
+      message: {
+        id: `message-${sessionId}`,
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000, output_tokens: 100 }
+      }
+    });
+    await writeFile(join(claudeDir, "older.jsonl"), transcript(
+      olderProject,
+      "older",
+      new Date(now - 60_000).toISOString()
+    ));
+    await writeFile(join(claudeDir, "latest.jsonl"), transcript(
+      latestProject,
+      "latest",
+      new Date(now - 1_000).toISOString()
+    ));
+
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_CLAUDE_HOME_DIR", claudeHome);
+    vi.stubEnv("AI_SPEND_CODEX_HOME_DIR", codexHome);
+    vi.stubEnv("AI_SPEND_CLAUDE_CONFIG", join(claudeHome, "missing.json"));
+    vi.stubEnv("AI_SPEND_CLAUDE_SETTINGS", join(claudeHome, "missing-settings.json"));
+    vi.stubEnv("AI_SPEND_CODEX_AUTH", join(codexHome, "missing-auth.json"));
+
+    const implicit = await getUsageGlanceTool({ sinceDays: 30 });
+    const explicitOlder = await getUsageGlanceTool({ path: olderProject, sinceDays: 30 });
+
+    expect(implicit.currentSession?.project).toBe(latestProject.split("/").at(-1));
+    expect(implicit.sessionHealth.activation.discoverableItems).toBe(1);
+    expect(explicitOlder.sessionHealth.activation.discoverableItems).toBe(0);
   });
 
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
@@ -454,7 +682,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.5.8" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.5.9" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",

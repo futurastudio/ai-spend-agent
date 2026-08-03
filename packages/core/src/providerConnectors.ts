@@ -192,6 +192,7 @@ export function normalizeOpenAiCostResponse(response: unknown, options: Normaliz
         projectId,
         apiKeyId,
         providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket",
         quantity: typeof result.quantity === "number" ? result.quantity : undefined,
         operation: lineItem
       });
@@ -233,6 +234,7 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
         userId,
         apiKeyId,
         providerCostType: "openai_usage_evidence",
+        usageGranularity: "usage_bucket",
         quantity: numberValue(result.num_model_requests),
         operation: "OpenAI completions usage evidence"
       });
@@ -279,6 +281,7 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
         userId,
         projectId: organizationId,
         providerCostType: "anthropic_claude_code_usage",
+        usageGranularity: "daily_aggregate",
         quantity: sessions,
         operation: `Claude Code sessions: ${sessions}; LOC +${added}/-${removed}; commits ${commits}; PRs ${prs}`
       });
@@ -310,6 +313,7 @@ export function normalizeGitHubCopilotSeatResponse(response: unknown, options: N
       userId,
       projectId: options.accountId,
       providerCostType: "copilot_seat_reconciliation",
+      usageGranularity: "seat",
       quantity: 1,
       operation: `GitHub Copilot ${plan} seat; ${lastActivity ? `last activity ${lastActivity}` : "no recent activity reported"}`
     }];
@@ -348,6 +352,7 @@ export function normalizeAnthropicCostResponse(response: unknown, options: Norma
         projectId: workspaceId,
         workspaceId,
         providerCostType: result.cost_type ?? "anthropic_cost",
+        usageGranularity: "billing_bucket",
         operation: description
       });
     }
@@ -379,6 +384,7 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
         costConfidence: "missing",
         projectId: options.accountId,
         providerCostType: "copilot_usage_metrics",
+        usageGranularity: "daily_aggregate",
         operation: feature
       });
     }
@@ -396,6 +402,7 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
         costConfidence: "missing",
         projectId: options.accountId,
         providerCostType: "copilot_cli_metrics",
+        usageGranularity: "daily_aggregate",
         operation: "CLI requests"
       });
     }
@@ -426,6 +433,7 @@ export function normalizeCursorSpendResponse(response: unknown, options: Normali
       userId,
       projectId: options.accountId,
       providerCostType: "cursor_spend",
+      usageGranularity: "user_aggregate",
       operation: "Cursor team spend"
     }];
   });

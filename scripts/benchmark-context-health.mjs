@@ -185,7 +185,7 @@ const cases = [
     }
   },
   {
-    name: "never-invoked discoverable item",
+    name: "discoverable item with no matching invocation",
     expected: "trim_dead_context",
     input: {
       inventory: { items: [deadSkill] },

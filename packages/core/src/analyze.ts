@@ -1,6 +1,9 @@
 import { generateSpendInsights } from "./insights.js";
 import {
   costConfidenceValues,
+  hasModeledWorkloadEvidence,
+  hasPricedEvidence,
+  spendComparisonKey,
   spendSummarySchema,
   type CostConfidence,
   type Recommendation,
@@ -20,39 +23,19 @@ const confidenceRank: Record<CostConfidence, number> = {
   missing: 3
 };
 
-/**
- * Planning ratios behind every "estimated impact/savings" figure this module
- * emits. These are deliberately ROUND heuristics — orientation numbers for a
- * first conversation, not measured savings — and every consumer labels them
- * estimated. They are aligned with the documented per-model economics in
- * cutList.ts (downgradeRules retain 20–50% of cost on downgrade-safe work;
- * the Batch API retains 50%): applying those cuts to only the eligible slice
- * of a workload typically lands in the 10–30% range below.
- *
- * If you change one, change the doc line with it. No undocumented multiplier
- * may ever reach user-visible output — that is a product bug on an
- * honest-numbers brand, not a style issue.
- */
-const impactRatios = {
-  /** Portion of a workflow's spend typically cuttable via caps, caching, and tier routing. */
-  workflowSavings: 0.2,
-  /** Un-attributed workflow spend treated as margin-exposed until mapped to a client/project (coin-flip prior). */
-  workflowMarginRisk: 0.5,
-  /** Top-model spend recoverable by moving downgrade-safe work to a cheaper tier (see cutList.ts downgradeRules). */
-  modelDowngrade: 0.3,
-  /** Cost of oversized-context calls recoverable by trimming prompts/retrieval. */
-  promptTrimming: 0.15,
-  /** Spend on repeated identical operations recoverable via caching/memoization. */
-  caching: 0.25,
-  /** Top-agent spend avoidable with budget caps catching runaway loops. */
-  agentCaps: 0.15,
-  /** Total spend addressable by moving latency-tolerant work to Batch APIs (50% price × eligible slice). */
-  batching: 0.1,
-  /** Total spend addressable with price/quality routing across multiple providers. */
-  routing: 0.1
-} as const;
+/** Published retained-cost fraction for providers whose Batch pricing we explicitly support. */
+const batchCostRetainedByProvider: Readonly<Record<string, number>> = {
+  openai: 0.5,
+  anthropic: 0.5
+};
 
 export function analyzeSpend(records: UsageRecord[]): SpendSummary {
+  // Billing buckets, usage aggregates, seats, and user totals are useful for
+  // financial breakdowns and spend-spike detection. They do not prove a
+  // workload-level counterfactual. Only records with explicit call/invocation
+  // provenance and a named operation feed modeled recommendations/insights.
+  const decisionRecords = records.filter(hasModeledWorkloadEvidence);
+  const anomalyRecords = records.filter((record) => !isLocalAgentRecord(record));
   const summary: SpendSummary = {
     totalUsd: roundMoney(sumRecords(records)),
     recordCount: records.length,
@@ -67,59 +50,116 @@ export function analyzeSpend(records: UsageRecord[]): SpendSummary {
     byWorkspace: breakdown(records, (record) => record.workspaceId),
     byApiKey: breakdown(records, (record) => record.apiKeyId),
     workflowWatch: generateWorkflowWatch(records),
-    anomalies: detectSpendSpikes(records),
-    recommendations: generateRecommendations(records),
+    anomalies: detectSpendSpikes(anomalyRecords),
+    recommendations: generateRecommendations(decisionRecords),
     insights: []
   };
 
-  summary.insights = generateSpendInsights(records, summary);
+  // Insights may explain stable provider-billing cohorts, but their own
+  // engines distinguish aggregate accounting evidence from run-level evidence.
+  // Recompute without local transcript aggregates so cumulative local session
+  // rows cannot leak into provider anomaly or ownership diagnostics.
+  if (anomalyRecords.length > 0) {
+    const evidenceSummary: SpendSummary = anomalyRecords.length === records.length
+      ? summary
+      : {
+          totalUsd: roundMoney(sumRecords(anomalyRecords)),
+          recordCount: anomalyRecords.length,
+          confidence: combinedConfidence(anomalyRecords.map((record) => record.costConfidence)),
+          confidenceBreakdown: confidenceBreakdown(anomalyRecords),
+          bySource: breakdown(anomalyRecords, (record) => record.source.id),
+          byModel: breakdown(anomalyRecords, (record) => record.model),
+          byClient: breakdown(anomalyRecords, (record) => record.clientId),
+          byProject: breakdown(anomalyRecords, (record) => record.projectId),
+          byAgent: breakdown(anomalyRecords, (record) => record.agentId),
+          byUser: breakdown(anomalyRecords, (record) => record.userId),
+          byWorkspace: breakdown(anomalyRecords, (record) => record.workspaceId),
+          byApiKey: breakdown(anomalyRecords, (record) => record.apiKeyId),
+          workflowWatch: generateWorkflowWatch(anomalyRecords),
+          anomalies: detectSpendSpikes(anomalyRecords),
+          recommendations: generateRecommendations(anomalyRecords),
+          insights: []
+        };
+    summary.insights = generateSpendInsights(anomalyRecords, evidenceSummary);
+  }
 
   return spendSummarySchema.parse(summary);
 }
 
 export function detectSpendSpikes(records: UsageRecord[]): SpendAnomaly[] {
-  const byDay = new Map<string, UsageRecord[]>();
+  // Local coding-agent records are day + agent + model + project aggregates.
+  // A cumulative session counter may be attributed to its final observation
+  // day, so comparing those rows day-over-day would manufacture a "spike."
+  // Only provider/call-level records can participate in this detector.
+  const byCohort = new Map<string, Map<string, UsageRecord[]>>();
   for (const record of records) {
+    if (isLocalAgentRecord(record) || !hasPricedEvidence(record)) continue;
+    const comparisonKey = spendComparisonKey(record);
+    // Unknown row shape is not a comparable cohort. Pooling all unclassified
+    // provider rows creates fake spikes when source mix changes between days.
+    if (!comparisonKey) continue;
     const day = record.timestamp.slice(0, 10);
+    const byDay = byCohort.get(comparisonKey) ?? new Map<string, UsageRecord[]>();
     byDay.set(day, [...(byDay.get(day) ?? []), record]);
+    byCohort.set(comparisonKey, byDay);
   }
 
-  const days = [...byDay.keys()].sort();
   const anomalies: SpendAnomaly[] = [];
-  for (let index = 1; index < days.length; index += 1) {
-    const previousDay = days[index - 1]!;
-    const currentDay = days[index]!;
-    const previousAmountUsd = roundMoney(sumRecords(byDay.get(previousDay) ?? []));
-    const currentRecords = byDay.get(currentDay) ?? [];
-    const currentAmountUsd = roundMoney(sumRecords(currentRecords));
-    if (previousAmountUsd === 0 || currentAmountUsd - previousAmountUsd < 10) {
-      continue;
-    }
+  for (const [comparisonKey, byDay] of [...byCohort.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const days = [...byDay.keys()].sort();
+    for (let index = 1; index < days.length; index += 1) {
+      const previousDay = days[index - 1]!;
+      const currentDay = days[index]!;
+      if (!isNextCalendarDay(previousDay, currentDay)) continue;
+      const previousRecords = byDay.get(previousDay) ?? [];
+      const previousAmountUsd = roundMoney(sumRecords(previousRecords));
+      const currentRecords = byDay.get(currentDay) ?? [];
+      const currentAmountUsd = roundMoney(sumRecords(currentRecords));
+      if (previousAmountUsd === 0 || currentAmountUsd - previousAmountUsd < 10) {
+        continue;
+      }
 
-    const multiplier = currentAmountUsd / previousAmountUsd;
-    if (multiplier >= 1.75) {
-      anomalies.push({
-        kind: "day_over_day_spike",
-        key: currentDay,
-        previousAmountUsd,
-        currentAmountUsd,
-        multiplier: roundMoney(multiplier),
-        confidence: combinedConfidence(currentRecords.map((record) => record.costConfidence))
-      });
+      const multiplier = currentAmountUsd / previousAmountUsd;
+      if (multiplier >= 1.75) {
+        anomalies.push({
+          kind: "day_over_day_spike",
+          key: currentDay,
+          comparisonKey,
+          previousAmountUsd,
+          currentAmountUsd,
+          multiplier: roundMoney(multiplier),
+          confidence: combinedConfidence(
+            [...previousRecords, ...currentRecords].map((record) => record.costConfidence)
+          )
+        });
+      }
     }
   }
 
-  return anomalies;
+  return anomalies.sort((left, right) =>
+    left.key.localeCompare(right.key) ||
+    (left.comparisonKey ?? "").localeCompare(right.comparisonKey ?? "")
+  );
+}
+
+function isNextCalendarDay(previousDay: string, currentDay: string): boolean {
+  const previous = Date.parse(`${previousDay}T00:00:00Z`);
+  const current = Date.parse(`${currentDay}T00:00:00Z`);
+  return Number.isFinite(previous) && Number.isFinite(current) && current - previous === 86_400_000;
 }
 
 export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntry[] {
-  const totalUsd = sumRecords(records);
+  // Workflow Watch is an ownership/concentration diagnostic. Do not attach a
+  // generic savings or margin prior: savings need a named counterfactual and
+  // margin risk needs real revenue/margin inputs that UsageRecord does not have.
+  const decisionRecords = records.filter((record) => !isLocalAgentRecord(record));
+  const totalUsd = sumRecords(decisionRecords);
   if (totalUsd === 0) {
     return [];
   }
 
   const groups = new Map<string, UsageRecord[]>();
-  for (const record of records) {
+  for (const record of decisionRecords) {
     const clientId = record.clientId ?? "unmapped-client";
     const projectId = record.projectId ?? "unmapped-project";
     const workflowKey = record.operation ?? "unmapped-workflow";
@@ -137,10 +177,11 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
       // such as $0.0075 rounds to $0.01 for display; dividing that rounded
       // value by the raw total produced 1.3333 and failed the [0, 1] schema.
       const shareOfSpend = roundRatio(Math.min(1, rawAmountUsd / totalUsd));
-      const estimatedSavingsUsd = roundMoney(amountUsd * impactRatios.workflowSavings);
-      const estimatedMarginRiskUsd = roundMoney(amountUsd * impactRatios.workflowMarginRisk);
+      const estimatedSavingsUsd = 0;
+      const estimatedMarginRiskUsd = 0;
       const confidence = combinedConfidence(groupRecords.map((record) => record.costConfidence));
-      const suggestedOptimization = workflowOptimizationFor(workflowKey, agentId);
+      const hasRunLevelEvidence = groupRecords.every(hasModeledWorkloadEvidence);
+      const suggestedOptimization = workflowDiagnosticFor(workflowKey, agentId, hasRunLevelEvidence);
 
       return {
         id: slugify(["workflow", clientId, projectId, workflowKey].join("-")),
@@ -155,18 +196,24 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
         estimatedMarginRiskUsd,
         estimatedSavingsUsd,
         suggestedOptimization,
-        applyArtifact: `Copy this into your coding agent to cut cost: ${suggestedOptimization}`,
-        verificationPlan: `After applying, rerun the ${workflowKey} workflow on the same sample and compare spend, latency, and output acceptance before rolling it out.`
+        applyArtifact: `Before changing this workload: ${suggestedOptimization}`,
+        verificationPlan: hasRunLevelEvidence
+          ? `Reconcile ${workflowKey} to its owner and budget, then define one reversible candidate and compare matched future accepted outcomes plus provider-reported cost.`
+          : `Reconcile ${workflowKey} to its owner and budget, then collect call-level workload evidence before modeling or applying a cost change.`
       } satisfies WorkflowWatchEntry;
     })
     .filter((entry) => entry.amountUsd > 0)
-    .sort((left, right) => right.estimatedMarginRiskUsd - left.estimatedMarginRiskUsd || left.id.localeCompare(right.id))
+    .sort((left, right) => right.amountUsd - left.amountUsd || left.id.localeCompare(right.id))
     .slice(0, 5);
 }
 
 export function generateRecommendations(records: UsageRecord[]): Recommendation[] {
+  const decisionRecords = records.filter(hasModeledWorkloadEvidence);
   const recommendations: Recommendation[] = [];
-  const modelSpend = breakdown(records, (record) => record.model);
+  const downgradeRecords = decisionRecords.filter(
+    (record) => record.workloadSemantics?.downgradeSafe === true
+  );
+  const modelSpend = breakdown(downgradeRecords, (record) => record.model);
   const topModel = modelSpend[0];
   if (topModel && topModel.amountUsd >= 20) {
     recommendations.push({
@@ -176,88 +223,86 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       whyItMatters: "Premium model usage tends to become invisible once agents are running in the background. Spend owners need a clear rule for which jobs deserve the expensive model.",
       nextAction: `Audit the top ${topModel.key} operations and move low-risk summarization, extraction, and draft work to a cheaper model tier first.`,
       priority: "high",
-      estimatedImpactUsd: roundMoney(topModel.amountUsd * impactRatios.modelDowngrade),
+      // The high-level recommendation does not know which model-specific rule
+      // will pass quality verification. Dollar math lives in the exact cut
+      // candidate; concentration alone earns no flat percentage.
+      estimatedImpactUsd: 0,
       confidence: topModel.confidence,
       relatedKeys: [topModel.key]
     });
   }
 
-  const highInputTokenRecords = records.filter((record) => record.inputTokens >= 100_000);
+  const highInputTokenRecords = decisionRecords.filter((record) => record.inputTokens >= 100_000);
   if (highInputTokenRecords.length > 0) {
     recommendations.push({
       id: "prompt-context-trimming",
-      title: "Trim large prompts and retrieved context",
-      rationale: "High input-token calls suggest prompt or retrieval context may be oversized.",
-      whyItMatters: "Context bloat compounds across every agent run and can make spend rise even when output quality does not improve.",
-      nextAction: "Sample the largest prompts, cap retrieval chunks, and require justification before agents include full documents or long histories.",
+      title: "Inspect large prompts and retrieved context",
+      rationale: "High-input call records identify context exposure, but no matched reduction counterfactual is attached.",
+      whyItMatters: "Large context can consume budget, but token volume alone does not prove which context is removable or what quality tradeoff a cut would cause.",
+      nextAction: "Inspect the largest prompts locally and run a matched before/after with the same output-acceptance criteria before applying a broader limit.",
       priority: "high",
-      estimatedImpactUsd: roundMoney(sumRecords(highInputTokenRecords) * impactRatios.promptTrimming),
+      estimatedImpactUsd: 0,
       confidence: combinedConfidence(highInputTokenRecords.map((record) => record.costConfidence)),
       relatedKeys: unique(highInputTokenRecords.map((record) => record.model))
     });
   }
 
-  // Session aggregates from local agent logs share one operation label per
-  // agent — that's aggregation, not repetition, and a result cache is not a
-  // real lever for interactive coding sessions. Exclude them here.
-  const cacheableRecords = records.filter((record) => record.providerCostType !== "local_agent_logs");
-  const repeatedOperations = repeatedValues(cacheableRecords.map((record) => record.operation).filter(isPresent));
-  if (repeatedOperations.length > 0) {
+  // An operation label alone does not prove identical inputs. Require an
+  // adapter-provided stable fingerprint repeated within the same
+  // provider/model/operation cohort before presenting a cache candidate.
+  const cacheKeys = decisionRecords.map(cacheEvidenceKey).filter(isPresent);
+  const repeatedCacheKeys = repeatedValues(cacheKeys);
+  const cacheableRecords = cacheAvoidableRecords(decisionRecords, repeatedCacheKeys);
+  if (cacheableRecords.length > 0) {
+    const repeatedOperations = unique(cacheableRecords.map((record) => record.operation).filter(isPresent));
     recommendations.push({
       id: "caching",
       title: "Cache repeated operations",
-      rationale: "Repeated operation labels are present in the sample and may be cacheable.",
+      rationale: "The same adapter-provided stable input fingerprint repeats within a provider/model workload.",
       whyItMatters: "Repeated AI calls are the easiest spend to defend cutting because they usually do not change the customer experience.",
       nextAction: "Add a local cache or memoization policy for repeated operation labels before expanding this workflow to more clients.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(cacheableRecords.filter((record) => repeatedOperations.includes(record.operation ?? ""))) * impactRatios.caching),
+      estimatedImpactUsd: roundMoney(sumRecords(cacheableRecords)),
       confidence: combinedConfidence(cacheableRecords.map((record) => record.costConfidence)),
       relatedKeys: repeatedOperations
     });
   }
 
-  const agentSpend = breakdown(records, (record) => record.agentId);
+  const agentSpend = breakdown(decisionRecords, (record) => record.agentId);
   const topAgent = agentSpend[0];
   if (topAgent && topAgent.amountUsd >= 25) {
     recommendations.push({
       id: "agent-caps",
-      title: "Set local spend caps for the highest-cost agent",
+      title: "Confirm the owner and budget for the highest-cost agent",
       rationale: `${topAgent.key} accounts for a material share of sampled usage.`,
-      whyItMatters: "An autonomous agent can quietly turn one bad loop or broad task into a budget issue before anyone reviews the invoice.",
-      nextAction: `Set a warning threshold and hard cap for ${topAgent.key}, then require approval when a run exceeds its expected range.`,
+      whyItMatters: "Concentration is an accountability signal, but it does not by itself prove abnormal behavior or an avoidable dollar amount.",
+      nextAction: `Confirm ${topAgent.key}'s owner and approved range, then collect run-level evidence before proposing a warning threshold or hard cap.`,
       priority: "high",
-      estimatedImpactUsd: roundMoney(topAgent.amountUsd * impactRatios.agentCaps),
+      estimatedImpactUsd: 0,
       confidence: topAgent.confidence,
       relatedKeys: [topAgent.key]
     });
   }
 
-  if (records.length >= 8) {
+  const batchableRecords = decisionRecords.filter(
+    (record) =>
+      record.workloadSemantics?.batchEligible === true &&
+      batchCostRetainedByProvider[record.source.provider] !== undefined
+  );
+  if (batchableRecords.length >= 3) {
     recommendations.push({
       id: "batching",
       title: "Batch low-latency-tolerant work",
-      rationale: "The sample contains enough discrete calls to review for batching opportunities.",
+      rationale: "At least three call-level records are explicitly attested as latency-tolerant and Batch-eligible.",
       whyItMatters: "Batching turns scattered background calls into an intentional queue, which makes spend easier to forecast and approve.",
       nextAction: "Mark jobs that do not need immediate responses and run them in scheduled batches with a shared context budget.",
       priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records) * impactRatios.batching),
-      confidence: combinedConfidence(records.map((record) => record.costConfidence)),
-      relatedKeys: ["usage-records"]
-    });
-  }
-
-  const sources = unique(records.map((record) => record.source.id));
-  if (sources.length > 1) {
-    recommendations.push({
-      id: "routing",
-      title: "Route workloads by price and quality requirements",
-      rationale: "Multiple AI providers are represented, so routing policy can reduce avoidable spend.",
-      whyItMatters: "Without routing policy, teams pay premium prices for tasks where cheaper models or providers would be good enough.",
-      nextAction: "Define default provider/model tiers for extraction, drafting, research, and high-stakes reasoning, then measure quality deltas.",
-      priority: "medium",
-      estimatedImpactUsd: roundMoney(sumRecords(records) * impactRatios.routing),
-      confidence: combinedConfidence(records.map((record) => record.costConfidence)),
-      relatedKeys: sources
+      estimatedImpactUsd: roundMoney(batchableRecords.reduce((total, record) => {
+        const retained = batchCostRetainedByProvider[record.source.provider]!;
+        return total + (record.amountUsd ?? 0) * (1 - retained);
+      }, 0)),
+      confidence: combinedConfidence(batchableRecords.map((record) => record.costConfidence)),
+      relatedKeys: unique(batchableRecords.map((record) => record.operation).filter(isPresent))
     });
   }
 
@@ -316,6 +361,26 @@ function repeatedValues(values: string[]): string[] {
     .sort();
 }
 
+function cacheEvidenceKey(record: UsageRecord): string | undefined {
+  const fingerprint = record.workloadSemantics?.stableInputFingerprint;
+  if (!record.operation || !fingerprint) return undefined;
+  return JSON.stringify([record.source.provider, record.model, record.operation, fingerprint]);
+}
+
+function cacheAvoidableRecords(records: UsageRecord[], repeatedKeys: string[]): UsageRecord[] {
+  const groups = new Map<string, UsageRecord[]>();
+  for (const record of records) {
+    const key = cacheEvidenceKey(record);
+    if (!key || !repeatedKeys.includes(key)) continue;
+    groups.set(key, [...(groups.get(key) ?? []), record]);
+  }
+  return [...groups.values()].flatMap((group) =>
+    [...group]
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id))
+      .slice(1)
+  );
+}
+
 function unique(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
@@ -324,17 +389,18 @@ function isPresent(value: string | undefined): value is string {
   return value !== undefined;
 }
 
-function workflowOptimizationFor(workflowKey: string, agentId: string): string {
-  const normalized = workflowKey.toLowerCase();
-  if (normalized.includes("research") || normalized.includes("summary")) {
-    return `Cap context for ${workflowKey}, cache repeated research inputs, and route first-pass summaries from ${agentId} to a cheaper model tier unless confidence drops.`;
-  }
+function isLocalAgentRecord(record: UsageRecord): boolean {
+  return record.providerCostType === "local_agent_logs";
+}
 
-  if (normalized.includes("draft") || normalized.includes("copy")) {
-    return `Move first-draft generation for ${workflowKey} to a cheaper model tier, keep premium review only for final approval, and cache brand/context blocks.`;
-  }
-
-  return `Add a per-run budget cap for ${workflowKey}, route low-risk calls to a cheaper model tier, and cache stable inputs before expanding ${agentId}.`;
+function workflowDiagnosticFor(
+  workflowKey: string,
+  agentId: string,
+  hasRunLevelEvidence: boolean
+): string {
+  return hasRunLevelEvidence
+    ? `Confirm the owner and approved budget for ${workflowKey} (${agentId}), reconcile the observed spend, and define one reversible candidate with an accepted-outcome quality bar before approval.`
+    : `Confirm the owner and approved budget for ${workflowKey} (${agentId}), reconcile the observed spend, and collect call-level provenance before proposing a reversible optimization.`;
 }
 
 function slugify(value: string): string {

@@ -36,7 +36,7 @@ describe("zero-key instant demo first run", () => {
     // Headline spend number lands first.
     expect(result.stdout).toContain("$87.00");
     // Actionable, dollar-specific cut list (the wow).
-    expect(result.stdout).toContain("What to test");
+    expect(result.stdout).toContain("Illustrative hypotheses only");
     expect(result.stdout).toMatch(/Move .* to .*model ~\$/);
     // Demo banner + connect CTA, no over-promise about "all four".
     expect(result.stdout).toContain("DEMO");
@@ -70,11 +70,44 @@ describe("zero-key instant demo first run", () => {
     }
   });
 
+  it("treats apply --sample as a strict demo/privacy boundary", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-apply-sample-"));
+    const priorKey = process.env.OPENAI_ADMIN_KEY;
+    process.env.OPENAI_ADMIN_KEY = `sk-${"must-not-appear".repeat(2)}`;
+    await writeFile(process.env.AI_SPEND_CLAUDE_CONFIG!, JSON.stringify({
+      oauthAccount: {
+        billingType: "stripe_subscription",
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x"
+      }
+    }));
+
+    try {
+      const result = await runCli(["apply", "--sample", "--path", dir, "--no-color"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("data: DEMO sample data");
+      expect(result.stdout).toContain("NON-EXECUTABLE DEMO");
+      expect(result.stdout).toContain("no live transcripts, account metadata, credentials, or persisted spend state were read");
+      expect(result.stdout).not.toContain("Claude Max 20x");
+      expect(result.stdout).not.toContain("must-not-appear");
+      expect(result.stdout).not.toContain(dir);
+      expect(result.stdout).not.toContain("$7.50");
+
+      const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+      expect(prompt).toContain("NON-EXECUTABLE DEMO");
+      expect(prompt).not.toContain("Claude Max 20x");
+    } finally {
+      if (priorKey === undefined) delete process.env.OPENAI_ADMIN_KEY;
+      else process.env.OPENAI_ADMIN_KEY = priorKey;
+    }
+  });
+
   it("prints --version without scanning local data", async () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.5\.8$/);
+    expect(result.stdout).toMatch(/^0\.5\.9$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -84,7 +117,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--group-by", "agent", "--no-color", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Spend by agent");
+    expect(result.stdout).toContain("Cost/value evidence by agent");
     expect(result.stdout).toContain("agent-analyst");
   });
 
@@ -93,7 +126,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--group-by", "project", "--no-color", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Spend by project");
+    expect(result.stdout).toContain("Cost/value evidence by project");
     expect(result.stdout).toMatch(/window: \d+ days? of data/);
     // The drill-down answers one question — the four-stage loop stays out.
     expect(result.stdout).not.toContain("RECOMMEND");
@@ -111,7 +144,7 @@ describe("zero-key instant demo first run", () => {
     await mkdir(join(logsDir, "-tmp-late"), { recursive: true });
     await writeFile(join(logsDir, "-tmp-late", "late.jsonl"), JSON.stringify({
       type: "assistant",
-      timestamp: "2026-06-09T10:00:00.000Z",
+      timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
       cwd: "/tmp/late",
       sessionId: "late-1",
       requestId: "late-req",
@@ -120,7 +153,32 @@ describe("zero-key instant demo first run", () => {
 
     const second = await runCli(["report", "--path", dir]);
     // $7.50 (old fixture) + $15.00 (new one) — the fresh read must include both.
-    expect(second.stdout).toContain("total spend: $22.50");
+    expect(second.stdout).toContain("cost/value evidence total: $22.50");
+  });
+
+  it("uses one explicit 30-day evidence window across quickstart, report, and apply", async () => {
+    await writeClaudeLogFixture();
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "-tmp-old"), { recursive: true });
+    await writeFile(join(logsDir, "-tmp-old", "old.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 45 * 24 * 60 * 60 * 1_000).toISOString(),
+      cwd: "/tmp/old",
+      sessionId: "old-1",
+      requestId: "old-req",
+      message: { id: "old-msg", model: "claude-opus-4-8", usage: { input_tokens: 2_000_000, output_tokens: 200_000 } }
+    }), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-window-"));
+
+    const quick = await runCli(["--path", dir, "--no-color"]);
+    const report = await runCli(["report", "--path", dir]);
+    const apply = await runCli(["apply", "--path", dir]);
+
+    expect(quick.stdout).toContain("$7.50");
+    expect(quick.stdout).not.toContain("$22.50");
+    expect(report.stdout).toContain("cost/value evidence total: $7.50");
+    expect(apply.exitCode).toBe(0);
+    expect(apply.stdout).toContain("30 days");
   });
 
   it("re-running after report persists local_logs state does not warn about sample/legacy state", async () => {
@@ -148,7 +206,7 @@ describe("zero-key instant demo first run", () => {
     await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
     const transcript = JSON.stringify({
       type: "assistant",
-      timestamp: "2026-06-08T10:00:00.000Z",
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
       cwd: "/Users/jose/myproject",
       sessionId: "sess-1",
       requestId: "req-1",
@@ -282,8 +340,25 @@ describe("zero-key instant demo first run", () => {
 
     const artifact = await runCli(["apply-artifact", "--path", dir]);
     expect(artifact.exitCode).toBe(0);
-    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    const artifactDir = join(dir, ".ai-spend-agent");
+    const prompt = await readFile(join(artifactDir, "ai-spend-coding-agent-prompt.md"), "utf8");
+    const action = await readFile(join(artifactDir, "ai-spend-action-plan.md"), "utf8");
+    const policy = await readFile(join(artifactDir, "ai-spend-policy-config-draft.md"), "utf8");
+    const verification = await readFile(join(artifactDir, "ai-spend-verify-plan.md"), "utf8");
     expect(prompt).toContain("# AI Spend Apply Artifact");
+    expect(action).toContain("Observed API-equivalent value: $7.50");
+    expect(action).not.toContain("Estimated impact");
+    expect(policy).toContain('financialClaim: "unverified"');
+    expect(policy).not.toContain("currentTrackedSpendUsd");
+    expect(policy).not.toContain("modeledOpportunityUsd");
+    expect(verification).toContain("Collect at least 3 new matched sessions");
+    expect(verification).not.toContain("Rerun the same workflow/sample window");
+
+    // One command generation uses one exact UTC anchor across every artifact.
+    const rangePattern = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z through \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/;
+    const ranges = [prompt, action, policy, verification].map((text) => text.match(rangePattern)?.[0]);
+    expect(ranges.every(Boolean)).toBe(true);
+    expect(new Set(ranges).size).toBe(1);
   });
 
   it("report without state or logs explains what to run — and never suggests sample data as the fix for real data", async () => {
@@ -292,6 +367,55 @@ describe("zero-key instant demo first run", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("npx aibill");
     expect(result.stderr).not.toMatch(/^Run scan --sample/);
+  });
+
+  it("keeps a legacy mode-less bundled sample Apply artifact non-executable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-legacy-sample-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    delete state.mode;
+    await writeFile(statePath, JSON.stringify(state));
+
+    const result = await runCli(["apply-artifact", "--path", dir]);
+    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    const demoPackage = await readFile(join(dir, ".ai-spend-agent", "demo-package.md"), "utf8");
+
+    expect(result.exitCode).toBe(0);
+    expect(prompt).toContain("AI Spend Apply Artifact — Demo Only");
+    expect(prompt).toContain("NON-EXECUTABLE DEMO");
+    expect(prompt).not.toContain("Copy this into your coding agent");
+    expect(demoPackage).toContain("non-executable previews");
+    expect(demoPackage).not.toContain("copyable inspection and approval task");
+  });
+
+  it("fails closed for an unlabeled state that is not the bundled sample", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-unlabeled-state-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      mode?: string;
+      records: Array<{ source: { observedFrom: string } }>;
+    };
+    delete state.mode;
+    state.records = state.records.map((record) => ({
+      ...record,
+      source: { ...record.source, observedFrom: "legacy_import" }
+    }));
+    await writeFile(statePath, JSON.stringify(state));
+
+    const result = await runCli(["apply-artifact", "--path", dir]);
+    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    const demoPackage = await readFile(join(dir, ".ai-spend-agent", "demo-package.md"), "utf8");
+
+    expect(result.exitCode).toBe(0);
+    expect(prompt).toContain("Evidence Mode Required");
+    expect(prompt).toContain("NON-EXECUTABLE");
+    expect(prompt).not.toContain("Copy this into your coding agent");
+    expect(demoPackage).toContain("Evidence Mode Required");
+    expect(demoPackage).toContain("NON-EXECUTABLE");
+    expect(demoPackage).not.toContain("copyable inspection and approval task");
+    expect(demoPackage).not.toContain("operator action list");
   });
 
   it("honors --plan as an explicit persona override", async () => {
@@ -317,10 +441,10 @@ describe("zero-key instant demo first run", () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-defaultgroup-"));
     const local = await runCli(["--path", dir, "--no-color"]);
-    expect(local.stdout).toContain("Spend by project");
+    expect(local.stdout).toContain("API-equivalent value by project");
 
     const demo = await runCli(["--sample", "--path", dir, "--no-color"]);
-    expect(demo.stdout).toContain("Spend by model");
+    expect(demo.stdout).toContain("Cost/value evidence by model");
   });
 
   it("never injects sample dead-context onto a real (local-logs) readout", async () => {
@@ -441,9 +565,26 @@ describe("zero-key instant demo first run", () => {
 });
 
 describe("minimal CLI vertical slice", () => {
+  beforeEach(async () => {
+    // Keep every CLI test hermetic. Without these overrides doctor/provider
+    // flows read the developer's real transcript and account metadata, making
+    // duration and assertions depend on the host machine.
+    process.env.AI_SPEND_CLAUDE_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-claude-"));
+    process.env.AI_SPEND_CODEX_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-"));
+    process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-home-"));
+    process.env.AI_SPEND_CODEX_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-home-"));
+    process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
+    process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.OPENAI_ADMIN_KEY;
+    delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
+    delete process.env.AI_SPEND_CODEX_LOGS_DIR;
+    delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
+    delete process.env.AI_SPEND_CODEX_HOME_DIR;
+    delete process.env.AI_SPEND_CLAUDE_CONFIG;
+    delete process.env.AI_SPEND_CODEX_AUTH;
   });
 
   it("leads connect with OpenAI/Anthropic and warns cost is admin-gated", async () => {
@@ -600,7 +741,7 @@ describe("minimal CLI vertical slice", () => {
     await symlink(outsideFile, discoveryPath);
     await expect(runCli(["scan", "--path", dir])).rejects.toThrow(/symbolic link/);
     expect(await readFile(outsideFile, "utf8")).toContain("must remain outside");
-  }, 10_000);
+  }, 30_000);
 
   it("refuses a symlinked CLI state directory before reset can delete outside files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-reset-root-"));
@@ -891,7 +1032,7 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill report");
-    expect(result.stdout).toContain("total spend: $87.00");
+    expect(result.stdout).toContain("cost/value evidence total: $87.00");
 
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const html = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
@@ -904,22 +1045,20 @@ describe("minimal CLI vertical slice", () => {
     expect(markdown).toContain("## Executive accountability brief");
     expect(markdown).toContain("## Priority recommendations");
     expect(markdown).toContain("## Executive action plan");
-    expect(markdown).toContain("## Agency margin and workflow watch");
+    expect(markdown).toContain("## Illustrative workflow attribution watch");
     expect(markdown).toContain("client-beta / project-research / research_summary");
-    expect(markdown).toContain("Modeled opportunity: $12.80");
-    expect(markdown).toContain("Copy this into your coding agent");
-    expect(applyArtifact).toContain("# AI Spend Apply Artifact");
-    expect(applyArtifact).toContain("client-beta / project-research / research_summary");
-    expect(applyArtifact).toContain("Do not change user-visible quality thresholds without approval");
+    expect(markdown).toContain("Financial inference: attribution concentration only; no margin or savings amount is inferred.");
+    expect(markdown).toContain("no executable Apply action is generated from the bundled sample");
+    expect(applyArtifact).toContain("# AI Spend Apply Artifact — Demo Only");
+    expect(applyArtifact).toContain("NON-EXECUTABLE DEMO");
+    expect(applyArtifact).not.toContain("client-beta / project-research / research_summary");
     expect(actionPlan).toContain("# AI Spend Action Plan");
-    expect(actionPlan).toContain("Immediate actions");
-    expect(actionPlan).toContain("Estimated impact");
+    expect(actionPlan).toContain("No file, configuration, routing, budget, provider, or policy change is authorized");
     expect(policyDraft).toContain("# AI Spend Policy / Config Draft");
-    expect(policyDraft).toContain("humanApproved: true");
-    expect(policyDraft).toContain("cloudUpload: false");
+    expect(policyDraft).toContain("humanApproved: false");
+    expect(policyDraft).toContain("executionAuthorized: false");
     expect(verifyPlan).toContain("# AI Spend Verification Plan");
-    expect(verifyPlan).toContain("Before baseline");
-    expect(verifyPlan).toContain("Rollback triggers");
+    expect(verifyPlan).toContain("Do not rerun the sample as a before/after test");
     expect(demoPackage).toContain("# aibill Demo Package");
     expect(demoPackage).toContain("Demo command flow");
     expect(demoPackage).toContain("QA controller checklist");
@@ -948,13 +1087,13 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["quickstart", "--sample", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("ILLUSTRATIVE API-EQUIVALENT VALUE");
+    expect(result.stdout).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
     expect(result.stdout).toContain("$87.00");
-    expect(result.stdout).toContain("tracked across 9 calls");
-    expect(result.stdout).toContain("What to test");
+    expect(result.stdout).toContain("combined illustrative evidence across 9 illustrative records");
+    expect(result.stdout).toContain("Illustrative hypotheses only");
     expect(result.stdout).toContain("to gpt-5.5-mini");
     expect(result.stdout).toMatch(/model ~\$[\d,]+\.\d{2}\/mo/);
-    expect(result.stdout).toContain("Spend by model");
+    expect(result.stdout).toContain("Cost/value evidence by model");
     // Human-readable terminal output, not a JSON dump.
     expect(result.stdout).not.toContain("totalUsd");
   });
@@ -965,7 +1104,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["quickstart", "--sample", "--group-by", "client", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Spend by client");
+    expect(result.stdout).toContain("Cost/value evidence by client");
   });
 
   it("reports baseline then deltas across watch cycles and persists snapshots", async () => {
@@ -1072,8 +1211,8 @@ describe("minimal CLI vertical slice", () => {
     const quick = await runCli(["quickstart", "--group-by", "model", "--path", dir]);
     expect(quick.exitCode).toBe(0);
     expect(quick.stdout).toContain("$54.50");
-    expect(quick.stdout).toContain("tracked across 2 calls");
-    expect(quick.stdout).toContain("Spend by model");
+    expect(quick.stdout).toContain("tracked across 2 provider records");
+    expect(quick.stdout).toContain("Provider-reported cost by model");
     expect(quick.stdout).toContain("gpt-4.1");
     expect(quick.stdout).not.toContain(fakeToken);
     expect(quick.stdout).not.toContain("87.00");

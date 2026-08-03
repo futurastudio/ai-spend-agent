@@ -73,7 +73,7 @@ export function createServer(): McpServer {
     {
       title: "Scan AI spend",
       description:
-        "Discover AI-provider files and configuration signals in an approved local folder. This writes only local aibill state; it does not parse detected exports into official provider-reported cost or call provider APIs. Pass sample=true only for an explicitly labeled demo report.",
+        "Discover AI-provider files and configuration signals in an approved local folder. This writes only local aibill state; it does not parse detected exports into official provider-reported cost or call provider APIs. Pass sample=true only for an explicitly labeled, demo-only report that is not user data and must not produce a real change recommendation.",
       inputSchema: {
         path: absolutePath.describe("Absolute path to the local folder to scan."),
         sample: z
@@ -94,9 +94,9 @@ export function createServer(): McpServer {
   server.registerTool(
     "sync_local_agent_spend",
     {
-      title: "Sync local Claude Code and Codex spend",
+      title: "Sync local Claude Code and Codex usage value",
       description:
-        "Read local Claude Code and Codex transcript metadata, estimate API-equivalent cost, and persist a local spend report. Transcript contents are not uploaded. Optionally filter the aggregate records to one project name.",
+        "Read local Claude Code and Codex transcript metadata, calculate API-equivalent usage value (not billed spend), and persist a local evidence report. Day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. Transcript contents are not uploaded. Optionally filter the aggregate records to one project name.",
       inputSchema: {
         path: absolutePath.describe("Absolute project folder where .ai-spend-agent state may be written."),
         sinceDays: z.number().int().min(1).max(365).optional().describe("Lookback window in days; defaults to 30."),
@@ -176,7 +176,7 @@ export function createServer(): McpServer {
     {
       title: "Get hook-aware Context Health",
       description:
-        "Return the canonical read-only Context Health result shared by aibill CLI, MCP, and Glance. Distinguishes discoverable, explicitly invoked, MCP schema-loaded, hook-injected, and other lifecycle context. Hook commands are never run and runtime payload tokens are never inferred.",
+        "Return the canonical read-only Context Health result shared by aibill CLI, MCP, and Glance. Distinguishes discoverable, explicitly invoked, MCP-configured, explicit always-load requests, hook-injected, invocation-unobservable, and other lifecycle context. Configuration does not prove a schema payload was loaded. Hook commands are never run and runtime payload tokens are never inferred.",
       inputSchema: {
         path: absolutePath.describe("Absolute project root for project-scoped inventory."),
         sinceDays: z.number().int().min(1).max(365).optional().describe("Local transcript history window; defaults to 30 days."),
@@ -234,9 +234,9 @@ export function createServer(): McpServer {
   server.registerTool(
     "recommend_cuts",
     {
-      title: "Recommend cuts",
+      title: "Inspect reduction candidates",
       description:
-        "Return recommendations from the analyzed spend report when available, falling back to discovery-signal guidance.",
+        "Return provider-modeled candidates only when schema-validated call/invocation granularity, named workload semantics, and priced evidence support them. Billing buckets, usage aggregates, seats, user totals, and workflow ownership/concentration remain reconciliation diagnostics and never become call-level cuts. Sample state returns demo-only guidance; local transcript aggregates return observed exposure or collect-more-evidence guidance. No change, cash saving, or approval is inferred. The legacy tool name is retained for compatibility; use `npx aibill apply` for the full approval, rollback, and matched-verification plan.",
       inputSchema: {
         path: absolutePath.describe("Absolute path with existing .ai-spend-agent state.")
       },

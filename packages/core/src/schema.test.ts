@@ -42,10 +42,41 @@ describe("core schemas", () => {
       clientId: "client-beta",
       projectId: "project-research",
       agentId: "agent-analyst",
-      operation: "research_summary"
+      operation: "research_summary",
+      usageGranularity: "call",
+      workloadSemantics: {
+        stableInputFingerprint: "research-summary-v1",
+        batchEligible: true,
+        downgradeSafe: true
+      }
     });
 
     expect(record.amountUsd).toBe(18.6);
+    expect(record.usageGranularity).toBe("call");
+  });
+
+  it("rejects invented granularity and unvalidated workload attestations", () => {
+    const base = {
+      id: "usage-granularity",
+      timestamp: "2026-05-19T14:40:00.000Z",
+      source,
+      model: "gpt-4.1",
+      inputTokens: 1,
+      outputTokens: 1,
+      amountUsd: 1,
+      costConfidence: "verified"
+    };
+    expect(usageRecordSchema.safeParse({ ...base, usageGranularity: "probably-a-call" }).success).toBe(false);
+    expect(usageRecordSchema.safeParse({
+      ...base,
+      usageGranularity: "call",
+      workloadSemantics: { stableInputFingerprint: "raw prompt with spaces" }
+    }).success).toBe(false);
+    expect(usageRecordSchema.safeParse({
+      ...base,
+      usageGranularity: "call",
+      workloadSemantics: { batchEligible: true, inventedClaim: true }
+    }).success).toBe(false);
   });
 
   it("requires missing costs to omit the amount", () => {
