@@ -83,7 +83,7 @@ export default function Home() {
               $
             </span>
             <span className="font-mono text-sm font-semibold tracking-tight text-ink">
-              aibill
+              Tilden - aibill
             </span>
           </a>
           <nav className="flex items-center gap-1 sm:gap-2" aria-label="Primary navigation">
