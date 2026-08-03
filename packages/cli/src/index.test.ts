@@ -379,11 +379,14 @@ describe("zero-key instant demo first run", () => {
 
     const result = await runCli(["apply-artifact", "--path", dir]);
     const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    const demoPackage = await readFile(join(dir, ".ai-spend-agent", "demo-package.md"), "utf8");
 
     expect(result.exitCode).toBe(0);
     expect(prompt).toContain("AI Spend Apply Artifact — Demo Only");
     expect(prompt).toContain("NON-EXECUTABLE DEMO");
     expect(prompt).not.toContain("Copy this into your coding agent");
+    expect(demoPackage).toContain("non-executable previews");
+    expect(demoPackage).not.toContain("copyable inspection and approval task");
   });
 
   it("fails closed for an unlabeled state that is not the bundled sample", async () => {
@@ -403,11 +406,16 @@ describe("zero-key instant demo first run", () => {
 
     const result = await runCli(["apply-artifact", "--path", dir]);
     const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    const demoPackage = await readFile(join(dir, ".ai-spend-agent", "demo-package.md"), "utf8");
 
     expect(result.exitCode).toBe(0);
     expect(prompt).toContain("Evidence Mode Required");
     expect(prompt).toContain("NON-EXECUTABLE");
     expect(prompt).not.toContain("Copy this into your coding agent");
+    expect(demoPackage).toContain("Evidence Mode Required");
+    expect(demoPackage).toContain("NON-EXECUTABLE");
+    expect(demoPackage).not.toContain("copyable inspection and approval task");
+    expect(demoPackage).not.toContain("operator action list");
   });
 
   it("honors --plan as an explicit persona override", async () => {

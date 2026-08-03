@@ -1189,6 +1189,32 @@ function generateLocalVerificationPlanMarkdown(input: SpendReportInput): string 
 }
 
 export function generateDemoPackageMarkdown(input: SpendReportInput): string {
+  if (input.dataMode === undefined) {
+    return [
+      "# aibill Demo Package — Evidence Mode Required",
+      "",
+      "> **NON-EXECUTABLE.** The persisted state has no verified data-mode label. This package does not treat its records as sample, local transcript evidence, or connected provider evidence, and it authorizes no action.",
+      "",
+      "## Why this package is disabled",
+      "",
+      "- The accounting basis, source mode, and ownership of the stored records are unverified.",
+      "- No ranked optimization, copyable agent task, operator action, policy/config draft, savings, or ROI claim is supported.",
+      "- The accompanying Apply, action, policy, and verification artifacts remain non-executable.",
+      "",
+      "## Recover safely",
+      "",
+      "1. Run `npx aibill` to re-read supported current local coding-agent evidence, or run an explicit provider sync.",
+      "2. Confirm the refreshed report names its evidence mode, source, UTC window, record granularity, confidence, and missing coverage.",
+      "3. Generate Apply again; read-only inspection and explicit approval are still required before any mutation.",
+      "",
+      "## QA controller checklist",
+      "",
+      "- [ ] No action is copied or executed from this unlabeled legacy state.",
+      "- [ ] The replacement state has an explicit evidence-mode label.",
+      "- [ ] No raw secrets, paths, prompts, or credentials appear in generated artifacts.",
+      ""
+    ].join("\n");
+  }
   const sampleOnly = input.dataMode === "sample";
   return [
     "# aibill Demo Package",

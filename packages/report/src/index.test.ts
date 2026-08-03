@@ -5,6 +5,7 @@ import type { SpendReportInput } from "./index.js";
 import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
+  generateDemoPackageMarkdown,
   generateHtmlReport,
   generateMarkdownReport,
   generatePolicyConfigDraftMarkdown,
@@ -440,6 +441,7 @@ describe("board-style report generation", () => {
     const action = generateActionPlanMarkdown(unlabeledInput);
     const policy = generatePolicyConfigDraftMarkdown(unlabeledInput);
     const verification = generateVerificationPlanMarkdown(unlabeledInput);
+    const demoPackage = generateDemoPackageMarkdown(unlabeledInput);
     const markdown = generateMarkdownReport(unlabeledInput);
     const html = generateHtmlReport(unlabeledInput);
 
@@ -449,6 +451,12 @@ describe("board-style report generation", () => {
     expect(action).toContain("No mutation is authorized");
     expect(policy).toContain("executionAuthorized: false");
     expect(verification).toContain("No savings, ROI, or operational improvement is verified");
+    expect(demoPackage).toContain("Evidence Mode Required");
+    expect(demoPackage).toContain("NON-EXECUTABLE");
+    expect(demoPackage).toContain("No ranked optimization");
+    expect(demoPackage).not.toContain("copyable inspection and approval task");
+    expect(demoPackage).not.toContain("operator action list");
+    expect(demoPackage).not.toContain("low-risk policy/config draft");
     expect(markdown).toContain("UNLABELED LEGACY STATE");
     expect(markdown).toContain("Recommendations disabled");
     expect(markdown).toContain("No action is approved from unlabeled legacy state");

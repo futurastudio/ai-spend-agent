@@ -29,7 +29,9 @@ Recommendation-truth hotfix for the public beta.
   state and omits absolute local paths from terminal output.
   MCP now persists and returns `mode: sample`, recovers narrowly identifiable
   legacy mode-less bundled samples, and returns demo-only guidance. Any other
-  unlabeled legacy state fails closed instead of becoming a connected action.
+  unlabeled legacy state fails closed across Apply, action/policy/verification,
+  demo-package, Markdown, and HTML artifacts instead of becoming a connected
+  action.
 - Connected MCP recommendations now preserve a stable candidate ID, record IDs,
   provider/source, accounting basis, candidate-specific UTC window, confidence,
   approval boundary, rollback, and matched verification. Aggregate provider
