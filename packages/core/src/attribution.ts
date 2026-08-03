@@ -31,7 +31,7 @@ export function attributeUsageRecords(records: UsageRecord[]): AttributionMappin
 function buildCandidates(record: UsageRecord): AttributionCandidate[] {
   const candidates: AttributionCandidate[] = [];
 
-  if (record.projectId) {
+  if (record.projectId && !isPlaceholderEntityId(record.projectId)) {
     candidates.push({
       entityType: "project",
       entityId: record.projectId,
@@ -39,7 +39,7 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
       evidence: [`usage record includes projectId ${record.projectId}`]
     });
   }
-  if (record.clientId) {
+  if (record.clientId && !isPlaceholderEntityId(record.clientId)) {
     candidates.push({
       entityType: "client",
       entityId: record.clientId,
@@ -47,7 +47,7 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
       evidence: [`usage record includes clientId ${record.clientId}`]
     });
   }
-  if (record.agentId) {
+  if (record.agentId && !isPlaceholderEntityId(record.agentId)) {
     candidates.push({
       entityType: "agent",
       entityId: record.agentId,
@@ -55,7 +55,7 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
       evidence: [`usage record includes agentId ${record.agentId}`]
     });
   }
-  if (record.userId) {
+  if (record.userId && !isPlaceholderEntityId(record.userId)) {
     candidates.push({
       entityType: "user",
       entityId: record.userId,
@@ -63,7 +63,7 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
       evidence: [`usage record includes userId ${record.userId}`]
     });
   }
-  if (record.workspaceId) {
+  if (record.workspaceId && !isPlaceholderEntityId(record.workspaceId)) {
     candidates.push({
       entityType: "workspace",
       entityId: record.workspaceId,
@@ -71,7 +71,7 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
       evidence: [`usage record includes workspaceId ${record.workspaceId}`]
     });
   }
-  if (record.apiKeyId) {
+  if (record.apiKeyId && !isPlaceholderEntityId(record.apiKeyId)) {
     candidates.push({
       entityType: "api_key",
       entityId: record.apiKeyId,
@@ -111,6 +111,12 @@ function buildCandidates(record: UsageRecord): AttributionCandidate[] {
   }
 
   return dedupeCandidates(candidates);
+}
+
+function isPlaceholderEntityId(value: string): boolean {
+  return ["(home)", "home", "unknown", "unattributed", "unmapped", "(unmapped)"].includes(
+    value.trim().toLowerCase()
+  );
 }
 
 function dedupeCandidates(candidates: AttributionCandidate[]): AttributionCandidate[] {

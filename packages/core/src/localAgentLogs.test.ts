@@ -279,6 +279,51 @@ describe("parseCodexRollout", () => {
     expect(parseCodexRollout(homeLaunched)[0]?.project).toBe("agent-finops");
   });
 
+  it("recovers workdirs from the current nested Codex exec envelope without evaluating it", () => {
+    const projectRoot = join(homedir(), "agent-finops");
+    const nestedExec = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-nested-exec",
+          cwd: homedir(),
+          timestamp: "2026-08-03T14:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          input: [
+            "const first = await tools.exec_command({",
+            `  cmd: \"npm test\", workdir: ${JSON.stringify(projectRoot)}`,
+            "});",
+            "const second = await tools.exec_command({",
+            `  cmd: \"npm run build\", workdir: ${JSON.stringify(join(projectRoot, "apps", "web"))}`,
+            "});"
+          ].join("\n")
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T14:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 5_000,
+              output_tokens: 1_000
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(nestedExec)[0]?.project).toBe("agent-finops");
+  });
+
   it("summarizes Codex prompts and marks delegated sessions", () => {
     const delegated = [
       JSON.stringify({
@@ -417,6 +462,19 @@ describe("aggregateCalls", () => {
     }]);
     expect(records[0]!.amountUsd).toBeNull();
     expect(records[0]!.costConfidence).toBe("missing");
+  });
+
+  it("keeps home-launched sessions unattributed instead of inventing a Home project", () => {
+    const records = aggregateCalls([{
+      agent: "codex",
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-03T10:00:00.000Z",
+      project: "(home)",
+      usage: { inputTokens: 10_000, outputTokens: 1_000 }
+    }]);
+
+    expect(records[0]!.projectId).toBeUndefined();
+    expect(records[0]!.id).toContain("home");
   });
 });
 

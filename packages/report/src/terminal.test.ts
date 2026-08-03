@@ -212,4 +212,43 @@ describe("generatePlainEnglishSummary", () => {
     const demo = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
     expect(demo).toMatch(/tracked across \d+ calls/);
   });
+
+  it("renders home-launched project usage as unattributed with an honest record unit", () => {
+    const records: UsageRecord[] = [{
+      id: "local-home",
+      timestamp: "2026-08-03T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local agent session logs", provider: "openai", confidence: "estimated", observedFrom: "test" },
+      model: "gpt-5.6-sol",
+      inputTokens: 100_000,
+      outputTokens: 5_000,
+      amountUsd: 81,
+      costConfidence: "estimated",
+      agentId: "codex",
+      providerCostType: "local_agent_logs"
+    }, {
+      id: "local-project",
+      timestamp: "2026-08-03T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local agent session logs", provider: "openai", confidence: "estimated", observedFrom: "test" },
+      model: "gpt-5.6-sol",
+      inputTokens: 20_000,
+      outputTokens: 1_000,
+      amountUsd: 19,
+      costConfidence: "estimated",
+      projectId: "agent-finops",
+      agentId: "codex",
+      providerCostType: "local_agent_logs"
+    }];
+
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      groupBy: "project"
+    });
+
+    expect(text).toContain("81% is not yet attributable to a project");
+    expect(text).toContain("Unattributed");
+    expect(text).toContain("Records");
+    expect(text).not.toContain("(home) eats");
+  });
 });
