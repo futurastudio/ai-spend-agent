@@ -126,6 +126,10 @@ investigate and how to verify it.
   spend, remaining entitlement, plan coverage, or the cheapest plan. Reported
   limit windows are shown separately when available.
 - **Drill-down**: `--group-by source|model|client|project|agent|user|workspace|apiKey`.
+  Local project rows use observed working-directory evidence; unsupported
+  activity stays `Unattributed` instead of becoming a guessed project. The
+  `Records` column counts day + agent + model + project aggregates, not raw
+  API calls.
 - **Shareable AI Receipt**: `report-card` writes a redacted SVG (no client/
   project/user names) + a paste-ready caption.
 - **Honest confidence labels**: every number is tagged verified / estimated /
