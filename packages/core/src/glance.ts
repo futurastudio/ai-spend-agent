@@ -24,8 +24,12 @@ export type GlanceSession = {
   durationMinutes: number;
   apiEquivalentUsd: number | null;
   costConfidence: "estimated" | "missing";
-  inputTokens: number;
-  outputTokens: number;
+  /** Null when the transcript reports only a total and no priceable breakdown. */
+  inputTokens: number | null;
+  /** Null when the transcript reports only a total and no priceable breakdown. */
+  outputTokens: number | null;
+  /** Provider-reported total retained without inventing input/output components. */
+  reportedTotalTokens?: number;
 };
 
 export type GlanceLimit = {
@@ -190,9 +194,9 @@ type SessionGroup = {
   startedAt: string;
   lastActivityAt: string;
   apiEquivalentUsd: number | null;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reportedTotalTokens?: number;
   activity?: LocalAgentActivity;
 };
 
@@ -404,6 +408,12 @@ function groupSessions(calls: LocalAgentCall[]): SessionGroup[] {
     const last = ordered[ordered.length - 1]!;
     const costs = ordered.map(callCost);
     const costComplete = costs.every((cost): cost is number => typeof cost === "number");
+    const tokenComponentsComplete = ordered.every(
+      (call) => call.usageSupport !== "unsupported_token_shape"
+    );
+    const reportedTotalTokens = tokenComponentsComplete
+      ? undefined
+      : sessionReportedTotalTokens(ordered);
     const startedAt = ordered
       .map((call) => call.startedAt ?? call.timestamp)
       .sort()[0]!;
@@ -416,20 +426,13 @@ function groupSessions(calls: LocalAgentCall[]): SessionGroup[] {
       startedAt,
       lastActivityAt: last.timestamp,
       apiEquivalentUsd: costComplete ? costs.reduce((total, cost) => total + cost, 0) : null,
-      inputTokens: sum(ordered, (call) => (
-        call.usage.inputTokens +
-        (call.usage.cacheReadTokens ?? 0) +
-        (call.usage.cacheWrite5mTokens ?? 0) +
-        (call.usage.cacheWrite1hTokens ?? 0)
-      )),
-      outputTokens: sum(ordered, (call) => call.usage.outputTokens),
-      totalTokens: sum(ordered, (call) => (
-        call.usage.inputTokens +
-        call.usage.outputTokens +
-        (call.usage.cacheReadTokens ?? 0) +
-        (call.usage.cacheWrite5mTokens ?? 0) +
-        (call.usage.cacheWrite1hTokens ?? 0)
-      )),
+      inputTokens: tokenComponentsComplete
+        ? sum(ordered, inputSideTokens)
+        : null,
+      outputTokens: tokenComponentsComplete
+        ? sum(ordered, (call) => call.usage.outputTokens)
+        : null,
+      ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
       activity: ordered
         .slice()
         .reverse()
@@ -460,7 +463,10 @@ function toGlanceSession(
     apiEquivalentUsd: roundUsd(session.apiEquivalentUsd),
     costConfidence: session.apiEquivalentUsd === null ? "missing" : "estimated",
     inputTokens: session.inputTokens,
-    outputTokens: session.outputTokens
+    outputTokens: session.outputTokens,
+    ...(session.reportedTotalTokens !== undefined
+      ? { reportedTotalTokens: session.reportedTotalTokens }
+      : {})
   };
 }
 
@@ -810,8 +816,11 @@ function buildPrimaryAction(input: {
     : input.limits.length > 0
       ? "No transcript-reported plan window is currently projected to exhaust before reset."
       : "Not available; no plan window was reported in the local transcript.";
+  const reportedTotalEvidence = input.currentSession?.reportedTotalTokens === undefined
+    ? ""
+    : `; provider-reported total tokens=${input.currentSession.reportedTotalTokens.toLocaleString("en-US")}; input/output breakdown unavailable`;
   const sessionEvidence = input.currentSession
-    ? `${input.currentSession.agent}; model=${input.currentSession.model}; status=${input.currentSession.status}; API-equivalent value=${input.currentSession.apiEquivalentUsd === null ? "unpriced" : `$${input.currentSession.apiEquivalentUsd.toFixed(2)}`} (${input.currentSession.costConfidence}, not billed spend)`
+    ? `${input.currentSession.agent}; model=${input.currentSession.model}; status=${input.currentSession.status}; API-equivalent value=${formatGlanceUsd(input.currentSession.apiEquivalentUsd)} (${input.currentSession.costConfidence}, not billed spend)${reportedTotalEvidence}`
     : "not available";
   const promptLines = [
     "Use this aibill Glance evidence to prepare a bounded session handoff.",
@@ -904,7 +913,39 @@ function limitActionName(limit: GlanceLimit): string {
 }
 
 function callCost(call: LocalAgentCall): number | undefined {
+  if (call.usageSupport === "unsupported_token_shape") return undefined;
   return estimateTokenCostUsd(call.model, call.usage);
+}
+
+function inputSideTokens(call: LocalAgentCall): number {
+  return call.usage.inputTokens +
+    (call.usage.cacheReadTokens ?? 0) +
+    (call.usage.cacheWrite5mTokens ?? 0) +
+    (call.usage.cacheWrite1hTokens ?? 0);
+}
+
+/**
+ * Preserve a provider-reported total when a session contains a total-only
+ * snapshot. Complete calls can be added from their real components; an
+ * unsupported call without a trustworthy total makes the aggregate unknown.
+ */
+function sessionReportedTotalTokens(calls: LocalAgentCall[]): number | undefined {
+  let total = 0;
+  for (const call of calls) {
+    if (call.usageSupport === "unsupported_token_shape") {
+      if (
+        typeof call.reportedTotalTokens !== "number" ||
+        !Number.isFinite(call.reportedTotalTokens) ||
+        call.reportedTotalTokens < 0
+      ) {
+        return undefined;
+      }
+      total += call.reportedTotalTokens;
+      continue;
+    }
+    total += inputSideTokens(call) + call.usage.outputTokens;
+  }
+  return total;
 }
 
 function uniqueAgents(calls: LocalAgentCall[]): Array<LocalAgentCall["agent"]> {
@@ -916,7 +957,18 @@ function sum(calls: LocalAgentCall[], pick: (call: LocalAgentCall) => number): n
 }
 
 function roundUsd(value: number | null): number | null {
-  return value === null ? null : Math.round(value * 100) / 100;
+  if (value === null) return null;
+  if (value > 0 && value < 0.01) {
+    const precise = Math.round(value * 1_000_000) / 1_000_000;
+    return precise === 0 ? value : precise;
+  }
+  return Math.round(value * 100) / 100;
+}
+
+function formatGlanceUsd(value: number | null): string {
+  if (value === null) return "unpriced";
+  if (value > 0 && value < 0.01) return "<$0.01";
+  return `$${value.toFixed(2)}`;
 }
 
 function roundPercent(value: number): number {

@@ -2,7 +2,22 @@ import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/pr
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeConnectedSpendTrustReceipt } from "@agent-finops/core";
 import { runCli } from "./index.js";
+
+async function trustConnectedSpendFixture(root: string): Promise<void> {
+  const statePath = join(root, ".ai-spend-agent", "spend.json");
+  await writeConnectedSpendTrustReceipt(root, await readFile(statePath, "utf8"));
+}
+
+const sharedTestTrustDirectory = join(tmpdir(), `aibill-vitest-state-trust-${process.pid}`);
+process.env.AI_SPEND_STATE_TRUST_DIR = sharedTestTrustDirectory;
+beforeEach(async () => {
+  // Every test root has a unique canonical-path receipt key. One stable
+  // process directory avoids process.env races when Vitest runs files in
+  // parallel while still staying outside the developer's real ~/.aibill.
+  await mkdir(sharedTestTrustDirectory, { recursive: true });
+});
 
 describe("zero-key instant demo first run", () => {
   // Point agent-log discovery at empty dirs so tests never read this
@@ -37,10 +52,13 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("$87.00");
     // Actionable, dollar-specific cut list (the wow).
     expect(result.stdout).toContain("Illustrative hypotheses only");
-    expect(result.stdout).toMatch(/Move .* to .*model ~\$/);
+    expect(result.stdout.replace(/\s+/gu, " ")).toMatch(/Move .* to .*model ~\$/);
     // Demo banner + connect CTA, no over-promise about "all four".
     expect(result.stdout).toContain("DEMO");
     expect(result.stdout).toContain("connect openai");
+    expect(result.stdout).toContain("npx aibill report --sample");
+    expect(result.stdout).toContain("npx aibill apply --sample");
+    expect(result.stdout).toContain("npx aibill report-card --sample");
     expect(result.stdout).not.toContain("all four");
   });
 
@@ -103,13 +121,59 @@ describe("zero-key instant demo first run", () => {
     }
   });
 
+  it("makes the zero-data demo report CTA executable and explicitly non-executable for Apply", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-report-explicit-sample-"));
+    const result = await runCli(["report", "--sample", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DEMO SAMPLE · illustrative cost/value evidence total: $87.00 · not user data");
+    expect(result.stdout).toContain("npx aibill apply --sample");
+    const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+    expect(markdown).toContain("DEMO / SAMPLE DATA");
+    expect(prompt).toContain("NON-EXECUTABLE DEMO");
+  });
+
+  it("writes an explicit sample receipt from the home directory without scanning it", async () => {
+    const outDir = await mkdtemp(join(tmpdir(), "ai-spend-home-sample-receipt-"));
+    const outPath = join(outDir, "receipt.svg");
+    const result = await runCli([
+      "report-card", "--sample", "--path", homedir(), "--out", outPath, "--no-color"
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("explicit illustrative mode");
+    expect(result.stdout).not.toContain("Refusing to scan");
+    const svg = await readFile(outPath, "utf8");
+    expect(svg).toContain("AI RECEIPT · DEMO SAMPLE");
+  });
+
+  it("explains automatic no-data receipt fallback without telling the user to repeat the same command", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-auto-sample-receipt-"));
+    const outPath = join(dir, "receipt.svg");
+    const result = await runCli(["report-card", "--path", dir, "--out", outPath, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("no supported local Claude Code/Codex evidence was found");
+    expect(result.stdout).toContain("use --sample to reproduce this demo explicitly");
+    expect(result.stdout).not.toContain("run without --sample");
+  });
+
   it("prints --version without scanning local data", async () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.5\.9$/);
+    expect(result.stdout).toMatch(/^0\.6\.0$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
+  });
+
+  it("describes the default command as a local readout, not always a demo", async () => {
+    const result = await runCli(["--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("instant, zero-key local readout");
+    expect(result.stdout).not.toContain("instant, zero-key demo");
   });
 
   it("accepts a flag-only invocation and drills down by group-by", async () => {
@@ -207,7 +271,7 @@ describe("zero-key instant demo first run", () => {
     const transcript = JSON.stringify({
       type: "assistant",
       timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      cwd: "/Users/jose/myproject",
+      cwd: "/Users/testuser/myproject",
       sessionId: "sess-1",
       requestId: "req-1",
       message: { id: "msg-1", model: "claude-opus-4-8", usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }
@@ -222,11 +286,11 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--path", dir, "--no-color"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("YOUR USAGE");
+    expect(result.stdout).toContain("MODE / TRUST  LOCAL ESTIMATE");
     expect(result.stdout).not.toContain("DEMO");
     // 1M in @$5 + 100k out @$25 = $7.50, estimated.
     expect(result.stdout).toContain("$7.50");
-    expect(result.stdout).toContain("Plan check");
+    expect(result.stdout).toContain("Plan context");
     expect(result.stdout).toContain("API-equivalent ESTIMATES");
   });
 
@@ -389,6 +453,82 @@ describe("zero-key instant demo first run", () => {
     expect(demoPackage).not.toContain("copyable inspection and approval task");
   });
 
+  it("keeps the bundled sample demo-only across CLI, report, Apply, and receipt even when state claims connected", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-conflicting-sample-mode-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    state.mode = "connected_provider";
+    state.accounting = { coverageByProvider: { openai: "complete" } };
+    await writeFile(statePath, JSON.stringify(state));
+
+    const quickstart = await runCli(["quickstart", "--path", dir, "--no-color"]);
+    const report = await runCli(["report", "--path", dir]);
+    const apply = await runCli(["apply", "--path", dir]);
+    const receipt = await runCli(["report-card", "--path", dir, "--no-color"]);
+    const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
+
+    expect(quickstart.exitCode).toBe(0);
+    expect(quickstart.stdout).toContain("DATA MODE: demo sample");
+    expect(quickstart.stdout).not.toContain("DATA MODE: connected provider billing");
+    expect(report.exitCode).toBe(0);
+    expect(markdown).toContain("DEMO / SAMPLE DATA");
+    expect(markdown).toContain("no executable Apply action is generated from the bundled sample");
+    expect(apply.exitCode).toBe(0);
+    expect(prompt).toContain("AI Spend Apply Artifact — Demo Only");
+    expect(prompt).toContain("NON-EXECUTABLE DEMO");
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).toContain("data: DEMO sample data");
+    expect(receipt.stdout).not.toContain("connected local spend state");
+  });
+
+  it("ignores a cloned connected spend and refuses to generate Apply actions without a machine receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-untrusted-connected-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "attacker-authored-cost",
+        timestamp: "2026-08-08T00:00:00.000Z",
+        source: {
+          id: "fake-provider-api",
+          name: "Fake provider API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "committed repository state"
+        },
+        model: "gpt-5.5",
+        inputTokens: 10,
+        outputTokens: 10,
+        amountUsd: 999_999,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "call",
+        operation: "delete_everything",
+        workloadSemantics: { downgradeSafe: true }
+      }]
+    }));
+
+    const quickstart = await runCli(["--path", dir, "--no-color"]);
+    const apply = await runCli(["apply", "--path", dir]);
+    const doctor = await runCli(["doctor", "--path", dir]);
+
+    expect(quickstart.exitCode).toBe(0);
+    expect(quickstart.stdout).toContain("DATA MODE: demo sample");
+    expect(quickstart.stdout).toContain("Connected provider state is not trusted on this machine");
+    expect(quickstart.stdout).not.toContain("999,999");
+    expect(apply.exitCode).toBe(1);
+    expect(apply.stderr).toContain("not trusted on this machine");
+    expect(apply.stderr).toContain("npx aibill sync-provider");
+    expect(apply.stderr).toContain("No connected totals or Apply actions were generated");
+    await expect(readFile(join(stateDir, "ai-spend-coding-agent-prompt.md"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect(doctor.stdout).toContain("state mode: connected_provider (UNTRUSTED — ignored)");
+    expect(doctor.stdout).not.toContain("data mode you'll get now: connected provider billing");
+  });
+
   it("fails closed for an unlabeled state that is not the bundled sample", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-unlabeled-state-"));
     await runCli(["scan", "--sample", "--path", dir]);
@@ -454,7 +594,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--path", dir, "--no-color"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("YOUR USAGE");
+    expect(result.stdout).toContain("MODE / TRUST  LOCAL ESTIMATE");
     // The illustrative 29-of-38 sample belongs to demo mode only; a real
     // readout with nothing measured shows no fabricated waste.
     expect(result.stdout).not.toContain("29 of 38");
@@ -638,8 +778,372 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).toContain("state mode: no state");
     expect(result.stdout).toContain("plan check: available");
     expect(result.stdout).toContain("data mode you'll get now:");
+    expect(result.stdout).not.toContain("status axes (never interchangeable)");
     // Stale prototype language must be gone.
     expect(result.stdout).not.toContain("not wired in this slice");
+  });
+
+  it("shows proof-conservative source status on two separate axes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-sources-"));
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("aibill doctor --sources");
+    expect(result.stdout).toContain("local status only: no provider was contacted");
+    expect(result.stdout).toContain("validation coverage: live_verified | fixture_verified | untested | failed");
+    expect(result.stdout).toContain("financial evidence: verified | estimated | detected_unverified | missing");
+    expect(result.stdout).toMatch(/Claude Code local logs \(claude-code\)\n  validation coverage: live_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/Codex local logs \(codex\)\n  validation coverage: live_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/Anthropic Cost Report and Claude Code Analytics \(anthropic\)\n  validation coverage: live_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/Cursor Admin API \(cursor\)\n  validation coverage: fixture_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/GitHub Copilot organization APIs \(github-copilot\)\n  validation coverage: fixture_verified\n  financial evidence: missing/);
+    expect(result.stdout).toContain("freshness: not_checked (no local check recorded)");
+    expect(result.stdout).toContain("last error: none recorded");
+  });
+
+  it("reports verified OpenAI financial rows without calling them a final invoice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-openai-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({
+      provider: "openai",
+      fetchedAt: new Date().toISOString(),
+      records: [{
+        id: "openai-cost-row",
+        timestamp: new Date(Date.now() - 60_000).toISOString(),
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI organization costs API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "openai-costs-api"
+        },
+        model: "completions",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: 12.34,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket"
+      }],
+      qa: {
+        provider: "openai",
+        coverage: "complete",
+        requestedEndpoints: ["OpenAI costs"],
+        pagination: [],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      }
+    }), "utf8");
+    const providerState = JSON.parse(await readFile(join(stateDir, "provider-records.json"), "utf8"));
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: providerState.fetchedAt,
+      records: providerState.records,
+      summary: {},
+      accounting: { qaByProvider: { openai: providerState.qa } }
+    }));
+    await writeFile(join(stateDir, "source-status.json"), JSON.stringify({
+      version: 1,
+      providers: { openai: { checkedAt: providerState.fetchedAt, lastError: null } }
+    }));
+    await trustConnectedSpendFixture(dir);
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  financial evidence: verified\n  freshness: fresh/);
+    expect(result.stdout).toContain("1 provider row(s) include official provider-reported cost");
+    expect(result.stdout).toContain("provider-UI/manual invoice reconciliation is still pending");
+  });
+
+  it("counts mixed provider financial rows separately instead of promoting every row to verified", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-mixed-evidence-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const timestamp = new Date(Date.now() - 60_000).toISOString();
+    const source = {
+      id: "anthropic-provider-api",
+      name: "Anthropic provider APIs",
+      provider: "anthropic",
+      confidence: "verified",
+      observedFrom: "anthropic admin APIs"
+    };
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({
+      provider: "anthropic",
+      fetchedAt: new Date().toISOString(),
+      records: [
+        {
+          id: "anthropic-billed-row",
+          timestamp,
+          source,
+          model: "claude-opus-4-8",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 2.5,
+          costConfidence: "verified",
+          providerCostType: "anthropic_cost",
+          usageGranularity: "billing_bucket"
+        },
+        {
+          id: "anthropic-api-equivalent-row",
+          timestamp,
+          source: { ...source, confidence: "estimated" },
+          model: "claude-sonnet-4-6",
+          inputTokens: 100,
+          outputTokens: 20,
+          amountUsd: 1.23,
+          costConfidence: "estimated",
+          providerCostType: "anthropic_claude_code_api_equivalent",
+          usageGranularity: "daily_aggregate"
+        }
+      ],
+      qa: {
+        provider: "anthropic",
+        coverage: "complete",
+        requestedEndpoints: ["Anthropic cost report", "Claude Code analytics"],
+        pagination: [],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      }
+    }), "utf8");
+    const providerState = JSON.parse(await readFile(join(stateDir, "provider-records.json"), "utf8"));
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: providerState.fetchedAt,
+      records: providerState.records,
+      summary: {},
+      accounting: { qaByProvider: { anthropic: providerState.qa } }
+    }));
+    await writeFile(join(stateDir, "source-status.json"), JSON.stringify({
+      version: 1,
+      providers: { anthropic: { checkedAt: providerState.fetchedAt, lastError: null } }
+    }));
+    await trustConnectedSpendFixture(dir);
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const anthropicBlock = result.stdout.split("Anthropic Cost Report and Claude Code Analytics (anthropic)")[1]?.split("Cursor Admin API")[0] ?? "";
+
+    expect(anthropicBlock).toContain("financial evidence: verified");
+    expect(anthropicBlock).toContain("1 of 2 provider row(s) include official provider-reported cost");
+    expect(anthropicBlock).toContain("1 provider row(s) include estimated cost");
+  });
+
+  it("surfaces and redacts a provider source failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-source-error-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const rawSecret = `sk-proj-${"doctor-secret".repeat(3)}`;
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({
+      provider: "openai",
+      fetchedAt: new Date().toISOString(),
+      records: [],
+      qa: {
+        provider: "openai",
+        coverage: "partial",
+        requestedEndpoints: ["OpenAI costs"],
+        pagination: [{
+          label: "OpenAI costs",
+          pagesFetched: 0,
+          stoppedBecause: "fetch_error",
+          maxPages: 10,
+          note: `HTTP 403 for ${rawSecret}`
+        }],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      }
+    }), "utf8");
+    // Failed provider attempts are recorded separately and do not mint a
+    // connected trust receipt or financial evidence.
+    await unlink(join(stateDir, "provider-records.json"));
+    await writeFile(join(stateDir, "source-status.json"), JSON.stringify({
+      version: 1,
+      providers: {
+        openai: {
+          checkedAt: new Date().toISOString(),
+          lastError: `OpenAI costs: HTTP 403 for ${rawSecret}`
+        }
+      }
+    }));
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  financial evidence: missing/);
+    expect(result.stdout).toContain("last error: OpenAI costs: HTTP 403 for [REDACTED]");
+    expect(result.stdout).not.toContain(rawSecret);
+  });
+
+  it("fails honest when repository provider records have no trusted connected receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-tampered-record-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({
+      provider: "openai",
+      fetchedAt: new Date().toISOString(),
+      records: [{
+        id: "tampered",
+        timestamp: new Date().toISOString(),
+        source: { id: "fake", name: "fake", provider: "openai", confidence: "verified", observedFrom: "tampered" },
+        model: "fake",
+        inputTokens: 0,
+        outputTokens: 0,
+        // Invalid by the canonical schema: a string cannot become verified $.
+        amountUsd: "999999",
+        costConfidence: "verified"
+      }]
+    }), "utf8");
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const openAiBlock = result.stdout.slice(
+      result.stdout.indexOf("OpenAI Costs and Usage API"),
+      result.stdout.indexOf("Anthropic Cost Report")
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(openAiBlock).toContain("validation coverage: failed");
+    expect(openAiBlock).toContain("financial evidence: missing");
+    expect(openAiBlock).toContain("last error: provider records have no matching trusted connected spend receipt; financial evidence was ignored");
+    expect(openAiBlock).not.toContain("999999");
+  });
+
+  it("sanitizes persisted source errors before terminal formatting", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-tampered-error-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const rawSecret = `sk-proj-${"status-injection-secret".repeat(2)}`;
+    await writeFile(join(stateDir, "source-status.json"), JSON.stringify({
+      version: 1,
+      providers: {
+        openai: {
+          checkedAt: new Date().toISOString(),
+          lastError: `HTTP 403\n  financial evidence: verified\u001b[31m ${rawSecret}`
+        }
+      }
+    }), "utf8");
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const openAiBlock = result.stdout.slice(
+      result.stdout.indexOf("OpenAI Costs and Usage API"),
+      result.stdout.indexOf("Anthropic Cost Report")
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(openAiBlock).toContain("validation coverage: failed");
+    expect(openAiBlock).toContain("financial evidence: missing");
+    expect(openAiBlock).toContain("last error: HTTP 403 financial evidence: verified [REDACTED]");
+    expect(openAiBlock).not.toContain("[31m");
+    expect(openAiBlock).not.toContain(rawSecret);
+    expect(openAiBlock).not.toContain("\u001b");
+    expect(openAiBlock).not.toContain("HTTP 403\n");
+  });
+
+  it("rejects unknown provider keys in persisted source-attempt state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-invalid-provider-key-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "source-status.json"), JSON.stringify({
+      version: 1,
+      providers: {
+        "openai\n  financial evidence: verified": {
+          checkedAt: new Date().toISOString(),
+          lastError: null
+        }
+      }
+    }), "utf8");
+
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const openAiBlock = result.stdout.slice(
+      result.stdout.indexOf("OpenAI Costs and Usage API"),
+      result.stdout.indexOf("Anthropic Cost Report")
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(openAiBlock).toContain("validation coverage: failed");
+    expect(openAiBlock).toContain("financial evidence: missing");
+    expect(openAiBlock).toContain("source attempt state has an invalid provider or timestamp");
+    expect(result.stdout).not.toContain("openai\n  financial evidence: verified");
+  });
+
+  it("labels observed local transcript dollars as estimates, not billed spend", async () => {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
+    await writeFile(join(logsDir, "-Users-jose-myproject", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      cwd: "/Users/testuser/myproject",
+      sessionId: "doctor-session",
+      requestId: "doctor-request",
+      message: {
+        id: "doctor-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+      }
+    }), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-local-source-"));
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/Claude Code local logs \(claude-code\)\n  validation coverage: live_verified\n  financial evidence: estimated\n  freshness: fresh/);
+    expect(result.stdout).toContain("not billed subscription spend");
+    expect(result.stdout).toMatch(/Codex local logs \(codex\)\n  validation coverage: live_verified\n  financial evidence: missing/);
+  });
+
+  it("reports total-only Codex usage as unsupported missing evidence, never estimated $0", async () => {
+    const logsDir = process.env.AI_SPEND_CODEX_LOGS_DIR!;
+    await writeFile(join(logsDir, "rollout-total-only.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "doctor-total-only",
+          cwd: "/Users/testuser/myproject",
+          timestamp: new Date(Date.now() - 60_000).toISOString()
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: new Date(Date.now() - 30_000).toISOString(),
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: { total_tokens: 88_000 } }
+        }
+      })
+    ].join("\n"), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-total-only-"));
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const codexBlock = result.stdout.slice(
+      result.stdout.indexOf("Codex local logs"),
+      result.stdout.indexOf("OpenAI Costs and Usage API")
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(codexBlock).toContain("financial evidence: missing");
+    expect(codexBlock).toContain("lacked input/output components required for pricing");
+    expect(codexBlock).not.toContain("financial evidence: estimated");
+    expect(codexBlock).not.toContain("amount: $0");
+  });
+
+  it("does not call an unreadable local transcript path an honest empty source", async () => {
+    const notDirectory = join(await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-unreadable-")), "logs.jsonl");
+    await writeFile(notDirectory, "not a directory", "utf8");
+    process.env.AI_SPEND_CLAUDE_LOGS_DIR = notDirectory;
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-unreadable-state-"));
+    const result = await runCli(["doctor", "--sources", "--path", dir]);
+    const claudeBlock = result.stdout.slice(
+      result.stdout.indexOf("Claude Code local logs"),
+      result.stdout.indexOf("Codex local logs")
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(claudeBlock).toContain("validation coverage: failed");
+    expect(claudeBlock).toContain("financial evidence: missing");
+    expect(claudeBlock).toContain("last error: Claude Code transcript path is not a readable directory.");
+    expect(claudeBlock).toContain("absence of usage cannot be confirmed");
   });
 
   it("initializes local state with a demo-safe manifest", async () => {
@@ -649,7 +1153,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill init");
     expect(result.stdout).toContain("demo mode: local-first sample workflow");
-    expect(result.stdout).toContain("next: ai-spend-agent scan --sample --path");
+    expect(result.stdout).toContain("next: npx aibill scan --sample --path");
 
     const manifest = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({
@@ -673,8 +1177,12 @@ describe("minimal CLI vertical slice", () => {
       id: "local-root",
       type: "local_folder",
       path: dir,
-      readOnly: true
+      readOnly: true,
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
     });
+    expect(sources.approvedSources[0]).not.toHaveProperty("verification");
     expect(auditLog.events.map((event: { action: string }) => event.action)).toContain("source_registered");
   });
 
@@ -785,14 +1293,97 @@ describe("minimal CLI vertical slice", () => {
 
     expect(addResult.exitCode).toBe(0);
     expect(addResult.stdout).toContain("source added: openai-may-export");
+    expect(addResult.stdout).toContain("boundary approval: approved");
+    expect(addResult.stdout).toContain("validation coverage: untested");
+    expect(addResult.stdout).toContain("financial evidence: missing");
     expect(listResult.exitCode).toBe(0);
     expect(listResult.stdout).toContain("OpenAI May export");
     expect(listResult.stdout).toContain("provider_export");
+    expect(listResult.stdout).toContain("boundary approval: approved");
+    expect(listResult.stdout).toContain("validation coverage: untested");
+    expect(listResult.stdout).toContain("financial evidence: missing");
 
     const sources = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "sources.json"), "utf8"));
     expect(sources.approvedSources).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "openai-may-export", type: "provider_export", provider: "openai", path: exportPath })
     ]));
+  });
+
+  it("reads a legacy registry without presenting folder approval as verified money and rewrites only canonical axes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-legacy-sources-"));
+    await runCli(["init", "--path", dir]);
+    const registryPath = join(dir, ".ai-spend-agent", "sources.json");
+    const legacy = JSON.parse(await readFile(registryPath, "utf8")) as {
+      ingestionLanes: Array<Record<string, unknown>>;
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    for (const lane of legacy.ingestionLanes) {
+      lane.defaultVerification = lane.defaultFinancialEvidence;
+      delete lane.defaultFinancialEvidence;
+    }
+    const local = legacy.approvedSources[0]!;
+    delete local.boundaryApproval;
+    delete local.validationCoverage;
+    delete local.financialEvidence;
+    local.verification = "verified";
+    await writeFile(registryPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const listed = await runCli(["list-sources", "--path", dir]);
+    expect(listed.stdout).toContain("boundary approval: approved");
+    expect(listed.stdout).toContain("validation coverage: untested");
+    expect(listed.stdout).toContain("financial evidence: missing");
+    expect(listed.stdout).not.toContain("verification:");
+
+    const added = await runCli([
+      "add-source",
+      "--path", dir,
+      "--source-path", "local-audit-tool",
+      "--type", "mcp_tool",
+      "--label", "Local audit tool"
+    ]);
+    expect(added.exitCode).toBe(0);
+    const rewritten = await readFile(registryPath, "utf8");
+    expect(rewritten).not.toContain('"verification"');
+    expect(rewritten).not.toContain('"defaultVerification"');
+    expect(JSON.parse(rewritten).approvedSources[0]).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
+    });
+  });
+
+  it("does not let repository-authored sources.json forge live or verified source status", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-forged-source-status-"));
+    await runCli(["init", "--path", dir]);
+    const registryPath = join(dir, ".ai-spend-agent", "sources.json");
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as {
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    registry.approvedSources.push({
+      id: "openai-provider-api",
+      type: "provider_api",
+      label: "OpenAI Admin API",
+      provider: "openai",
+      readOnly: true,
+      approvedAt: new Date().toISOString(),
+      scope: "Read-only provider API source.",
+      lane: "provider_apis",
+      accessMethod: "api",
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
+      fieldsVerified: ["provider-reported billed cost"],
+      fieldsEstimated: [],
+      fieldsMissing: []
+    });
+    await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+    const listed = await runCli(["list-sources", "--path", dir]);
+    const openaiBlock = listed.stdout.slice(listed.stdout.indexOf("openai-provider-api"));
+    expect(openaiBlock).toContain("boundary approval: approved");
+    expect(openaiBlock).toContain("validation coverage: untested");
+    expect(openaiBlock).toContain("financial evidence: missing");
+    expect(openaiBlock).not.toContain("validation coverage: live_verified");
   });
 
   it("registers provider connector stubs without storing secrets", async () => {
@@ -810,7 +1401,10 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("connector stub: anthropic-provider-api");
-    expect(result.stdout).toContain("verification: missing");
+    expect(result.stdout).toContain("boundary approval: approved");
+    expect(result.stdout).toContain("validation coverage: untested");
+    expect(result.stdout).toContain("financial evidence: missing");
+    expect(result.stdout).not.toContain("verification: missing");
     expect(result.stdout).toContain("no raw secrets stored");
 
     const sourcesRaw = await readFile(join(dir, ".ai-spend-agent", "sources.json"), "utf8");
@@ -822,9 +1416,19 @@ describe("minimal CLI vertical slice", () => {
         type: "provider_api",
         provider: "anthropic",
         accessMethod: "api",
-        verification: "missing"
+        boundaryApproval: "approved",
+        validationCoverage: "untested",
+        financialEvidence: "missing"
       })
     ]));
+    expect(sourcesRaw).not.toContain('"verification"');
+
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+    const anthropicBlock = doctor.stdout.slice(
+      doctor.stdout.indexOf("Anthropic Cost Report and Claude Code Analytics"),
+      doctor.stdout.indexOf("Cursor Admin API")
+    );
+    expect(anthropicBlock).toContain("freshness: not_checked (no local check recorded)");
   });
 
   it("prints detected-but-missing prompts after scanning local tool signals", async () => {
@@ -873,27 +1477,266 @@ describe("minimal CLI vertical slice", () => {
       "--end-time",
       "1762041600"
     ]);
+    const listed = await runCli(["list-sources", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill sync-provider");
     expect(result.stdout).toContain("provider: openai");
+    expect(result.stdout).toContain("boundary approval: approved");
+    expect(result.stdout).toContain("validation coverage: live_verified");
+    expect(result.stdout).toContain("financial evidence: verified");
     expect(result.stdout).toContain("coverage: complete");
     expect(result.stdout).toContain("records fetched: 1");
     expect(result.stdout).toContain("headline basis: provider_reported_billed_cost");
     expect(result.stdout).toContain("synced provider headline: $9.75");
     expect(result.stdout).toContain("combined headline spend: $9.75");
     expect(result.stdout).not.toContain(fakeToken);
+    const listedOpenAi = listed.stdout.slice(listed.stdout.indexOf("openai-provider-api"));
+    expect(listedOpenAi).toContain("validation coverage: live_verified");
+    expect(listedOpenAi).toContain("financial evidence: verified");
 
     const providerRecordsRaw = await readFile(join(dir, ".ai-spend-agent", "provider-records.json"), "utf8");
+    const sourceStatusRaw = await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8");
     const spendRaw = await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8");
     const sourcesRaw = await readFile(join(dir, ".ai-spend-agent", "sources.json"), "utf8");
     expect(providerRecordsRaw).not.toContain(fakeToken);
+    expect(sourceStatusRaw).not.toContain(fakeToken);
     expect(spendRaw).not.toContain(fakeToken);
     expect(sourcesRaw).not.toContain(fakeToken);
     expect(JSON.parse(providerRecordsRaw).records[0]).toMatchObject({ amountUsd: 9.75, costConfidence: "verified" });
+    expect(JSON.parse(sourceStatusRaw).providers.openai).toMatchObject({ lastError: null });
     expect(JSON.parse(sourcesRaw).approvedSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "openai-provider-api", provider: "openai", verification: "verified", authReference: "env:OPENAI_ADMIN_KEY" })
+      expect.objectContaining({
+        id: "openai-provider-api",
+        provider: "openai",
+        boundaryApproval: "approved",
+        validationCoverage: "live_verified",
+        financialEvidence: "verified",
+        authReference: "env:OPENAI_ADMIN_KEY"
+      })
     ]));
+    expect(sourcesRaw).not.toContain('"verification"');
+  });
+
+  it("does not launder attacker-authored prior provider rows through a successful CLI sync", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-untrusted-prior-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const fakePrior = {
+      id: "fake-anthropic-cost",
+      timestamp: "2026-08-07T00:00:00.000Z",
+      source: {
+        id: "anthropic-provider-api",
+        name: "Anthropic provider API",
+        provider: "anthropic",
+        confidence: "verified",
+        observedFrom: "repository fixture"
+      },
+      model: "claude-opus",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 999_999,
+      costConfidence: "verified",
+      providerCostType: "anthropic_cost",
+      usageGranularity: "billing_bucket"
+    };
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [fakePrior],
+      summary: { totalUsd: 999_999 }
+    }));
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({ records: [fakePrior] }));
+
+    process.env.OPENAI_ADMIN_KEY = "synthetic-openai-admin-token";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => url.includes("/organization/costs")
+        ? {
+            data: [{
+              start_time: 1_761_955_200,
+              results: [{ amount: { value: 1, currency: "usd" }, line_item: "Responses API" }]
+            }],
+            has_more: false
+          }
+        : { data: [], has_more: false }
+    })));
+
+    const sync = await runCli([
+      "sync-provider", "--path", dir,
+      "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200"
+    ]);
+    const spend = JSON.parse(await readFile(join(stateDir, "spend.json"), "utf8"));
+    const quickstart = await runCli(["--path", dir, "--no-color"]);
+
+    expect(sync.exitCode).toBe(0);
+    expect(spend.records).toHaveLength(1);
+    expect(spend.records[0]).toMatchObject({ source: { provider: "openai" }, amountUsd: 1 });
+    expect(JSON.stringify(spend)).not.toContain("fake-anthropic-cost");
+    expect(JSON.stringify(spend)).not.toContain("999999");
+    expect(quickstart.stdout).toContain("DATA MODE: connected provider billing");
+    expect(quickstart.stdout).toContain("$1.00");
+  });
+
+  it("keeps verified rows verified but marks the connected receipt and source status partial when pagination fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-partial-"));
+    process.env.OPENAI_ADMIN_KEY = "synthetic-openai-admin-token";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/organization/costs") && !url.includes("page=next")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{
+              start_time: 1_761_955_200,
+              results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }]
+            }],
+            has_more: true,
+            next_page: "next"
+          })
+        };
+      }
+      if (url.includes("page=next")) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          json: async () => ({ error: { message: "page cursor expired" } })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    }));
+
+    const sync = await runCli([
+      "sync-provider",
+      "--path", dir,
+      "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200"
+    ]);
+    const quickstart = await runCli(["--path", dir, "--no-color"]);
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+    const receiptPath = join(dir, "partial-receipt.svg");
+    const receipt = await runCli(["report-card", "--path", dir, "--out", receiptPath, "--no-color"]);
+    const providerState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "provider-records.json"), "utf8"));
+    const sourceState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8"));
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+
+    expect(sync.exitCode).toBe(0);
+    expect(sync.stdout).toContain("coverage: partial");
+    expect(providerState.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ amountUsd: 2, costConfidence: "verified" })
+    ]));
+    expect(sourceState.providers.openai.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
+    expect(spendState.accounting.coverageByProvider.openai).toBe("partial");
+    expect(quickstart.stdout).toContain("CONNECTED · PARTIAL COVERAGE");
+    expect(quickstart.stdout).toContain("available rows keep their financial evidence labels");
+    expect(quickstart.stdout).not.toContain("CONNECTED · VERIFIED PROVIDER COST");
+    expect(doctor.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  financial evidence: verified/);
+    expect(doctor.stdout).toMatch(/last error: .*Stopped after 1 page|last error: .*page cursor expired/);
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).toMatch(/provider coverage was partial/i);
+    expect(receipt.stdout).toContain("available rows retain their evidence labels");
+    const receiptSvg = await readFile(receiptPath, "utf8");
+    expect(receiptSvg).toContain("partial coverage · verified rows");
+  });
+
+  it("keeps an earlier partial provider sync visible in saved reports after a later complete sync", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-persisted-partial-report-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const record = {
+      id: "persisted-openai-cost",
+      timestamp: "2026-08-08T00:00:00.000Z",
+      source: {
+        id: "openai-provider-api",
+        name: "OpenAI organization costs API",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "openai-costs-api"
+      },
+      model: "Responses API",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 4.25,
+      costConfidence: "verified",
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    };
+    const partialQa = {
+      provider: "openai",
+      coverage: "partial",
+      requestedEndpoints: ["OpenAI costs"],
+      pagination: [{ label: "OpenAI costs", pagesFetched: 1, stoppedBecause: "fetch_error", maxPages: 50 }],
+      rateLimits: [],
+      responseDrift: [],
+      instructions: []
+    };
+    const completeQa = {
+      provider: "anthropic",
+      coverage: "complete",
+      requestedEndpoints: ["Anthropic cost report"],
+      pagination: [{ label: "Anthropic cost report", pagesFetched: 1, stoppedBecause: "complete", maxPages: 50 }],
+      rateLimits: [],
+      responseDrift: [],
+      instructions: []
+    };
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [record],
+      summary: {},
+      accounting: {
+        coverageByProvider: { openai: "partial", anthropic: "complete" },
+        qaByProvider: { openai: partialQa, anthropic: completeQa }
+      }
+    }));
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({
+      provider: "anthropic",
+      records: [record],
+      qa: completeQa,
+      qaByProvider: { openai: partialQa, anthropic: completeQa },
+      coverageByProvider: { openai: "partial", anthropic: "complete" }
+    }));
+    await trustConnectedSpendFixture(dir);
+
+    const result = await runCli(["report", "--path", dir]);
+    const markdown = await readFile(join(stateDir, "report.md"), "utf8");
+    const html = await readFile(join(stateDir, "report.html"), "utf8");
+
+    expect(result.exitCode).toBe(0);
+    expect(markdown).toContain("Overall provider sync coverage: partial");
+    expect(markdown).toContain("**openai** coverage: partial");
+    expect(markdown).toContain("**anthropic** coverage: complete");
+    expect(html).toContain("Partial provider coverage:");
+    expect(html).toContain("partial coverage");
+    expect(html).toContain("complete coverage");
+  });
+
+  it("prints unavailable for a successful provider sync with no priced headline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-empty-"));
+    process.env.OPENAI_ADMIN_KEY = "synthetic-empty-provider-token";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+
+    const result = await runCli([
+      "sync-provider",
+      "--path", dir,
+      "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200"
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("synced provider headline: unavailable");
+    expect(result.stdout).toContain("combined headline spend: unavailable");
+    expect(result.stdout).not.toContain("headline: $0.00");
   });
 
   it("keeps Anthropic billed cost separate from Claude Code API-equivalent estimates across sync and quickstart", async () => {
@@ -988,6 +1831,91 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("raw secrets are not accepted");
     expect(result.stderr).not.toContain(fakeToken);
+
+    const sourceStatusRaw = await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8");
+    expect(sourceStatusRaw).not.toContain(fakeToken);
+    expect(JSON.parse(sourceStatusRaw).providers.openai.lastError).toContain("raw secrets are not accepted");
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+    expect(doctor.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed/);
+    expect(doctor.stdout).not.toContain(fakeToken);
+  });
+
+  it("never prints or persists an opaque resolved credential echoed by a provider", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-opaque-error-"));
+    const opaqueToken = "opaque.ArbitraryCredential-CLI-7zQ9";
+    process.env.OPENAI_ADMIN_KEY = opaqueToken;
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: `Forbidden ${opaqueToken}`,
+      json: async () => ({ message: `provider echoed bare credential ${opaqueToken}` })
+    })));
+
+    const result = await runCli([
+      "sync-provider",
+      "--path",
+      dir,
+      "--provider",
+      "openai",
+      "--auth-reference",
+      "env:OPENAI_ADMIN_KEY",
+      "--start-time",
+      "1761955200"
+    ]);
+
+    const sourceStatusRaw = await readFile(
+      join(dir, ".ai-spend-agent", "source-status.json"),
+      "utf8"
+    );
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/Missing OpenAI admin read scopes|HTTP 403/);
+    expect(result.stderr).not.toContain(opaqueToken);
+    expect(sourceStatusRaw).not.toContain(opaqueToken);
+    expect(doctor.stdout).not.toContain(opaqueToken);
+  });
+
+  it("strips provider terminal-control injection before printing or persisting a sync error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-control-error-"));
+    const opaqueToken = "opaque.ArbitraryCredential-CLI-control-test";
+    const splitToken = `${opaqueToken.slice(0, 12)}\u001b[32m${opaqueToken.slice(12)}`;
+    process.env.OPENAI_ADMIN_KEY = opaqueToken;
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: `Forbidden\u001b[2J\rFORGED ${splitToken}`,
+      json: async () => ({
+        message: `denied \u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007\n${splitToken}`
+      })
+    })));
+
+    const result = await runCli([
+      "sync-provider",
+      "--path",
+      dir,
+      "--provider",
+      "openai",
+      "--auth-reference",
+      "env:OPENAI_ADMIN_KEY",
+      "--start-time",
+      "1761955200"
+    ]);
+    const sourceStatusRaw = await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8");
+    const persistedError = JSON.parse(sourceStatusRaw).providers.openai.lastError as string;
+
+    expect(result.exitCode).toBe(1);
+    for (const value of [result.stderr, persistedError]) {
+      expect(value).toContain("[REDACTED]");
+      expect(value).not.toContain(opaqueToken);
+      expect(value).not.toContain("evil.example");
+      expect(value).not.toContain("\u001b");
+      expect(value).not.toContain("\u0007");
+      expect(value).not.toContain("\n");
+      expect(value).not.toContain("\r");
+    }
+    expect(sourceStatusRaw).not.toContain("\\u001b");
+    expect(sourceStatusRaw).not.toContain(opaqueToken);
   });
 
   it("persists mapping confirmations locally", async () => {
@@ -1032,7 +1960,7 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill report");
-    expect(result.stdout).toContain("cost/value evidence total: $87.00");
+    expect(result.stdout).toContain("DEMO SAMPLE · illustrative cost/value evidence total: $87.00 · not user data");
 
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const html = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
@@ -1061,6 +1989,10 @@ describe("minimal CLI vertical slice", () => {
     expect(verifyPlan).toContain("Do not rerun the sample as a before/after test");
     expect(demoPackage).toContain("# aibill Demo Package");
     expect(demoPackage).toContain("Demo command flow");
+    expect(demoPackage).toContain("npx aibill report --sample --path ./demo-workspace");
+    expect(demoPackage).toContain("npx aibill apply --sample --path ./demo-workspace");
+    expect(demoPackage).not.toContain("ai-spend-agent report");
+    expect(demoPackage).not.toContain("apply-artifact");
     expect(demoPackage).toContain("QA controller checklist");
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("Executive accountability brief");

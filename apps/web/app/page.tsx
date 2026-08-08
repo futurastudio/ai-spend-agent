@@ -5,40 +5,50 @@ import { WaitlistForm } from "@/components/WaitlistForm";
 const integrations = [
   "Claude Code",
   "Codex",
-  "Anthropic billing · live-verified",
-  "OpenAI billing · reconciliation pending",
+  "Anthropic billing · connector live_verified",
+  "OpenAI billing · connector live_verified",
 ];
 
 const accountabilityPath = [
-  ["Agent work", "Observed"],
-  ["Cost", "Source-labeled"],
-  ["Owner", "Where exposed"],
-  ["Accepted outcome", "Workspace next"],
-  ["Controlled action", "Approval-gated next"],
-];
+  ["Agent work", "Observed", "available"],
+  ["Cost", "Source-labeled", "available"],
+  ["Owner", "Where exposed", "attention"],
+  ["Accepted outcome", "Workspace next", "attention"],
+  ["Controlled action", "Approval-gated next", "attention"],
+] as const;
 
 const accountabilityQuestions = [
   {
     status: "Available now",
+    tone: "available",
     title: "What work is driving the available usage and cost evidence?",
     body: "Attribute observed activity and cost evidence by project, model, agent, workspace, user, or client—only where the source exposes it.",
   },
   {
     status: "Partial",
+    tone: "attention",
     title: "Who owns it—and did it produce an accepted outcome?",
     body: "Observed ownership is available where supported. Accepted-task and pull-request receipts are the next open contract.",
   },
   {
     status: "Partial",
+    tone: "attention",
     title: "Which subscriptions and provider charges never reach finance?",
     body: "Local plan context and optional provider reports are available now. A centralized seat and invoice ledger is Workspace next.",
   },
   {
     status: "Local action available",
+    tone: "available",
     title: "What changed, what needs approval, and did the action work?",
-    body: "Apply turns local evidence into read-only checks, one approval-gated reversible change, rollback, and matched future-session verification. Shared approvals and verified company history come with Workspace.",
+    body: "Apply turns local evidence into read-only checks, one approval-gated reversible change, rollback, and a matched future-session comparison. The user decides whether it worked. Shared approvals and company history are planned for Workspace.",
   },
-];
+] as const;
+
+function evidenceToneClass(tone: "verified" | "available" | "attention") {
+  if (tone === "verified") return "text-green";
+  if (tone === "available") return "text-muted";
+  return "text-yellow";
+}
 
 const faqs = [
   {
@@ -49,7 +59,7 @@ const faqs = [
   {
     question: "What leaves my computer?",
     answer:
-      "The default CLI and Glance run locally with no account or telemetry. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy.",
+      "The default CLI and Glance run locally with no account or telemetry. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.",
   },
   {
     question: "What can I use today?",
@@ -82,8 +92,8 @@ export default function Home() {
             >
               $
             </span>
-            <span className="font-mono text-sm font-semibold tracking-tight text-ink">
-              Tilden - aibill
+            <span className="whitespace-nowrap font-mono text-sm font-semibold tracking-tight text-ink">
+              aibill
             </span>
           </a>
           <nav className="flex items-center gap-1 sm:gap-2" aria-label="Primary navigation">
@@ -102,10 +112,11 @@ export default function Home() {
               GitHub
             </a>
             <a
-              href="#beta"
+              href="/?ref=teams#beta"
               className="glass glass-interactive inline-flex min-h-11 items-center whitespace-nowrap rounded-xl px-3.5 text-xs font-medium text-ink sm:text-sm"
             >
-              Join the team beta
+              <span className="sm:hidden">Team beta</span>
+              <span className="hidden sm:inline">Join the team beta</span>
             </a>
           </nav>
         </div>
@@ -144,7 +155,7 @@ export default function Home() {
               <div className="flex flex-wrap items-center justify-start gap-x-4 gap-y-2 font-mono text-xs">
                 <span className="text-faint">Node 22+ · no signup</span>
                 <a
-                  href="#beta"
+                  href="/?ref=teams#beta"
                   className="text-green transition-colors hover:text-green-bright"
                 >
                   Need a company view? Join the beta →
@@ -161,14 +172,16 @@ export default function Home() {
               Accountability chain
             </p>
             <ol className="mt-3">
-              {accountabilityPath.map(([label, state], index) => (
+              {accountabilityPath.map(([label, state, tone], index) => (
                 <li
                   key={label}
                   className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2 border-t border-white/[0.07] py-3 first:border-t-0"
                 >
                   <span className="font-mono text-[0.65rem] text-green">0{index + 1}</span>
                   <span className="text-sm font-medium text-ink">{label}</span>
-                  <span className="col-start-2 mt-0.5 font-mono text-[0.65rem] text-faint">
+                  <span
+                    className={`col-start-2 mt-0.5 font-mono text-[0.65rem] ${evidenceToneClass(tone)}`}
+                  >
                     {state}
                   </span>
                 </li>
@@ -217,9 +230,9 @@ export default function Home() {
             One evidence layer. Three ways to use it.
           </h2>
           <p className="max-w-xl text-pretty text-base leading-relaxed text-muted md:justify-self-end">
-            Each surface keeps the same evidence rules. Available sources and
-            actions differ deliberately; source, freshness, billing class, and
-            missing data stay explicit.
+            Each surface keeps the same evidence rules. Connector validation
+            never upgrades a number&apos;s financial-evidence label; source,
+            freshness, billing class, and missing data stay explicit.
           </p>
         </div>
 
@@ -276,7 +289,9 @@ export default function Home() {
               key={step.title}
               className="relative border-b border-white/[0.07] p-6 last:border-b-0 sm:p-8 sm:[&:nth-child(even)]:border-l sm:[&:nth-child(3)]:border-b-0 sm:[&:nth-child(4)]:border-b-0"
             >
-              <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-green">
+              <span
+                className={`font-mono text-[0.65rem] uppercase tracking-[0.14em] ${evidenceToneClass(step.tone)}`}
+              >
                 {step.status}
               </span>
               <div className="mt-7 flex items-start justify-between gap-5">
@@ -290,6 +305,41 @@ export default function Home() {
               </p>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section
+        id="teams"
+        className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-12 sm:py-16"
+      >
+        <div className="grid border-y border-white/[0.09] py-10 md:grid-cols-[minmax(0,1.15fr)_minmax(17rem,0.85fr)] md:items-end md:gap-16 sm:py-12">
+          <div className="min-w-0">
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
+              Teams &amp; Agencies
+            </h2>
+            <p className="mt-5 max-w-2xl text-pretty text-base leading-relaxed text-muted sm:text-lg">
+              The planned workspace will add continuous monitoring, spend alerts,
+              a shared workspace, and white-label client reports to the same
+              evidence layer—without putting a proxy in your AI traffic.
+            </p>
+          </div>
+
+          <div className="mt-8 flex min-w-0 flex-col items-start md:mt-0">
+            <p className="max-w-md text-pretty text-sm leading-relaxed text-muted">
+              Founding design partners will help shape reconciliation, budgets,
+              approvals, and reporting before the workspace launches broadly.
+            </p>
+            <a
+              href="/?ref=teams#beta"
+              className="glass glass-interactive mt-6 inline-flex min-h-11 items-center whitespace-nowrap rounded-xl px-3 py-2.5 text-xs font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-4 sm:text-sm"
+            >
+              Become a founding design partner
+              <span className="ml-2 text-green" aria-hidden="true">→</span>
+            </a>
+            <p className="mt-3 text-xs leading-relaxed text-faint">
+              Planned product—not yet launched. Local mode stays free and private.
+            </p>
+          </div>
         </div>
       </section>
 

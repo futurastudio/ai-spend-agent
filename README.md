@@ -25,8 +25,9 @@ already on your machine and shows observed usage estimated at API-equivalent
 rates, where it goes by project/model where supported, ranked evidence to
 investigate, and detected or user-declared **plan context**. Dollar savings
 appear only when the source supports a counterfactual; local cumulative usage
-stays observed exposure until matched future evidence verifies an effect. Zero keys,
-zero signup, nothing leaves your laptop on this default local run. Connect a
+stays observed exposure until matched future evidence verifies an effect. No
+provider connection or signup is required, and nothing leaves your laptop
+on this default local run. Connect a
 provider's admin cost report only when you need official provider-reported
 cost alongside the local evidence.
 
@@ -87,7 +88,7 @@ developer, engineering leader, agency owner, or finance team does next:
 | What work is driving the available usage and cost evidence? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
 | Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Partial:** observed ownership is source-dependent. The open Agent Economics Receipt and `aibill outcome` are next. |
 | Which subscriptions and provider charges never reach finance? | Keep local plan context, provider-reported cost, purchased credits, and API-equivalent value separate before reconciling them. | **Partial:** local plan context and optional provider reports exist. Centralized seat and invoice reconciliation is Workspace next. |
-| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Available locally:** Apply drafts candidate-specific inspection, approval, rollback, and matched verification. Shared approvals and verified company history are next. |
+| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Available locally:** Apply drafts candidate-specific inspection, approval, rollback, and a matched future-session comparison. The user decides whether the change worked. Shared approvals and company history are next. |
 | Can finance defend the ROI? | Join reconciled cost to an accepted outcome and independently evidenced business value before deciding what to scale, constrain, redesign, or stop. | **Next:** the beta does not calculate productivity or ROI. |
 
 aibill's beta establishes the cost-and-capacity evidence: provider-reported
@@ -175,17 +176,31 @@ supported cost basis stay `missing`. Connecting provider billing adds official
 provider-reported cost beside the local API-rate estimate. It does not convert a
 transcript estimate into an invoice line item.
 
+Connector validation is a separate question from financial evidence quality.
+`live_verified`, `fixture_verified`, `untested`, and `failed` describe how the
+reader/connector itself has been exercised; they never upgrade an individual
+number's financial label. Run `npx aibill doctor --sources` to see both axes,
+freshness, and the last locally recorded error for every supported source.
+Read-boundary approval is separate again: approving a local folder permits a
+read-only scan, but never turns its contents into verified financial evidence.
+
 ## Data sources
 
-| Source | What | Status |
-| --- | --- | --- |
-| Claude Code logs (local) | Observed transcript usage, priced at published API rates | ✅ Reads supported fields from your machine's transcripts |
-| Codex logs (local) | Observed rollout usage, priced at published API rates | ✅ Binds each rollout to its root session, subtracts inherited parent history from forked subagents, and deduplicates only identical root-session snapshots |
-| OpenAI Costs/Usage API | Admin-gated billing, per project/key | 🟡 Live auth/endpoint exercised; non-empty cost reconciliation pending |
-| Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | ✅ Implemented and live-verified |
-| Cursor Admin API | Team spend (Business plan, team admin) | 🧪 Fixture-verified beta; live account QA pending |
-| GitHub Copilot org APIs | Metrics + seats (org/billing admin) | 🧪 Fixture-verified beta; live account QA pending |
-| Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | 🔜 Planned — parsers welcome ([request an agent or provider](https://github.com/futurastudio/ai-spend-agent/issues/new/choose)) |
+| Source | What | Validation coverage | Financial evidence when present |
+| --- | --- | --- | --- |
+| Claude Code logs (local) | Observed transcript usage, priced at published API rates | `live_verified` | `estimated` or `missing`—never billed spend |
+| Codex logs (local) | Root-session-aware rollout usage with fork accounting and snapshot deduplication | `live_verified` | `estimated` or `missing`—never billed spend |
+| OpenAI Costs/Usage API | Admin-gated billing, per project/key | `live_verified` on a non-empty Admin API window; manual provider-UI/invoice reconciliation pending | `verified`, `estimated`, or `missing` by returned endpoint; final invoice remains separate |
+| Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | `live_verified` on non-empty API records | `verified`, `estimated`, or `missing` by returned row |
+| Cursor Admin API | Team spend (Business plan, team admin) | Current official response and pagination fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
+| GitHub Copilot org APIs | Metrics + seats (org/billing admin) | Current official metrics-download and per-seat fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
+| Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | `untested` / planned | `missing` until a parser produces supported evidence ([request an agent or provider](https://github.com/futurastudio/ai-spend-agent/issues/new/choose)) |
+
+The August 8 adversarial corpus replay exercised both local readers. Its Codex
+slice produced 25 aggregate rows: 14 supported API-rate estimates and 11
+honestly `missing` rows where pricing or token components were insufficient,
+with zero false estimated-$0 rows. That is reader-validation evidence—not an
+upgrade of any local estimate to billed spend.
 
 **Model price coverage:** local-log estimates use published list prices for
 Anthropic, OpenAI, Google (Gemini), DeepSeek, Moonshot (Kimi), and xAI (Grok)
@@ -199,18 +214,20 @@ rates were checked against the official OpenAI model pages on 2026-07-28.
 ## Connect provider cost and usage
 
 Provider APIs are admin/owner-gated, so connecting is a deliberate step.
-OpenAI and Anthropic cost reports can add official provider-reported cost;
-Cursor and Copilot remain labeled according to their beta evidence:
+OpenAI and Anthropic Admin API reports can add official provider-reported
+cost. Both connectors have non-empty live-API coverage; OpenAI's manual
+provider-UI/invoice reconciliation remains pending. Cursor and Copilot match
+current official response fixtures but remain beta until live-account QA:
 
 ```bash
-npx aibill connect openai          # requires an org-owner Admin key
-npx aibill connect anthropic       # requires an Admin key
+npx aibill connect openai          # requires an org-owner Admin credential reference
+npx aibill connect anthropic       # requires an Admin credential reference
 npx aibill connect cursor          # fixture-verified beta; live QA pending
 npx aibill connect github-copilot  # seat estimates + usage evidence; live QA pending
 ```
 
 Credentials are referenced from your local environment (`--auth-reference
-env:NAME`) — the tool never stores or prints a raw key.
+env:NAME`). aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 
 ## Commands
 
@@ -227,7 +244,7 @@ env:NAME`) — the tool never stores or prints a raw key.
 | `report [--out <name>] [--since-days N]` | Generate local Markdown + HTML reports and action sidecars under the selected project's `.ai-spend-agent/` from the same evidence window; no external system is changed |
 | `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
 | `scan [--path <dir>]` | Scan a local workspace for AI usage signals |
-| `doctor` | Check local runtime and safety posture |
+| `doctor [--sources]` | Check local runtime and safety posture; `--sources` separates connector validation, financial evidence, freshness, and errors |
 
 Run `npx aibill --help` for the full list.
 
@@ -376,10 +393,12 @@ current form records interest, not access to a signed download.
   from all output and persisted state.
 - **Estimates labeled as estimates.** Log-derived financial values with a
   supported price basis use published API rates and are tagged `estimated`;
-  unsupported cost bases stay `missing`. OpenAI and Anthropic cost-report
-  numbers are `verified`; Copilot seat-price reconciliation and the beta Cursor
-  connector are honestly tagged `estimated` until reconciled against a real
-  invoice.
+  unsupported cost bases stay `missing`. Authenticated OpenAI and Anthropic
+  cost-report rows can be `verified`; usage, seat, estimated, and unavailable
+  rows retain their own evidence labels, and final invoices can still include
+  credits, discounts, tax, or later adjustments. Copilot seat-price
+  reconciliation and the beta Cursor connector remain `estimated` until
+  reconciled against a real invoice.
 
 ## Open core, optional Workspace
 
@@ -391,10 +410,11 @@ free, and private.
 for the AI-agent workforce—connecting what agents did to what they cost, who
 owns it, what outcome it produced, and what should happen next. The planned
 Workspace is the paid, permissioned financial teammate over that ledger:
-explicit aggregate-only synchronization, organizational history,
-provider-invoice reconciliation, allocation, budgets, anomaly routing,
-approvals, and evidence-backed cost per accepted outcome where coverage
-supports it. It will never be required to inspect a user's own local data.
+continuous monitoring, spend alerts, a shared team workspace, white-label
+client reports, explicit aggregate-only synchronization, provider-invoice
+reconciliation, allocation, budgets, approvals, and evidence-backed cost per
+accepted outcome where coverage supports it. It will never be required to
+inspect a user's own local data.
 
 **[Apply as a Workspace design partner →](https://ai-spend-agent.vercel.app/?ref=github-readme#beta)**
 

@@ -77,8 +77,8 @@ export function PageShell({
               </p>
             </div>
             <p className="mt-5 text-sm text-muted">
-              Want to shape opt-in reconciliation, allocation, budgets,
-              approvals, and outcome evidence?{" "}
+              Need continuous monitoring, spend alerts, a shared team workspace,
+              or white-label client reports?{" "}
               <Link
                 href={`/?ref=${ctaRef}#beta`}
                 className="text-green underline-offset-4 hover:underline"

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" role="img" aria-label="AI receipt">
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" role="img" aria-label="AI receipt demo sample">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0b1020"/>
@@ -9,27 +9,28 @@
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .label { fill: #7c89b3; font-size: 13px; letter-spacing: 2px; }
     .big { fill: #e8edff; font-size: 52px; font-weight: 700; }
-    .save { fill: #4ade80; font-size: 30px; font-weight: 700; }
+    .modeled { fill: #fbbf24; font-size: 30px; font-weight: 700; }
+    .unavailable { fill: #9aa6d6; font-size: 30px; font-weight: 700; }
     .meta { fill: #9aa6d6; font-size: 14px; }
     .cut { fill: #cdd6f7; font-size: 14px; }
-    .cutSave { fill: #4ade80; font-weight: 700; }
+    .cutImpact { fill: #fbbf24; font-weight: 700; }
     .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
   </style>
   <rect width="640" height="400" rx="18" fill="url(#bg)"/>
   <rect x="0.5" y="0.5" width="639" height="399" rx="18" fill="none" stroke="#26304f"/>
 
-  <text x="40" y="58" class="label">AI RECEIPT</text>
+  <text x="40" y="58" class="label">AI RECEIPT · DEMO SAMPLE</text>
 
   <text x="40" y="120" class="label">ILLUSTRATIVE COST / VALUE EVIDENCE</text>
   <text x="40" y="172" class="big">$87.00</text>
 
-  <text x="40" y="212"><tspan class="save">~$539.70/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
+  <text x="40" y="212"><tspan class="modeled">~$572.90/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan></text>
 
   <text x="40" y="244" class="meta">2 providers · 9 illustrative records · detected/unverified</text>
 
-      <text x="40" y="274" class="cut">1. Investigate a model-routing candidate<tspan class="cutSave"> ~$376.80/mo modeled</tspan></text>
-      <text x="40" y="304" class="cut">2. Investigate an asynchronous batch candidate<tspan class="cutSave"> ~$320.00/mo modeled</tspan></text>
-      <text x="40" y="334" class="cut">3. Inspect oversized context<tspan class="cutSave"> ~$144.75/mo modeled</tspan></text>
+      <text x="40" y="274" class="cut">1. Investigate a repeated-work cache candidate<tspan class="cutImpact"> ~$410.00/mo modeled</tspan></text>
+      <text x="40" y="304" class="cut">2. Investigate a model-routing candidate<tspan class="cutImpact"> ~$376.80/mo modeled</tspan></text>
+      <text x="40" y="334" class="cut">3. Investigate an asynchronous batch candidate<tspan class="cutImpact"> ~$235.50/mo modeled</tspan></text>
 
   <text x="40" y="372" class="brand">aibill · local-first · npx aibill</text>
 </svg>

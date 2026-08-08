@@ -197,6 +197,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
 enum GlanceFormatting {
   static func dollars(_ value: Double?) -> String {
     guard let value else { return "Unpriced" }
+    if value > 0, value < 0.01 { return "<$0.01" }
     return value.formatted(.currency(code: "USD").precision(.fractionLength(2)))
   }
 

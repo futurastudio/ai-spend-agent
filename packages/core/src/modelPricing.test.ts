@@ -19,7 +19,15 @@ describe("model pricing coverage", () => {
   });
 
   it("returns undefined for open-weight models with no canonical price — never invents a number", () => {
-    for (const model of ["llama-4-maverick", "qwen3-coder", "mistral-large", "glm-4.5", "totally-unknown-model"]) {
+    for (const model of [
+      "llama-4-maverick",
+      "qwen3-coder",
+      "mistral-large",
+      "glm-4.5",
+      "totally-unknown-model",
+      "codex-auto-review",
+      "my-codex-wrapper"
+    ]) {
       expect(estimateTokenCostUsd(model, usage), model).toBeUndefined();
       expect(findPricingRule(model), model).toBeUndefined();
     }

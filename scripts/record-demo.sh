@@ -26,7 +26,7 @@ trap 'rm -rf "$AIBILL_DEMO_TMP"' EXIT
 #    skips local plan and credential discovery, so the recording cannot absorb
 #    machine-specific account hints while still exercising the real CLI.
 mkdir -p "$AIBILL_DEMO_TMP/cwd"
-(cd "$AIBILL_DEMO_TMP/cwd" && FORCE_COLOR=1 node "$CLI" --sample --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
+(cd "$AIBILL_DEMO_TMP/cwd" && env -u NO_COLOR FORCE_COLOR=1 node "$CLI" --sample --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
 grep -q "DATA MODE: demo sample" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing sample banner — aborting" >&2; exit 1; }
 grep -q "ILLUSTRATIVE COST / VALUE EVIDENCE" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the mixed-basis sample label — aborting" >&2; exit 1; }
 grep -q "NON-EXECUTABLE DEMO" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the sample Apply safety boundary — aborting" >&2; exit 1; }

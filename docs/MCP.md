@@ -10,12 +10,21 @@ agent hosts.
 The MCP client and the spend provider are separate concerns:
 
 - **MCP clients:** any stdio-compatible agent can call the tools.
-- **Local usage:** Claude Code and Codex transcript metadata.
+- **Local usage:** Claude Code and Codex transcript metadata; both readers are
+  `live_verified` against an adversarial local corpus.
 - **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
-- **Live verification:** Anthropic is implemented and live-verified. OpenAI
-  authentication and endpoint access were exercised on 2026-07-28, while a
-  non-empty cost reconciliation is still pending. Copilot and Cursor have
-  fixture and failure-path coverage but still require a live account QA pass.
+- **Validation coverage:** OpenAI and Anthropic have non-empty live-API
+  verification; OpenAI's manual provider-UI/invoice reconciliation remains
+  pending. Copilot and Cursor pass current official-format fixtures and
+  failure paths but remain `fixture_verified` beta until live-account QA. This
+  connector axis is separate from each record's `verified`, `estimated`,
+  `detected_unverified`, or `missing` financial-evidence label. Run `npx aibill
+  doctor --sources` to inspect both.
+
+The August 8 adversarial replay produced 25 Codex aggregate rows: 14 supported
+API-rate estimates and 11 honestly `missing` rows, with zero false estimated-$0
+rows. This validates the reader path; it does not turn local estimates into
+provider-reported cost.
 
 Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 
@@ -161,15 +170,22 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   roots are refused.
 - `get_usage_glance` is read-only and scans only the known Claude Code and
   Codex transcript locations (or the documented test-directory overrides).
-- State is written only to `<path>/.ai-spend-agent/`.
+- Project reports and source state are written to `<path>/.ai-spend-agent/`.
+  After a successful provider sync, aibill also writes one hash-only trust
+  receipt outside the repository at `~/.aibill/state-receipts/` (override with
+  `AI_SPEND_STATE_TRUST_DIR`). It contains the canonical project root, hashes
+  of the exact `spend.json` and `sources.json`, the connected-state mode, and a
+  timestamp—never credentials, records, costs, or transcript content. This
+  prevents a cloned repository from declaring its own connected totals or
+  source-status truth axes trusted. Reset, sample, and local-log syncs
+  invalidate the receipt.
 - aibill itself does not upload local transcript contents or send telemetry.
   An MCP tool's selected structured result is returned to the invoking AI
   client and follows that client's data-handling policy.
 - Provider tools are read-only against provider APIs.
 - Provider credentials must be inherited environment variables referenced as
   `env:NAME`; raw keys are rejected before any network request.
-- Only the reference name is persisted. Raw credentials are neither returned
-  to the MCP client nor written to state.
+- Only the reference name is persisted. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 - Provider syncs merge with prior provider syncs by provider. Re-syncing one
   provider replaces only that provider's older records.
 - Local-log estimates and provider-billed costs use separate active modes to
@@ -181,8 +197,9 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 
 Discovers provider configuration, dependencies, exports, invoices, and secret
 names in an approved folder. Evidence is redacted before persistence/output.
-Discovery does not make a file a verified billing source and does not parse an
-arbitrary provider export into spend.
+Discovery only establishes a detected local signal. It does not create current
+financial evidence or parse an arbitrary provider export into spend; connector
+validation is reported separately.
 
 ```json
 { "path": "/Users/you/projects/your-project" }
@@ -343,7 +360,10 @@ metadata. Detailed records are available through `get_spend_report`.
 
 ### `list_sources`
 
-Lists approved sources, ingestion method, and verification level:
+Lists the approved local source registry and ingestion method. Each source
+separately reports read-boundary approval, connector-validation coverage, and
+financial-evidence status; approving a folder never verifies money. Freshness
+and the last sanitized error are returned by `get_spend_report` after a sync:
 
 ```json
 { "path": "/Users/you/projects/your-project" }
@@ -360,7 +380,13 @@ provider, or explicit sample sync:
 
 An explicit sample remains `mode: sample` after persistence. Its accounting
 policy is `demo_sample_not_user_data`; it is never silently reclassified as
-connected provider evidence.
+connected provider evidence. If no synced spend state exists at all,
+`get_spend_report` returns the same unmistakably labeled sample in memory with
+`fallback.automatic: true`, `fallback.persisted: false`, and
+`fallback.demoOnly: true`. It does not create project state. A malformed,
+untrusted, or failed real local/provider state never silently becomes sample
+data; use `scan_ai_spend` with `sample: true` only when you deliberately want a
+persisted demo fixture.
 
 ### `recommend_cuts`
 
@@ -422,7 +448,9 @@ npm run benchmark:context
   arguments.
 - **Provider returns 401/403:** the credential needs organization/admin
   billing-read scopes, not a normal inference API key.
-- **`get_spend_report` is missing:** run a local/provider sync or an explicit
-  sample scan first.
+- **`get_spend_report` returns `mode: sample`:** no synced spend state exists.
+  The fallback is bundled, in-memory, demo-only data; run a local/provider sync
+  for real evidence or an explicit sample scan only when you want to persist the
+  demo fixture.
 - **A root is refused:** select a specific project folder; broad-root refusal
   is intentional prompt-injection protection.

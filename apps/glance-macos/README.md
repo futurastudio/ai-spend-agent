@@ -7,6 +7,9 @@ the camera and reveals the panel on hover. It is a rendering surface over the
 same transcript-derived evidence contract used by the CLI and MCP server:
 current work, cost meaning, reported runway, freshness, and one next action.
 Company accountability and ROI remain Workspace milestones, not Glance claims.
+Source/connector validation and a number's financial-evidence status are
+separate axes; Glance never upgrades an estimate because its local reader has
+been tested.
 
 ## Local prototype
 
@@ -60,10 +63,10 @@ Glance checks its supported standard Node locations.
 The current source preview resolves data in this order:
 
 1. the valid path in `AIBILL_GLANCE_COMMAND`;
-2. the original development checkout fallback at
-   `~/agent-finops/packages/cli/dist/index.js`, retained only for compatibility;
-3. an executable `ai-spend-agent` at `~/.local/bin`, `~/.npm-global/bin`,
-   `/opt/homebrew/bin`, or `/usr/local/bin`.
+2. `packages/cli/dist/index.js` beneath the current working directory when the
+   app binary is launched from a built source checkout;
+3. an executable `aibill` or `ai-spend-agent` at `~/.local/bin`,
+   `~/.npm-global/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`.
 
 It does not search an arbitrary shell `PATH`. For every executable candidate,
 Glance appends `glance --since-days 30`; for a JavaScript candidate it runs

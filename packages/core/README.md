@@ -14,6 +14,12 @@ invoice reconciliation, or ROI.
 
 Local API-equivalent estimates, subscription context, and official
 provider-reported cost are separate concepts and must not be added together.
+Reader/connector validation (`live_verified`, `fixture_verified`, `untested`,
+or `failed`) is also separate from each number's financial evidence
+(`verified`, `estimated`, `detected_unverified`, or `missing`). A live-tested
+local reader still emits estimates or missing cost—not billed spend.
+Source-boundary approval is a third, permission-only field: approving a folder
+for read-only scanning never verifies any financial number inside it.
 
 MIT licensed. See the repository
 [README](https://github.com/futurastudio/ai-spend-agent#readme) and

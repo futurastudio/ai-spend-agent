@@ -38,7 +38,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-20",
-          dateModified: "2026-07-31",
+          dateModified: "2026-08-08",
           mainEntityOfPage: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -109,8 +109,8 @@ export default function Page() {
           <H2>Check your local evidence</H2>
           <P>
             <span className="font-mono text-green">npx aibill</span> reads the
-            session logs already on your machine — locally, no account, no keys,
-            no upload — and shows:
+            session logs already on your machine—locally, with no signup,
+            provider connection, or upload—and shows:
           </P>
           <ul className="mt-4 space-y-3 text-base leading-relaxed text-muted">
             <li className="glass rounded-xl px-5 py-4">
@@ -148,8 +148,8 @@ export default function Page() {
             Numbers derived from local logs are{" "}
             <span className="text-ink">estimates</span> at published API rates —
             useful for comparisons and cost investigations, but not a bill. If
-            you want official provider-reported cost, connect an org admin/owner
-            key with the required read permissions. aibill keeps that report
+            you want official provider-reported cost, connect a user-referenced
+            org admin/owner credential with the required read permissions. aibill keeps that report
             beside—not merged into—the local estimate. A final invoice can still
             include credits, discounts, tax, or adjustments. Anything the source
             cannot establish remains labeled accordingly.
@@ -163,8 +163,9 @@ export default function Page() {
             telemetry, or upload. A deliberate provider connection sends the
             referenced credential only to that provider&apos;s official API; an
             explicit MCP result goes only to the AI client you invoked. The code
-            is MIT-licensed and open source. The meters are multiplying; know
-            which number you are looking at before acting on it.
+            is MIT-licensed and open source. aibill never sits in the inference path and never stores, prints, or proxies provider credentials. The
+            meters are multiplying; know which number you are looking at before
+            acting on it.
           </P>
         </Reveal>
       </article>

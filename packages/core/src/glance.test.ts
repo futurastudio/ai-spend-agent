@@ -50,6 +50,84 @@ describe("buildUsageGlance", () => {
     expect(snapshot.currentSession?.apiEquivalentUsd).toBe(0.02);
   });
 
+  it("keeps a total-only Codex snapshot unpriced without inventing a token breakdown", () => {
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "total-only-known-model",
+      project: "agent-finops",
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-08T15:58:00.000Z",
+      usageScope: "session_cumulative",
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 42_000,
+      usage: usage(0, 0)
+    }], {
+      now: new Date("2026-08-08T16:00:00.000Z")
+    });
+
+    expect(snapshot.currentSession).toMatchObject({
+      model: "gpt-5.6-sol",
+      apiEquivalentUsd: null,
+      costConfidence: "missing",
+      inputTokens: null,
+      outputTokens: null,
+      reportedTotalTokens: 42_000
+    });
+    expect(snapshot.provenance.sessionValue.confidence).toBe("missing");
+    expect(snapshot.primaryAction.agentPrompt).toContain("API-equivalent value=unpriced");
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "provider-reported total tokens=42,000; input/output breakdown unavailable"
+    );
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("$0.00");
+  });
+
+  it("keeps a complete usage snapshot for an unknown Codex alias unpriced", () => {
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "unknown-codex-alias",
+      project: "agent-finops",
+      model: "codex-auto-review",
+      timestamp: "2026-08-08T15:58:00.000Z",
+      usageScope: "session_cumulative",
+      usageSupport: "complete",
+      usage: usage(20_000, 2_000)
+    }], {
+      now: new Date("2026-08-08T16:00:00.000Z")
+    });
+
+    expect(snapshot.currentSession).toMatchObject({
+      model: "codex-auto-review",
+      apiEquivalentUsd: null,
+      costConfidence: "missing",
+      inputTokens: 20_000,
+      outputTokens: 2_000
+    });
+    expect(snapshot.currentSession).not.toHaveProperty("reportedTotalTokens");
+    expect(snapshot.provenance.sessionValue.confidence).toBe("missing");
+    expect(snapshot.primaryAction.agentPrompt).toContain("API-equivalent value=unpriced");
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("$0.00");
+  });
+
+  it("preserves a positive sub-cent session value and labels it below one cent", () => {
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "tiny-priced-session",
+      project: "agent-finops",
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-08T15:58:00.000Z",
+      usageScope: "session_cumulative",
+      usageSupport: "complete",
+      usage: usage(100, 0)
+    }], {
+      now: new Date("2026-08-08T16:00:00.000Z")
+    });
+
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBeGreaterThan(0);
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBeLessThan(0.01);
+    expect(snapshot.primaryAction.agentPrompt).toContain("API-equivalent value=<$0.01");
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("$0.00");
+  });
+
   it("prioritizes the latest session, reported limits, main focus, and one anomaly", () => {
     const calls: LocalAgentCall[] = [
       {

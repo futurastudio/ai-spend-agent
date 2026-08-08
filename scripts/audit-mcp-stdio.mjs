@@ -80,6 +80,14 @@ try {
           mode: report.data.mode,
           records: report.data.records?.length,
           totalUsd: report.data.summary?.totalUsd,
+          sourceStatuses: (report.data.sourceStatuses ?? []).map((source) => ({
+            id: source.id,
+            boundaryApproval: source.boundaryApproval,
+            validationCoverage: source.validationCoverage,
+            financialEvidence: source.financialEvidence,
+            freshness: source.freshness,
+            ...(source.lastError ? { lastError: source.lastError } : {})
+          })),
           providers: Array.from(new Set(
             (report.data.records ?? []).map((record) => record.source?.provider).filter(Boolean)
           )).sort()
@@ -91,7 +99,9 @@ try {
           approved: (sources.data.approvedSources ?? []).map((source) => ({
             id: source.id,
             provider: source.provider,
-            verification: source.verification
+            boundaryApproval: source.boundaryApproval,
+            validationCoverage: source.validationCoverage,
+            financialEvidence: source.financialEvidence
           }))
         }
       : sources

@@ -73,7 +73,6 @@ const pricingRules: PricingRule[] = [
   // Open-weight models with NO canonical price (llama, qwen, mistral, glm):
   // hosting rates vary several-fold by provider, so we deliberately return
   // undefined -> costConfidence "missing" instead of inventing a number.
-  { match: /codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 }
 ];
 
 export function findPricingRule(model: string): PricingRule | undefined {

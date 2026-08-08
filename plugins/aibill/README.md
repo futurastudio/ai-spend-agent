@@ -12,7 +12,7 @@ instructions.
 - `$aibill-help`: choose CLI, MCP/plugin, or macOS Glance.
 - Eight MCP tools, including `get_usage_glance` and `get_context_health`.
 
-The plugin launches `@agent-finops/mcp@0.5.9` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.6.0` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository
@@ -33,8 +33,15 @@ local structured result.
 aibill sends no telemetry or transcripts to an aibill service. CLI transcript
 analysis and the source-built Glance preview run locally. Scan, sync, and report
 tools may write explicit local state under the selected project's
-`.ai-spend-agent/` directory; they do not make an automatic external change.
+`.ai-spend-agent/` directory. A successful provider sync also writes a
+hash-only, credential-free trust receipt under `~/.aibill/state-receipts/` so
+cloned repository state cannot claim connected totals or source-status truth.
+The receipt binds hashes of the exact `spend.json` and `sources.json` plus the
+canonical root and timestamp; it contains no spend rows, source records, or
+credentials. No external provider or project setting is changed automatically.
 An explicitly requested provider sync sends the referenced credential only to
-the selected provider's official read-only API; raw credentials are never
-persisted or returned. An invoked MCP skill returns the selected structured
-result to that AI client under the client's own data-handling policy.
+the selected provider's official read-only API. aibill never sits in the inference path and never stores, prints, or proxies provider credentials. An invoked MCP skill returns the selected structured result to that AI client under the client's own data-handling policy.
+
+Connector validation (`live_verified`, `fixture_verified`, `untested`, or
+`failed`) is separate from each number's financial evidence (`verified`,
+`estimated`, `detected_unverified`, or `missing`).

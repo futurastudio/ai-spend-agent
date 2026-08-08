@@ -1,10 +1,12 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   aggregateCalls,
   dedupeCumulativeSessionCalls,
   latestObservedWorkingDirectory,
+  loadLocalAgentUsage,
   parseClaudeCodeTranscript,
   parseCodexRollout
 } from "./localAgentLogs.js";
@@ -19,7 +21,7 @@ const claudeLine = (overrides: Record<string, unknown> = {}, usage: Record<strin
   JSON.stringify({
     type: "assistant",
     timestamp: "2026-06-08T10:00:00.000Z",
-    cwd: "/Users/jose/agent-finops",
+    cwd: "/Users/testuser/agent-finops",
     sessionId: "sess-1",
     requestId: "req-1",
     message: {
@@ -70,7 +72,7 @@ describe("parseClaudeCodeTranscript", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model).toBe("claude-opus-4-8");
     expect(calls[0]!.project).toBe("agent-finops");
-    expect(calls[0]!.workingDirectory).toBe("/Users/jose/agent-finops");
+    expect(calls[0]!.workingDirectory).toBe("/Users/testuser/agent-finops");
     expect(calls[0]!.usage).toEqual({
       inputTokens: 100,
       outputTokens: 200,
@@ -117,7 +119,7 @@ describe("parseClaudeCodeTranscript", () => {
           usage: { input_tokens: 10, output_tokens: 20 },
           content: [{
             type: "tool_use",
-            input: { file_path: "/Users/jose/agent-finops/apps/glance-macos/GlanceView.swift" }
+            input: { file_path: "/Users/testuser/agent-finops/apps/glance-macos/GlanceView.swift" }
           }]
         }
       })
@@ -203,39 +205,39 @@ describe("parseClaudeCodeTranscript", () => {
       JSON.stringify({
         type: "user",
         timestamp: "2026-08-03T10:00:00.000Z",
-        cwd: "/Users/jose/project-alpha",
+        cwd: "/Users/testuser/project-alpha",
         sessionId: "mixed-project-session",
         message: { content: "Please launch the landing page." }
       }),
       claudeLine({
         timestamp: "2026-08-03T10:01:00.000Z",
-        cwd: "/Users/jose/project-alpha",
+        cwd: "/Users/testuser/project-alpha",
         sessionId: "mixed-project-session",
         requestId: "req-project-alpha",
         message: {
           id: "msg-project-alpha",
           model: "claude-opus-4-8",
           usage: { input_tokens: 10, output_tokens: 20 },
-          content: [{ type: "tool_use", input: { file_path: "/Users/jose/project-alpha/page.tsx" } }]
+          content: [{ type: "tool_use", input: { file_path: "/Users/testuser/project-alpha/page.tsx" } }]
         }
       }),
       JSON.stringify({
         type: "user",
         timestamp: "2026-08-03T11:00:00.000Z",
-        cwd: "/Users/jose/project-beta",
+        cwd: "/Users/testuser/project-beta",
         sessionId: "mixed-project-session",
         message: { content: "Please test the MCP feature." }
       }),
       claudeLine({
         timestamp: "2026-08-03T11:01:00.000Z",
-        cwd: "/Users/jose/project-beta",
+        cwd: "/Users/testuser/project-beta",
         sessionId: "mixed-project-session",
         requestId: "req-project-beta",
         message: {
           id: "msg-project-beta",
           model: "claude-opus-4-8",
           usage: { input_tokens: 30, output_tokens: 40 },
-          content: [{ type: "tool_use", input: { file_path: "/Users/jose/project-beta/mcp.test.ts" } }]
+          content: [{ type: "tool_use", input: { file_path: "/Users/testuser/project-beta/mcp.test.ts" } }]
         }
       })
     ].join("\n");
@@ -259,7 +261,7 @@ describe("parseClaudeCodeTranscript", () => {
 
 describe("parseCodexRollout", () => {
   const rollout = [
-    JSON.stringify({ type: "session_meta", payload: { id: "codex-sess", cwd: "/Users/jose/pitcht-com", timestamp: "2026-06-01T17:25:37.000Z" } }),
+    JSON.stringify({ type: "session_meta", payload: { id: "codex-sess", cwd: "/Users/testuser/pitcht-com", timestamp: "2026-06-01T17:25:37.000Z" } }),
     JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.1-codex" } }),
     JSON.stringify({ type: "event_msg", timestamp: "2026-06-01T17:30:00.000Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_000, cached_input_tokens: 4_000, output_tokens: 100 }, last_token_usage: { input_tokens: 4_000, cached_input_tokens: 3_000, output_tokens: 100, total_tokens: 4_100 } } } }),
     JSON.stringify({
@@ -305,7 +307,7 @@ describe("parseCodexRollout", () => {
     expect(calls[0]!.agent).toBe("codex");
     expect(calls[0]!.model).toBe("gpt-5.1-codex");
     expect(calls[0]!.project).toBe("pitcht-com");
-    expect(calls[0]!.workingDirectory).toBe("/Users/jose/pitcht-com");
+    expect(calls[0]!.workingDirectory).toBe("/Users/testuser/pitcht-com");
     expect(calls[0]!.startedAt).toBe("2026-06-01T17:25:37.000Z");
     expect(calls[0]!.timestamp).toBe("2026-06-01T17:40:00.000Z");
     expect(calls[0]!.usage.inputTokens).toBe(25_035 - 5_504);
@@ -472,7 +474,7 @@ describe("parseCodexRollout", () => {
         type: "session_meta",
         payload: {
           id: "codex-subagent",
-          cwd: "/Users/jose/agent-finops",
+          cwd: "/Users/testuser/agent-finops",
           timestamp: "2026-07-28T16:00:00.000Z",
           thread_source: "subagent",
           parent_thread_id: "codex-parent",
@@ -509,7 +511,7 @@ describe("parseCodexRollout", () => {
         payload: {
           type: "custom_tool_call",
           name: "apply_patch",
-          input: "*** Begin Patch\n*** Update File: /Users/jose/agent-finops/packages/mcp/src/index.test.ts\n*** End Patch\n"
+          input: "*** Begin Patch\n*** Update File: /Users/testuser/agent-finops/packages/mcp/src/index.test.ts\n*** End Patch\n"
         }
       }),
       JSON.stringify({
@@ -546,7 +548,7 @@ describe("parseCodexRollout", () => {
         type: "session_meta",
         payload: {
           id: "codex-attachment-noise",
-          cwd: "/Users/jose/agent-finops",
+          cwd: "/Users/testuser/agent-finops",
           timestamp: "2026-08-03T15:00:00.000Z"
         }
       }),
@@ -607,7 +609,7 @@ describe("parseCodexRollout", () => {
         type: "session_meta",
         payload: {
           id: "codex-aibill-prompt",
-          cwd: "/Users/jose/agent-finops",
+          cwd: "/Users/testuser/agent-finops",
           timestamp: "2026-08-03T15:00:00.000Z"
         }
       }),
@@ -657,7 +659,7 @@ describe("parseCodexRollout", () => {
         type: "session_meta",
         payload: {
           id: "codex-hover",
-          cwd: "/Users/jose/agent-finops",
+          cwd: "/Users/testuser/agent-finops",
           timestamp: "2026-07-28T16:00:00.000Z"
         }
       }),
@@ -701,7 +703,7 @@ describe("parseCodexRollout", () => {
         timestamp: rootStartedAt,
         payload: {
           id: "child-root",
-          cwd: "/Users/jose/project-alpha",
+          cwd: "/Users/testuser/project-alpha",
           timestamp: rootStartedAt,
           thread_source: "subagent",
           parent_thread_id: "parent-root",
@@ -713,7 +715,7 @@ describe("parseCodexRollout", () => {
         timestamp: "2026-08-03T15:00:00.100Z",
         payload: {
           id: "parent-root",
-          cwd: "/Users/jose/project-beta",
+          cwd: "/Users/testuser/project-beta",
           timestamp: "2026-08-03T09:00:00.000Z",
           thread_source: "user"
         }
@@ -753,7 +755,7 @@ describe("parseCodexRollout", () => {
       JSON.stringify({
         type: "turn_context",
         timestamp: "2026-08-03T15:00:01.000Z",
-        payload: { model: "gpt-5.6-sol", cwd: "/Users/jose/project-beta" }
+        payload: { model: "gpt-5.6-sol", cwd: "/Users/testuser/project-beta" }
       }),
       JSON.stringify({
         type: "response_item",
@@ -790,7 +792,7 @@ describe("parseCodexRollout", () => {
       sessionId: "child-root",
       startedAt: rootStartedAt,
       project: "project-alpha",
-      workingDirectory: "/Users/jose/project-alpha",
+      workingDirectory: "/Users/testuser/project-alpha",
       usage: {
         inputTokens: 200,
         cacheReadTokens: 300,
@@ -854,6 +856,40 @@ describe("parseCodexRollout", () => {
 
   it("returns nothing for rollouts without token counts", () => {
     expect(parseCodexRollout(JSON.stringify({ type: "session_meta", payload: {} }))).toHaveLength(0);
+  });
+
+  it("marks nonzero total-only token snapshots unsupported instead of estimating $0", () => {
+    const totalOnly = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-total-only",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T10:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: { total_tokens: 42_000 } }
+        }
+      })
+    ].join("\n");
+
+    const calls = parseCodexRollout(totalOnly);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 42_000,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }
+    });
+    expect(aggregateCalls(calls)[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
   });
 });
 
@@ -938,6 +974,49 @@ describe("aggregateCalls", () => {
     expect(records[0]!.costConfidence).toBe("missing");
   });
 
+  it("does not assign a GPT price to an undocumented Codex alias", () => {
+    const records = aggregateCalls([{
+      agent: "codex",
+      model: "codex-auto-review",
+      timestamp: "2026-08-08T10:00:00.000Z",
+      usage: { inputTokens: 100_000, outputTokens: 10_000 }
+    }]);
+    expect(records[0]).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+  });
+
+  it("does not partially price a group when one cumulative snapshot has unsupported usage", () => {
+    const shared = {
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-08T10:00:00.000Z",
+      project: "agent-finops"
+    };
+    const records = aggregateCalls([
+      {
+        ...shared,
+        sessionId: "complete-session",
+        usageScope: "session_cumulative",
+        usageSupport: "complete",
+        usage: { inputTokens: 100_000, outputTokens: 10_000 }
+      },
+      {
+        ...shared,
+        sessionId: "total-only-session",
+        usageScope: "session_cumulative",
+        usageSupport: "unsupported_token_shape",
+        reportedTotalTokens: 50_000,
+        usage: { inputTokens: 0, outputTokens: 0 }
+      }
+    ]);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      quantity: 2,
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
   it("keeps home-launched sessions unattributed instead of inventing a Home project", () => {
     const records = aggregateCalls([{
       agent: "codex",
@@ -949,6 +1028,86 @@ describe("aggregateCalls", () => {
 
     expect(records[0]!.projectId).toBeUndefined();
     expect(records[0]!.id).toContain("home");
+  });
+});
+
+describe("loadLocalAgentUsage diagnostics", () => {
+  it("distinguishes a missing directory from a readable directory with no usage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-local-diagnostics-"));
+    const readableCodex = join(root, "codex");
+    await mkdir(readableCodex);
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: join(root, "missing-claude"),
+      codexSessionsDir: readableCodex
+    });
+
+    expect(result.sourceScans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent: "claude-code", directoryStatus: "missing" }),
+      expect.objectContaining({ agent: "codex", directoryStatus: "readable", filesDiscovered: 0 })
+    ]));
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      agent: "claude-code",
+      code: "directory_missing",
+      severity: "info"
+    }));
+  });
+
+  it("reports malformed JSONL and unsupported Codex usage without exposing transcript text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-local-malformed-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    const secretishMalformedLine = "not-json sk-proj-this-must-not-appear";
+    await writeFile(join(claudeDir, "session.jsonl"), secretishMalformedLine, "utf8");
+    await writeFile(join(codexDir, "rollout-total.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: "total-only", timestamp: "2026-08-08T10:00:00.000Z" }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T10:05:00.000Z",
+        payload: { type: "token_count", info: { total_token_usage: { total_tokens: 12_345 } } }
+      })
+    ].join("\n"), "utf8");
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir
+    });
+
+    expect(result.sourceScans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent: "claude-code", malformedLines: 1 }),
+      expect.objectContaining({ agent: "codex", unsupportedUsageSnapshots: 1 })
+    ]));
+    expect(result.records.find((record) => record.agentId === "codex")).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+    expect(JSON.stringify(result.diagnostics)).not.toContain(secretishMalformedLine);
+  });
+
+  it("reports a non-directory source path as unreadable instead of an honest empty scan", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-local-unreadable-"));
+    const notDirectory = join(root, "not-a-directory");
+    const codexDir = join(root, "codex");
+    await writeFile(notDirectory, "not a directory", "utf8");
+    await mkdir(codexDir);
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: notDirectory,
+      codexSessionsDir: codexDir
+    });
+
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code")?.directoryStatus).toBe("unreadable");
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      agent: "claude-code",
+      code: "directory_unreadable",
+      severity: "error"
+    }));
   });
 });
 

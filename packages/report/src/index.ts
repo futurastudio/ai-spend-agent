@@ -14,6 +14,7 @@ import type {
   DetectedPlan,
   LocalDiscoveryResult,
   MissingSourcePrompt,
+  ProviderCoverageStatus,
   ProviderQaSummary,
   SourceRegistry,
   SpendSummary,
@@ -42,6 +43,8 @@ export type SpendReportInput = {
   confirmedMappings?: ConfirmedMapping[];
   providerRecords?: UsageRecord[];
   providerQa?: ProviderQaSummary[];
+  /** Aggregate completeness across persisted provider syncs. */
+  providerCoverage?: ProviderCoverageStatus;
   generatedAt?: string;
   /**
    * All analyzed usage records. The evidence ledger is built from these so it
@@ -246,7 +249,84 @@ function localValueBreakdownLines(entries: SpendSummary["bySource"]): string[] {
   );
 }
 
+type ReportFinancialPresentationBasis =
+  | "sample"
+  | "unlabeled"
+  | "local_estimate"
+  | "provider_reported"
+  | "connected_estimated"
+  | "connected_unverified"
+  | "connected_mixed"
+  | "connected_missing";
+
+/**
+ * Saved reports follow the financial evidence attached to their records. A
+ * connected provider is a transport fact; it is not proof of billed cost.
+ */
+function reportFinancialPresentationBasis(input: SpendReportInput): ReportFinancialPresentationBasis {
+  if (input.dataMode === "sample") return "sample";
+  if (input.dataMode === "local_logs") return "local_estimate";
+  if (input.dataMode !== "connected_provider") return "unlabeled";
+
+  const records = input.allRecords ?? input.providerRecords ?? [];
+  const priced = records.filter((record) => typeof record.amountUsd === "number");
+  if (priced.length === 0) return "connected_missing";
+
+  const kinds = new Set(priced.map((record) => record.costConfidence));
+  if (kinds.size === 1 && kinds.has("verified")) return "provider_reported";
+  if (kinds.size === 1 && kinds.has("estimated")) return "connected_estimated";
+  if (kinds.size === 1 && kinds.has("detected_unverified")) return "connected_unverified";
+  return "connected_mixed";
+}
+
+function reportHeadlineLabel(basis: ReportFinancialPresentationBasis): string {
+  switch (basis) {
+    case "sample": return "Combined illustrative cost/value evidence";
+    case "unlabeled": return "Unlabeled legacy cost/value evidence";
+    case "local_estimate": return "Observed API-equivalent value";
+    case "provider_reported": return "Provider-reported cost";
+    case "connected_estimated": return "Connected estimated cost/value";
+    case "connected_unverified": return "Connected unverified cost/value";
+    case "connected_mixed": return "Mixed connected cost/value evidence";
+    case "connected_missing": return "Connected cost/value";
+  }
+}
+
+function reportBreakdownPrefix(basis: ReportFinancialPresentationBasis): string {
+  switch (basis) {
+    case "sample": return "Cost/value evidence";
+    case "unlabeled": return "Unlabeled cost/value evidence";
+    case "local_estimate": return "API-equivalent value";
+    case "provider_reported": return "Provider-reported cost";
+    case "connected_estimated": return "Connected estimated cost/value";
+    case "connected_unverified": return "Connected unverified cost/value";
+    case "connected_mixed": return "Mixed connected cost/value evidence";
+    case "connected_missing": return "Connected cost/value coverage";
+  }
+}
+
+function reportHeadlineAmount(basis: ReportFinancialPresentationBasis, input: SpendReportInput): string {
+  if (basis === "connected_missing") return "Unavailable";
+  const records = input.allRecords ?? input.providerRecords;
+  const rawAmount = records?.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
+  const displayAmount = rawAmount !== undefined && rawAmount > 0 && rawAmount < 0.01
+    ? rawAmount
+    : input.summary.totalUsd;
+  return formatUsd(displayAmount);
+}
+
+function connectedReadoutLine(input: SpendReportInput, basis: ReportFinancialPresentationBasis): string {
+  if (basis === "connected_missing") {
+    return `- Current readout: unavailable across ${input.summary.recordCount} connected provider record${input.summary.recordCount === 1 ? "" : "s"}; no priced financial evidence was present, and missing/null amounts are not treated as zero.`;
+  }
+  return `- Current readout: ${reportHeadlineAmount(basis, input)} of ${reportHeadlineLabel(basis).toLowerCase()} across ${input.summary.recordCount} connected provider record${input.summary.recordCount === 1 ? "" : "s"} with ${input.summary.confidence} confidence.`;
+}
+
 export function generateMarkdownReport(input: SpendReportInput): string {
+  return generateSanitizedMarkdownReport(sanitizeMarkdownReportInput(input));
+}
+
+function generateSanitizedMarkdownReport(input: SpendReportInput): string {
   if (input.dataMode === "local_logs") {
     return generateLocalLogMarkdownReport(input);
   }
@@ -257,13 +337,20 @@ export function generateMarkdownReport(input: SpendReportInput): string {
   const insights = isUnlabeled ? [] : [...(input.summary.insights ?? [])].sort(compareInsights);
   const isSample = input.dataMode === "sample";
   const isConnected = input.dataMode === "connected_provider";
+  const financialBasis = reportFinancialPresentationBasis(input);
+  const reportRecords = input.allRecords ?? input.providerRecords ?? [];
+  const financialAmountAvailable = financialBasis !== "connected_missing";
+  const headlineLabel = reportHeadlineLabel(financialBasis);
+  const headlineAmount = reportHeadlineAmount(financialBasis, input);
   const recommendedPlan = buildRecommendedRecommendations(recommendations);
-  const impactLine = isUnlabeled
+  const impactLine = !financialAmountAvailable
+    ? "Unavailable until priced financial evidence is present"
+    : isUnlabeled
     ? "Unavailable until the evidence mode is refreshed"
     : recommendedPlan.additionalImpactUsd > 0
     ? `${formatUsd(recommendedPlan.recommendedImpactUsd)} (${isSample ? "illustrative modeled" : "recommended"} plan, deduplicated) + ${formatUsd(recommendedPlan.additionalImpactUsd)} overlapping (non-additive)`
     : `${formatUsd(recommendedPlan.recommendedImpactUsd)} (${isSample ? "illustrative modeled" : "recommended"} plan, deduplicated)`;
-  const breakdownPrefix = isSample ? "Cost/value evidence" : isUnlabeled ? "Unlabeled cost/value evidence" : "Spend";
+  const breakdownPrefix = reportBreakdownPrefix(financialBasis);
   const accountabilityLines = isSample
     ? [
         "- Decision needed: none from sample data. Replace the demo with real evidence before assigning an owner or approving a change.",
@@ -281,10 +368,14 @@ export function generateMarkdownReport(input: SpendReportInput): string {
         ]
       : [
           `- Decision needed: ${isConnected ? "reconcile connected provider evidence and approve at most one scoped test" : "approve the top evidence-backed local optimization test before connecting more sources"}.`,
-          `- Current readout: ${formatUsd(input.summary.totalUsd)} of cost/value evidence across ${input.summary.recordCount} ${isConnected ? "connected provider" : "local"} records with ${input.summary.confidence} confidence.`,
-          `- Biggest cost driver: ${topDriverLine(input.summary.byModel)}`,
+          isConnected
+            ? connectedReadoutLine(input, financialBasis)
+            : `- Current readout: ${headlineAmount} of ${headlineLabel.toLowerCase()} across ${input.summary.recordCount} local records with ${input.summary.confidence} confidence.`,
+          `- Biggest cost driver: ${topDriverLine(input.summary.byModel, reportRecords, "model")}`,
           `- Attribution risk: ${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"} need confirmation before this becomes finance-grade.`,
-          `- Opportunity thesis: ${formatUsd(recommendedPlan.recommendedImpactUsd)} modeled near-term impact (deduplicated) from ${recommendedPlan.recommended.length} of ${recommendations.length} recommendations; require candidate-level evidence, explicit approval, and matched future verification.`
+          financialAmountAvailable
+            ? `- Opportunity thesis: ${formatUsd(recommendedPlan.recommendedImpactUsd)} modeled near-term impact (deduplicated) from ${recommendedPlan.recommended.length} of ${recommendations.length} recommendations; require candidate-level evidence, explicit approval, and matched future verification.`
+            : "- Opportunity thesis: unavailable until priced financial evidence supports a candidate and counterfactual."
         ];
   const lines = [
     "# aibill Evidence Report",
@@ -296,7 +387,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     ...dataModeBannerLines(input.dataMode),
     "## Executive summary",
     "",
-    `- ${isSample ? "Combined illustrative cost/value evidence" : isUnlabeled ? "Unlabeled legacy cost/value evidence" : "Tracked cost/value evidence"}: ${formatUsd(input.summary.totalUsd)}`,
+    `- ${headlineLabel}: ${headlineAmount}`,
     `- Records analyzed: ${input.summary.recordCount}`,
     `- Overall confidence: ${input.summary.confidence}`,
     `- Discovery signals: ${input.discovery?.signals.length ?? 0}`,
@@ -306,7 +397,7 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "",
     "## Diagnose → Recommend → Apply → Verify",
     "",
-    ...(isUnlabeled ? unlabeledOperatingLoopMarkdownLines() : operatingLoopMarkdownLines(input.summary, recommendations, insights, isSample)),
+    ...(isUnlabeled ? unlabeledOperatingLoopMarkdownLines() : operatingLoopMarkdownLines(input.summary, recommendations, insights, isSample, financialAmountAvailable)),
     "",
     "## Executive accountability brief",
     "",
@@ -314,52 +405,53 @@ export function generateMarkdownReport(input: SpendReportInput): string {
     "",
     "## Confidence breakdown",
     "",
-    ...confidenceBreakdownLines(input.summary),
+    ...confidenceBreakdownLines(input.summary, reportRecords),
     "",
     "## Evidence quality ledger",
     "",
-    ...evidenceLedgerMarkdownLines(input.allRecords ?? input.providerRecords ?? []),
+    ...evidenceLedgerMarkdownLines(reportRecords),
     "",
     "## Provider-by-provider live QA",
     "",
+    ...providerCoverageMarkdownLines(input.providerCoverage),
     ...providerQaMarkdownLines(input.providerQa ?? []),
     "",
     `## ${breakdownPrefix} by source`,
-    ...breakdownLines(input.summary.bySource),
+    ...breakdownLines(input.summary.bySource, reportRecords, "source"),
     "",
     `## ${breakdownPrefix} by model`,
     "",
-    ...breakdownLines(input.summary.byModel),
+    ...breakdownLines(input.summary.byModel, reportRecords, "model"),
     "",
     `## ${breakdownPrefix} by client`,
     "",
-    ...breakdownLines(input.summary.byClient),
+    ...breakdownLines(input.summary.byClient, reportRecords, "client"),
     "",
     `## ${breakdownPrefix} by project`,
     "",
-    ...breakdownLines(input.summary.byProject),
+    ...breakdownLines(input.summary.byProject, reportRecords, "project"),
     "",
     `## ${breakdownPrefix} by agent`,
     "",
-    ...breakdownLines(input.summary.byAgent),
+    ...breakdownLines(input.summary.byAgent, reportRecords, "agent"),
     "",
     `## ${isSample ? "Illustrative entity attribution" : "Enterprise entity cost/value evidence"}`,
     "",
     `### ${breakdownPrefix} by user`,
     "",
-    ...breakdownLines(input.summary.byUser),
+    ...breakdownLines(input.summary.byUser, reportRecords, "user"),
     "",
     `### ${breakdownPrefix} by workspace / team`,
     "",
-    ...breakdownLines(input.summary.byWorkspace),
+    ...breakdownLines(input.summary.byWorkspace, reportRecords, "workspace"),
     "",
     `### ${breakdownPrefix} by API key`,
     "",
-    ...breakdownLines(input.summary.byApiKey),
+    ...breakdownLines(input.summary.byApiKey, reportRecords, "apiKey"),
     "",
     `## ${isSample ? "Illustrative workflow attribution watch" : "Workflow ownership and cost/value concentration"}`,
     "",
-    ...workflowWatchMarkdownLines(input.summary.workflowWatch, isSample),
+    ...workflowWatchMarkdownLines(input.summary.workflowWatch, isSample, reportRecords),
     "",
     "## Source coverage and connection gaps",
     "",
@@ -482,6 +574,12 @@ function generateConnectedApplyArtifact(input: SpendReportInput): string {
   const records = input.allRecords ?? input.providerRecords ?? [];
   const evidenceWindow = observedRecordWindow(records);
   const sourceSummary = connectedSourceSummary(records);
+  const providerCoverage = input.providerCoverage ?? "not reported";
+  const providerCoverageCaveat = providerCoverage === "partial"
+    ? "Partial provider coverage means missing pages, endpoints, credits, adjustments, or rows remain missing; do not extrapolate them or treat the available total as complete."
+    : providerCoverage === "complete"
+      ? "Complete means the requested connector pagination finished; it does not prove invoice reconciliation, credits, discounts, tax, or later adjustments."
+      : "Provider response coverage was not reported; treat completeness as unknown and reconcile it before approval.";
   const modeledCandidates = connectedModeledCandidates(records).slice(0, 5);
   const promptLines: string[] = [
     "You are reviewing a draft aibill optimization plan built from connected provider evidence.",
@@ -491,6 +589,7 @@ function generateConnectedApplyArtifact(input: SpendReportInput): string {
     "EVIDENCE COVERAGE:",
     `- Observed UTC record window: ${evidenceWindow}.`,
     `- Sources: ${sourceSummary}.`,
+    `- Provider response coverage: ${providerCoverage}. ${providerCoverageCaveat}`,
     `- Records available: ${records.length}. Provider records may be invoice lines, cost buckets, usage aggregates, seats, or calls; do not assume call-level granularity.`,
     "- Provider-reported cost can still differ from a final invoice because credits, discounts, tax, and later adjustments may be missing."
   ];
@@ -523,8 +622,11 @@ function generateConnectedApplyArtifact(input: SpendReportInput): string {
 
   promptLines.push(
     "",
+    ...(providerCoverage === "partial"
+      ? ["PARTIAL-COVERAGE APPROVAL GATE: name the missing provider scope in the review table. Do not approve a financial target or claim complete spend until the missing scope is reconciled; any candidate can only be a bounded test against the available labeled rows."]
+      : []),
     "APPROVAL GATE: read-only inspection is allowed, but do NOT edit files, run a mutating shell command, change routing, budgets, providers, policy, or production configuration until I approve one specific candidate ID.",
-    "First return a table with candidate ID, verified source evidence, record granularity, proposed scoped change, expected operational and financial effect, quality risk, owner, and rollback. Wait for explicit approval.",
+    "First return a table with candidate ID, source evidence carrying its exact financial-evidence label and connector-validation status, record granularity, proposed scoped change, expected operational and financial effect, quality risk, owner, and rollback. Wait for explicit approval.",
     "",
     "CONSTRAINTS: no cloud uploads; never expose raw prompts, credentials, config values, customer data, or secret-bearing commands. Do not convert API-equivalent estimates into billed spend or business ROI.",
     "ROLLBACK: before one approved change, prepare a permission-preserving scoped backup or secret-safe patch without printing sensitive contents. Restore it if the canary, quality bar, or target metric regresses.",
@@ -547,6 +649,7 @@ function generateConnectedApplyArtifact(input: SpendReportInput): string {
     "",
     `- Observed UTC record window: ${evidenceWindow}.`,
     `- Sources: ${sourceSummary}.`,
+    `- Provider response coverage: ${providerCoverage}. ${providerCoverageCaveat}`,
     "- A provider record is not assumed to be one call; record granularity must be verified before recommending routing, caching, batching, or context changes.",
     "- Modeled opportunity is not verified savings, final invoice impact, or business ROI.",
     "- Nothing is changed automatically; explicit approval and matched future evidence determine whether one scoped action worked.",
@@ -1216,17 +1319,25 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     ].join("\n");
   }
   const sampleOnly = input.dataMode === "sample";
+  const reportCommand = sampleOnly
+    ? "npx aibill report --sample --path ./demo-workspace"
+    : "npx aibill report --path ./demo-workspace";
+  const applyCommand = sampleOnly
+    ? "npx aibill apply --sample --path ./demo-workspace"
+    : "npx aibill apply --path ./demo-workspace";
   return [
     "# aibill Demo Package",
     "",
     "## Demo command flow",
     "",
     "```bash",
-    "ai-spend-agent init --path ./demo-workspace",
-    "ai-spend-agent doctor --path ./demo-workspace",
-    "ai-spend-agent scan --sample --path ./demo-workspace",
-    "ai-spend-agent report --path ./demo-workspace",
-    "ai-spend-agent apply-artifact --path ./demo-workspace",
+    "npx aibill init --path ./demo-workspace",
+    "npx aibill doctor --path ./demo-workspace",
+    sampleOnly
+      ? "npx aibill scan --sample --path ./demo-workspace"
+      : "npx aibill scan --path ./demo-workspace",
+    reportCommand,
+    applyCommand,
     "```",
     "",
     "## What the buyer should understand in 10 seconds",
@@ -1276,15 +1387,14 @@ export function generateHtmlReport(input: SpendReportInput): string {
   const recommendations = isUnlabeled ? [] : [...input.summary.recommendations].sort(compareRecommendations);
   const insights = isUnlabeled ? [] : [...(input.summary.insights ?? [])].sort(compareInsights);
   const isSample = input.dataMode === "sample";
+  const financialBasis = reportFinancialPresentationBasis(input);
+  const reportRecords = input.allRecords ?? input.providerRecords ?? [];
+  const financialAmountAvailable = financialBasis !== "connected_missing";
+  const totalMetricLabel = reportHeadlineLabel(financialBasis);
+  const totalMetricValue = reportHeadlineAmount(financialBasis, input);
   const recommendedPlan = buildRecommendedRecommendations(recommendations);
   const recommendedImpactUsd = recommendedPlan.recommendedImpactUsd;
   const topRecommendation = recommendations[0];
-  const totalMetricLabel = input.dataMode === "sample"
-    ? "Cost/value evidence"
-    : isUnlabeled
-      ? "Unlabeled cost/value evidence"
-      : "Provider-reported cost";
-
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1319,8 +1429,8 @@ export function generateHtmlReport(input: SpendReportInput): string {
     </section>
 
     <section class="metric-grid" aria-label="Executive metrics">
-      ${metricCard(totalMetricLabel, formatUsd(input.summary.totalUsd), `${input.summary.recordCount} evidence records`, "primary")}
-      ${isUnlabeled ? metricCard("Optimization impact", "Unavailable", "Refresh the evidence mode before modeling an action") : metricCard(isSample ? "Illustrative modeled opportunity" : "Optimization impact", formatUsd(recommendedImpactUsd), `${isSample ? "demo hypothesis—not verified savings" : "recommended plan"}, deduplicated (${recommendedPlan.recommended.length} of ${recommendations.length})`)}
+      ${metricCard(totalMetricLabel, totalMetricValue, financialBasis === "connected_missing" ? `${input.summary.recordCount} records · no priced financial evidence` : `${input.summary.recordCount} evidence records`, "primary")}
+      ${isUnlabeled || !financialAmountAvailable ? metricCard("Optimization impact", "Unavailable", isUnlabeled ? "Refresh the evidence mode before modeling an action" : "Priced financial evidence is required before modeling an action") : metricCard(isSample ? "Illustrative modeled opportunity" : "Optimization impact", formatUsd(recommendedImpactUsd), `${isSample ? "demo hypothesis—not verified savings" : "recommended plan"}, deduplicated (${recommendedPlan.recommended.length} of ${recommendations.length})`, "estimated")}
       ${metricCard("Mapping questions", String(mappingQuestions.length), "Need confirmation for finance-grade attribution")}
       ${metricCard("Discovery signals", String(input.discovery?.signals.length ?? 0), "Local source hints found during scan")}
     </section>
@@ -1334,7 +1444,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <span class="impact-pill">Human-approved before rollout</span>
       </div>
       <div class="loop-grid">
-        ${(isUnlabeled ? unlabeledOperatingLoopCards() : operatingLoopCards(input.summary, recommendations, insights, isSample)).join("\n")}
+        ${(isUnlabeled ? unlabeledOperatingLoopCards() : operatingLoopCards(input.summary, recommendations, insights, isSample, financialAmountAvailable)).join("\n")}
       </div>
     </section>
 
@@ -1343,10 +1453,10 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <div class="section-label">Executive accountability brief</div>
         <h2>${isUnlabeled ? "Refresh required before any decision" : "Decision needed before adding more sources"}</h2>
         <ul class="brief-list">
-          <li><span>Current readout</span><strong>${formatUsd(input.summary.totalUsd)} across ${input.summary.recordCount} ${isSample ? "illustrative" : "evidence"} records</strong></li>
-          <li><span>${isSample ? "Largest evidence concentration" : "Biggest cost driver"}</span><strong>${escapeHtml(topDriverLine(input.summary.byModel))}</strong></li>
+          <li><span>Current readout</span><strong>${financialBasis === "connected_missing" ? `Unavailable across ${input.summary.recordCount} records · missing/null is not zero` : `${totalMetricValue} of ${escapeHtml(totalMetricLabel.toLowerCase())} across ${input.summary.recordCount} ${isSample ? "illustrative" : "evidence"} records`}</strong></li>
+          <li><span>${isSample ? "Largest evidence concentration" : "Biggest cost driver"}</span><strong>${escapeHtml(topDriverLine(input.summary.byModel, reportRecords, "model"))}</strong></li>
           <li><span>Attribution risk</span><strong>${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"}</strong></li>
-          <li><span>${isSample ? "Illustrative modeled opportunity" : "Modeled opportunity"}</span><strong>${isUnlabeled ? "Disabled until evidence mode is verified" : `${formatUsd(recommendedImpactUsd)} deduplicated ${isSample ? "demo impact—not verified savings" : "impact to test"}`}</strong></li>
+          <li><span>${isSample ? "Illustrative modeled opportunity" : "Modeled opportunity"}</span><strong>${isUnlabeled ? "Disabled until evidence mode is verified" : !financialAmountAvailable ? "Unavailable until priced financial evidence is present" : `${formatUsd(recommendedImpactUsd)} deduplicated ${isSample ? "demo impact—not verified savings" : "impact to test"}`}</strong></li>
         </ul>
       </article>
 
@@ -1354,10 +1464,10 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <div class="section-label">Confidence</div>
         <h2>Cost confidence mix</h2>
         <div class="stacked-bars" aria-label="Confidence breakdown">
-          ${confidenceBarSegments(input.summary)}
+          ${confidenceBarSegments(input.summary, reportRecords)}
         </div>
         <div class="mini-breakdown">
-          ${confidenceBreakdownHtml(input.summary)}
+          ${confidenceBreakdownHtml(input.summary, reportRecords)}
         </div>
       </article>
     </section>
@@ -1371,7 +1481,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <span class="impact-pill">No silent allocation</span>
       </div>
       <div class="evidence-quality-grid">
-        ${evidenceLedgerHtml(input.allRecords ?? input.providerRecords ?? [])}
+        ${evidenceLedgerHtml(reportRecords)}
       </div>
     </section>
 
@@ -1381,8 +1491,9 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <div class="section-label">Provider-by-provider live QA</div>
           <h2>API response drift, pagination, rate limits, and source-specific instructions</h2>
         </div>
-        <span class="impact-pill">${input.providerQa?.length ?? 0} provider${(input.providerQa?.length ?? 0) === 1 ? "" : "s"}</span>
+        <span class="impact-pill${input.providerCoverage === "partial" ? " impact-pill--attention" : ""}">${input.providerCoverage === "partial" ? "Partial coverage" : `${input.providerQa?.length ?? 0} provider${(input.providerQa?.length ?? 0) === 1 ? "" : "s"}`}</span>
       </div>
+      ${providerCoverageHtml(input.providerCoverage)}
       <div class="provider-qa-grid">
         ${providerQaHtml(input.providerQa ?? [])}
       </div>
@@ -1410,7 +1521,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <span class="impact-pill">${input.summary.workflowWatch.length} watched workflow${input.summary.workflowWatch.length === 1 ? "" : "s"}</span>
       </div>
       <div class="workflow-chart">
-        ${input.summary.workflowWatch.length === 0 ? emptyState("No workflow ownership entries yet. Add client, project, agent, and operation metadata to attribute cost/value evidence.") : input.summary.workflowWatch.map((entry) => workflowWatchCard(entry, isSample)).join("\n")}
+        ${input.summary.workflowWatch.length === 0 ? emptyState("No workflow ownership entries yet. Add client, project, agent, and operation metadata to attribute cost/value evidence.") : input.summary.workflowWatch.map((entry) => workflowWatchCard(entry, isSample, reportRecords)).join("\n")}
       </div>
     </section>
 
@@ -1426,19 +1537,19 @@ export function generateHtmlReport(input: SpendReportInput): string {
         <article class="source-detail-card">
           <h3>By user</h3>
           <div class="entity-breakdown-list">
-            ${entityBreakdownHtml(input.summary.byUser)}
+            ${entityBreakdownHtml(input.summary.byUser, reportRecords, "user")}
           </div>
         </article>
         <article class="source-detail-card">
           <h3>By workspace / team</h3>
           <div class="entity-breakdown-list">
-            ${entityBreakdownHtml(input.summary.byWorkspace)}
+            ${entityBreakdownHtml(input.summary.byWorkspace, reportRecords, "workspace")}
           </div>
         </article>
         <article class="source-detail-card">
           <h3>By API key</h3>
           <div class="entity-breakdown-list">
-            ${entityBreakdownHtml(input.summary.byApiKey)}
+            ${entityBreakdownHtml(input.summary.byApiKey, reportRecords, "apiKey")}
           </div>
         </article>
       </div>
@@ -1477,7 +1588,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <div class="section-label">Priority recommendations</div>
           <h2>What to do next</h2>
         </div>
-        <span class="impact-pill">${isUnlabeled ? "Disabled · mode required" : `${formatUsd(recommendedImpactUsd)} ${isSample ? "illustrative modeled impact" : "recommended-plan impact"}`}</span>
+        <span class="impact-pill impact-pill--attention">${isUnlabeled ? "Disabled · mode required" : !financialAmountAvailable ? "Unavailable · priced evidence required" : `${formatUsd(recommendedImpactUsd)} ${isSample ? "illustrative modeled impact" : "recommended-plan impact"}`}</span>
       </div>
       <div class="recommendation-grid">
         ${recommendations.length === 0 ? emptyState(isUnlabeled ? "Recommendations disabled: refresh this legacy state to establish a verified evidence mode." : "No recommendations generated from the current evidence.") : recommendations.map((recommendation) => recommendationCard(recommendation, isSample)).join("\n")}
@@ -1534,7 +1645,8 @@ function operatingLoopMarkdownLines(
   summary: SpendSummary,
   recommendations: SpendSummary["recommendations"],
   insights: SpendSummary["insights"],
-  isSample = false
+  isSample = false,
+  financialAmountAvailable = true
 ): string[] {
   const topWorkflow = summary.workflowWatch[0];
   const topRecommendation = recommendations[0];
@@ -1549,7 +1661,7 @@ function operatingLoopMarkdownLines(
     ];
   }
   return [
-    `1. **Diagnose the evidence:** ${topInsight ? topInsight.title : topWorkflow ? `${topWorkflow.clientId} / ${topWorkflow.projectId} / ${topWorkflow.workflowKey}` : `${formatUsd(summary.totalUsd)} cost/value baseline`}.`,
+    `1. **Diagnose the evidence:** ${topInsight ? topInsight.title : topWorkflow ? `${topWorkflow.clientId} / ${topWorkflow.projectId} / ${topWorkflow.workflowKey}` : financialAmountAvailable ? `${formatUsd(summary.totalUsd)} cost/value baseline` : "cost/value unavailable; no priced financial evidence"}.`,
     `2. **Qualify a candidate:** ${topRecommendation ? topRecommendation.nextAction : "Collect explicit call/invocation workload evidence before proposing a change."} Treat summary recommendations as read-only investigation prompts until record IDs and workload semantics support a canonical modeled action.`,
     "3. **Apply safely:** workflow ownership or cost concentration alone is not a change candidate. Require a canonical modeled action, read-only inspection, explicit approval, and rollback before one scoped mutation.",
     "4. **Verify the result:** compare at least 3 matched pre-change and 3 matched future workloads, including accepted output quality and comparable provider-reported cost when available."
@@ -1578,7 +1690,8 @@ function operatingLoopCards(
   summary: SpendSummary,
   recommendations: SpendSummary["recommendations"],
   insights: SpendSummary["insights"],
-  isSample = false
+  isSample = false,
+  financialAmountAvailable = true
 ): string[] {
   const topWorkflow = summary.workflowWatch[0];
   const topRecommendation = recommendations[0];
@@ -1617,7 +1730,7 @@ function operatingLoopCards(
     loopCard(
       "01",
       "Diagnose the evidence",
-      topInsight ? topInsight.title : topWorkflow ? `${topWorkflow.clientId} / ${topWorkflow.workflowKey}` : `${formatUsd(summary.totalUsd)} cost/value baseline`,
+      topInsight ? topInsight.title : topWorkflow ? `${topWorkflow.clientId} / ${topWorkflow.workflowKey}` : financialAmountAvailable ? `${formatUsd(summary.totalUsd)} cost/value baseline` : "Cost/value unavailable",
       topInsight?.summary ?? "Locate the client, project, agent, model, or workflow where observed cost/value evidence is concentrated."
     ),
     loopCard(
@@ -1716,23 +1829,42 @@ function executiveActionPlanLines(
   ];
 }
 
-function topDriverLine(entries: SpendSummary["bySource"]): string {
+type ReportBreakdownDimension =
+  | "source"
+  | "model"
+  | "client"
+  | "project"
+  | "agent"
+  | "user"
+  | "workspace"
+  | "apiKey";
+
+function topDriverLine(
+  entries: SpendSummary["bySource"],
+  records?: readonly UsageRecord[],
+  dimension?: ReportBreakdownDimension
+): string {
   const topEntry = entries[0];
   if (!topEntry) {
     return "none detected yet";
   }
-  return `${topEntry.key} at ${formatUsd(topEntry.amountUsd)} across ${topEntry.recordCount} records`;
+  const amount = records && dimension
+    ? reportBreakdownAmount(topEntry, records, dimension)
+    : formatUsd(topEntry.amountUsd);
+  return `${topEntry.key} at ${amount} across ${topEntry.recordCount} records`;
 }
 
-function confidenceBreakdownLines(summary: SpendSummary): string[] {
-  return Object.entries(summary.confidenceBreakdown).map(([confidence, amount]) => `- ${confidence}: ${formatUsd(amount)}`);
+function confidenceBreakdownLines(summary: SpendSummary, records: readonly UsageRecord[]): string[] {
+  return Object.entries(summary.confidenceBreakdown).map(([confidence, amount]) => (
+    `- ${confidence}: ${confidenceAmount(amount, confidence as UsageRecord["costConfidence"], records)}`
+  ));
 }
 
 function evidenceLedgerMarkdownLines(records: UsageRecord[]): string[] {
   const ledger = buildEvidenceLedger(records);
   return [
-    `- Provider-reported cost: ${formatUsd(ledger.verifiedSpendUsd)} across ${ledger.verifiedSpendCount} record${ledger.verifiedSpendCount === 1 ? "" : "s"}`,
-    `- Estimated cost/value: ${formatUsd(ledger.estimatedSpendUsd)} across ${ledger.estimatedSpendCount} record${ledger.estimatedSpendCount === 1 ? "" : "s"}`,
+    `- Provider-reported cost: ${ledgerAmount(ledger.verifiedSpendUsd, ledger.verifiedSpendCount)} across ${ledger.verifiedSpendCount} record${ledger.verifiedSpendCount === 1 ? "" : "s"}`,
+    `- Estimated cost/value: ${ledgerAmount(ledger.estimatedSpendUsd, ledger.estimatedSpendCount)} across ${ledger.estimatedSpendCount} record${ledger.estimatedSpendCount === 1 ? "" : "s"}`,
     `- Verified usage evidence: ${ledger.usageEvidenceTokens.toLocaleString("en-US")} tokens across ${ledger.usageEvidenceCount} record${ledger.usageEvidenceCount === 1 ? "" : "s"}`,
     `- Missing cost data: ${ledger.missingCostCount} record${ledger.missingCostCount === 1 ? "" : "s"} need${ledger.missingCostCount === 1 ? "s" : ""} billing/source reconciliation`
   ];
@@ -1741,11 +1873,28 @@ function evidenceLedgerMarkdownLines(records: UsageRecord[]): string[] {
 function evidenceLedgerHtml(records: UsageRecord[]): string {
   const ledger = buildEvidenceLedger(records);
   return [
-    evidenceLedgerCard("verified", "Provider-reported cost", formatUsd(ledger.verifiedSpendUsd), `${ledger.verifiedSpendCount} official provider record${ledger.verifiedSpendCount === 1 ? "" : "s"}`),
-    evidenceLedgerCard("estimated", "Estimated cost/value", formatUsd(ledger.estimatedSpendUsd), `${ledger.estimatedSpendCount} estimate-backed record${ledger.estimatedSpendCount === 1 ? "" : "s"}`),
+    evidenceLedgerCard("verified", "Provider-reported cost", ledgerAmount(ledger.verifiedSpendUsd, ledger.verifiedSpendCount), `${ledger.verifiedSpendCount} official provider record${ledger.verifiedSpendCount === 1 ? "" : "s"}`),
+    evidenceLedgerCard("estimated", "Estimated cost/value", ledgerAmount(ledger.estimatedSpendUsd, ledger.estimatedSpendCount), `${ledger.estimatedSpendCount} estimate-backed record${ledger.estimatedSpendCount === 1 ? "" : "s"}`),
     evidenceLedgerCard("usage", "Verified usage evidence", `${ledger.usageEvidenceTokens.toLocaleString("en-US")} tokens`, `${ledger.usageEvidenceCount} usage record${ledger.usageEvidenceCount === 1 ? "" : "s"} without silent dollar allocation`),
     evidenceLedgerCard("missing", "Missing cost data", `${ledger.missingCostCount} record${ledger.missingCostCount === 1 ? "" : "s"}`, "Needs billing/export/source reconciliation before finance-grade reporting")
   ].join("\n");
+}
+
+function ledgerAmount(amount: number, pricedRecordCount: number): string {
+  return pricedRecordCount > 0 ? formatUsd(amount) : "Not reported";
+}
+
+function confidenceAmount(
+  summaryAmount: number,
+  confidence: UsageRecord["costConfidence"],
+  records: readonly UsageRecord[]
+): string {
+  const matchingAmounts = records
+    .filter((record) => record.costConfidence === confidence && typeof record.amountUsd === "number")
+    .map((record) => record.amountUsd as number);
+  if (matchingAmounts.length === 0) return "Not reported";
+  const rawAmount = matchingAmounts.reduce((total, amount) => total + amount, 0);
+  return rawAmount > 0 && rawAmount < 0.01 ? formatUsd(rawAmount) : formatUsd(summaryAmount);
 }
 
 function evidenceLedgerCard(tone: string, label: string, value: string, context: string): string {
@@ -1792,7 +1941,7 @@ function providerQaMarkdownLines(providerQa: ProviderQaSummary[]): string[] {
   }
 
   return providerQa.flatMap((qa) => [
-    `- **${qa.provider}** endpoints checked: ${qa.requestedEndpoints.join(", ") || "none"}`,
+    `- **${qa.provider}** coverage: ${qa.coverage ?? "not recorded"}; endpoints checked: ${qa.requestedEndpoints.join(", ") || "none"}`,
     ...qa.pagination.map((page) => `  - Pagination: ${providerPaginationExplanation(page)}`),
     providerRateLimitExplanation(qa),
     providerResponseDriftExplanation(qa),
@@ -1805,16 +1954,49 @@ function providerQaHtml(providerQa: ProviderQaSummary[]): string {
     return emptyState("No live-provider QA captured yet. Run provider sync with API access to record pagination, rate-limit, and response-shape evidence.");
   }
 
-  return providerQa.map((qa) => `<article class="provider-qa-card">
-    <span>${escapeHtml(qa.provider)}</span>
-    <h3>${escapeHtml(qa.requestedEndpoints.join(", ") || "No endpoints checked")}</h3>
-    <ul>
-      ${qa.pagination.map((page) => `<li>${escapeHtml(providerPaginationExplanation(page))}</li>`).join("\n")}
-      <li>${escapeHtml(stripListPrefix(providerRateLimitExplanation(qa)))}</li>
-      <li>${escapeHtml(stripListPrefix(providerResponseDriftExplanation(qa)))}</li>
-      ${qa.instructions.map((instruction) => `<li>Instruction: ${escapeHtml(instruction)}</li>`).join("\n")}
-    </ul>
-  </article>`).join("\n");
+  return providerQa.map((qa) => {
+    const failed = qa.pagination.some((page) => (
+      page.stoppedBecause === "fetch_error" || page.stoppedBecause === "unsafe_next_link"
+    ));
+    const toneClass = failed
+      ? " provider-qa-card--failed"
+      : qa.coverage === "partial"
+        ? " provider-qa-card--partial"
+        : "";
+    return `<article class="provider-qa-card${toneClass}">
+      <span>${escapeHtml(qa.provider)}</span>
+      <h3>${escapeHtml(qa.coverage ? `${qa.coverage} coverage` : "Coverage not recorded")}</h3>
+      <ul>
+        <li>Endpoints checked: ${escapeHtml(qa.requestedEndpoints.join(", ") || "none")}</li>
+        ${qa.pagination.map((page) => `<li>${escapeHtml(providerPaginationExplanation(page))}</li>`).join("\n")}
+        <li>${escapeHtml(stripListPrefix(providerRateLimitExplanation(qa)))}</li>
+        <li>${escapeHtml(stripListPrefix(providerResponseDriftExplanation(qa)))}</li>
+        ${qa.instructions.map((instruction) => `<li>Instruction: ${escapeHtml(instruction)}</li>`).join("\n")}
+      </ul>
+    </article>`;
+  }).join("\n");
+}
+
+function providerCoverageMarkdownLines(coverage: ProviderCoverageStatus | undefined): string[] {
+  if (coverage === "partial") {
+    return [
+      "- **Overall provider sync coverage: partial.** At least one persisted provider sync ended before complete coverage; totals include only available rows, whose financial evidence labels remain unchanged."
+    ];
+  }
+  if (coverage === "complete") {
+    return ["- Overall provider sync coverage: complete for the persisted provider syncs represented here."];
+  }
+  return [];
+}
+
+function providerCoverageHtml(coverage: ProviderCoverageStatus | undefined): string {
+  if (coverage === "partial") {
+    return `<div class="verification-note verification-note--partial"><strong>Partial provider coverage:</strong> at least one persisted provider sync ended before complete coverage. Totals include only available rows; their financial evidence labels remain unchanged.</div>`;
+  }
+  if (coverage === "complete") {
+    return `<div class="verification-note"><strong>Provider coverage:</strong> complete for the persisted provider syncs represented here.</div>`;
+  }
+  return "";
 }
 
 function providerPaginationExplanation(page: ProviderQaSummary["pagination"][number]): string {
@@ -1835,25 +2017,72 @@ function stripListPrefix(value: string): string {
   return value.replace(/^\s*-\s*/, "");
 }
 
-function breakdownLines(entries: SpendSummary["bySource"]): string[] {
+function breakdownLines(
+  entries: SpendSummary["bySource"],
+  records: readonly UsageRecord[] = [],
+  dimension?: ReportBreakdownDimension
+): string[] {
   if (entries.length === 0) {
     return ["No spend in this dimension."];
   }
-  return entries.map((entry) => `- ${entry.key}: ${formatUsd(entry.amountUsd)} across ${entry.recordCount} records (${entry.confidence})`);
+  return entries.map((entry) => {
+    const amount = dimension
+      ? reportBreakdownAmount(entry, records, dimension)
+      : formatUsd(entry.amountUsd);
+    return `- ${entry.key}: ${amount} across ${entry.recordCount} records (${entry.confidence})`;
+  });
 }
 
-function entityBreakdownHtml(entries: SpendSummary["bySource"]): string {
+function reportBreakdownAmount(
+  entry: SpendSummary["bySource"][number],
+  records: readonly UsageRecord[],
+  dimension: ReportBreakdownDimension
+): string {
+  const amounts = records
+    .filter((record) => (reportBreakdownKey(record, dimension) ?? "unmapped") === entry.key)
+    .map((record) => record.amountUsd)
+    .filter((amount): amount is number => typeof amount === "number");
+  if (amounts.length === 0) return "Not reported";
+  const rawAmount = amounts.reduce((total, amount) => total + amount, 0);
+  return rawAmount > 0 && rawAmount < 0.01 ? formatUsd(rawAmount) : formatUsd(entry.amountUsd);
+}
+
+function reportBreakdownKey(
+  record: UsageRecord,
+  dimension: ReportBreakdownDimension
+): string | undefined {
+  switch (dimension) {
+    case "source": return record.source.id;
+    case "model": return record.model;
+    case "client": return record.clientId;
+    case "project": return record.projectId;
+    case "agent": return record.agentId;
+    case "user": return record.userId;
+    case "workspace": return record.workspaceId;
+    case "apiKey": return record.apiKeyId;
+  }
+}
+
+function entityBreakdownHtml(
+  entries: SpendSummary["bySource"],
+  records: readonly UsageRecord[] = [],
+  dimension?: ReportBreakdownDimension
+): string {
   if (entries.length === 0) {
     return emptyState("No source signal for this entity yet. Connect provider admin data or confirm mappings to make this first-class.");
   }
   return entries.slice(0, 5).map((entry) => `<div class="mapping-row">
     <span>${escapeHtml(formatConfidenceLabel(entry.confidence))}</span>
     <strong>${escapeHtml(entry.key)}</strong>
-    <p>${formatUsd(entry.amountUsd)} across ${entry.recordCount} record${entry.recordCount === 1 ? "" : "s"}</p>
+    <p>${escapeHtml(dimension ? reportBreakdownAmount(entry, records, dimension) : formatUsd(entry.amountUsd))} across ${entry.recordCount} record${entry.recordCount === 1 ? "" : "s"}</p>
   </div>`).join("\n");
 }
 
-function workflowWatchMarkdownLines(entries: SpendSummary["workflowWatch"], isSample = false): string[] {
+function workflowWatchMarkdownLines(
+  entries: SpendSummary["workflowWatch"],
+  isSample = false,
+  records: readonly UsageRecord[] = []
+): string[] {
   if (entries.length === 0) {
     return ["No workflow ownership entries yet. Add client, project, agent, and operation metadata to attribute cost/value evidence."];
   }
@@ -1861,7 +2090,7 @@ function workflowWatchMarkdownLines(entries: SpendSummary["workflowWatch"], isSa
   if (isSample) {
     return entries.flatMap((entry) => [
       `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence}; fictional sample entities)`,
-      `  - Illustrative cost/value evidence: ${formatUsd(entry.amountUsd)} across ${entry.recordCount} records`,
+      `  - Illustrative cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
       "  - Financial inference: attribution concentration only; no margin or savings amount is inferred.",
       `  - Example hypothesis (do not execute): ${entry.suggestedOptimization}`,
       "  - Apply status: disabled until real evidence is collected",
@@ -1871,7 +2100,7 @@ function workflowWatchMarkdownLines(entries: SpendSummary["workflowWatch"], isSa
 
   return entries.flatMap((entry) => [
     `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence})`,
-    `  - Observed cost/value evidence: ${formatUsd(entry.amountUsd)} across ${entry.recordCount} records`,
+    `  - Observed cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
     `  - Evidence share: ${formatPercent(entry.shareOfSpend)}`,
     "  - Interpretation: ownership/concentration diagnostic only; no margin, savings, or safe change is inferred.",
     `  - Read-only next step: ${entry.suggestedOptimization}`,
@@ -1880,7 +2109,11 @@ function workflowWatchMarkdownLines(entries: SpendSummary["workflowWatch"], isSa
   ]);
 }
 
-function workflowWatchCard(entry: SpendSummary["workflowWatch"][number], isSample = false): string {
+function workflowWatchCard(
+  entry: SpendSummary["workflowWatch"][number],
+  isSample = false,
+  records: readonly UsageRecord[] = []
+): string {
   const width = Math.max(6, Math.min(100, Math.round(entry.shareOfSpend * 100)));
   const workflowFacts = isSample
     ? `<span>Records <strong>${entry.recordCount}</strong></span>
@@ -1902,7 +2135,7 @@ function workflowWatchCard(entry: SpendSummary["workflowWatch"][number], isSampl
         <h3>${escapeHtml(entry.clientId)} / ${escapeHtml(entry.projectId)} / ${escapeHtml(entry.workflowKey)}</h3>
         <p>${escapeHtml(entry.agentId)} · ${escapeHtml(entry.confidence)}</p>
       </div>
-      <strong>${formatUsd(entry.amountUsd)}</strong>
+      <strong>${escapeHtml(workflowWatchAmount(entry, records))}</strong>
     </div>
     <div class="workflow-bar" aria-label="${escapeHtml(formatPercent(entry.shareOfSpend))} of ${isSample ? "illustrative cost/value evidence" : "observed cost/value evidence"}"><span style="width: ${width}%"></span></div>
     <div class="workflow-facts">
@@ -1911,6 +2144,24 @@ function workflowWatchCard(entry: SpendSummary["workflowWatch"][number], isSampl
     <div class="apply-prompt"><strong>${actionLabel}</strong> ${escapeHtml(actionText)}</div>
     <div class="verification-note"><strong>Verify:</strong> ${escapeHtml(verificationText)}</div>
   </article>`;
+}
+
+function workflowWatchAmount(
+  entry: SpendSummary["workflowWatch"][number],
+  records: readonly UsageRecord[]
+): string {
+  const amounts = records
+    .filter((record) => (
+      (record.clientId ?? "unmapped-client") === entry.clientId &&
+      (record.projectId ?? "unmapped-project") === entry.projectId &&
+      (record.operation ?? "unmapped-workflow") === entry.workflowKey &&
+      (record.agentId ?? "unmapped-agent") === entry.agentId
+    ))
+    .map((record) => record.amountUsd)
+    .filter((amount): amount is number => typeof amount === "number");
+  if (amounts.length === 0) return "Not reported";
+  const rawAmount = amounts.reduce((total, amount) => total + amount, 0);
+  return rawAmount > 0 && rawAmount < 0.01 ? formatUsd(rawAmount) : formatUsd(entry.amountUsd);
 }
 
 function sourceCoverageMarkdownLines(input: SpendReportInput): string[] {
@@ -1922,10 +2173,25 @@ function sourceCoverageMarkdownLines(input: SpendReportInput): string[] {
     const count = registry.approvedSources.filter((source) => source.lane === lane.id).length;
     return `- ${lane.label}: ${count} approved source${count === 1 ? "" : "s"}`;
   });
+  const sourceTruthLines = registry.approvedSources.length === 0
+    ? ["- No approved source boundaries yet."]
+    : registry.approvedSources.map((source) => (
+        `- ${source.label}: boundary ${source.boundaryApproval}; validation ${source.validationCoverage}; financial evidence ${source.financialEvidence}`
+      ));
   const promptLines = (input.missingSourcePrompts ?? []).length === 0
     ? ["- No detected-but-missing connector prompts." ]
     : (input.missingSourcePrompts ?? []).map((prompt) => `- ${prompt.reason} Suggested: ${prompt.suggestedConnector}`);
-  return [...laneLines, "", "### Detected but missing", "", ...promptLines];
+  return [
+    ...laneLines,
+    "",
+    "### Source truth axes",
+    "",
+    ...sourceTruthLines,
+    "",
+    "### Detected but missing",
+    "",
+    ...promptLines
+  ];
 }
 
 function confirmedMappingMarkdownLines(mappings: ConfirmedMapping[]): string[] {
@@ -1945,12 +2211,14 @@ function sourceLaneCards(registry?: SourceRegistry): string[] {
   }
   return lanes.map((lane) => {
     const sources = registry?.approvedSources.filter((source) => source.lane === lane.id) ?? [];
-    const verification = sources[0]?.verification ?? lane.defaultVerification;
+    const validationCoverage = sources[0]?.validationCoverage ?? "untested";
+    const financialEvidence = sources[0]?.financialEvidence ?? "missing";
     return `<article class="source-lane-card source-lane-card--${escapeHtml(lane.id)}">
-      <span class="source-lane-status">${escapeHtml(formatConfidenceLabel(verification))}</span>
+      <span class="source-lane-status">${escapeHtml(`boundary ${sources.length > 0 ? "approved" : "not approved"}`)}</span>
       <h3>${escapeHtml(lane.label)}</h3>
       <strong>${sources.length} approved source${sources.length === 1 ? "" : "s"}</strong>
-      <p>${sources.length === 0 ? "Not connected yet." : sources.map((source) => source.label).join("; ")}</p>
+      <p>Validation: ${escapeHtml(validationCoverage)} · financial evidence: ${escapeHtml(formatConfidenceLabel(financialEvidence))}</p>
+      <p>${sources.length === 0 ? "Not connected yet." : sources.map((source) => escapeHtml(source.label)).join("; ")}</p>
     </article>`;
   });
 }
@@ -1984,7 +2252,7 @@ function confirmedMappingHtml(mappings: ConfirmedMapping[]): string {
 function nextSourceLine(input: SpendReportInput): string {
   const providers = new Set(input.discovery?.signals.map((signal) => signal.provider) ?? []);
   if (!providers.has("openai")) {
-    return "Connect or import OpenAI billing/export data first, then label costs as verified only after source confirmation.";
+    return "Connect or import OpenAI billing/export data first; label a cost verified only when an official provider-reported row supports that financial evidence. Connector validation alone is not financial proof.";
   }
   if (!providers.has("anthropic")) {
     return "Connect or import Anthropic usage/cost exports next, then compare source totals against local detected usage.";
@@ -1993,6 +2261,7 @@ function nextSourceLine(input: SpendReportInput): string {
 }
 
 function formatUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) return "<$0.01";
   return `$${amount.toFixed(2)}`;
 }
 
@@ -2042,7 +2311,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
   const barRow = (key: string, amountUsd: number): string => {
     const share = summary.totalUsd > 0 ? amountUsd / summary.totalUsd : 0;
     const pct = Math.max(1, Math.round(share * 100));
-    return `<div class="row"><span class="k">${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><span class="bar"><i style="width:${pct}%"></i></span><span class="v">${formatUsd(amountUsd)}<em>${formatPercent(share)}</em></span></div>`;
+    return `<div class="row"><span class="k">${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><span class="bar"><i class="estimated-bar" style="width:${pct}%"></i></span><span class="v estimated-value">${formatUsd(amountUsd)}<em>${formatPercent(share)}</em></span></div>`;
   };
 
   const statCard = (label: string, value: string, note: string, tone = ""): string =>
@@ -2056,7 +2325,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     const impact = cut.impactBasis === "observed_value_no_counterfactual"
       ? `${formatUsd(cut.affectedSpendUsd)} observed value`
       : `~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled`;
-    return `<div class="cut"><div><strong>${escapeHtml(cut.title)}</strong><p>${escapeHtml(cut.action)}</p></div><div class="cut-v"><strong>${impact}</strong><span>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</span></div></div>`;
+    return `<div class="cut"><div><strong>${escapeHtml(cut.title)}</strong><p>${escapeHtml(cut.action)}</p></div><div class="cut-v"><strong class="estimated-value">${impact}</strong><span>${cut.recordCount} ${unit} · ${escapeHtml(cut.confidence)}</span></div></div>`;
   }).join("");
 
   const deadChips = dead
@@ -2085,17 +2354,17 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         <div class="hero">
           ${valueCheck
-            ? `<div class="hero-big g-accent">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COMPARED WITH <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — API-equivalent usage is ~${valueCheck.valueMultiple}× the listed plan price${hittingLimits ? ` <span class="warn">· check the reported limit signal</span>` : ""}</div>`
-            : `<div class="hero-big g-accent">${formatUsd(summary.totalUsd)}</div><div class="hero-sub">API-equivalent usage from local Claude Code / Codex transcripts · estimated</div>`}
+            ? `<div class="hero-big estimated-value">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COMPARED WITH <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — API-equivalent usage is ~${valueCheck.valueMultiple}× the listed plan price${hittingLimits ? ` <span class="warn">· check the reported limit signal</span>` : ""}</div>`
+            : `<div class="hero-big estimated-value">${formatUsd(summary.totalUsd)}</div><div class="hero-sub">API-equivalent usage from local Claude Code / Codex transcripts · estimated</div>`}
         </div>
 
         ${sectionHead("WHAT HAPPENED", "measured from this machine's transcripts")}
         <div class="stats">
-          ${valueCheck ? statCard("API-rate comparison", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} list price`, "primary") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records`, "primary")}
-          ${statCard("Usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`)}
+          ${valueCheck ? statCard("API-rate comparison", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} list price`, "estimated-card") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`, "estimated-card")}
+          ${statCard("Usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`, "estimated-card")}
           ${plan.recommendedSavingsUsd > 0
-            ? statCard("Modeled opportunity", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "connected-workload model · verify")
-            : statCard("Context exposure", formatUsd(observedContextValue), "observed value · reduction unproven")}
+            ? statCard("Modeled opportunity", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "connected-workload model · verify", "estimated-card")
+            : statCard("Context exposure", formatUsd(observedContextValue), "observed value · reduction unproven", "estimated-card")}
           ${dead ? statCard("Config candidates", `${dead.deadCount} of ${dead.loadedCount}`, `no matching invocation in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : statCard("Config candidates", "none", "no supported candidate evidence")}
         </div>
 
@@ -2143,6 +2412,7 @@ function terminalReportCss(): string {
     .dim { color: #66788c; }
     .warn { color: #fbbf24; }
     .g-accent { color: #4ade80; }
+    .estimated-value { color: #fbbf24; }
     .prompt { font-size: 13px; margin-bottom: 22px; }
     .hero { text-align: center; margin: 6px 0 26px; }
     .hero-big { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; }
@@ -2153,11 +2423,11 @@ function terminalReportCss(): string {
     .sec .blurb { color: #66788c; }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
     .stat { border: 1px solid #1c2733; border-radius: 10px; padding: 14px; background: #0e141c; display: flex; flex-direction: column; gap: 5px; }
-    .stat.primary { border-color: rgba(74,222,128,0.4); }
+    .stat.estimated-card { border-color: rgba(251,191,36,0.4); }
     .stat.warn-card { border-color: rgba(251,191,36,0.4); }
     .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: #66788c; }
     .stat strong { font-size: 24px; color: #e8eff6; }
-    .stat.primary strong { color: #4ade80; }
+    .stat.estimated-card strong { color: #fbbf24; }
     .stat.warn-card strong { color: #fbbf24; }
     .stat .note { font-size: 11px; color: #8494a6; }
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
@@ -2166,8 +2436,9 @@ function terminalReportCss(): string {
     .row { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 12px; }
     .row .k { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab8c7; }
     .row .bar { flex: 1; height: 9px; background: #131c26; border-radius: 4px; overflow: hidden; }
-    .row .bar i { display: block; height: 100%; background: linear-gradient(90deg, #22d3ee, #4ade80); }
+    .row .bar i { display: block; height: 100%; background: linear-gradient(90deg, #22d3ee, #fbbf24); }
     .row .v { flex: 0 0 96px; text-align: right; color: #e8eff6; }
+    .row .v.estimated-value { color: #fbbf24; }
     .row .v em { font-style: normal; color: #66788c; margin-left: 5px; }
     .deadbox { margin-top: 14px; border: 1px dashed rgba(251,191,36,0.35); border-radius: 10px; padding: 11px 13px; font-size: 12px; }
     .deadbox .label { color: #fbbf24; margin-right: 6px; }
@@ -2176,7 +2447,7 @@ function terminalReportCss(): string {
     .cut strong { font-size: 13px; color: #e8eff6; }
     .cut p { font-size: 11.5px; color: #8494a6; margin-top: 5px; line-height: 1.5; max-width: 60ch; }
     .cut-v { text-align: right; flex-shrink: 0; }
-    .cut-v strong { color: #4ade80; font-size: 15px; }
+    .cut-v strong.estimated-value { color: #fbbf24; font-size: 15px; }
     .cut-v span { display: block; font-size: 10.5px; color: #66788c; margin-top: 4px; }
     .plan-row { border-left: 2px solid #24303d; padding: 2px 0 2px 12px; margin-bottom: 11px; font-size: 12px; }
     .plan-row strong { color: #e8eff6; }
@@ -2240,8 +2511,10 @@ function premiumReportCss(): string {
     .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
     .metric-card { border-radius: 18px; padding: 18px; min-height: 132px; }
     .metric-card--primary { background: linear-gradient(180deg, rgba(94,106,210,0.25), rgba(255,255,255,0.03)); border-color: rgba(130,143,255,0.34); }
+    .metric-card--estimated { border-color: rgba(251,191,36,0.34); background: linear-gradient(180deg, rgba(217,119,6,0.10), rgba(255,255,255,0.03)); }
     .metric-label { color: var(--muted); font-size: 12px; font-weight: 510; }
     .metric-value { display: block; margin-top: 18px; color: var(--text); font-size: 31px; line-height: 1; letter-spacing: -0.05em; font-weight: 510; }
+    .metric-card--estimated .metric-value { color: #fbbf24; }
     .metric-context { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .operating-loop { margin-top: 16px; border-radius: 22px; padding: 24px; }
     .loop-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -2260,7 +2533,7 @@ function premiumReportCss(): string {
     .stacked-bars { display: flex; width: 100%; height: 12px; margin: 22px 0 12px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.05); }
     .bar-segment { min-width: 2px; }
     .bar-segment--verified { background: #10b981; }
-    .bar-segment--estimated { background: #7170ff; }
+    .bar-segment--estimated { background: #fbbf24; }
     .bar-segment--detected-unverified { background: #d97706; }
     .bar-segment--missing { background: #62666d; }
     .mini-breakdown { display: grid; gap: 0; }
@@ -2272,7 +2545,7 @@ function premiumReportCss(): string {
     .evidence-quality-card strong { display: block; margin-top: 12px; color: var(--text); font-size: 26px; line-height: 1; letter-spacing: -0.04em; font-weight: 510; }
     .evidence-quality-card p { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }
     .evidence-quality-card--verified { border-color: rgba(16,185,129,0.28); }
-    .evidence-quality-card--estimated { border-color: rgba(113,112,255,0.30); }
+    .evidence-quality-card--estimated { border-color: rgba(251,191,36,0.34); }
     .evidence-quality-card--usage { border-color: rgba(59,130,246,0.30); }
     .evidence-quality-card--missing { border-color: rgba(217,119,6,0.32); }
     .insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -2292,11 +2565,16 @@ function premiumReportCss(): string {
     .evidence-list strong { color: var(--soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
     .evidence-list span { padding-left: 10px; border-left: 1px solid var(--border-soft); }
     .verification-note { margin-top: 12px; padding: 12px; border: 1px solid rgba(113,112,255,0.24); border-radius: 12px; background: rgba(113,112,255,0.08); color: var(--soft); font-size: 13px; line-height: 1.5; }
+    .verification-note--partial { border-color: rgba(251,191,36,0.32); background: rgba(217,119,6,0.09); }
     .workflow-watch { margin-top: 16px; border-radius: 22px; padding: 24px; }
     .source-coverage { margin-top: 16px; border-radius: 22px; padding: 24px; }
     .provider-qa { margin-top: 16px; border-radius: 22px; padding: 24px; }
     .provider-qa-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     .provider-qa-card { border: 1px solid var(--border-soft); border-radius: 18px; padding: 18px; background: rgba(255,255,255,0.025); }
+    .provider-qa-card--partial { border-color: rgba(251,191,36,0.32); background: linear-gradient(180deg, rgba(217,119,6,0.09), rgba(255,255,255,0.025)); }
+    .provider-qa-card--partial h3 { color: #fbbf24; }
+    .provider-qa-card--failed { border-color: rgba(239,68,68,0.38); background: linear-gradient(180deg, rgba(239,68,68,0.11), rgba(255,255,255,0.025)); }
+    .provider-qa-card--failed h3 { color: #f87171; }
     .provider-qa-card span { color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
     .provider-qa-card h3 { margin: 12px 0; color: var(--text); font-size: 16px; line-height: 1.25; letter-spacing: -0.02em; font-weight: 590; }
     .provider-qa-card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.55; }
@@ -2320,14 +2598,15 @@ function premiumReportCss(): string {
     .workflow-card p { margin-top: 7px; color: var(--muted); line-height: 1.45; font-size: 13px; }
     .workflow-card-main > strong { color: var(--text); font-size: 24px; line-height: 1; letter-spacing: -0.04em; font-weight: 510; white-space: nowrap; }
     .workflow-bar { height: 10px; margin-top: 16px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.055); }
-    .workflow-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7170ff, #10b981); }
+    .workflow-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7170ff, #8b8aff); }
     .workflow-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
     .workflow-facts span { padding: 11px; border: 1px solid var(--border-soft); border-radius: 12px; color: var(--muted); background: rgba(255,255,255,0.022); font-size: 12px; }
     .workflow-facts strong { display: block; margin-top: 4px; color: var(--soft); font-size: 13px; }
-    .apply-prompt { margin-top: 14px; padding: 12px; border-radius: 12px; background: rgba(16,185,129,0.075); color: var(--soft); font-size: 13px; line-height: 1.5; }
+    .apply-prompt { margin-top: 14px; padding: 12px; border: 1px solid rgba(217,119,6,0.24); border-radius: 12px; background: rgba(217,119,6,0.075); color: var(--soft); font-size: 13px; line-height: 1.5; }
     .recommendations-section { margin-top: 16px; }
     .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
     .impact-pill { border: 1px solid rgba(113,112,255,0.32); border-radius: 999px; padding: 8px 12px; color: var(--soft); background: rgba(113,112,255,0.10); font-size: 13px; font-weight: 510; }
+    .impact-pill--attention { border-color: rgba(251,191,36,0.32); color: #fbbf24; background: rgba(217,119,6,0.09); }
     .recommendation-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
     .recommendation-card { border: 1px solid var(--border-soft); border-radius: 18px; padding: 18px; background: rgba(255,255,255,0.025); }
     .recommendation-card--high { border-color: rgba(113,112,255,0.36); background: linear-gradient(180deg, rgba(113,112,255,0.14), rgba(255,255,255,0.025)); }
@@ -2335,7 +2614,7 @@ function premiumReportCss(): string {
     .priority-badge { border: 1px solid var(--border); border-radius: 999px; padding: 5px 8px; color: var(--soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
     .recommendation-card h3 { margin: 16px 0 10px; color: var(--text); font-size: 18px; line-height: 1.25; letter-spacing: -0.02em; font-weight: 590; }
     .recommendation-card p, .artifact-card p { color: var(--muted); line-height: 1.62; font-size: 14px; }
-    .impact-line { display: block; color: var(--text); font-size: 28px; letter-spacing: -0.05em; font-weight: 510; }
+    .impact-line { display: block; color: #fbbf24; font-size: 28px; letter-spacing: -0.05em; font-weight: 510; }
     .next-action { margin-top: 14px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.035); color: var(--soft); font-size: 13px; line-height: 1.5; }
     .board-action-list { margin: 20px 0 0; padding-left: 20px; color: var(--soft); }
     .board-action-list li { margin: 10px 0; padding-left: 8px; line-height: 1.58; }
@@ -2361,8 +2640,9 @@ function formatConfidenceLabel(confidence: SpendSummary["confidence"]): string {
   }
 }
 
-function metricCard(label: string, value: string, context: string, tone?: "primary"): string {
-  return `<article class="metric-card${tone === "primary" ? " metric-card--primary" : ""}">
+function metricCard(label: string, value: string, context: string, tone?: "primary" | "estimated"): string {
+  const toneClass = tone ? ` metric-card--${tone}` : "";
+  return `<article class="metric-card${toneClass}">
     <span class="metric-label">${escapeHtml(label)}</span>
     <strong class="metric-value">${escapeHtml(value)}</strong>
     <p class="metric-context">${escapeHtml(context)}</p>
@@ -2381,19 +2661,24 @@ function recommendationCard(recommendation: SpendSummary["recommendations"][numb
   </article>`;
 }
 
-function confidenceBarSegments(summary: SpendSummary): string {
+function confidenceBarSegments(summary: SpendSummary, records: readonly UsageRecord[]): string {
   const total = Math.max(summary.totalUsd, 1);
   return Object.entries(summary.confidenceBreakdown)
     .map(([confidence, amount]) => {
-      const width = Math.max((amount / total) * 100, amount > 0 ? 3 : 0);
-      return `<span class="bar-segment bar-segment--${escapeHtml(confidence.replace(/_/g, "-"))}" style="width: ${width.toFixed(1)}%" title="${escapeHtml(confidence)} ${formatUsd(amount)}"></span>`;
+      const rawAmount = records.reduce((sum, record) => (
+        record.costConfidence === confidence ? sum + (record.amountUsd ?? 0) : sum
+      ), 0);
+      const widthAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : amount;
+      const width = Math.max((widthAmount / total) * 100, widthAmount > 0 ? 3 : 0);
+      const displayAmount = confidenceAmount(amount, confidence as UsageRecord["costConfidence"], records);
+      return `<span class="bar-segment bar-segment--${escapeHtml(confidence.replace(/_/g, "-"))}" style="width: ${width.toFixed(1)}%" title="${escapeHtml(confidence)} ${escapeHtml(displayAmount)}"></span>`;
     })
     .join("\n");
 }
 
-function confidenceBreakdownHtml(summary: SpendSummary): string {
+function confidenceBreakdownHtml(summary: SpendSummary, records: readonly UsageRecord[]): string {
   return Object.entries(summary.confidenceBreakdown)
-    .map(([confidence, amount]) => `<div><span>${escapeHtml(confidence.replace(/_/g, " "))}</span><strong>${formatUsd(amount)}</strong></div>`)
+    .map(([confidence, amount]) => `<div><span>${escapeHtml(confidence.replace(/_/g, " "))}</span><strong>${escapeHtml(confidenceAmount(amount, confidence as UsageRecord["costConfidence"], records))}</strong></div>`)
     .join("\n");
 }
 
@@ -2403,6 +2688,43 @@ function emptyState(message: string): string {
 
 function stripOrderedPrefix(line: string): string {
   return line.replace(/^\d+\.\s*/, "");
+}
+
+/**
+ * Persisted report metadata is untrusted Markdown input. Remove terminal and
+ * line-control sequences, collapse injected structure to readable prose, and
+ * encode raw HTML delimiters before any value is interpolated into the saved
+ * Markdown artifact. Generated Markdown syntax is added only after this pass.
+ */
+function sanitizeMarkdownReportInput<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizeMarkdownText(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeMarkdownReportInput(entry)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeMarkdownReportInput(entry)])
+    ) as T;
+  }
+  return value;
+}
+
+function sanitizeMarkdownText(value: string): string {
+  return value
+    // OSC sequences (including hyperlinks), terminated by BEL/ST or EOF.
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\|$)/gu, "")
+    .replace(/\u009d[\s\S]*?(?:\u0007|\u009c|$)/gu, "")
+    // CSI plus remaining two-character escape sequences.
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\u001b[@-_]/gu, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function markdownToSimpleHtml(markdown: string): string {

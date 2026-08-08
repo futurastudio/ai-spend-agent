@@ -23,8 +23,8 @@ const rows: Array<[string, string, string]> = [
     "Detailed local usage and cost reporting",
   ],
   [
-    "Adds official provider cost reports (OpenAI/Anthropic admin key)",
-    "Anthropic live-verified; OpenAI auth/endpoint exercised, non-empty reconciliation pending",
+    "Adds official provider cost reports (user-referenced OpenAI/Anthropic admin credential)",
+    "Connector validation: live_verified on non-empty Admin API data; OpenAI manual UI/invoice check pending. Financial evidence stays labeled per row",
     "Not a stated focus",
   ],
   [
@@ -65,7 +65,7 @@ export default function Page() {
               okay, that&apos;s the number. Now what?
             </span>{" "}
             It adds API-rate comparison beside plan context, evidence-ranked
-            candidates with approval and matched verification, hook-aware Context Health, and optional
+            candidates with approval and matched future-session comparison, hook-aware Context Health, and optional
             official provider cost reports kept separate from local estimates.
           </p>
         </Reveal>
@@ -105,6 +105,11 @@ export default function Page() {
             for the current feature set. &ldquo;—&rdquo; means not a stated
             focus, not necessarily absent.
           </p>
+          <p className="mt-3 text-sm leading-relaxed text-faint">
+            aibill&apos;s validation labels describe connector coverage, not the
+            financial evidence of every number. Local log values remain
+            estimates even when their reader is live_verified.
+          </p>
         </Reveal>
 
         <Reveal>
@@ -115,7 +120,7 @@ export default function Page() {
             Use ccusage when detailed Claude Code or Codex usage reporting is
             the job. Use aibill when you want the decision layer on top: plan
             economics, evidence-backed actions, and — when you connect an
-            admin billing key — official provider cost reports beside local
+            user-referenced admin billing credential — official provider cost reports beside local
             estimates. Both are free
             and local-first; running both is a sensible comparison.
           </p>

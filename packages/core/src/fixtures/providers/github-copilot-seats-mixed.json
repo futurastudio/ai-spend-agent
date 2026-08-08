@@ -1,0 +1,20 @@
+{
+  "total_seats": 3,
+  "seats": [
+    {
+      "assignee": { "login": "alice" },
+      "plan_type": "business",
+      "last_activity_at": "2026-08-01T12:00:00Z"
+    },
+    {
+      "assignee": { "login": "bob" },
+      "plan_type": "enterprise",
+      "last_activity_at": "2026-08-01T13:00:00Z"
+    },
+    {
+      "assignee": { "login": "casey" },
+      "plan_type": "future-tier",
+      "last_activity_at": null
+    }
+  ]
+}

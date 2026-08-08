@@ -5,12 +5,14 @@ import {
   confirmMapping,
   createLocalFolderSourceRegistry,
   createProviderConnectorStub,
+  downgradeUntrustedSourceRegistryClaims,
+  normalizeSourceRegistry,
   providerCatalog,
   providerConnectorCatalog
 } from "./sourceRegistry.js";
 
 describe("provider source normalization", () => {
-  it("models the five ingestion lanes with verification metadata", () => {
+  it("models the five ingestion lanes with separate source-truth axes", () => {
     const registry = createLocalFolderSourceRegistry("/tmp/ai-spend");
     const sourceTypes = new Set(registry.supportedSourceTypes);
 
@@ -33,9 +35,12 @@ describe("provider source normalization", () => {
     expect(registry.approvedSources[0]).toMatchObject({
       type: "local_folder",
       accessMethod: "file",
-      verification: "verified",
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing",
       lane: "local_files_exports"
     });
+    expect(registry.approvedSources[0]).not.toHaveProperty("verification");
   });
 
   it("creates provider connector stubs without storing secret values", () => {
@@ -47,13 +52,16 @@ describe("provider source normalization", () => {
       accessMethod: "api",
       authMode: "oauth",
       authScopes: expect.arrayContaining(["organization:usage:read", "organization:costs:read"]),
-      verification: "missing",
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing",
       readOnly: true
     });
     expect(stub.fieldsVerified).toContain("organization cost report");
     expect(stub.fieldsMissing).toContain("admin API token reference");
     expect(JSON.stringify(stub)).not.toContain("sk-ant");
     expect(JSON.stringify(stub)).not.toContain("password");
+    expect(JSON.stringify(stub)).not.toContain('"verification"');
   });
 
   it("turns local detections without account sources into missing-source prompts", () => {
@@ -68,10 +76,12 @@ describe("provider source normalization", () => {
       expect.objectContaining({ provider: "anthropic", status: "detected_unverified", suggestedConnector: "connect anthropic --type provider_api" }),
       expect.objectContaining({ provider: "github-copilot", status: "detected_unverified", suggestedConnector: "connect github-copilot --type provider_api" })
     ]));
+    expect(prompts[0]?.reason).toContain("current financial evidence");
+    expect(prompts.map((prompt) => prompt.reason).join(" ")).not.toContain("verified provider");
     expect(prompts.some((prompt) => prompt.provider === "openai")).toBe(false);
   });
 
-  it("suppresses missing prompts when a verified provider source exists", () => {
+  it("suppresses missing prompts when an approved source has current financial evidence", () => {
     const registry = addApprovedSource(createLocalFolderSourceRegistry("/tmp/ai-spend"), {
       id: "anthropic-admin-api",
       type: "provider_api",
@@ -79,7 +89,9 @@ describe("provider source normalization", () => {
       provider: "anthropic",
       accessMethod: "api",
       lane: "provider_apis",
-      verification: "verified",
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
       fieldsVerified: ["organization cost report"],
       fieldsEstimated: [],
       fieldsMissing: []
@@ -90,6 +102,110 @@ describe("provider source normalization", () => {
     ], registry);
 
     expect(prompts).toHaveLength(0);
+  });
+
+  it("migrates legacy verification as financial evidence without treating folder approval as financial proof", () => {
+    const canonical = createLocalFolderSourceRegistry("/tmp/ai-spend", new Date("2026-08-08T12:00:00.000Z"));
+    const legacy = JSON.parse(JSON.stringify(canonical)) as Record<string, unknown>;
+    const lanes = legacy.ingestionLanes as Array<Record<string, unknown>>;
+    for (const lane of lanes) {
+      lane.defaultVerification = lane.defaultFinancialEvidence;
+      delete lane.defaultFinancialEvidence;
+    }
+    const local = (legacy.approvedSources as Array<Record<string, unknown>>)[0]!;
+    delete local.boundaryApproval;
+    delete local.validationCoverage;
+    delete local.financialEvidence;
+    local.verification = "verified";
+    (legacy.approvedSources as Array<Record<string, unknown>>).push({
+      ...local,
+      id: "anthropic-provider-api",
+      type: "provider_api",
+      label: "Anthropic Admin API",
+      provider: "anthropic",
+      lane: "provider_apis",
+      accessMethod: "api",
+      verification: "estimated"
+    });
+
+    const migrated = normalizeSourceRegistry(legacy);
+    expect(migrated.approvedSources[0]).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
+    });
+    expect(migrated.approvedSources[1]).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "estimated"
+    });
+    expect(JSON.stringify(migrated)).not.toContain('"verification"');
+    expect(JSON.stringify(migrated)).not.toContain('"defaultVerification"');
+  });
+
+  it("rejects invented truth-axis values instead of accepting ambiguous persisted status", () => {
+    const hostile = JSON.parse(JSON.stringify(createLocalFolderSourceRegistry("/tmp/ai-spend"))) as {
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    hostile.approvedSources[0]!.validationCoverage = "verified";
+    expect(() => normalizeSourceRegistry(hostile)).toThrow(/invalid validation coverage/);
+
+    const hostileFinancial = JSON.parse(JSON.stringify(createLocalFolderSourceRegistry("/tmp/ai-spend"))) as {
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    hostileFinancial.approvedSources[0]!.financialEvidence = "live_verified";
+    expect(() => normalizeSourceRegistry(hostileFinancial)).toThrow(/invalid financial evidence/);
+  });
+
+  it("downgrades repository-controlled provider claims until a machine receipt authenticates them", () => {
+    const registry = addApprovedSource(createLocalFolderSourceRegistry("/tmp/ai-spend"), {
+      id: "openai-provider-api",
+      type: "provider_api",
+      label: "OpenAI Admin API",
+      provider: "openai",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
+      fieldsVerified: ["provider-reported billed cost"]
+    });
+
+    const downgraded = downgradeUntrustedSourceRegistryClaims(registry);
+    expect(downgraded.approvedSources.find((source) => source.id === "openai-provider-api")).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing",
+      fieldsVerified: []
+    });
+  });
+
+  it("does not write a legacy verification property supplied by an untyped caller", () => {
+    const registry = createLocalFolderSourceRegistry("/tmp/ai-spend");
+    const next = addApprovedSource(registry, {
+      id: "legacy-shaped-export",
+      type: "provider_export",
+      label: "Legacy shaped export",
+      provider: "openai",
+      verification: "verified"
+    } as never);
+    const added = next.approvedSources.find((source) => source.id === "legacy-shaped-export");
+    expect(added).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
+    });
+    expect(added).not.toHaveProperty("verification");
+  });
+
+  it("never lets a legacy verification property override canonical financial evidence", () => {
+    const dualAxis = JSON.parse(JSON.stringify(createProviderConnectorStub("openai"))) as Record<string, unknown>;
+    dualAxis.financialEvidence = "missing";
+    dualAxis.verification = "verified";
+    const base = createLocalFolderSourceRegistry("/tmp/ai-spend");
+    const migrated = normalizeSourceRegistry({
+      ...base,
+      approvedSources: [dualAxis]
+    });
+    expect(migrated.approvedSources[0]?.financialEvidence).toBe("missing");
+    expect(migrated.approvedSources[0]).not.toHaveProperty("verification");
   });
 
   it("persists confirmed mappings with evidence and confidence", () => {

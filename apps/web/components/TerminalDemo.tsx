@@ -45,7 +45,10 @@ export function TerminalReceipt() {
         </div>
         <div className="tour-terminal-runway">
           {limits.map((limit) => (
-            <div key={limit.label}>
+            <div
+              className={`tour-terminal-runway-row tour-terminal-runway-${limit.tone}`}
+              key={limit.label}
+            >
               <span>{limit.label}</span>
               <strong>{limit.value}</strong>
               <small>{limit.projection} · {limit.reset}</small>

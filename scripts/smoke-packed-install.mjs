@@ -1,0 +1,99 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+const root = resolve(import.meta.dirname, "..");
+const releasePackages = [
+  { directory: "packages/core", name: "@agent-finops/core" },
+  { directory: "packages/report", name: "@agent-finops/report" },
+  { directory: "packages/mcp", name: "@agent-finops/mcp" },
+  { directory: "packages/cli", name: "ai-spend-agent" },
+  { directory: "packages/aibill", name: "aibill" }
+];
+const scratch = await mkdtemp(join(tmpdir(), "aibill-packed-install-"));
+const tarballDir = join(scratch, "tarballs");
+const installDir = join(scratch, "consumer");
+
+try {
+  await mkdir(tarballDir);
+  await mkdir(installDir);
+  const tarballs = [];
+  let expectedVersion;
+
+  for (const releasePackage of releasePackages) {
+    const packageRoot = resolve(root, releasePackage.directory);
+    const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+    expectedVersion ??= manifest.version;
+    if (manifest.version !== expectedVersion) {
+      throw new Error(`${manifest.name} is ${manifest.version}; expected coordinated ${expectedVersion}`);
+    }
+    const packed = JSON.parse(execFileSync(
+      "npm",
+      ["pack", "--ignore-scripts", "--json", "--silent", "--pack-destination", tarballDir],
+      { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }
+    ));
+    if (packed.length !== 1 || packed[0].name !== releasePackage.name) {
+      throw new Error(`Unexpected pack result for ${releasePackage.name}`);
+    }
+    tarballs.push(join(tarballDir, packed[0].filename));
+  }
+
+  await writeFile(join(installDir, "package.json"), JSON.stringify({
+    name: "aibill-clean-install-smoke",
+    version: "1.0.0",
+    private: true
+  }, null, 2));
+  execFileSync(
+    "npm",
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs],
+    { cwd: installDir, stdio: ["ignore", "pipe", "inherit"] }
+  );
+
+  const installed = {};
+  for (const releasePackage of releasePackages) {
+    const manifestPath = join(
+      installDir,
+      "node_modules",
+      ...releasePackage.name.split("/"),
+      "package.json"
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    if (manifest.version !== expectedVersion) {
+      throw new Error(`${manifest.name} installed at ${manifest.version}; expected ${expectedVersion}`);
+    }
+    installed[manifest.name] = manifest.version;
+  }
+
+  const cliPath = join(installDir, "node_modules", "ai-spend-agent", "dist", "index.js");
+  const aliasPath = join(installDir, "node_modules", "aibill", "run.js");
+  const mcpPath = join(installDir, "node_modules", "@agent-finops", "mcp", "dist", "server.js");
+  const help = execFileSync(process.execPath, [cliPath, "--help"], {
+    cwd: installDir,
+    encoding: "utf8"
+  });
+  const sample = execFileSync(process.execPath, [aliasPath, "--sample", "--no-color"], {
+    cwd: installDir,
+    encoding: "utf8"
+  });
+  if (!help.includes("aibill") || !sample.includes("DATA MODE: demo sample")) {
+    throw new Error("Packed CLI or alias did not produce the expected clean-install output.");
+  }
+  execFileSync(process.execPath, [resolve(root, "scripts/smoke-mcp.mjs"), mcpPath], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "inherit"]
+  });
+
+  console.log(JSON.stringify({
+    status: "pass",
+    install: "five local tarballs into an empty consumer project",
+    expectedVersion,
+    installed,
+    cliHelp: "pass",
+    aliasSample: "pass",
+    mcpProtocol: "pass"
+  }));
+} finally {
+  await rm(scratch, { recursive: true, force: true });
+}

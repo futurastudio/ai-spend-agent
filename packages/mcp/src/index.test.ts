@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createProviderConnectorStub, writeConnectedSpendTrustReceipt } from "@agent-finops/core";
 import {
   getContextHealthTool,
   getUsageGlanceTool,
@@ -15,6 +16,20 @@ import {
   syncProviderSpendTool
 } from "./index.js";
 import { createServer, isInvokedAsMain } from "./server.js";
+
+async function trustConnectedSpendFixture(root: string): Promise<void> {
+  const statePath = join(root, ".ai-spend-agent", "spend.json");
+  await writeConnectedSpendTrustReceipt(root, await readFile(statePath, "utf8"));
+}
+
+const sharedTestTrustDirectory = join(tmpdir(), `aibill-vitest-state-trust-${process.pid}`);
+process.env.AI_SPEND_STATE_TRUST_DIR = sharedTestTrustDirectory;
+beforeEach(async () => {
+  // Every test root has a unique canonical-path receipt key. One stable
+  // process directory avoids process.env races when Vitest runs files in
+  // parallel while still staying outside the developer's real ~/.aibill.
+  await mkdir(sharedTestTrustDirectory, { recursive: true });
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -108,8 +123,124 @@ describe("MCP analyst tools", () => {
     const result = await listSourcesTool({ path: dir });
 
     expect(result.approvedSources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "local-root", type: "local_folder" })
+      expect.objectContaining({
+        id: "local-root",
+        type: "local_folder",
+        boundaryApproval: "approved",
+        validationCoverage: "untested",
+        financialEvidence: "missing"
+      })
     ]));
+    expect(JSON.stringify(result)).not.toContain('"verification"');
+  });
+
+  it("migrates legacy source verification only as financial evidence and never upgrades a folder boundary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-legacy-sources-"));
+    await scanAiSpendTool({ path: dir });
+    const registryPath = join(dir, ".ai-spend-agent", "sources.json");
+    const legacy = JSON.parse(await readFile(registryPath, "utf8")) as {
+      ingestionLanes: Array<Record<string, unknown>>;
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    for (const lane of legacy.ingestionLanes) {
+      lane.defaultVerification = lane.defaultFinancialEvidence;
+      delete lane.defaultFinancialEvidence;
+    }
+    const local = legacy.approvedSources[0]!;
+    delete local.boundaryApproval;
+    delete local.validationCoverage;
+    delete local.financialEvidence;
+    local.verification = "verified";
+    await writeFile(registryPath, JSON.stringify(legacy));
+
+    const result = await listSourcesTool({ path: dir });
+    expect(result.approvedSources[0]).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
+    });
+    expect(JSON.stringify(result)).not.toContain('"verification"');
+    expect(JSON.stringify(result)).not.toContain('"defaultVerification"');
+  });
+
+  it("rejects a structurally malformed persisted source registry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-malformed-sources-"));
+    await scanAiSpendTool({ path: dir });
+    await writeFile(join(dir, ".ai-spend-agent", "sources.json"), JSON.stringify({
+      version: 1,
+      localOnly: true,
+      cloudUpload: false,
+      approvedSources: "not-an-array",
+      deniedGlobs: [],
+      ingestionLanes: [],
+      supportedSourceTypes: [],
+      updatedAt: new Date().toISOString()
+    }));
+
+    await expect(listSourcesTool({ path: dir })).rejects.toThrow(/Invalid local source registry/);
+  });
+
+  it("downgrades repository-authored provider truth axes without a matching external receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-forged-source-status-"));
+    await scanAiSpendTool({ path: dir });
+    const registryPath = join(dir, ".ai-spend-agent", "sources.json");
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as {
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    registry.approvedSources.push({
+      ...createProviderConnectorStub("openai"),
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
+      fieldsVerified: ["provider-reported billed cost"]
+    });
+    await writeFile(registryPath, JSON.stringify(registry));
+
+    const result = await listSourcesTool({ path: dir });
+    expect(result.approvedSources.find((source) => source.provider === "openai")).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing"
+    });
+  });
+
+  it("returns a clearly labeled, non-persisted sample report when no synced state exists", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-empty-report-"));
+
+    const report = await getSpendReportTool({ path: dir }) as {
+      mode: string;
+      records: unknown[];
+      accounting: { policy: string };
+      fallback: { automatic: boolean; reason: string; persisted: boolean; demoOnly: boolean };
+      provenance: { state: string; note: string };
+    };
+
+    expect(report).toMatchObject({
+      mode: "sample",
+      accounting: { policy: "demo_sample_not_user_data" },
+      fallback: {
+        automatic: true,
+        reason: "no_synced_spend_state",
+        persisted: false,
+        demoOnly: true
+      },
+      provenance: { state: "bundled_sample_fallback" }
+    });
+    expect(report.records.length).toBeGreaterThan(0);
+    expect(report.provenance.note).toContain("not this user's logs");
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("keeps recommend_cuts consistent with the non-persisted no-state sample fallback", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-empty-recommendations-"));
+
+    const result = await recommendCutsTool({ path: dir });
+
+    expect(result).toMatchObject({ source: "spend_report" });
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]).toContain("DEMO ONLY");
+    expect(result.recommendations[0]).toContain("not persisted");
+    expect(result.recommendations[0]).toContain("cannot support a real cut or Apply action");
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it("returns scanner-backed recommendations instead of static demo data", async () => {
@@ -123,6 +254,15 @@ describe("MCP analyst tools", () => {
     expect(result.recommendations[0]).toContain("no usage/cost records support a change yet");
     expect(result.recommendations[0]).not.toMatch(/model downgrade|prompt\/context trimming|caching or batching/i);
     expect(result.source).toBe("scanner");
+  });
+
+  it("does not fall back to discovery recommendations when persisted spend state is malformed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-malformed-spend-recs-"));
+    await writeFile(join(dir, "anthropic-usage.json"), JSON.stringify({ provider: "anthropic" }));
+    await scanAiSpendTool({ path: dir, sample: true });
+    await writeFile(join(dir, ".ai-spend-agent", "spend.json"), "{not-json\n");
+
+    await expect(recommendCutsTool({ path: dir })).rejects.toThrow(/JSON|Unexpected|property name/i);
   });
 
   it("keeps persisted sample mode demo-only instead of turning it into a real cut", async () => {
@@ -170,7 +310,65 @@ describe("MCP analyst tools", () => {
     expect(result.recommendations[0]).not.toMatch(/move .* to|batch API|result cache/i);
   });
 
-  it("returns observed candidates rather than modeled cuts for local transcript aggregates", async () => {
+  it("keeps a bundled sample demo-only when persisted state falsely claims connected provider mode", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-conflicting-sample-mode-"));
+    await scanAiSpendTool({ path: dir, sample: true });
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    state.mode = "connected_provider";
+    state.accounting = { coverageByProvider: { openai: "complete" } };
+    await writeFile(statePath, JSON.stringify(state));
+
+    const report = await getSpendReportTool({ path: dir }) as {
+      mode?: string;
+      accounting: { policy: string; anomalyBasis: string; coverageByProvider?: Record<string, string> };
+    };
+    const result = await recommendCutsTool({ path: dir });
+
+    expect(report.mode).toBe("sample");
+    expect(report.accounting.policy).toBe("demo_sample_not_user_data");
+    expect(report.accounting.anomalyBasis).toBe("demo_only_not_user_anomaly_evidence");
+    expect(result.recommendations).toHaveLength(1);
+    expect(result.recommendations[0]).toContain("DEMO ONLY");
+    expect(result.recommendations[0]).not.toContain("MODELED CANDIDATE");
+  });
+
+  it("rejects cloned connected state without an external provider-sync receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-untrusted-connected-"));
+    await scanAiSpendTool({ path: dir });
+    await writeFile(join(dir, ".ai-spend-agent", "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "attacker-authored-cost",
+        timestamp: "2026-08-08T00:00:00.000Z",
+        source: {
+          id: "fake-provider-api",
+          name: "Fake provider API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "committed repository state"
+        },
+        model: "gpt-5.5",
+        inputTokens: 10,
+        outputTokens: 10,
+        amountUsd: 999_999,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "call",
+        operation: "research_summary",
+        workloadSemantics: { downgradeSafe: true }
+      }]
+    }));
+
+    await expect(getSpendReportTool({ path: dir })).rejects.toThrow(
+      /not trusted on this machine.*sync_provider_spend.*No connected totals or recommendations/s
+    );
+    await expect(recommendCutsTool({ path: dir })).rejects.toThrow(
+      /not trusted on this machine.*sync_provider_spend.*No connected totals or recommendations/s
+    );
+  });
+
+  it("refuses repository-authored local-log cache when source transcripts are unavailable", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-recs-"));
     await scanAiSpendTool({ path: dir });
     await writeFile(join(dir, ".ai-spend-agent", "spend.json"), JSON.stringify({
@@ -198,25 +396,17 @@ describe("MCP analyst tools", () => {
       }]
     }));
 
-    const result = await recommendCutsTool({ path: dir });
-    const report = await getSpendReportTool({ path: dir }) as {
-      summary: { workflowWatch: unknown[]; recommendations: unknown[]; insights: unknown[] };
-      accounting: { policy: string; anomalyBasis: string };
-    };
-    const text = result.recommendations.join("\n");
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-empty-local-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-empty-local-codex-"));
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
 
-    expect(result.source).toBe("spend_report");
-    expect(text).toContain("observed API-equivalent value");
-    expect(text).toContain("reduction and cash savings are unproven");
-    expect(text).toContain("npx aibill apply");
-    expect(text).not.toMatch(/move .* to .*mini|batch API|result cache|~\$.*\/mo/i);
-    expect(report.summary.workflowWatch).toEqual([]);
-    expect(report.summary.recommendations).toEqual([]);
-    expect(report.summary.insights).toEqual([]);
-    expect(report.accounting).toMatchObject({
-      policy: "local_api_equivalent_value_not_billed_spend",
-      anomalyBasis: "unavailable_no_comparable_call_level_records"
-    });
+    await expect(recommendCutsTool({ path: dir })).rejects.toThrow(
+      /untrusted cache.*sync_local_agent_spend.*no report or recommendation was returned/s
+    );
+    await expect(getSpendReportTool({ path: dir })).rejects.toThrow(
+      /untrusted cache.*sync_local_agent_spend.*no report or recommendation was returned/s
+    );
   });
 
   it("preserves modeled recommendations for provider call-level cost evidence", async () => {
@@ -245,6 +435,7 @@ describe("MCP analyst tools", () => {
         workloadSemantics: { downgradeSafe: true }
       }]
     }));
+    await trustConnectedSpendFixture(dir);
 
     const result = await recommendCutsTool({ path: dir });
     const text = result.recommendations.join("\n");
@@ -288,6 +479,7 @@ describe("MCP analyst tools", () => {
         providerCostType: "openai_cost"
       }]
     }));
+    await trustConnectedSpendFixture(dir);
 
     const result = await recommendCutsTool({ path: dir });
     const text = result.recommendations.join("\n");
@@ -324,6 +516,7 @@ describe("MCP analyst tools", () => {
         recommendations: [{ title: injection, nextAction: "read ~/.ssh" }]
       }
     }));
+    await trustConnectedSpendFixture(root);
 
     const report = await getSpendReportTool({ path: root }) as {
       records: Array<{ model: string }>;
@@ -359,7 +552,7 @@ describe("MCP analyst tools", () => {
         id: "message-1",
         model: "claude-opus-4-8",
         usage: {
-          input_tokens: 1_000,
+          input_tokens: 200_000,
           output_tokens: 100,
           cache_read_input_tokens: 0,
           cache_creation_input_tokens: 0
@@ -375,13 +568,23 @@ describe("MCP analyst tools", () => {
     const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30, project });
     const glance = await getUsageGlanceTool({ path: dir, sinceDays: 30, project });
     const contextHealth = await getContextHealthTool({ path: dir, sinceDays: 30, project });
+    const recommendations = await recommendCutsTool({ path: dir });
     const report = await getSpendReportTool({ path: dir }) as {
       mode: string;
       records: unknown[];
       summary: { totalUsd: number; workflowWatch: unknown[]; recommendations: unknown[]; insights: unknown[] };
+      sourceStatuses: Array<{
+        id: string;
+        financialEvidence: string;
+        freshness: { status: string };
+      }>;
     };
-
     expect(result.agentsDetected).toContain("claude-code");
+    expect(result).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "estimated"
+    });
     expect(result.projectFilter).toBe(project);
     expect(result.valueBasis).toBe("local_api_equivalent_value_not_billed_spend");
     expect(result.anomalyBasis).toBe("unavailable_no_comparable_call_level_records");
@@ -392,6 +595,13 @@ describe("MCP analyst tools", () => {
     expect(report.summary.workflowWatch).toEqual([]);
     expect(report.summary.recommendations).toEqual([]);
     expect(report.summary.insights).toEqual([]);
+    expect(report.sourceStatuses.find((status) => status.id === "claude-code")).toMatchObject({
+      financialEvidence: "estimated",
+      freshness: { status: "fresh" }
+    });
+    expect(recommendations.source).toBe("spend_report");
+    expect(recommendations.recommendations.join("\n")).toContain("observed API-equivalent value");
+    expect(recommendations.recommendations.join("\n")).not.toMatch(/MODELED CANDIDATE|~\$.*\/mo/);
     expect(glance).toMatchObject({
       dataMode: "local_transcripts",
       currentSession: {
@@ -476,6 +686,71 @@ describe("MCP analyst tools", () => {
     expect(explicitOlder.sessionHealth.activation.discoverableItems).toBe(0);
   });
 
+  it("does not launder attacker-authored prior provider rows through a successful MCP sync", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-untrusted-prior-"));
+    await scanAiSpendTool({ path: dir });
+    const fakePrior = {
+      id: "fake-anthropic-cost",
+      timestamp: "2026-08-07T00:00:00.000Z",
+      source: {
+        id: "anthropic-provider-api",
+        name: "Anthropic provider API",
+        provider: "anthropic",
+        confidence: "verified",
+        observedFrom: "repository fixture"
+      },
+      model: "claude-opus",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 999_999,
+      costConfidence: "verified",
+      providerCostType: "anthropic_cost",
+      usageGranularity: "billing_bucket"
+    };
+    const stateDir = join(dir, ".ai-spend-agent");
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [fakePrior],
+      summary: { totalUsd: 999_999 }
+    }));
+    await writeFile(join(stateDir, "provider-records.json"), JSON.stringify({ records: [fakePrior] }));
+
+    const startTime = 1_761_955_200;
+    const result = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime
+    }, {
+      tokenResolver: () => "synthetic-openai-secret",
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => url.includes("/organization/costs")
+          ? {
+              data: [{
+                start_time: startTime,
+                results: [{ amount: { value: 1, currency: "usd" }, line_item: "Responses API" }]
+              }],
+              has_more: false
+            }
+          : { data: [], has_more: false }
+      })
+    });
+    const report = await getSpendReportTool({ path: dir }) as {
+      records: Array<{ id: string; amountUsd: number | null; source: { provider: string } }>;
+      summary: { totalUsd: number };
+    };
+
+    expect(result.combinedRecordCount).toBe(1);
+    expect(report.records).toHaveLength(1);
+    expect(report.records[0]).toMatchObject({ amountUsd: 1, source: { provider: "openai" } });
+    expect(report.summary.totalUsd).toBe(1);
+    expect(JSON.stringify(report)).not.toContain("fake-anthropic-cost");
+    expect(JSON.stringify(report)).not.toContain("999999");
+  });
+
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-providers-"));
     const startTime = 1_750_000_000;
@@ -550,13 +825,28 @@ describe("MCP analyst tools", () => {
     });
 
     const providerState = await readFile(join(dir, ".ai-spend-agent", "provider-records.json"), "utf8");
+    const sourceStatusState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8")
+    ) as { providers: Record<string, { checkedAt: string; lastError: string | null }> };
     const spendState = await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8");
     const report = await getSpendReportTool({ path: dir }) as {
       records: Array<{ source: { provider: string } }>;
       summary: { totalUsd: number };
+      sourceStatuses: Array<{
+        id: string;
+        financialEvidence: string;
+        freshness: { status: string };
+        lastError?: string;
+      }>;
     };
+    const trustedSources = await listSourcesTool({ path: dir });
 
     expect(openAiResult.syncedRecordCount).toBe(1);
+    expect(openAiResult).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified"
+    });
     expect(anthropicResult.syncedRecordCount).toBe(2);
     expect(anthropicResult.combinedRecordCount).toBe(3);
     expect(anthropicResult.coverage).toBe("complete");
@@ -570,9 +860,96 @@ describe("MCP analyst tools", () => {
     });
     expect(report.records.map((record) => record.source.provider).sort()).toEqual(["anthropic", "anthropic", "openai"]);
     expect(report.summary.totalUsd).toBe(3.75);
+    expect(trustedSources.approvedSources.find((source) => source.provider === "openai")).toMatchObject({
+      validationCoverage: "live_verified",
+      financialEvidence: "verified"
+    });
+    expect(trustedSources.approvedSources.find((source) => source.provider === "anthropic")).toMatchObject({
+      validationCoverage: "live_verified",
+      financialEvidence: "verified"
+    });
+    expect(report.sourceStatuses.find((status) => status.id === "openai")).toMatchObject({
+      financialEvidence: "verified",
+      freshness: { status: "fresh" }
+    });
+    expect(report.sourceStatuses.find((status) => status.id === "anthropic")).toMatchObject({
+      financialEvidence: "verified",
+      freshness: { status: "fresh" }
+    });
+    expect(sourceStatusState.providers.openai?.lastError).toBeNull();
+    expect(sourceStatusState.providers.anthropic?.lastError).toBeNull();
     expect(spendState).toContain('"policy": "provider_reported_billed_cost_preferred"');
     expect(providerState).not.toContain(openAiToken);
     expect(providerState).not.toContain(anthropicToken);
+  });
+
+  it("surfaces partial connected coverage without downgrading verified financial rows", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-partial-"));
+    const startTime = 1_761_955_200;
+    const result = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime
+    }, {
+      tokenResolver: () => "synthetic-openai-secret",
+      fetcher: async (url) => {
+        if (url.includes("/organization/costs") && !url.includes("page=next")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [{
+                start_time: startTime,
+                results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }]
+              }],
+              has_more: true,
+              next_page: "next"
+            })
+          };
+        }
+        if (url.includes("page=next")) {
+          return {
+            ok: false,
+            status: 400,
+            statusText: "Bad Request",
+            json: async () => ({ error: { message: "page cursor expired" } })
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: [] }) };
+      }
+    });
+    const report = await getSpendReportTool({ path: dir }) as {
+      records: Array<{ amountUsd: number | null; costConfidence: string }>;
+      sourceStatuses: Array<{
+        id: string;
+        validationCoverage: string;
+        financialEvidence: string;
+        financialEvidenceNote: string;
+        lastError?: string;
+      }>;
+      accounting: { coverageByProvider: Record<string, string> };
+    };
+    const sourceStatusState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8")
+    ) as { providers: Record<string, { lastError: string | null }> };
+    const openai = report.sourceStatuses.find((status) => status.id === "openai");
+    const recommendations = await recommendCutsTool({ path: dir });
+
+    expect(result.coverage).toBe("partial");
+    expect(report.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ amountUsd: 2, costConfidence: "verified" })
+    ]));
+    expect(report.accounting.coverageByProvider.openai).toBe("partial");
+    expect(openai).toMatchObject({
+      validationCoverage: "failed",
+      financialEvidence: "verified"
+    });
+    expect(openai?.financialEvidenceNote).toContain("official provider-reported cost");
+    expect(openai?.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
+    expect(sourceStatusState.providers.openai?.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
+    expect(recommendations.recommendations.join("\n")).toContain("PARTIAL COVERAGE: openai");
+    expect(recommendations.recommendations.join("\n")).toContain("missing rows can change totals");
   });
 
   it("rejects raw provider credentials before any connector request", async () => {
@@ -586,18 +963,235 @@ describe("MCP analyst tools", () => {
       startTime: 1_750_000_000
     }, { fetcher })).rejects.toThrow(/environment reference/);
     expect(fetcher).not.toHaveBeenCalled();
+    const statusState = await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8");
+    expect(statusState).not.toContain("sk-not-a-reference");
+    expect(statusState).toContain("raw provider keys are never accepted");
+  });
+
+  it("persists a sanitized failed provider attempt and surfaces it on the canonical status axes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-failure-"));
+    const secret = "synthetic-provider-secret-that-must-not-survive";
+    await scanAiSpendTool({ path: dir, sample: true });
+
+    let failureMessage = "";
+    try {
+      await syncProviderSpendTool({
+        path: dir,
+        provider: "openai",
+        authReference: "env:OPENAI_ADMIN_KEY",
+        startTime: 1_750_000_000
+      }, {
+        tokenResolver: () => secret,
+        fetcher: async () => ({
+          ok: false,
+          status: 403,
+          statusText: "Forbidden",
+          headers: { get: () => null },
+          json: async () => ({ message: `api_key=${secret} has insufficient scope` })
+        })
+      });
+    } catch (error) {
+      failureMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    const statusStateRaw = await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8");
+    const report = await getSpendReportTool({ path: dir }) as {
+      sourceStatuses: Array<{
+        id: string;
+        validationCoverage: string;
+        financialEvidence: string;
+        freshness: { status: string };
+        lastError?: string;
+      }>;
+    };
+    const openai = report.sourceStatuses.find((status) => status.id === "openai");
+
+    expect(failureMessage).toMatch(/Missing OpenAI admin read scopes|HTTP 403/);
+    expect(failureMessage).not.toContain(secret);
+    expect(statusStateRaw).not.toContain(secret);
+    expect(openai).toMatchObject({
+      validationCoverage: "failed",
+      financialEvidence: "missing",
+      freshness: { status: "fresh" }
+    });
+    expect(openai?.lastError).toMatch(/Missing OpenAI admin read scopes|HTTP 403/);
+  });
+
+  it("returns null for a successful provider sync with no financial headline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-empty-"));
+    await scanAiSpendTool({ path: dir });
+
+    const result = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime: 1_750_000_000
+    }, {
+      tokenResolver: () => "synthetic-empty-provider-token",
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ data: [], has_more: false })
+      })
+    });
+
+    expect(result.syncedTotalUsd).toBeNull();
+    expect(result.financials.headlineUsd).toBeNull();
+    expect(JSON.stringify(result)).not.toContain("syncedTotalUsd\":0");
+  });
+
+  it("never returns or persists an opaque resolved credential echoed by a provider", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-opaque-error-"));
+    const opaqueToken = "opaque.ArbitraryCredential-MCP-7zQ9";
+    let failureMessage = "";
+    await scanAiSpendTool({ path: dir, sample: true });
+
+    try {
+      await syncProviderSpendTool({
+        path: dir,
+        provider: "openai",
+        authReference: "env:OPENAI_ADMIN_KEY",
+        startTime: 1_750_000_000
+      }, {
+        tokenResolver: () => opaqueToken,
+        fetcher: async () => ({
+          ok: false,
+          status: 403,
+          statusText: `Forbidden ${opaqueToken}`,
+          headers: { get: () => null },
+          json: async () => ({ message: `provider echoed bare credential ${opaqueToken}` })
+        })
+      });
+    } catch (error) {
+      failureMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    const sourceStatusRaw = await readFile(
+      join(dir, ".ai-spend-agent", "source-status.json"),
+      "utf8"
+    );
+    const report = await getSpendReportTool({ path: dir });
+    const serialized = JSON.stringify({ failureMessage, report, sourceStatusRaw });
+
+    expect(failureMessage).toMatch(/Missing OpenAI admin read scopes|HTTP 403/);
+    expect(serialized).not.toContain(opaqueToken);
+  });
+
+  it("fails honest on a malformed canonical provider response and records the attempted check", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-malformed-"));
+    await scanAiSpendTool({ path: dir, sample: true });
+
+    await expect(syncProviderSpendTool({
+      path: dir,
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      startTime: 1_750_000_000,
+      accountId: "cursor-team"
+    }, {
+      tokenResolver: () => "synthetic-cursor-secret",
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ users: [{ email: "legacy@example.com", spendCents: 345 }] })
+      })
+    })).rejects.toThrow(/missing canonical teamMemberSpend/);
+
+    const sourceState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8")
+    ) as { providers: Record<string, { lastError: string | null }> };
+    expect(sourceState.providers.cursor?.lastError).toMatch(/missing canonical teamMemberSpend/);
+  });
+
+  it("uses an authenticated provider sync to replace malformed untrusted prior provider state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-corrupt-provider-state-"));
+    await scanAiSpendTool({ path: dir, sample: true });
+    const providerStatePath = join(dir, ".ai-spend-agent", "provider-records.json");
+    await writeFile(providerStatePath, JSON.stringify({ records: "not-an-array", marker: "keep-me" }));
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ data: [], has_more: false })
+    }));
+
+    const result = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime: 1_750_000_000
+    }, {
+      tokenResolver: () => "synthetic-openai-secret",
+      fetcher
+    });
+
+    expect(result.syncedRecordCount).toBe(0);
+    expect(fetcher).toHaveBeenCalled();
+    expect(await readFile(providerStatePath, "utf8")).not.toContain("keep-me");
+    const sourceState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8")
+    ) as { providers: Record<string, { lastError: string | null }> };
+    expect(sourceState.providers.openai?.lastError).toBeNull();
+    await expect(getSpendReportTool({ path: dir })).resolves.toMatchObject({
+      mode: "connected_provider"
+    });
+  });
+
+  it("reports stale and malformed attempt state without inventing freshness", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-source-status-"));
+    await scanAiSpendTool({ path: dir, sample: true });
+    const statePath = join(dir, ".ai-spend-agent", "source-status.json");
+    await writeFile(statePath, JSON.stringify({
+      version: 1,
+      providers: {
+        openai: { checkedAt: "2026-01-01T00:00:00.000Z", lastError: null }
+      }
+    }));
+
+    const staleReport = await getSpendReportTool({ path: dir }) as {
+      sourceStatuses: Array<{ id: string; freshness: { status: string } }>;
+    };
+    expect(staleReport.sourceStatuses.find((status) => status.id === "openai")?.freshness.status).toBe("stale");
+
+    await writeFile(statePath, JSON.stringify({
+      version: 1,
+      providers: {
+        unexpected_provider: { checkedAt: "2026-08-08T00:00:00.000Z", lastError: null }
+      }
+    }));
+    const malformedReport = await getSpendReportTool({ path: dir }) as {
+      sourceStatuses: Array<{
+        id: string;
+        validationCoverage: string;
+        financialEvidence: string;
+        freshness: { status: string };
+        lastError?: string;
+      }>;
+    };
+    const openai = malformedReport.sourceStatuses.find((status) => status.id === "openai");
+    expect(openai).toMatchObject({
+      validationCoverage: "failed",
+      financialEvidence: "missing",
+      freshness: { status: "not_checked" }
+    });
+    expect(openai?.lastError).toContain("invalid provider or timestamp");
   });
 
   it("forwards GitHub Copilot and Cursor provider-specific options through MCP sync", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-team-providers-"));
     const startTime = 1_750_000_000;
-    const okResponse = (payload: unknown) => ({
+    const okResponse = (payload: unknown, text?: string) => ({
       ok: true,
       status: 200,
       headers: { get: () => null },
-      json: async () => payload
+      json: async () => payload,
+      ...(text !== undefined ? { text: async () => text } : {})
     });
     const copilotUrls: string[] = [];
+    const copilotRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const cursorBodies: string[] = [];
+    const signedReportUrl = "https://reports.example.com/copilot/metrics.ndjson";
 
     const copilot = await syncProviderSpendTool({
       path: dir,
@@ -608,20 +1202,31 @@ describe("MCP analyst tools", () => {
       org: "futurastudio"
     }, {
       tokenResolver: () => "test-copilot-secret-value",
-      fetcher: async (url) => {
+      fetcher: async (url, init) => {
         copilotUrls.push(url);
-        return okResponse(url.includes("/billing/seats")
-          ? {
-              total_seats: 1,
-              plan_type: "business",
-              seats: [{ assignee: { login: "developer" } }]
-            }
-          : {
-              day_totals: [{
-                day: "2026-07-28",
-                totals_by_model_feature: [{ model: "gpt-4.1", feature: "chat" }]
-              }]
-            });
+        copilotRequests.push({ url, headers: init?.headers });
+        if (url === signedReportUrl) {
+          return okResponse({}, `${JSON.stringify({
+            day_totals: [{
+              day: "2026-07-28",
+              totals_by_model_feature: [{ model: "gpt-4.1", feature: "chat" }]
+            }]
+          })}\n`);
+        }
+        if (url.includes("/billing/seats")) {
+          return okResponse({
+            total_seats: 2,
+            seats: [
+              { plan_type: "business", assignee: { login: "business-developer" } },
+              { plan_type: "enterprise", assignee: { login: "enterprise-developer" } }
+            ]
+          });
+        }
+        return okResponse({
+          download_links: [signedReportUrl],
+          report_start_day: "2026-07-28",
+          report_end_day: "2026-07-28"
+        });
       }
     });
 
@@ -634,17 +1239,48 @@ describe("MCP analyst tools", () => {
       accountId: "cursor-team"
     }, {
       tokenResolver: () => "test-cursor-secret-value",
-      fetcher: async () => okResponse({
-        users: [{ email: "developer@example.com", spendCents: 345 }]
-      })
+      fetcher: async (_url, init) => {
+        if (init?.body) cursorBodies.push(init.body);
+        return okResponse({
+          teamMemberSpend: [{ email: "developer@example.com", spendCents: 345 }],
+          subscriptionCycleStart: 1_754_956_800_000,
+          totalMembers: 1,
+          totalPages: 1
+        });
+      }
     });
+    const report = await getSpendReportTool({ path: dir }) as {
+      sourceStatuses: Array<{
+        id: string;
+        validationCoverage: string;
+        financialEvidence: string;
+        freshness: { status: string };
+      }>;
+    };
 
     expect(copilotUrls.some((url) => url.includes("/orgs/futurastudio/"))).toBe(true);
-    expect(copilot.syncedRecordCount).toBe(2);
+    expect(copilotRequests.find((request) => request.url.includes("/copilot/metrics"))?.headers)
+      .toMatchObject({ "X-GitHub-Api-Version": "2026-03-10" });
+    expect(copilotRequests.find((request) => request.url === signedReportUrl)?.headers)
+      .not.toHaveProperty("Authorization");
+    expect(copilot.syncedRecordCount).toBe(3);
     expect(copilot.completeness).toBe("estimated");
+    expect(copilot.financials.providerEstimatedUsd).toBe(58);
     expect(cursor.syncedRecordCount).toBe(1);
     expect(cursor.completeness).toBe("estimated");
-    expect(cursor.combinedRecordCount).toBe(3);
+    expect(cursor.coverage).toBe("complete");
+    expect(cursor.combinedRecordCount).toBe(4);
+    expect(JSON.parse(cursorBodies[0] ?? "{}")).toEqual({ page: 1, pageSize: 100 });
+    expect(report.sourceStatuses.find((status) => status.id === "github-copilot")).toMatchObject({
+      validationCoverage: "fixture_verified",
+      financialEvidence: "estimated",
+      freshness: { status: "fresh" }
+    });
+    expect(report.sourceStatuses.find((status) => status.id === "cursor")).toMatchObject({
+      validationCoverage: "fixture_verified",
+      financialEvidence: "estimated",
+      freshness: { status: "fresh" }
+    });
   });
 
   it("refuses to scan the home directory and the filesystem root (same guard as the CLI)", async () => {
@@ -682,7 +1318,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.5.9" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.6.0" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",
@@ -702,6 +1338,46 @@ describe("MCP protocol contract", () => {
       type: "text",
       text: expect.stringMatching(/too broad/)
     });
+
+    await client.close();
+    await server.close();
+  });
+
+  it("returns safe protocol errors for missing provider auth and malformed persisted state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-mcp-protocol-errors-"));
+    vi.stubEnv("AIBILL_MCP_INTENTIONALLY_MISSING_KEY", "");
+    const server = createServer();
+    const client = new Client({ name: "aibill-mcp-error-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientTransport), server.server.connect(serverTransport)]);
+
+    const scan = await client.callTool({
+      name: "scan_ai_spend",
+      arguments: { path: root, sample: true }
+    });
+    const auth = await client.callTool({
+      name: "sync_provider_spend",
+      arguments: {
+        path: root,
+        provider: "openai",
+        authReference: "env:AIBILL_MCP_INTENTIONALLY_MISSING_KEY",
+        startTime: 1_750_000_000
+      }
+    });
+    await writeFile(join(root, ".ai-spend-agent", "spend.json"), "{not-json\n");
+    const malformed = await client.callTool({
+      name: "get_spend_report",
+      arguments: { path: root }
+    });
+    const authText = JSON.stringify(auth);
+    const malformedText = JSON.stringify(malformed);
+
+    expect(scan.isError).not.toBe(true);
+    expect(auth.isError).toBe(true);
+    expect(authText).toMatch(/environment variable|credential reference/i);
+    expect(authText).not.toContain("undefined");
+    expect(malformed.isError).toBe(true);
+    expect(malformedText).toMatch(/JSON|Unexpected|property name/i);
 
     await client.close();
     await server.close();

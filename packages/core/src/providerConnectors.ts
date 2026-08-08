@@ -9,6 +9,7 @@ type ProviderResponse = {
   statusText?: string;
   headers?: Record<string, string | undefined> | { get: (name: string) => string | null };
   json: () => Promise<unknown>;
+  text?: () => Promise<string>;
 };
 
 export type ProviderQaPagination = {
@@ -68,6 +69,8 @@ type FetchPagesResult = {
   pagination: ProviderQaPagination;
   rateLimits: ProviderQaRateLimit[];
   responseDrift: ProviderQaDriftIssue[];
+  /** True when transport completed but one or more financial rows could not be normalized safely. */
+  coverageIncomplete?: boolean;
 };
 
 export type ProviderId = "openai" | "anthropic" | "github-copilot" | "cursor" | string;
@@ -101,9 +104,9 @@ export type CreateProviderConnectionInput = {
   sourceId?: string;
   authReference: string;
   verifiedRecordCount: number;
-  totalUsd: number;
+  totalUsd: number | null;
   fetchedAt?: Date;
-  /** Record-derived completeness; the source's verification label mirrors it. */
+  /** Record-derived completeness; this controls financial evidence, not connector validation. */
   completeness?: ProviderConnectorResult["completeness"];
 };
 
@@ -158,22 +161,32 @@ type OpenAiUsageBucket = {
 type NormalizerOptions = { sourceId: string; observedFrom: string; accountId?: string };
 
 export function normalizeOpenAiCostResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
-  const data = isObject(response) && Array.isArray(response.data) ? response.data as OpenAiCostBucket[] : [];
+  const data = isObject(response) && Array.isArray(response.data) ? response.data : [];
   const records: UsageRecord[] = [];
 
-  for (const bucket of data) {
-    const startTime = typeof bucket.start_time === "number" ? bucket.start_time : 0;
+  for (const bucketValue of data) {
+    if (!isRecord(bucketValue)) continue;
+    const startTime = validEpochSeconds(bucketValue.start_time);
+    if (typeof startTime !== "number") continue;
     const timestamp = new Date(startTime * 1000).toISOString();
-    for (const result of bucket.results ?? []) {
+    const results = Array.isArray(bucketValue.results) ? bucketValue.results : [];
+    for (const resultValue of results) {
+      if (!isRecord(resultValue)) continue;
+      const amount = isRecord(resultValue.amount) ? resultValue.amount : undefined;
+      const currency = amount?.currency === undefined
+        ? "usd"
+        : typeof amount.currency === "string"
+          ? amount.currency.toLowerCase()
+          : undefined;
       // The live API returns amount.value as a decimal STRING (dollars);
       // accept both string and number.
-      const amountUsd = result.amount?.currency?.toLowerCase() === "usd" || !result.amount?.currency
-        ? parseDollarUsd(result.amount?.value)
+      const amountUsd = currency === "usd"
+        ? parseDollarUsd(amount?.value)
         : undefined;
       if (typeof amountUsd !== "number") continue;
-      const lineItem = result.line_item ?? "OpenAI organization costs";
-      const projectId = result.project_id ?? undefined;
-      const apiKeyId = result.api_key_id ?? undefined;
+      const lineItem = stringValue(resultValue.line_item) ?? "OpenAI organization costs";
+      const projectId = stringValue(resultValue.project_id);
+      const apiKeyId = stringValue(resultValue.api_key_id);
       records.push({
         id: slugifySourceId(["openai-costs", String(startTime), projectId, apiKeyId, lineItem].filter(Boolean).join("-")),
         timestamp,
@@ -193,7 +206,7 @@ export function normalizeOpenAiCostResponse(response: unknown, options: Normaliz
         apiKeyId,
         providerCostType: "openai_cost",
         usageGranularity: "billing_bucket",
-        quantity: typeof result.quantity === "number" ? result.quantity : undefined,
+        quantity: nonNegativeNumberValue(resultValue.quantity),
         operation: lineItem
       });
     }
@@ -214,12 +227,12 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
       const userId = result.user_id ?? undefined;
       const apiKeyId = result.api_key_id ?? undefined;
       const model = result.model ?? "openai-usage";
-      const inputTokens = numberValue(result.input_tokens) ?? 0;
-      const outputTokens = numberValue(result.output_tokens) ?? 0;
-      const cachedTokens = numberValue(result.input_cached_tokens) ?? 0;
-      const audioInputTokens = numberValue(result.input_audio_tokens) ?? 0;
-      const audioOutputTokens = numberValue(result.output_audio_tokens) ?? 0;
-      const requestCount = numberValue(result.num_model_requests);
+      const inputTokens = nonNegativeIntegerValue(result.input_tokens) ?? 0;
+      const outputTokens = nonNegativeIntegerValue(result.output_tokens) ?? 0;
+      const cachedTokens = nonNegativeIntegerValue(result.input_cached_tokens) ?? 0;
+      const audioInputTokens = nonNegativeIntegerValue(result.input_audio_tokens) ?? 0;
+      const audioOutputTokens = nonNegativeIntegerValue(result.output_audio_tokens) ?? 0;
+      const requestCount = nonNegativeIntegerValue(result.num_model_requests);
       if (inputTokens + outputTokens + audioInputTokens + audioOutputTokens === 0 && typeof requestCount !== "number") continue;
       records.push({
         id: slugifySourceId(["openai-usage", String(startTime), projectId, userId, apiKeyId, model].filter(Boolean).join("-")),
@@ -235,7 +248,7 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
         apiKeyId,
         providerCostType: "openai_usage_evidence",
         usageGranularity: "usage_bucket",
-        quantity: numberValue(result.num_model_requests),
+        quantity: requestCount,
         operation: "OpenAI completions usage evidence"
       });
     }
@@ -254,11 +267,11 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
     const userId = stringValue(actor.email_address) ?? stringValue(actor.api_key_name) ?? stringValue(actor.id) ?? "unknown-claude-code-actor";
     const core = isRecord(row.core_metrics) ? row.core_metrics : {};
     const lines = isRecord(core.lines_of_code) ? core.lines_of_code : {};
-    const sessions = numberValue(core.num_sessions) ?? 0;
-    const added = numberValue(lines.added) ?? 0;
-    const removed = numberValue(lines.removed) ?? 0;
-    const commits = numberValue(core.commits_by_claude_code) ?? 0;
-    const prs = numberValue(core.pull_requests_by_claude_code) ?? 0;
+    const sessions = nonNegativeIntegerValue(core.num_sessions) ?? 0;
+    const added = nonNegativeIntegerValue(lines.added) ?? 0;
+    const removed = nonNegativeIntegerValue(lines.removed) ?? 0;
+    const commits = nonNegativeIntegerValue(core.commits_by_claude_code) ?? 0;
+    const prs = nonNegativeIntegerValue(core.pull_requests_by_claude_code) ?? 0;
     const organizationId = stringValue(row.organization_id) ?? options.accountId;
     const modelBreakdown = Array.isArray(row.model_breakdown) ? row.model_breakdown : [];
     for (const item of modelBreakdown) {
@@ -274,8 +287,8 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
         timestamp: new Date(`${date}T00:00:00Z`).toISOString(),
         source: { id: options.sourceId, name: "Anthropic Claude Code Usage Report", provider: "anthropic", confidence: "estimated", observedFrom: options.observedFrom },
         model,
-        inputTokens: (numberValue(tokens.input) ?? 0) + (numberValue(tokens.cache_read) ?? 0) + (numberValue(tokens.cache_creation) ?? 0),
-        outputTokens: numberValue(tokens.output) ?? 0,
+        inputTokens: (nonNegativeIntegerValue(tokens.input) ?? 0) + (nonNegativeIntegerValue(tokens.cache_read) ?? 0) + (nonNegativeIntegerValue(tokens.cache_creation) ?? 0),
+        outputTokens: nonNegativeIntegerValue(tokens.output) ?? 0,
         amountUsd,
         costConfidence: "estimated",
         userId,
@@ -292,14 +305,18 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
 
 export function normalizeGitHubCopilotSeatResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
   const seats = extractArray(response, "seats");
-  const plan = stringValue(isRecord(response) ? response.plan_type : undefined) ?? "business";
-  const seatUsd = plan === "enterprise" ? 39 : 19;
   const timestamp = new Date().toISOString();
   return seats.flatMap((seat) => {
     if (!isRecord(seat)) return [];
     const assignee = isRecord(seat.assignee) ? seat.assignee : {};
     const userId = stringValue(assignee.login) ?? stringValue(assignee.email) ?? stringValue(seat.login) ?? stringValue(seat.id);
     if (!userId) return [];
+    // The current GitHub seat schema reports plan_type on each seat. Never
+    // inherit a top-level value: an enterprise can contain mixed Business and
+    // Enterprise organizations, and an unknown tier is evidence, not $19.
+    const reportedPlan = stringValue(seat.plan_type)?.toLowerCase();
+    const plan = reportedPlan === "business" || reportedPlan === "enterprise" ? reportedPlan : "unknown";
+    const seatUsd = plan === "enterprise" ? 39 : plan === "business" ? 19 : null;
     const lastActivity = stringValue(seat.last_activity_at);
     return [{
       id: slugifySourceId(["github-copilot-seat", options.accountId, userId, plan].filter(Boolean).join("-")),
@@ -309,7 +326,7 @@ export function normalizeGitHubCopilotSeatResponse(response: unknown, options: N
       inputTokens: 0,
       outputTokens: 0,
       amountUsd: seatUsd,
-      costConfidence: "estimated" as const,
+      costConfidence: seatUsd === null ? "missing" as const : "estimated" as const,
       userId,
       projectId: options.accountId,
       providerCostType: "copilot_seat_reconciliation",
@@ -321,21 +338,31 @@ export function normalizeGitHubCopilotSeatResponse(response: unknown, options: N
 }
 
 export function normalizeAnthropicCostResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
-  const data = isObject(response) && Array.isArray(response.data) ? response.data as AnthropicCostBucket[] : [];
+  const data = isObject(response) && Array.isArray(response.data) ? response.data : [];
   const records: UsageRecord[] = [];
 
-  for (const bucket of data) {
-    const timestamp = bucket.starting_at ?? new Date(0).toISOString();
-    for (const result of bucket.results ?? []) {
-      const currency = result.currency?.toLowerCase() ?? "usd";
+  for (const bucketValue of data) {
+    if (!isRecord(bucketValue)) continue;
+    const timestamp = validDateTimeString(bucketValue.starting_at);
+    if (!timestamp) continue;
+    const results = Array.isArray(bucketValue.results) ? bucketValue.results : [];
+    for (const resultValue of results) {
+      if (!isRecord(resultValue)) continue;
+      const currency = resultValue.currency === undefined
+        ? "usd"
+        : typeof resultValue.currency === "string"
+          ? resultValue.currency.toLowerCase()
+          : undefined;
       if (currency !== "usd") continue;
-      const amountUsd = parseMinorUsd(result.amount);
+      const amountUsd = parseMinorUsd(resultValue.amount);
       if (typeof amountUsd !== "number") continue;
-      const description = result.description ?? result.cost_type ?? "Anthropic organization costs";
-      const model = result.model ?? description;
-      const workspaceId = result.workspace_id ?? undefined;
+      const costType = stringValue(resultValue.cost_type);
+      const description = stringValue(resultValue.description) ?? costType ?? "Anthropic organization costs";
+      const model = stringValue(resultValue.model) ?? description;
+      const workspaceId = stringValue(resultValue.workspace_id);
+      const tokenType = stringValue(resultValue.token_type);
       records.push({
-        id: slugifySourceId(["anthropic-costs", timestamp, workspaceId, model, result.token_type ?? result.cost_type].filter(Boolean).join("-")),
+        id: slugifySourceId(["anthropic-costs", timestamp, workspaceId, model, tokenType ?? costType].filter(Boolean).join("-")),
         timestamp: new Date(timestamp).toISOString(),
         source: {
           id: options.sourceId,
@@ -351,7 +378,7 @@ export function normalizeAnthropicCostResponse(response: unknown, options: Norma
         costConfidence: "verified",
         projectId: workspaceId,
         workspaceId,
-        providerCostType: result.cost_type ?? "anthropic_cost",
+        providerCostType: costType ?? "anthropic_cost",
         usageGranularity: "billing_bucket",
         operation: description
       });
@@ -396,8 +423,8 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
         timestamp,
         source: { id: options.sourceId, name: "GitHub Copilot metrics API", provider: "github-copilot", confidence: "verified", observedFrom: options.observedFrom },
         model: "github-copilot-cli",
-        inputTokens: numberValue(tokenUsage?.prompt_tokens_sum) ?? 0,
-        outputTokens: numberValue(tokenUsage?.output_tokens_sum) ?? 0,
+        inputTokens: nonNegativeIntegerValue(tokenUsage?.prompt_tokens_sum) ?? 0,
+        outputTokens: nonNegativeIntegerValue(tokenUsage?.output_tokens_sum) ?? 0,
         amountUsd: null,
         costConfidence: "missing",
         projectId: options.accountId,
@@ -411,12 +438,13 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
 }
 
 export function normalizeCursorSpendResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
-  const users = extractArray(response, "users").length > 0 ? extractArray(response, "users") : extractArray(response, "data");
-  const timestamp = new Date().toISOString();
+  const users = extractArray(response, "teamMemberSpend");
+  const cycleStart = isRecord(response) ? numberValue(response.subscriptionCycleStart) : undefined;
+  const timestamp = typeof cycleStart === "number" ? new Date(cycleStart).toISOString() : new Date().toISOString();
   return users.flatMap((user) => {
     if (!isRecord(user)) return [];
-    const userId = stringValue(user.email) ?? stringValue(user.emailAddress) ?? stringValue(user.userId) ?? stringValue(user.id);
-    const cents = numberValue(user.spendCents) ?? numberValue(user.usageBasedCents) ?? numberValue(user.chargedCents);
+    const userId = stringValue(user.email) ?? stringValue(user.userId);
+    const cents = numberValue(user.spendCents);
     if (!userId || typeof cents !== "number") return [];
     return [{
       id: slugifySourceId(["cursor-spend", options.accountId, userId].filter(Boolean).join("-")),
@@ -443,20 +471,101 @@ export async function fetchProviderUsageRecords(input: ProviderConnectorInput): 
   const token = (input.tokenResolver ?? defaultTokenResolver)(input.authReference);
   const fetcher = input.fetcher ?? defaultFetcher;
   const sourceId = input.sourceId ?? `${input.provider}-provider-api`;
+  const credentialVariants = resolvedCredentialVariants(input.provider, token);
 
-  if (input.provider === "openai") {
-    return fetchOpenAi(input, token, fetcher, sourceId);
+  try {
+    if (input.provider === "openai") {
+      return redactResolvedCredentialValue(
+        await fetchOpenAi(input, token, fetcher, sourceId),
+        credentialVariants
+      );
+    }
+    if (input.provider === "anthropic") {
+      return redactResolvedCredentialValue(
+        await fetchAnthropic(input, token, fetcher, sourceId),
+        credentialVariants
+      );
+    }
+    if (input.provider === "github-copilot") {
+      return redactResolvedCredentialValue(
+        await fetchGitHubCopilot(input, token, fetcher, sourceId),
+        credentialVariants
+      );
+    }
+    if (input.provider === "cursor") {
+      return redactResolvedCredentialValue(
+        await fetchCursor(input, token, fetcher, sourceId),
+        credentialVariants
+      );
+    }
+    throw new Error(`Provider connector not implemented yet: ${input.provider}`);
+  } catch (error) {
+    // This is the shared credential boundary for CLI, MCP, and future hosts.
+    // Provider payloads, status text, fetch implementations, and validation
+    // errors are all untrusted after a credential has been resolved. Exact
+    // replacement covers opaque tokens that do not match a known key shape.
+    throw redactResolvedCredentialError(error, credentialVariants);
   }
-  if (input.provider === "anthropic") {
-    return fetchAnthropic(input, token, fetcher, sourceId);
+}
+
+function resolvedCredentialVariants(provider: ProviderId, token: string): string[] {
+  const values = token ? [token] : [];
+  if (provider === "cursor" && token) {
+    try {
+      const encoded = btoaCompat(`${token}:`);
+      const unpadded = encoded.replace(/=+$/g, "");
+      const base64Url = unpadded.replace(/\+/g, "-").replace(/\//g, "_");
+      values.push(encoded, unpadded, base64Url, `Basic ${encoded}`, `Basic ${unpadded}`, `Basic ${base64Url}`);
+    } catch {
+      // Cursor's request will fail on the same unsupported credential. Keep the
+      // raw value in the redaction set so that failure is still safe to return.
+    }
   }
-  if (input.provider === "github-copilot") {
-    return fetchGitHubCopilot(input, token, fetcher, sourceId);
+  const encodedValues = values.flatMap((value) => {
+    const encoded = encodeURIComponent(value);
+    return encoded === value ? [value] : [value, encoded];
+  });
+  return Array.from(new Set(encodedValues)).sort((left, right) => right.length - left.length);
+}
+
+function exactRedactCredentialValues(value: string, credentialVariants: string[]): string {
+  return credentialVariants.reduce(
+    (safeValue, credential) => safeValue.split(credential).join("[REDACTED]"),
+    value
+  );
+}
+
+function redactResolvedCredentialError(error: unknown, credentialVariants: string[]): Error {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const withoutResolvedCredential = exactRedactCredentialValues(rawMessage, credentialVariants);
+  // Strip controls before a second exact-redaction pass: an adversarial
+  // provider can splice ANSI bytes through an opaque credential so the first
+  // literal replacement misses it and control stripping reconstructs it.
+  const safeMessage = exactRedactCredentialValues(
+    sanitizeProviderMessage(withoutResolvedCredential),
+    credentialVariants
+  ).trim();
+  return new Error(safeMessage || "Provider connector request failed without a safe error message.");
+}
+
+function redactResolvedCredentialValue<T>(value: T, credentialVariants: string[]): T {
+  if (typeof value === "string") {
+    const withoutResolvedCredential = exactRedactCredentialValues(value, credentialVariants);
+    return exactRedactCredentialValues(
+      sanitizeProviderMessage(withoutResolvedCredential),
+      credentialVariants
+    ) as T;
   }
-  if (input.provider === "cursor") {
-    return fetchCursor(input, token, fetcher, sourceId);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactResolvedCredentialValue(item, credentialVariants)) as T;
   }
-  throw new Error(`Provider connector not implemented yet: ${input.provider}`);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, item]) => [key, redactResolvedCredentialValue(item, credentialVariants)])
+    ) as T;
+  }
+  return value;
 }
 
 async function fetchOpenAi(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -465,7 +574,9 @@ async function fetchOpenAi(input: ProviderConnectorInput, token: string, fetcher
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
   };
   const costFetch = await fetchPaginatedJson(fetcher, buildOpenAiCostsUrl(input.startTime, input.endTime), request, "openai", "OpenAI costs API");
+  markMalformedCostRows(costFetch, "openai", "OpenAI costs API");
   const usageFetch = await fetchPaginatedJson(fetcher, buildOpenAiUsageUrl(input.startTime, input.endTime), request, "openai", "OpenAI usage API");
+  markMalformedUsageRows(usageFetch, "openai", "OpenAI usage API");
   const records = [
     ...costFetch.pages.flatMap((page) => normalizeOpenAiCostResponse(page, { sourceId, observedFrom: "OpenAI organization costs API" })),
     ...usageFetch.pages.flatMap((page) => normalizeOpenAiUsageResponse(page, { sourceId, observedFrom: "OpenAI organization usage API" }))
@@ -479,7 +590,11 @@ async function fetchAnthropic(input: ProviderConnectorInput, token: string, fetc
     headers: { "x-api-key": token, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }
   };
   const costFetch = await fetchPaginatedJson(fetcher, buildAnthropicCostUrl(input.startTime, input.endTime), costRequest, "anthropic", "Anthropic Admin cost report");
+  markMalformedCostRows(costFetch, "anthropic", "Anthropic Admin cost report");
   const claudeCodeFetches = await fetchDateRangeJson(fetcher, buildAnthropicClaudeCodeUrl, input.startTime, input.endTime, costRequest, "anthropic", "Anthropic Claude Code usage report");
+  for (const fetchResult of claudeCodeFetches) {
+    markMalformedUsageRows(fetchResult, "anthropic", "Anthropic Claude Code usage report");
+  }
   const records = [
     ...costFetch.pages.flatMap((page) => normalizeAnthropicCostResponse(page, { sourceId, observedFrom: "Anthropic Admin Cost Report" })),
     ...claudeCodeFetches.flatMap((fetchResult) => fetchResult.pages.flatMap((page) => normalizeAnthropicClaudeCodeUsageResponse(page, { sourceId, observedFrom: "Anthropic Claude Code Usage Report", accountId: input.accountId })))
@@ -492,10 +607,15 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
   if (!accountId) throw new Error("GitHub Copilot connector requires --org or --enterprise.");
   const request = {
     method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" }
   };
-  const metricsFetch = await fetchPaginatedJson(fetcher, buildGitHubCopilotMetricsUrl(input), request, "github-copilot", "GitHub Copilot metrics");
+  const metricsManifestResponse = await fetchJsonOrThrow(fetcher, buildGitHubCopilotMetricsUrl(input), request, "github-copilot", "GitHub Copilot metrics manifest");
+  const metricsManifest = metricsManifestResponse.payload;
+  const metricsDownloadLinks = requireStringArray(metricsManifest, "download_links", "GitHub Copilot metrics manifest");
+  const metricsFetch = await fetchGitHubCopilotSignedReports(fetcher, metricsDownloadLinks, metricsManifest, metricsManifestResponse.rateLimit);
+  markMalformedUsageRows(metricsFetch, "github-copilot", "GitHub Copilot metrics reports");
   const seatFetch = input.org ? await fetchPaginatedJson(fetcher, buildGitHubCopilotSeatsUrl(input.org), request, "github-copilot", "GitHub Copilot seats") : undefined;
+  if (seatFetch) assessGitHubCopilotSeatCompleteness(seatFetch);
   const metricsRecords = metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId }));
   const seatRecords = seatFetch ? seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })) : [];
   return providerResult("github-copilot", sourceId, input.authReference, [...metricsRecords, ...seatRecords], qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])]));
@@ -503,30 +623,219 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
 
 async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
   const accountId = input.accountId ?? input.org ?? "cursor-team";
-  const response = await fetchJsonOrThrow(fetcher, "https://api.cursor.com/teams/spend", {
-    method: "POST",
-    headers: { Authorization: `Basic ${btoaCompat(`${token}:`)}`, "Content-Type": "application/json" },
-    body: JSON.stringify({})
-  }, "cursor", "Cursor Admin API spend");
-  const page = response.payload;
-  const records = normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId });
-  // The Cursor connector is matched to the published spec but not live-verified.
-  // If the API answered with content but no spend fields we recognize, say so
-  // loudly rather than silently report $0 (which reads as "you spent nothing").
-  if (records.length === 0 && isRecord(page) && Object.keys(page).length > 0) {
-    throw new Error(
-      "Cursor returned data but no spend fields this connector recognizes " +
-        `(saw: ${Object.keys(page).slice(0, 8).join(", ")}). The Cursor connector is beta — ` +
-        "please open an issue with this field list so we can map it: https://github.com/futurastudio/ai-spend-agent/issues"
-    );
+  const spendFetch = await fetchCursorSpendPages(fetcher, token);
+  const records = spendFetch.pages.flatMap((page) => normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId }));
+  return providerResult("cursor", sourceId, input.authReference, records, qaSummary("cursor", [spendFetch]));
+}
+
+async function fetchCursorSpendPages(fetcher: Fetcher, token: string): Promise<FetchPagesResult> {
+  const label = "Cursor Admin API spend";
+  const pages: unknown[] = [];
+  const rateLimits: ProviderQaRateLimit[] = [];
+  const responseDrift: ProviderQaDriftIssue[] = [];
+  const maxPages = 50;
+  const pageSize = 100;
+  let expectedTotalPages: number | undefined;
+  let expectedTotalMembers: number | undefined;
+  let stoppedBecause: ProviderQaPagination["stoppedBecause"] = "complete";
+  let note: string | undefined;
+
+  for (let pageNumber = 1; pageNumber <= (expectedTotalPages ?? 1) && pageNumber <= maxPages; pageNumber += 1) {
+    let response;
+    try {
+      response = await fetchJsonOrThrow(fetcher, "https://api.cursor.com/teams/spend", {
+        method: "POST",
+        headers: { Authorization: `Basic ${btoaCompat(`${token}:`)}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ page: pageNumber, pageSize })
+      }, "cursor", label);
+    } catch (error) {
+      if (pages.length === 0) throw error;
+      stoppedBecause = "fetch_error";
+      note = `Stopped after ${pages.length} page(s): ${sanitizeProviderMessage(error instanceof Error ? error.message : String(error))}`;
+      break;
+    }
+
+    const page = response.payload;
+    const pageMetadata = validateCursorSpendPage(page, pageNumber);
+    if (expectedTotalPages === undefined) expectedTotalPages = pageMetadata.totalPages;
+    if (expectedTotalMembers === undefined) expectedTotalMembers = pageMetadata.totalMembers;
+    if (pageMetadata.totalPages !== expectedTotalPages || pageMetadata.totalMembers !== expectedTotalMembers) {
+      stoppedBecause = "fetch_error";
+      note = `Cursor pagination metadata changed on page ${pageNumber} (totalPages ${expectedTotalPages}→${pageMetadata.totalPages}, totalMembers ${expectedTotalMembers}→${pageMetadata.totalMembers}); results may be incomplete.`;
+      pages.push(page);
+      responseDrift.push({ label, field: "totalPages/totalMembers", issue: note });
+      break;
+    }
+    pages.push(page);
+    if (response.rateLimit) rateLimits.push(response.rateLimit);
+    responseDrift.push(...detectResponseDrift(page, "cursor", label));
   }
-  const singleFetch: FetchPagesResult = {
-    pages: [page],
-    pagination: { label: "Cursor Admin API spend", pagesFetched: 1, stoppedBecause: "complete", maxPages: 1 },
-    rateLimits: response.rateLimit ? [response.rateLimit] : [],
-    responseDrift: detectResponseDrift(page, "cursor", "Cursor Admin API spend")
+
+  if ((expectedTotalPages ?? 0) > maxPages && stoppedBecause === "complete") {
+    stoppedBecause = "max_pages";
+    note = `Cursor reported ${expectedTotalPages} pages, exceeding the ${maxPages}-page connector limit.`;
+  }
+  const fetchedMembers = pages.reduce<number>((sum, page) => sum + extractArray(page, "teamMemberSpend").length, 0);
+  if (stoppedBecause === "complete" && typeof expectedTotalMembers === "number" && fetchedMembers !== expectedTotalMembers) {
+    stoppedBecause = "missing_cursor";
+    note = `Cursor reported ${expectedTotalMembers} members but returned ${fetchedMembers}; refusing to mark the sync complete.`;
+    responseDrift.push({ label, field: "totalMembers", issue: note });
+  }
+
+  return {
+    pages,
+    pagination: { label, pagesFetched: pages.length, stoppedBecause, maxPages, limitPerPage: pageSize, ...(note ? { note } : {}) },
+    rateLimits,
+    responseDrift
   };
-  return providerResult("cursor", sourceId, input.authReference, records, qaSummary("cursor", [singleFetch]));
+}
+
+function validateCursorSpendPage(page: unknown, pageNumber: number): { totalPages: number; totalMembers: number } {
+  if (!isRecord(page) || !Array.isArray(page.teamMemberSpend)) {
+    const fields = isRecord(page) ? Object.keys(page).slice(0, 8).join(", ") : typeof page;
+    throw new Error(`Cursor spend page ${pageNumber} is missing canonical teamMemberSpend data (saw: ${fields}).`);
+  }
+  const totalPages = numberValue(page.totalPages);
+  if (typeof totalPages !== "number" || !Number.isInteger(totalPages) || totalPages < 1) {
+    throw new Error(`Cursor spend page ${pageNumber} has invalid or missing totalPages; completeness cannot be proven.`);
+  }
+  const totalMembers = numberValue(page.totalMembers);
+  if (typeof totalMembers !== "number" || !Number.isInteger(totalMembers) || totalMembers < 0) {
+    throw new Error(`Cursor spend page ${pageNumber} has invalid or missing totalMembers; completeness cannot be proven.`);
+  }
+  for (const [index, member] of page.teamMemberSpend.entries()) {
+    const spendCents = isRecord(member) ? numberValue(member.spendCents) : undefined;
+    if (!isRecord(member) || (!stringValue(member.email) && !stringValue(member.userId)) || typeof spendCents !== "number" || spendCents < 0) {
+      const fields = isRecord(member) ? Object.keys(member).slice(0, 8).join(", ") : typeof member;
+      throw new Error(`Cursor spend page ${pageNumber} member ${index + 1} is missing email/userId or a non-negative spendCents value (saw: ${fields}).`);
+    }
+    if (member.fastPremiumRequests !== undefined && typeof nonNegativeIntegerValue(member.fastPremiumRequests) !== "number") {
+      throw new Error(`Cursor spend page ${pageNumber} member ${index + 1} has an invalid fastPremiumRequests quantity; expected a non-negative integer.`);
+    }
+  }
+  return { totalPages, totalMembers };
+}
+
+async function fetchGitHubCopilotSignedReports(
+  fetcher: Fetcher,
+  downloadLinks: string[],
+  manifest: unknown,
+  manifestRateLimit?: ProviderQaRateLimit
+): Promise<FetchPagesResult> {
+  const label = "GitHub Copilot metrics reports";
+  const maxReports = 100;
+  if (downloadLinks.length > maxReports) {
+    throw new Error(`GitHub Copilot metrics manifest returned ${downloadLinks.length} report files, exceeding the ${maxReports}-file safety limit.`);
+  }
+
+  const pages: unknown[] = [];
+  const responseDrift = detectResponseDrift(manifest, "github-copilot", "GitHub Copilot metrics manifest");
+  for (const [index, candidate] of downloadLinks.entries()) {
+    const safeUrl = validateSignedDownloadUrl(candidate);
+    if (!safeUrl) {
+      throw new Error(`GitHub Copilot metrics report ${index + 1} had an unsafe signed download URL; only public HTTPS URLs without embedded credentials are accepted.`);
+    }
+    const body = await fetchTextOrThrow(fetcher, safeUrl, {
+      method: "GET",
+      // Signed report URLs carry their own authorization. Never replay the
+      // GitHub bearer token to a storage host.
+      headers: { Accept: "application/x-ndjson, application/json" }
+    }, "github-copilot", `GitHub Copilot metrics report ${index + 1}`);
+    const reports = parseNdjsonReports(body, index + 1);
+    if (reports.length === 0) {
+      throw new Error(`GitHub Copilot metrics report ${index + 1} was empty; refusing to report a complete sync.`);
+    }
+    for (const report of reports) {
+      if (!isRecord(report) || !Array.isArray(report.day_totals)) {
+        const fields = isRecord(report) ? Object.keys(report).slice(0, 8).join(", ") : typeof report;
+        throw new Error(`GitHub Copilot metrics report ${index + 1} did not contain the documented day_totals wrapper (saw: ${fields}).`);
+      }
+      pages.push(report);
+      responseDrift.push(...detectResponseDrift(report, "github-copilot", label));
+    }
+  }
+
+  return {
+    pages,
+    pagination: { label, pagesFetched: downloadLinks.length, stoppedBecause: "complete", maxPages: maxReports },
+    rateLimits: manifestRateLimit ? [manifestRateLimit] : [],
+    responseDrift
+  };
+}
+
+async function fetchTextOrThrow(
+  fetcher: Fetcher,
+  url: string,
+  request: { method?: string; headers?: Record<string, string>; body?: string },
+  provider: string,
+  label: string
+): Promise<string> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxFetchRetries; attempt += 1) {
+    const response = await fetcher(url, request);
+    if (response.ok) {
+      if (!response.text) throw new Error(`${label} did not expose a readable NDJSON body.`);
+      return response.text();
+    }
+    const payload = await response.json().catch(() => undefined);
+    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === maxFetchRetries) break;
+    const retryAfterSeconds = headerNumber(response.headers, "retry-after");
+    const delayMs = typeof retryAfterSeconds === "number"
+      ? Math.min(Math.max(retryAfterSeconds, 0) * 1000, maxRetryDelayMs)
+      : 500 * 2 ** attempt;
+    if (delayMs > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+  }
+  throw lastError ?? new Error(`${label} request failed.`);
+}
+
+function parseNdjsonReports(body: string, reportNumber: number): unknown[] {
+  const reports: unknown[] = [];
+  const lines = body.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  for (const [lineIndex, line] of lines.entries()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error(`GitHub Copilot metrics report ${reportNumber} contains malformed NDJSON at line ${lineIndex + 1}.`);
+    }
+    if (Array.isArray(parsed)) reports.push(...parsed);
+    else reports.push(parsed);
+  }
+  return reports;
+}
+
+function validateSignedDownloadUrl(candidate: string): string | undefined {
+  try {
+    const url = new URL(candidate);
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) return undefined;
+    if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname === "::" || hostname === "::1" || hostname === "0:0:0:0:0:0:0:1") return undefined;
+    if (/^0\./.test(hostname) || /^127\./.test(hostname) || /^10\./.test(hostname) || /^192\.168\./.test(hostname) || /^169\.254\./.test(hostname)) return undefined;
+    if (/^(?:fc|fd|fe[89ab])/i.test(hostname)) return undefined;
+    const private172 = hostname.match(/^172\.(\d+)\./);
+    if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function assessGitHubCopilotSeatCompleteness(fetchResult: FetchPagesResult): void {
+  const expected = fetchResult.pages
+    .map((page) => isRecord(page) ? numberValue(page.total_seats) : undefined)
+    .find((value): value is number => typeof value === "number");
+  const actual = fetchResult.pages.reduce<number>((sum, page) => sum + extractArray(page, "seats").length, 0);
+  if (typeof expected !== "number") {
+    if (fetchResult.pagination.stoppedBecause === "complete") fetchResult.pagination.stoppedBecause = "missing_cursor";
+    fetchResult.pagination.note = "GitHub Copilot seats response omitted total_seats; completeness cannot be proven.";
+    fetchResult.responseDrift.push({ label: "GitHub Copilot seats", field: "total_seats", issue: fetchResult.pagination.note });
+  } else if (fetchResult.pagination.stoppedBecause === "complete" && actual !== expected) {
+    fetchResult.pagination.stoppedBecause = "missing_cursor";
+    fetchResult.pagination.note = `GitHub reported ${expected} seats but returned ${actual}; completeness cannot be proven.`;
+    fetchResult.responseDrift.push({ label: "GitHub Copilot seats", field: "total_seats", issue: fetchResult.pagination.note });
+  }
 }
 
 async function fetchPaginatedJson(
@@ -753,6 +1062,235 @@ function hasHeaderGetter(headers: ProviderResponse["headers"]): headers is { get
   return typeof (headers as { get?: unknown } | undefined)?.get === "function";
 }
 
+function markMalformedCostRows(fetchResult: FetchPagesResult, provider: "openai" | "anthropic", label: string): void {
+  const issues: ProviderQaDriftIssue[] = [];
+  const maxDetailedIssues = 25;
+  let issueCount = 0;
+  const report = (field: string, issue: string) => {
+    issueCount += 1;
+    if (issues.length < maxDetailedIssues) issues.push({ label, field, issue });
+  };
+
+  for (const page of fetchResult.pages) {
+    if (!isRecord(page) || !Array.isArray(page.data)) {
+      report("data", "cost response omitted the canonical data array; no financial completeness claim is safe");
+      continue;
+    }
+    for (const [bucketIndex, bucketValue] of page.data.entries()) {
+      const bucketPath = `data[${bucketIndex}]`;
+      if (!isRecord(bucketValue)) {
+        report(bucketPath, "cost response contained a non-object billing bucket");
+        continue;
+      }
+      if (provider === "openai") {
+        if (typeof validEpochSeconds(bucketValue.start_time) !== "number") {
+          report(`${bucketPath}.start_time`, "cost bucket had an invalid timestamp and its rows were excluded");
+          continue;
+        }
+      } else if (!validDateTimeString(bucketValue.starting_at)) {
+        report(`${bucketPath}.starting_at`, "cost bucket had an invalid timestamp and its rows were excluded");
+        continue;
+      }
+      if (!Array.isArray(bucketValue.results)) {
+        report(`${bucketPath}.results`, "cost bucket omitted the canonical results array");
+        continue;
+      }
+
+      for (const [resultIndex, resultValue] of bucketValue.results.entries()) {
+        const resultPath = `${bucketPath}.results[${resultIndex}]`;
+        if (!isRecord(resultValue)) {
+          report(resultPath, "cost response contained a non-object billed-cost row");
+          continue;
+        }
+        if (provider === "openai") {
+          const amount = isRecord(resultValue.amount) ? resultValue.amount : undefined;
+          if (!amount) {
+            report(`${resultPath}.amount`, "billed-cost row had no canonical amount object and was excluded");
+            continue;
+          }
+          if (amount.currency !== undefined && (typeof amount.currency !== "string" || amount.currency.toLowerCase() !== "usd")) {
+            report(`${resultPath}.amount.currency`, "billed-cost row used an invalid or unsupported currency and was excluded from the USD headline");
+            continue;
+          }
+          if (typeof parseDollarUsd(amount.value) !== "number") {
+            report(`${resultPath}.amount.value`, "billed-cost row had an invalid dollar amount and was excluded");
+          }
+          if (resultValue.quantity !== undefined && typeof nonNegativeNumberValue(resultValue.quantity) !== "number") {
+            report(`${resultPath}.quantity`, "billed-cost row had a negative or invalid quantity; the quantity was excluded");
+          }
+          continue;
+        }
+
+        if (resultValue.currency !== undefined && (typeof resultValue.currency !== "string" || resultValue.currency.toLowerCase() !== "usd")) {
+          report(`${resultPath}.currency`, "billed-cost row used an invalid or unsupported currency and was excluded from the USD headline");
+          continue;
+        }
+        if (typeof parseMinorUsd(resultValue.amount) !== "number") {
+          report(`${resultPath}.amount`, "billed-cost row had an invalid minor-unit amount and was excluded");
+        }
+      }
+    }
+  }
+
+  if (issueCount === 0) return;
+  if (issueCount > maxDetailedIssues) {
+    issues.push({
+      label,
+      field: "data[].results[]",
+      issue: `${issueCount - maxDetailedIssues} additional malformed billed-cost schema issue(s) were omitted from QA details`
+    });
+  }
+  fetchResult.coverageIncomplete = true;
+  fetchResult.responseDrift.push(...issues);
+}
+
+/**
+ * Provider APIs are untrusted even after transport succeeds. A negative or
+ * fractional token count cannot satisfy UsageRecord's finance-grade schema,
+ * and a negative count/quantity cannot support a completeness claim. Keep any
+ * independently valid evidence, but mark the whole source pull partial and
+ * omit the invalid values during normalization.
+ */
+function markMalformedUsageRows(
+  fetchResult: FetchPagesResult,
+  provider: "openai" | "anthropic" | "github-copilot",
+  label: string
+): void {
+  const issues: ProviderQaDriftIssue[] = [];
+  const maxDetailedIssues = 25;
+  let issueCount = 0;
+  const report = (field: string, issue: string) => {
+    issueCount += 1;
+    if (issues.length < maxDetailedIssues) issues.push({ label, field, issue });
+  };
+  const checkInteger = (value: unknown, field: string, kind: "token count" | "quantity") => {
+    if (value !== undefined && typeof nonNegativeIntegerValue(value) !== "number") {
+      report(field, `${kind} must be a non-negative integer; the invalid value was excluded`);
+    }
+  };
+
+  for (const page of fetchResult.pages) {
+    if (provider === "openai") {
+      if (!isRecord(page) || !Array.isArray(page.data)) {
+        report("data", "usage response omitted the canonical data array; completeness cannot be proven");
+        continue;
+      }
+      for (const [bucketIndex, bucketValue] of page.data.entries()) {
+        const bucketPath = `data[${bucketIndex}]`;
+        if (!isRecord(bucketValue) || !Array.isArray(bucketValue.results)) {
+          report(bucketPath, "usage response contained a malformed bucket or omitted its results array");
+          continue;
+        }
+        for (const [resultIndex, resultValue] of bucketValue.results.entries()) {
+          const resultPath = `${bucketPath}.results[${resultIndex}]`;
+          if (!isRecord(resultValue)) {
+            report(resultPath, "usage response contained a non-object usage row");
+            continue;
+          }
+          for (const field of [
+            "input_tokens",
+            "input_uncached_tokens",
+            "input_cache_write_tokens",
+            "input_cached_tokens",
+            "input_text_tokens",
+            "input_image_tokens",
+            "input_audio_tokens",
+            "input_cached_text_tokens",
+            "input_cached_image_tokens",
+            "input_cached_audio_tokens",
+            "output_tokens",
+            "output_text_tokens",
+            "output_image_tokens",
+            "output_audio_tokens"
+          ] as const) {
+            checkInteger(resultValue[field], `${resultPath}.${field}`, "token count");
+          }
+          checkInteger(resultValue.num_model_requests, `${resultPath}.num_model_requests`, "quantity");
+        }
+      }
+      continue;
+    }
+
+    if (provider === "anthropic") {
+      if (!isRecord(page) || !Array.isArray(page.data)) {
+        report("data", "Claude Code usage response omitted the canonical data array; completeness cannot be proven");
+        continue;
+      }
+      for (const [rowIndex, rowValue] of page.data.entries()) {
+        const rowPath = `data[${rowIndex}]`;
+        if (!isRecord(rowValue)) {
+          report(rowPath, "Claude Code usage response contained a non-object row");
+          continue;
+        }
+        const core = isRecord(rowValue.core_metrics) ? rowValue.core_metrics : {};
+        const lines = isRecord(core.lines_of_code) ? core.lines_of_code : {};
+        checkInteger(core.num_sessions, `${rowPath}.core_metrics.num_sessions`, "quantity");
+        checkInteger(lines.added, `${rowPath}.core_metrics.lines_of_code.added`, "quantity");
+        checkInteger(lines.removed, `${rowPath}.core_metrics.lines_of_code.removed`, "quantity");
+        checkInteger(core.commits_by_claude_code, `${rowPath}.core_metrics.commits_by_claude_code`, "quantity");
+        checkInteger(core.pull_requests_by_claude_code, `${rowPath}.core_metrics.pull_requests_by_claude_code`, "quantity");
+        const modelBreakdown = Array.isArray(rowValue.model_breakdown) ? rowValue.model_breakdown : [];
+        for (const [modelIndex, modelValue] of modelBreakdown.entries()) {
+          const modelPath = `${rowPath}.model_breakdown[${modelIndex}]`;
+          if (!isRecord(modelValue)) {
+            report(modelPath, "Claude Code usage response contained a non-object model row");
+            continue;
+          }
+          const tokens = isRecord(modelValue.tokens) ? modelValue.tokens : {};
+          for (const field of ["input", "output", "cache_read", "cache_creation"] as const) {
+            checkInteger(tokens[field], `${modelPath}.tokens.${field}`, "token count");
+          }
+        }
+      }
+      continue;
+    }
+
+    if (!isRecord(page) || !Array.isArray(page.day_totals)) {
+      report("day_totals", "Copilot metrics response omitted the canonical day_totals array; completeness cannot be proven");
+      continue;
+    }
+    for (const [dayIndex, dayValue] of page.day_totals.entries()) {
+      const dayPath = `day_totals[${dayIndex}]`;
+      if (!isRecord(dayValue)) {
+        report(dayPath, "Copilot metrics response contained a non-object day row");
+        continue;
+      }
+      checkInteger(dayValue.daily_active_users, `${dayPath}.daily_active_users`, "quantity");
+      const featureRows = Array.isArray(dayValue.totals_by_model_feature) ? dayValue.totals_by_model_feature : [];
+      for (const [featureIndex, featureValue] of featureRows.entries()) {
+        if (!isRecord(featureValue)) {
+          report(`${dayPath}.totals_by_model_feature[${featureIndex}]`, "Copilot metrics response contained a non-object feature row");
+          continue;
+        }
+        const featurePath = `${dayPath}.totals_by_model_feature[${featureIndex}]`;
+        for (const field of ["engaged_users", "total_requests", "user_initiated_interaction_count"] as const) {
+          checkInteger(featureValue[field], `${featurePath}.${field}`, "quantity");
+        }
+      }
+      const cli = isRecord(dayValue.totals_by_cli) ? dayValue.totals_by_cli : undefined;
+      if (!cli) continue;
+      for (const field of ["request_count", "prompt_count", "session_count", "engaged_users", "total_requests"] as const) {
+        checkInteger(cli[field], `${dayPath}.totals_by_cli.${field}`, "quantity");
+      }
+      const tokenUsage = isRecord(cli.token_usage) ? cli.token_usage : undefined;
+      if (!tokenUsage) continue;
+      checkInteger(tokenUsage.prompt_tokens_sum, `${dayPath}.totals_by_cli.token_usage.prompt_tokens_sum`, "token count");
+      checkInteger(tokenUsage.output_tokens_sum, `${dayPath}.totals_by_cli.token_usage.output_tokens_sum`, "token count");
+    }
+  }
+
+  if (issueCount === 0) return;
+  if (issueCount > maxDetailedIssues) {
+    issues.push({
+      label,
+      field: "usage rows",
+      issue: `${issueCount - maxDetailedIssues} additional malformed usage schema issue(s) were omitted from QA details`
+    });
+  }
+  fetchResult.coverageIncomplete = true;
+  fetchResult.responseDrift.push(...issues);
+}
+
 function detectResponseDrift(payload: unknown, provider: string, label: string): ProviderQaDriftIssue[] {
   const known = knownProviderFields(provider, label);
   const issues: ProviderQaDriftIssue[] = [];
@@ -795,13 +1333,13 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].date", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
   }
   if (provider === "github-copilot" && label.toLowerCase().includes("metrics")) {
-    return new Set([...common, "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "generated_at"]);
+    return new Set([...common, "download_links", "download_links[]", "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.prompt_count", "day_totals[].totals_by_cli.session_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.token_usage.avg_tokens_per_request", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "created_at", "generated_at", "etl_id", "day_partition", "entity_id_partition", "enterprise_id", "organization_id"]);
   }
   if (provider === "github-copilot" && label.toLowerCase().includes("seats")) {
-    return new Set([...common, "total_seats", "plan_type", "seats", "seats[]", "seats[].created_at", "seats[].updated_at", "seats[].pending_cancellation_date", "seats[].last_activity_at", "seats[].last_activity_editor", "seats[].plan_type", "seats[].login", "seats[].id", "seats[].assignee", "seats[].assignee.login", "seats[].assignee.email", "seats[].assignee.id", "seats[].assignee.node_id", "seats[].assignee.avatar_url", "seats[].assignee.html_url", "seats[].assignee.type", "seats[].assignee.site_admin", "seats[].assigning_team", "seats[].organization"]);
+    return new Set([...common, "total_seats", "seats", "seats[]", "seats[].created_at", "seats[].updated_at", "seats[].pending_cancellation_date", "seats[].last_activity_at", "seats[].last_activity_editor", "seats[].last_authenticated_at", "seats[].plan_type", "seats[].login", "seats[].id", "seats[].assignee", "seats[].assignee.login", "seats[].assignee.email", "seats[].assignee.id", "seats[].assignee.node_id", "seats[].assignee.avatar_url", "seats[].assignee.html_url", "seats[].assignee.type", "seats[].assignee.site_admin", "seats[].assigning_team", "seats[].organization"]);
   }
   if (provider === "cursor") {
-    return new Set([...common, "users", "users[]", "users[].email", "users[].emailAddress", "users[].userId", "users[].id", "users[].name", "users[].role", "users[].spendCents", "users[].usageBasedCents", "users[].chargedCents", "users[].fastPremiumRequests", "users[].hardLimitOverrideDollars", "data[].email", "data[].emailAddress", "data[].userId", "data[].id", "data[].name", "data[].role", "data[].spendCents", "data[].usageBasedCents", "data[].chargedCents", "subscriptionCycleStart", "totalMembers", "totalPages"]);
+    return new Set([...common, "teamMemberSpend", "teamMemberSpend[]", "teamMemberSpend[].userId", "teamMemberSpend[].email", "teamMemberSpend[].name", "teamMemberSpend[].role", "teamMemberSpend[].spendCents", "teamMemberSpend[].fastPremiumRequests", "teamMemberSpend[].hardLimitOverrideDollars", "subscriptionCycleStart", "totalMembers", "totalPages"]);
   }
   return new Set([...common]);
 }
@@ -809,7 +1347,9 @@ function knownProviderFields(provider: string, label: string): Set<string> {
 function qaSummary(provider: string, fetches: FetchPagesResult[]): ProviderQaSummary {
   return {
     provider,
-    coverage: fetches.every((fetchResult) => fetchResult.pagination.stoppedBecause === "complete") ? "complete" : "partial",
+    coverage: fetches.every((fetchResult) =>
+      fetchResult.pagination.stoppedBecause === "complete" && fetchResult.coverageIncomplete !== true
+    ) ? "complete" : "partial",
     requestedEndpoints: Array.from(new Set(fetches.map((fetchResult) => fetchResult.pagination.label))),
     pagination: fetches.map((fetchResult) => fetchResult.pagination),
     rateLimits: fetches.flatMap((fetchResult) => fetchResult.rateLimits),
@@ -873,8 +1413,27 @@ function extractProviderMessage(payload: unknown): string {
 }
 
 function sanitizeProviderMessage(message: string): string {
-  // One redaction implementation for the whole product (discovery.ts owns it).
-  return redactSecrets(message).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]").replace(/gh[pousr]_[A-Za-z0-9_]+/g, "[REDACTED]");
+  // Provider error bodies/status text are terminal-facing untrusted input.
+  // Strip controls first so an escape sequence cannot split a secret pattern,
+  // then apply the product-wide redaction rules.
+  return redactSecrets(stripTerminalControlSequences(message))
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]")
+    .replace(/gh[pousr]_[A-Za-z0-9_]+/g, "[REDACTED]")
+    .trim();
+}
+
+function stripTerminalControlSequences(message: string): string {
+  return message
+    // OSC (window title, hyperlinks, clipboard), terminated by BEL/ST or EOF.
+    .replace(/(?:\u001b\]|\u009d)[\s\S]*?(?:\u0007|\u001b\\|\u009c|$)/gu, "")
+    // DCS/SOS/PM/APC string controls, terminated by ST or EOF.
+    .replace(/(?:\u001b(?:P|X|\^|_)|[\u0090\u0098\u009e\u009f])[\s\S]*?(?:\u001b\\|\u009c|$)/gu, "")
+    // CSI plus remaining two-character ESC sequences.
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\u001b[@-_]/gu, "")
+    // Prevent line/status injection while keeping words readable.
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ");
 }
 
 export function summarizeProviderFinancials(records: UsageRecord[]): ProviderFinancialSummary {
@@ -943,7 +1502,7 @@ function providerResult(provider: string, sourceId: string, authReference: strin
     : headlineConfidence;
   return {
     provider,
-    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd: financials.headlineUsd ?? 0, completeness }),
+    source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd: financials.headlineUsd, completeness }),
     records,
     fetchedAt: new Date().toISOString(),
     coverage,
@@ -955,16 +1514,29 @@ function providerResult(provider: string, sourceId: string, authReference: strin
 
 export function createProviderConnection(input: CreateProviderConnectionInput): ApprovedSource {
   const source = createProviderConnectorStub(input.provider, "provider_api", input.fetchedAt);
-  const total = `$${input.totalUsd.toFixed(2)}`;
-  const verification = input.completeness ?? "verified";
+  const total = input.totalUsd === null ? "an unavailable financial headline" : formatProviderUsd(input.totalUsd);
+  const financialEvidence = input.completeness ?? "verified";
   return {
     ...source,
     id: input.sourceId ?? source.id,
-    verification,
+    validationCoverage: validationCoverageForCompletedProviderSync(input.provider),
+    financialEvidence,
     authReference: input.authReference,
     fieldsMissing: [],
-    scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} ${verification} records totaling ${total}.`
+    scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} record(s); financial evidence: ${financialEvidence}; financial headline: ${total}.`
   };
+}
+
+function validationCoverageForCompletedProviderSync(provider: string): ApprovedSource["validationCoverage"] {
+  if (provider === "openai" || provider === "anthropic") return "live_verified";
+  if (provider === "cursor" || provider === "github-copilot" || provider === "copilot") {
+    return "fixture_verified";
+  }
+  return "untested";
+}
+
+function formatProviderUsd(value: number): string {
+  return value > 0 && value < 0.01 ? "less than $0.01" : `$${value.toFixed(2)}`;
 }
 
 export function resolveTokenReference(reference: string, env: Record<string, string | undefined> = process.env): string {
@@ -1045,28 +1617,72 @@ async function defaultFetcher(url: string, init?: { method?: string; headers?: R
 }
 
 function parseMinorUsd(value: unknown): number | undefined {
-  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(numeric) ? numeric / 100 : undefined;
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric / 100 : undefined;
 }
 
 /** Amount already denominated in dollars, as number or decimal string. */
 function parseDollarUsd(value: unknown): number | undefined {
-  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(numeric) ? numeric : undefined;
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim().length > 0
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
 }
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function nonNegativeNumberValue(value: unknown): number | undefined {
+  const numeric = numberValue(value);
+  return typeof numeric === "number" && numeric >= 0 ? numeric : undefined;
+}
+
+function nonNegativeIntegerValue(value: unknown): number | undefined {
+  const numeric = numberValue(value);
+  return typeof numeric === "number" && Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function validEpochSeconds(value: unknown): number | undefined {
+  const seconds = numberValue(value);
+  return typeof seconds === "number" && seconds >= 0 && Number.isFinite(new Date(seconds * 1000).getTime())
+    ? seconds
+    : undefined;
+}
+
+function validDateTimeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 function extractArray(value: unknown, key: string): unknown[] {
   if (Array.isArray(value)) return value;
   if (isRecord(value) && Array.isArray(value[key])) return value[key] as unknown[];
   return [];
+}
+
+function requireStringArray(value: unknown, key: string, label: string): string[] {
+  if (!isRecord(value) || !Array.isArray(value[key]) || value[key].length === 0) {
+    throw new Error(`${label} returned no signed NDJSON ${key}; refusing to report an empty metrics sync.`);
+  }
+  const values = value[key] as unknown[];
+  if (values.some((item) => typeof item !== "string" || item.length === 0)) {
+    throw new Error(`${label} returned a malformed ${key} entry; refusing a partial metrics sync.`);
+  }
+  const strings = values as string[];
+  if (new Set(strings).size !== strings.length) {
+    throw new Error(`${label} returned duplicate ${key}; refusing to double-count a report partition.`);
+  }
+  return strings;
 }
 
 function isObject(value: unknown): value is { data?: unknown } {
