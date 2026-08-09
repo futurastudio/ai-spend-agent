@@ -558,6 +558,41 @@ describe("zero-key instant demo first run", () => {
     expect(demoPackage).not.toContain("operator action list");
   });
 
+  it("never presents a forged verified row from mode-less persisted state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-unlabeled-tamper-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      mode?: string;
+      records: Array<{
+        source: { id: string; confidence: string; observedFrom: string };
+        costConfidence: string;
+      }>;
+    };
+    delete state.mode;
+    Object.assign(state.records[0]!.source, {
+      id: "openai-provider-api",
+      confidence: "verified",
+      observedFrom: "provider_api"
+    });
+    state.records[0]!.costConfidence = "verified";
+    await writeFile(statePath, JSON.stringify(state));
+
+    const quickstart = await runCli(["quickstart", "--path", dir, "--no-color"]);
+    const apply = await runCli(["apply-artifact", "--path", dir]);
+    const prompt = await readFile(
+      join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"),
+      "utf8"
+    );
+
+    expect(quickstart.stdout).toContain("DATA MODE: demo sample");
+    expect(quickstart.stdout).not.toMatch(/\$4\.80[^\n]*provider-reported/);
+    expect(quickstart.stdout).not.toMatch(/Confidence\s*verified/);
+    expect(apply.exitCode).toBe(0);
+    expect(prompt).toContain("Evidence Mode Required");
+    expect(prompt).toContain("NON-EXECUTABLE");
+  });
+
   it("honors --plan as an explicit persona override", async () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-plan-"));
@@ -668,6 +703,35 @@ describe("zero-key instant demo first run", () => {
     expect(result.stdout).toContain("$87.00");
     // Sample state must be labeled demo — never silently served as connected.
     expect(result.stdout).toContain("DATA MODE: demo sample");
+  });
+
+  it("demotes all declared sample evidence even when persisted markers are tampered", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-tampered-sample-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      records: Array<{
+        source: { id: string; confidence: string; observedFrom: string };
+        costConfidence: string;
+      }>;
+    };
+    Object.assign(state.records[0]!.source, {
+      id: "openai-provider-api",
+      confidence: "verified",
+      observedFrom: "provider_api"
+    });
+    state.records[0]!.costConfidence = "verified";
+    await writeFile(statePath, JSON.stringify(state));
+
+    const quickstart = await runCli(["quickstart", "--path", dir, "--no-color"]);
+    const apply = await runCli(["apply", "--path", dir]);
+
+    expect(quickstart.exitCode).toBe(0);
+    expect(quickstart.stdout).toContain("DATA MODE: demo sample");
+    expect(quickstart.stdout).toContain("$56.60 API-equivalent/estimated");
+    expect(quickstart.stdout).not.toContain("$4.80 provider-reported");
+    expect(apply.exitCode).toBe(0);
+    expect(apply.stdout).toContain("NON-EXECUTABLE DEMO");
   });
 
   it("does not let persisted sample state mask real local logs", async () => {
@@ -856,7 +920,8 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  financial evidence: verified\n  freshness: fresh/);
     expect(result.stdout).toContain("1 provider row(s) include official provider-reported cost");
-    expect(result.stdout).toContain("provider-UI/manual invoice reconciliation is still pending");
+    expect(result.stdout).toContain("Product connector QA exercised non-empty Admin cost and usage API paths");
+    expect(result.stdout).toContain("This does not reconcile the current user's account");
   });
 
   it("counts mixed provider financial rows separately instead of promoting every row to verified", async () => {
@@ -1225,10 +1290,21 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("discovery signals:");
     expect(result.stdout).not.toContain(fakeOpenAiKey);
+    expect(result.stdout).not.toContain(openAiKeyName);
 
-    const discovery = await readFile(join(dir, ".ai-spend-agent", "discovery.json"), "utf8");
-    expect(discovery).toContain(`${openAiKeyName}=[REDACTED]`);
-    expect(discovery).not.toContain(fakeOpenAiKey);
+    const discoveryText = await readFile(join(dir, ".ai-spend-agent", "discovery.json"), "utf8");
+    const discovery = JSON.parse(discoveryText) as {
+      secretsDetected: string[];
+      redactedEvidence: string[];
+    };
+    expect(discovery.secretsDetected).toEqual([
+      expect.stringMatching(/^secret-[a-f0-9]{16}$/)
+    ]);
+    expect(discovery.redactedEvidence[0]).toMatch(
+      /^path-[a-f0-9]{16}: secret-[a-f0-9]{16}=\[REDACTED\]$/
+    );
+    expect(discoveryText).not.toContain(openAiKeyName);
+    expect(discoveryText).not.toContain(fakeOpenAiKey);
   });
 
   it("never follows a symlinked CLI state child on reads or writes", async () => {

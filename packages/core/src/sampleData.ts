@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  usageRecordSchema,
+  downgradeSampleUsageEvidence,
+  parseUsageRecord,
   type UsageRecord,
   type WorkloadSemantics
 } from "./schema.js";
@@ -24,7 +25,8 @@ export async function loadSampleUsageData(rootDir = packageRoot): Promise<UsageR
     sampleFiles.map((file) => loadUsageCsv(resolve(rootDir, file)))
   );
 
-  return records.flat().sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+  return downgradeSampleUsageEvidence(records.flat())
+    .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
 }
 
 async function loadUsageCsv(path: string): Promise<UsageRecord[]> {
@@ -46,7 +48,7 @@ export function parseUsageCsv(contents: string): UsageRecord[] {
       headers.map((header, index) => [header, values[index]?.trim() ?? ""])
     ) as CsvRow;
 
-    return usageRecordSchema.parse({
+    return parseUsageRecord({
       id: row.id,
       timestamp: row.timestamp,
       source: {

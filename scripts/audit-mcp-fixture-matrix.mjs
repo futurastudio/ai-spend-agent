@@ -68,9 +68,19 @@ try {
     assert.equal(data.fallback?.demoOnly, true);
     assert.equal(data.provenance?.state, "bundled_sample_fallback");
     assert.ok(data.records?.length > 0);
+    assert.ok(data.records.every((record) => record.costConfidence !== "verified"));
+    assert.equal(data.accounting?.financialsByProvider?.openai?.providerReportedBilledUsd, null);
+    assert.equal(data.accounting?.financialsByProvider?.openai?.headlineBasis, "provider_estimated_cost");
   }, false);
 
   await callOk("scan_ai_spend", { path: stateRoot, sample: true }, (data) => {
+    assert.equal(data.dataMode, "sample");
+    assert.deepEqual(data.sampleBoundary, {
+      demoOnly: true,
+      spendRowsAreUserData: false,
+      localDiscovery: "skipped",
+      persisted: true
+    });
     assert.equal(data.registry?.cloudUpload, false);
   });
   await callExpectedError("sync_local_agent_spend", {
@@ -100,6 +110,11 @@ try {
   });
   await callOk("list_sources", { path: stateRoot }, (data) => {
     assert.ok(Array.isArray(data.approvedSources));
+    const local = data.approvedSources.find((source) => source.id === "local-root");
+    assert.equal(local?.label, "Approved local scan root");
+    assert.match(local?.path ?? "", /workspace$/);
+    assert.equal(local?.fieldsVerified?.[0], "approved local folder boundary");
+    assert.doesNotMatch(JSON.stringify(local), /\[untrusted-metadata:/);
   });
   await callOk("get_spend_report", { path: stateRoot }, (data) => {
     assert.equal(data.mode, "sample");

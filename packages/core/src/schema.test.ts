@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attributionMappingSchema,
   costConfidenceValues,
+  parseUsageRecord,
   recommendationSchema,
   spendSourceSchema,
   usageRecordSchema
@@ -53,6 +54,39 @@ describe("core schemas", () => {
 
     expect(record.amountUsd).toBe(18.6);
     expect(record.usageGranularity).toBe("call");
+  });
+
+  it("demotes legacy bundled-demo verification without changing real verified evidence", () => {
+    const legacySample = parseUsageRecord({
+      id: "legacy-sample-row",
+      timestamp: "2026-05-19T14:40:00.000Z",
+      source: {
+        ...source,
+        id: "openai-sample",
+        confidence: "verified",
+        observedFrom: "sample_csv"
+      },
+      model: "gpt-4.1",
+      inputTokens: 1,
+      outputTokens: 1,
+      amountUsd: 1,
+      costConfidence: "verified"
+    });
+    const realProvider = parseUsageRecord({
+      id: "real-provider-row",
+      timestamp: "2026-05-19T14:40:00.000Z",
+      source,
+      model: "gpt-4.1",
+      inputTokens: 1,
+      outputTokens: 1,
+      amountUsd: 1,
+      costConfidence: "verified"
+    });
+
+    expect(legacySample.source.confidence).toBe("estimated");
+    expect(legacySample.costConfidence).toBe("estimated");
+    expect(realProvider.source.confidence).toBe("verified");
+    expect(realProvider.costConfidence).toBe("verified");
   });
 
   it("rejects invented granularity and unvalidated workload attestations", () => {

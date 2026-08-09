@@ -93,7 +93,7 @@ export const sourceStatusDefinitions: readonly SourceStatusDefinition[] = [
     id: "openai",
     label: "OpenAI Costs and Usage API",
     validationCoverage: "live_verified",
-    validationNote: "Non-empty Admin cost and usage API paths were exercised live; provider-UI/manual invoice reconciliation is still pending.",
+    validationNote: "Product connector QA exercised non-empty Admin cost and usage API paths; the tested Costs total reconciled to invoiced API credits less the provider-UI balance with $0.00 variance. This does not reconcile the current user's account; final invoices, tax, discounts, and later adjustments remain separate.",
     staleAfterHours: 48
   },
   {

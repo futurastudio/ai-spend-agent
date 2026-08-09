@@ -16,12 +16,21 @@ historical untagged exception.
 - Updated Cursor and GitHub Copilot to their current official response shapes,
   pagination/download flows, and per-seat plan evidence. Canonical fixtures
   pass; both remain `fixture_verified` beta until live-account QA. OpenAI and
-  Anthropic have non-empty live-API coverage, while manual OpenAI
-  provider-UI/invoice reconciliation remains pending.
+  Anthropic have non-empty live-API coverage; OpenAI product QA reconciled the
+  tested Costs total to invoiced API credits less the provider-UI balance with
+  `$0.00` variance. Each user's final invoice remains separate.
 - Added a deterministic stdio fixture matrix that exercises all eight MCP
   tools, explicit sample persistence, safe empty/authentication failures, and
   a conspicuous automatic in-memory sample fallback that never creates project
   state or authorizes a real recommendation.
+- Reserved `verified`/provider-reported financial semantics for real evidence:
+  bundled sample rows are estimated or detected/unverified, legacy persisted
+  samples are demoted on read, and the initiating sample scan now returns an
+  explicit demo-only boundary while skipping local discovery. Agent-facing
+  discovery uses deterministic opaque references for repository-controlled
+  descendant paths and secret identifiers. `list_sources` keeps only the
+  approved root and canonical product capabilities readable; persisted prose,
+  forged lane metadata, and credential metadata are not echoed.
 - Added a machine-local connected-state integrity receipt outside the
   repository. It binds the canonical root plus exact `spend.json` and
   `sources.json` hashes, so cloned or edited repository state cannot promote

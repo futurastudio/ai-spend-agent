@@ -10,6 +10,7 @@ import {
   createProviderConnectorStub,
   createScanAuditLog,
   detectLocalPlans,
+  downgradeSampleUsageEvidence,
   fetchProviderUsageRecords,
   financialEvidenceForRecords,
   generateCutList,
@@ -21,6 +22,10 @@ import {
   loadSampleUsageData,
   normalizeSourceRegistry,
   downgradeUntrustedSourceRegistryClaims,
+  defaultDeniedGlobs,
+  ingestionLanes,
+  supportedSourceTypes,
+  providerCatalog,
   parseUsageRecord,
   readSafeStateText,
   invalidateConnectedSpendTrustReceipt,
@@ -42,6 +47,7 @@ import {
   type ProviderQaSummary,
   type ScanAuditEvent,
   type ScanAuditLog,
+  type ApprovedSource,
   type SourceRegistry,
   type SourceValidationCoverage,
   type SourceStatus,
@@ -96,7 +102,7 @@ type SyncProviderOverrides = {
 };
 
 type PersistedSpendState = {
-  mode?: "sample" | "local_logs" | "connected_provider";
+  mode: "sample" | "local_logs" | "connected_provider";
   /** Time this persisted source read completed; separate from row timestamps. */
   checkedAt?: string;
   coverageByProvider?: Record<string, ProviderCoverageStatus>;
@@ -126,6 +132,13 @@ type PersistedSourceAttemptState = {
 };
 
 export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
+  dataMode: "sample" | "discovery_only";
+  sampleBoundary: {
+    demoOnly: true;
+    spendRowsAreUserData: false;
+    localDiscovery: "skipped";
+    persisted: true;
+  } | null;
   registry: SourceRegistry;
   auditLog: ScanAuditLog;
   discovery: LocalDiscoveryResult;
@@ -136,7 +149,9 @@ export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
   const registry = createLocalFolderSourceRegistry(rootPath);
-  const discovery = await scanLocalUsageSignals(rootPath);
+  const discovery = input.sample
+    ? emptyLocalDiscovery(rootPath)
+    : await scanLocalUsageSignals(rootPath);
   const events: ScanAuditEvent[] = [
     {
       timestamp: registry.updatedAt,
@@ -145,33 +160,43 @@ export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
       path: rootPath,
       detail: "Explicit local folder source approved through MCP scan_ai_spend."
     },
-    {
-      timestamp: new Date().toISOString(),
-      action: "scan_started",
-      sourceId: "local-root",
-      path: rootPath,
-      detail: "MCP local scan started with cloud upload disabled."
-    },
-    {
-      timestamp: new Date().toISOString(),
-      action: "source_scanned",
-      sourceId: "local-root",
-      path: rootPath,
-      detail: `${discovery.scannedFiles} files scanned; ${discovery.signals.length} signals found.`
-    },
-    ...discovery.secretsDetected.map((secretName): ScanAuditEvent => ({
-      timestamp: new Date().toISOString(),
-      action: "secret_redacted",
-      sourceId: "local-root",
-      reason: `${secretName} was redacted before persistence/output.`
-    })),
-    {
-      timestamp: new Date().toISOString(),
-      action: "scan_completed",
-      sourceId: "local-root",
-      path: rootPath,
-      detail: "MCP local scan completed without cloud upload."
-    }
+    ...(input.sample
+      ? [{
+          timestamp: new Date().toISOString(),
+          action: "source_skipped" as const,
+          sourceId: "local-root",
+          path: rootPath,
+          reason: "Local discovery was skipped because sample mode uses bundled demo data only."
+        }]
+      : [
+          {
+            timestamp: new Date().toISOString(),
+            action: "scan_started" as const,
+            sourceId: "local-root",
+            path: rootPath,
+            detail: "MCP local scan started with cloud upload disabled."
+          },
+          {
+            timestamp: new Date().toISOString(),
+            action: "source_scanned" as const,
+            sourceId: "local-root",
+            path: rootPath,
+            detail: `${discovery.scannedFiles} files scanned; ${discovery.signals.length} signals found.`
+          },
+          ...discovery.secretsDetected.map((secretName): ScanAuditEvent => ({
+            timestamp: new Date().toISOString(),
+            action: "secret_redacted",
+            sourceId: "local-root",
+            reason: `${secretName} was redacted before persistence/output.`
+          })),
+          {
+            timestamp: new Date().toISOString(),
+            action: "scan_completed" as const,
+            sourceId: "local-root",
+            path: rootPath,
+            detail: "MCP local scan completed without cloud upload."
+          }
+        ])
   ];
   const auditLog = createScanAuditLog(events);
 
@@ -188,11 +213,25 @@ export async function scanAiSpendTool(input: ScanAiSpendInput): Promise<{
     await writeJson(join(stateDir, "mappings.json"), mappings);
   }
 
-  return { registry, auditLog, discovery };
+  return {
+    dataMode: input.sample ? "sample" : "discovery_only",
+    sampleBoundary: input.sample
+      ? {
+          demoOnly: true,
+          spendRowsAreUserData: false,
+          localDiscovery: "skipped",
+          persisted: true
+        }
+      : null,
+    registry,
+    auditLog,
+    discovery
+  };
 }
 
 export async function listSourcesTool(input: RegistryPathInput): Promise<SourceRegistry> {
-  return sanitizeUntrustedMetadata(await readRegistry(input.path));
+  const rootPath = await resolveSafeScanRoot(input.path);
+  return sourceRegistryForMcp(await readRegistry(rootPath), rootPath);
 }
 
 export async function getSpendReportTool(input: RegistryPathInput): Promise<unknown> {
@@ -1053,8 +1092,17 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
   if (value.checkedAt !== undefined && !validIsoString(value.checkedAt)) {
     throw new Error("Invalid local spend state: checkedAt must be an ISO timestamp.");
   }
-  const records = value.records.map((record) => parseUsageRecord(record));
-  const mode = isBundledSampleUsage(records) ? "sample" : storedMode;
+  const parsedRecords = value.records.map((record) => parseUsageRecord(record));
+  const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
+  if (!mode) {
+    throw new Error(
+      "Invalid local spend state: missing a recognized data mode and not the exact bundled sample. " +
+        "Re-run sync_local_agent_spend, sync_provider_spend, or an explicit sample scan; no totals were returned."
+    );
+  }
+  const records = mode === "sample"
+    ? downgradeSampleUsageEvidence(parsedRecords)
+    : parsedRecords;
   const accounting = isRecord(value.accounting) ? value.accounting : undefined;
   const coverageByProvider = mode === "connected_provider"
     ? parseCoverageByProvider(
@@ -1124,6 +1172,9 @@ function recordsForMode(
   records: UsageRecord[],
   mode: PersistedSpendState["mode"]
 ): UsageRecord[] {
+  if (mode === "sample") {
+    return downgradeSampleUsageEvidence(records);
+  }
   if (mode !== "local_logs") {
     return records;
   }
@@ -1224,15 +1275,190 @@ function sanitizePersistedRecord(record: UsageRecord): UsageRecord {
   };
 }
 
-function sanitizeUntrustedMetadata<T>(value: T): T {
-  if (typeof value === "string") return sanitizePersistedLabel(value) as T;
-  if (Array.isArray(value)) return value.map((item) => sanitizeUntrustedMetadata(item)) as T;
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, sanitizeUntrustedMetadata(item)])
-    ) as T;
+const trustedSourceFieldLabels = new Set([
+  "approved local folder boundary",
+  "provider account billing data",
+  "machine-bound provider validation and financial evidence",
+  "input/output/cache token counts",
+  "API-equivalent model cost",
+  "provider-billed amount",
+  "subscription quota state",
+  "approved account/API/export source",
+  ...providerCatalog.flatMap((entry) => [
+    ...entry.verifiedFields,
+    ...entry.missingFields
+  ])
+]);
+
+/**
+ * Source registries are repository-authored data. Return only schema enums,
+ * canonical product copy, the validated scan root, and constrained machine
+ * identifiers. This keeps provenance readable without echoing arbitrary prose
+ * from sources.json into an agent conversation.
+ */
+function sourceRegistryForMcp(registry: SourceRegistry, rootPath: string): SourceRegistry {
+  return {
+    version: 1,
+    localOnly: true,
+    cloudUpload: false,
+    approvedSources: registry.approvedSources.map((source) => sourceForMcp(source, rootPath)),
+    deniedGlobs: [...defaultDeniedGlobs],
+    ingestionLanes: ingestionLanes.map((lane) => ({
+      ...lane,
+      sourceTypes: [...lane.sourceTypes]
+    })),
+    supportedSourceTypes: [...supportedSourceTypes],
+    updatedAt: registry.updatedAt
+  };
+}
+
+function sourceForMcp(source: ApprovedSource, rootPath: string): ApprovedSource {
+  const id = sanitizePersistedLabel(source.id);
+  const type: ApprovedSource["type"] = source.id === "local-root"
+    ? "local_folder"
+    : source.type;
+  const provider = source.id !== "local-root" && source.provider
+    ? sanitizePersistedLabel(source.provider)
+    : undefined;
+  const path = source.id === "local-root"
+    ? rootPath
+    : source.path
+      ? safePersistedPath(source.path)
+      : undefined;
+  const evidenceFieldsAreCurrent = source.validationCoverage !== "untested" &&
+    source.validationCoverage !== "failed" &&
+    source.financialEvidence !== "missing";
+  const result: ApprovedSource = {
+    id,
+    type,
+    label: canonicalSourceLabel(type, source.id, id, provider),
+    ...(path ? { path } : {}),
+    ...(provider ? { provider } : {}),
+    readOnly: true,
+    approvedAt: source.approvedAt,
+    scope: canonicalSourceScope(type),
+    lane: canonicalLaneForSourceType(type),
+    accessMethod: canonicalAccessMethodForSourceType(type),
+    boundaryApproval: "approved",
+    validationCoverage: source.validationCoverage,
+    financialEvidence: source.financialEvidence,
+    fieldsVerified: evidenceFieldsAreCurrent
+      ? source.fieldsVerified.map(sanitizeSourceField)
+      : canonicalBoundaryFields(type),
+    fieldsEstimated: evidenceFieldsAreCurrent && source.financialEvidence === "estimated"
+      ? source.fieldsEstimated.map(sanitizeSourceField)
+      : [],
+    fieldsMissing: source.fieldsMissing.map(sanitizeSourceField)
+  };
+  return result;
+}
+
+function canonicalLaneForSourceType(type: ApprovedSource["type"]): ApprovedSource["lane"] {
+  return ingestionLanes.find((lane) => lane.sourceTypes.includes(type))?.id
+    ?? "local_files_exports";
+}
+
+function canonicalAccessMethodForSourceType(
+  type: ApprovedSource["type"]
+): ApprovedSource["accessMethod"] {
+  switch (type) {
+    case "provider_api": return "api";
+    case "browser_account": return "browser";
+    case "local_tool_detection": return "cli_detection";
+    case "mcp_tool": return "mcp";
+    case "internal_system": return "internal";
+    case "provider_export":
+    case "local_folder":
+      return "file";
+  }
+}
+
+function canonicalBoundaryFields(type: ApprovedSource["type"]): string[] {
+  if (type === "local_folder") return ["approved local folder boundary"];
+  if (type === "provider_api" || type === "provider_export" || type === "browser_account") {
+    return ["approved account/API/export source"];
+  }
+  return [];
+}
+
+function canonicalSourceLabel(
+  type: ApprovedSource["type"],
+  rawId: string,
+  id: string,
+  provider: string | undefined
+): string {
+  if (rawId === "local-root") {
+    return "Approved local scan root";
+  }
+  if (type === "local_folder") return `Approved local folder (${id})`;
+  if (type === "local_tool_detection" && provider === "local-agent-logs") {
+    return "Claude Code and Codex local agent logs";
+  }
+  const providerLabel = providerCatalog.find((entry) => entry.id === provider)?.label;
+  if (providerLabel) return `${providerLabel} (${canonicalSourceTypeLabel(type)})`;
+  return `Approved ${canonicalSourceTypeLabel(type)} (${id})`;
+}
+
+function canonicalSourceTypeLabel(type: ApprovedSource["type"]): string {
+  switch (type) {
+    case "provider_api": return "provider API";
+    case "provider_export": return "provider export";
+    case "browser_account": return "browser account";
+    case "local_tool_detection": return "local tool detection";
+    case "mcp_tool": return "MCP source";
+    case "internal_system": return "internal system";
+    case "local_folder": return "local folder";
+  }
+}
+
+function canonicalSourceScope(type: ApprovedSource["type"]): string {
+  switch (type) {
+    case "provider_api":
+      return "Read-only provider API usage and cost evidence; credential references only; no billing changes or cloud upload.";
+    case "provider_export":
+      return "Read-only provider export inside the approved boundary; no cloud upload.";
+    case "browser_account":
+      return "Read-only provider account evidence; authentication remains with the user; no account changes.";
+    case "local_tool_detection":
+      return "Read-only local agent/tool evidence; API-equivalent value is not provider-billed spend.";
+    case "mcp_tool":
+    case "internal_system":
+      return "Read-only approved organizational evidence; no writes or external actions without approval.";
+    case "local_folder":
+      return "Read-only scan of the exact approved root; state writes stay inside .ai-spend-agent; no cloud upload.";
+  }
+}
+
+function sanitizeSourceField(value: string): string {
+  return trustedSourceFieldLabels.has(value) ? value : opaqueMetadataAlias(value);
+}
+
+function safePersistedPath(value: string): string | undefined {
+  if (!value.startsWith("/") || sanitizeLocalActivityText(value) !== value) return undefined;
+  const segments = value.split("/").filter(Boolean);
+  if (segments.some((segment) => (
+    segment === "." ||
+    segment === ".." ||
+    segment.length > 120 ||
+    isInstructionLikeMetadata(segment) ||
+    !/^[A-Za-z0-9._+@#()~-]+$/.test(segment)
+  ))) {
+    return undefined;
   }
   return value;
+}
+
+function emptyLocalDiscovery(rootPath: string): LocalDiscoveryResult {
+  return {
+    rootPath,
+    scannedFiles: 0,
+    skippedDirectories: [],
+    skippedSymlinks: [],
+    unreadablePaths: [],
+    signals: [],
+    secretsDetected: [],
+    redactedEvidence: []
+  };
 }
 
 function sanitizePersistedLabel(value: string): string {
@@ -1240,7 +1466,7 @@ function sanitizePersistedLabel(value: string): string {
     .replace(/[\u0000-\u001F\u007F]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (/(?:ignore|disregard).{0,40}(?:previous|system|developer|instructions?)|system\s+prompt|read\s+~?\/?\.ssh|upload.{0,40}(?:secret|credential|file)|exfiltrat/i.test(clean)) {
+  if (isInstructionLikeMetadata(clean)) {
     return "[instruction-like metadata removed]";
   }
   // Persisted state lives in a repository and is not trusted merely because
@@ -1260,8 +1486,15 @@ function sanitizePersistedLabel(value: string): string {
 }
 
 function opaqueMetadataAlias(value: string): string {
-  const fingerprint = createHash("sha256").update(value).digest("hex").slice(0, 12);
-  return `[untrusted-metadata:${fingerprint}]`;
+  return `[untrusted-metadata:${metadataFingerprint(value)}]`;
+}
+
+function metadataFingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function isInstructionLikeMetadata(value: string): boolean {
+  return /(?:ignore|disregard).{0,40}(?:previous|system|developer|instructions?)|system\s+prompt|read\s+~?\/?\.ssh|upload.{0,40}(?:secret|credential|file)|exfiltrat/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -27,6 +27,7 @@ import {
   loadDeadContext,
   sampleDeadContext,
   latestObservedWorkingDirectory,
+  downgradeSampleUsageEvidence,
   isBundledSampleUsage,
   loadLocalAgentUsage,
   loadSampleUsageData,
@@ -505,12 +506,15 @@ async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | un
     if (!isPlainObject(spend) || !Array.isArray(spend.records)) {
       throw new Error("persisted spend state must contain a records array");
     }
-    const records = spend.records.map((record) => parseUsageRecord(record));
+    const parsedRecords = spend.records.map((record) => parseUsageRecord(record));
     const storedMode = isPersistedDataMode(spend.mode) ? spend.mode : undefined;
     // The bundled fixture fingerprint is authoritative over a conflicting mode
     // tag. A copied/tampered sample must never become connected billing merely
     // because `mode` was changed in JSON.
-    const mode = isBundledSampleUsage(records) ? "sample" : storedMode;
+    const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
+    const records = mode === "sample" || mode === undefined
+      ? downgradeSampleUsageEvidence(parsedRecords)
+      : parsedRecords;
     const providerCoverage = persistedProviderCoverage(spend.accounting);
     const connectedTrust = mode === "connected_provider"
       ? await verifyConnectedSpendTrustReceipt(rootPath, exactSpendContents)
@@ -2208,11 +2212,14 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
   // releases, and recompute decision output under the current evidence rules.
   // Any other unlabeled state remains unlabeled and therefore non-executable.
   if (spendState?.records && spendState.records.length > 0) {
-    const records = spendState.records.map((record) => parseUsageRecord(record));
+    const parsedRecords = spendState.records.map((record) => parseUsageRecord(record));
     const storedMode = isPersistedDataMode(spendState.mode) ? spendState.mode : undefined;
     // A bundled sample remains sample even if a conflicting mode was written.
     // This guards report and Apply separately from the quickstart read path.
-    const mode = isBundledSampleUsage(records) ? "sample" : storedMode;
+    const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
+    const records = mode === "sample" || mode === undefined
+      ? downgradeSampleUsageEvidence(parsedRecords)
+      : parsedRecords;
     unavailablePersistedLocalLogs = mode === "local_logs";
     const headlineRecords = mode === "connected_provider"
       ? selectProviderFinancialHeadlineRecords(records)

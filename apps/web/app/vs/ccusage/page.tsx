@@ -24,7 +24,7 @@ const rows: Array<[string, string, string]> = [
   ],
   [
     "Adds official provider cost reports (user-referenced OpenAI/Anthropic admin credential)",
-    "Connector validation: live_verified on non-empty Admin API data; OpenAI manual UI/invoice check pending. Financial evidence stays labeled per row",
+    "Connector validation: live_verified on non-empty Admin API data; tested OpenAI Costs reconciled to invoiced credits less the UI balance with $0.00 variance. Final invoices remain separate and financial evidence stays labeled per row",
     "Not a stated focus",
   ],
   [

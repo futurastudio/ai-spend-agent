@@ -132,10 +132,32 @@ export function hasPricedEvidence(record: UsageRecord): boolean {
  * arbitrary unlabeled state is real local or connected evidence.
  */
 export function isBundledSampleUsage(records: UsageRecord[]): boolean {
-  return records.length > 0 && records.every((record) =>
-    record.source.observedFrom === "sample_csv" &&
-    /(?:^|-)sample$/i.test(record.source.id)
-  );
+  return records.length > 0 && records.every(isBundledSampleRecord);
+}
+
+function isBundledSampleRecord(record: UsageRecord): boolean {
+  return record.source.observedFrom === "sample_csv" &&
+    /(?:^|-)sample$/i.test(record.source.id);
+}
+
+/** A declared demo/sample mode can never carry proof-level financial labels. */
+export function downgradeSampleUsageEvidence(records: UsageRecord[]): UsageRecord[] {
+  return records.map(downgradeSampleRecordEvidence);
+}
+
+function downgradeSampleRecordEvidence(record: UsageRecord): UsageRecord {
+  return {
+    ...record,
+    source: {
+      ...record.source,
+      confidence: record.source.confidence === "verified"
+        ? "estimated"
+        : record.source.confidence
+    },
+    costConfidence: record.costConfidence === "verified"
+      ? "estimated"
+      : record.costConfidence
+  };
 }
 
 /**
@@ -277,7 +299,9 @@ export const spendSummarySchema = z.object({
 export type SpendSummary = z.infer<typeof spendSummarySchema>;
 
 export function parseUsageRecord(value: unknown): UsageRecord {
-  return usageRecordSchema.parse(value);
+  const record = usageRecordSchema.parse(value);
+  if (!isBundledSampleRecord(record)) return record;
+  return downgradeSampleRecordEvidence(record);
 }
 
 export function parseSpendSummary(value: unknown): SpendSummary {

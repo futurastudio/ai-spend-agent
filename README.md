@@ -190,7 +190,7 @@ read-only scan, but never turns its contents into verified financial evidence.
 | --- | --- | --- | --- |
 | Claude Code logs (local) | Observed transcript usage, priced at published API rates | `live_verified` | `estimated` or `missing`—never billed spend |
 | Codex logs (local) | Root-session-aware rollout usage with fork accounting and snapshot deduplication | `live_verified` | `estimated` or `missing`—never billed spend |
-| OpenAI Costs/Usage API | Admin-gated billing, per project/key | `live_verified` on a non-empty Admin API window; manual provider-UI/invoice reconciliation pending | `verified`, `estimated`, or `missing` by returned endpoint; final invoice remains separate |
+| OpenAI Costs/Usage API | Admin-gated billing, per project/key | `live_verified` on a non-empty Admin API window; tested Costs total reconciled to invoiced API credits less the provider-UI balance with `$0.00` variance | `verified`, `estimated`, or `missing` by returned endpoint; each user's final invoice remains separate |
 | Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | `live_verified` on non-empty API records | `verified`, `estimated`, or `missing` by returned row |
 | Cursor Admin API | Team spend (Business plan, team admin) | Current official response and pagination fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | Current official metrics-download and per-seat fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
@@ -215,8 +215,10 @@ rates were checked against the official OpenAI model pages on 2026-07-28.
 
 Provider APIs are admin/owner-gated, so connecting is a deliberate step.
 OpenAI and Anthropic Admin API reports can add official provider-reported
-cost. Both connectors have non-empty live-API coverage; OpenAI's manual
-provider-UI/invoice reconciliation remains pending. Cursor and Copilot match
+cost. Both connectors have non-empty live-API coverage; OpenAI product QA
+reconciled the tested Costs total to invoiced API credits less the current
+provider-UI balance with `$0.00` variance. User-specific invoices, tax,
+discounts, and later adjustments remain separate. Cursor and Copilot match
 current official response fixtures but remain beta until live-account QA:
 
 ```bash

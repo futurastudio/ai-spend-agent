@@ -14,9 +14,11 @@ The MCP client and the spend provider are separate concerns:
   `live_verified` against an adversarial local corpus.
 - **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
 - **Validation coverage:** OpenAI and Anthropic have non-empty live-API
-  verification; OpenAI's manual provider-UI/invoice reconciliation remains
-  pending. Copilot and Cursor pass current official-format fixtures and
-  failure paths but remain `fixture_verified` beta until live-account QA. This
+  verification. OpenAI QA reconciled the tested Costs total to invoiced API
+  credits less the current provider-UI balance with `$0.00` variance; each
+  user's final invoice remains separate. Copilot and Cursor pass current
+  official-format fixtures and failure paths but remain `fixture_verified`
+  beta until live-account QA. This
   connector axis is separate from each record's `verified`, `estimated`,
   `detected_unverified`, or `missing` financial-evidence label. Run `npx aibill
   doctor --sources` to inspect both.
@@ -196,7 +198,9 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 ### `scan_ai_spend`
 
 Discovers provider configuration, dependencies, exports, invoices, and secret
-names in an approved folder. Evidence is redacted before persistence/output.
+patterns in an approved folder. Before persistence or agent output, descendant
+paths and detected secret identifiers become deterministic opaque references;
+the exact user-approved root remains readable. File contents are not returned.
 Discovery only establishes a detected local signal. It does not create current
 financial evidence or parse an arbitrary provider export into spend; connector
 validation is reported separately.
@@ -210,6 +214,12 @@ For a deterministic demo only:
 ```json
 { "path": "/Users/you/projects/your-project", "sample": true }
 ```
+
+The initiating response says `dataMode: sample` and includes
+`sampleBoundary: { demoOnly: true, spendRowsAreUserData: false, localDiscovery:
+"skipped", persisted: true }`; the follow-up spend report preserves the same
+boundary and cannot authorize Apply. Sample mode does not scan the approved
+folder for provider files or configuration signals.
 
 ### `sync_local_agent_spend`
 
@@ -363,7 +373,11 @@ metadata. Detailed records are available through `get_spend_report`.
 Lists the approved local source registry and ingestion method. Each source
 separately reports read-boundary approval, connector-validation coverage, and
 financial-evidence status; approving a folder never verifies money. Freshness
-and the last sanitized error are returned by `get_spend_report` after a sync:
+and the last sanitized error are returned by `get_spend_report` after a sync.
+Display names and scopes are product-authored, the approved local root stays
+readable, static lane/deny/type capabilities come from the product contract,
+and arbitrary persisted prose, auth metadata, or forged capability fields are
+never echoed:
 
 ```json
 { "path": "/Users/you/projects/your-project" }

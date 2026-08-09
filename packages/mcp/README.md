@@ -8,10 +8,11 @@ provider billing evidence to the same aibill report.
 The protocol is client-neutral. Local Claude Code and Codex readers are
 `live_verified` against an adversarial local corpus. Provider ingestion currently
 supports OpenAI, Anthropic, GitHub Copilot, and Cursor. OpenAI and Anthropic
-have non-empty live-API verification; OpenAI's manual provider-UI/invoice
-reconciliation remains pending. Copilot and Cursor pass current official-format
-fixtures but remain `fixture_verified` beta until live-account QA. Connector
-validation coverage is separate from each number's financial-evidence label;
+have non-empty live-API verification. OpenAI QA reconciled the tested Costs
+total to invoiced API credits less the current provider-UI balance with `$0.00`
+variance; each user's final invoice remains separate. Copilot and Cursor pass
+current official-format fixtures but remain `fixture_verified` beta until
+live-account QA. Connector validation coverage is separate from each number's financial-evidence label;
 `npx aibill doctor --sources` shows both.
 `list_sources` also exposes read-boundary approval separately. An approved
 folder boundary never means its financial contents were verified.
@@ -43,12 +44,12 @@ rejected. aibill never sits in the inference path and never stores, prints, or p
 
 | Tool | Purpose |
 | --- | --- |
-| `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
+| `scan_ai_spend` | Discover provider files/configuration using opaque descendant-path references; `sample: true` skips local discovery and is explicitly demo-only. |
 | `sync_local_agent_spend` | Build an estimated API-equivalent usage-value report from local Claude Code/Codex metadata. Totals are not billed spend; day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. |
 | `sync_provider_spend` | Pull read-only provider billing evidence through an `env:NAME` reference, with billed cost, estimates, and coverage kept separate. |
 | `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. An explicit `path` wins; otherwise project inventory follows the latest transcript cwd, matching CLI. |
 | `get_context_health` | Distinguish discoverable, configured, explicitly invoked, hook-injected, and invocation-unobservable context without assuming MCP schemas loaded or running hook commands. |
-| `list_sources` | List the locally approved source registry and ingestion methods. |
+| `list_sources` | List canonical product-authored source names/scopes, the approved local root, ingestion methods, and separate boundary/validation/financial axes without trusting persisted capability or credential metadata. |
 | `get_spend_report` | Return the active records, data mode, analyzed summary, and separate connector-validation, financial-evidence, freshness, and last-error source statuses. With no synced state, it returns a clearly labeled, non-persisted in-memory sample; malformed or untrusted real state still fails closed. |
 | `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. Use `npx aibill apply` for approval, rollback, and a matched future-session comparison. |
 
