@@ -5,6 +5,58 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.6.0 — 2026-08-08
+
+- Added the canonical two-axis source-status contract and `aibill doctor
+  --sources`: connector validation coverage remains separate from each
+  number's financial evidence, with local freshness and sanitized last errors.
+- Hardened Claude Code and Codex reader correctness against adversarial local
+  corpus replays. The Codex replay produced 25 aggregate rows—14 supported
+  estimates and 11 honestly missing—with zero false estimated-$0 rows.
+- Updated Cursor and GitHub Copilot to their current official response shapes,
+  pagination/download flows, and per-seat plan evidence. Canonical fixtures
+  pass; both remain `fixture_verified` beta until live-account QA. OpenAI and
+  Anthropic have non-empty live-API coverage; OpenAI product QA reconciled the
+  tested Costs total to invoiced API credits less the provider-UI balance with
+  `$0.00` variance. Each user's final invoice remains separate.
+- Added a deterministic stdio fixture matrix that exercises all eight MCP
+  tools, explicit sample persistence, safe empty/authentication failures, and
+  a conspicuous automatic in-memory sample fallback that never creates project
+  state or authorizes a real recommendation.
+- Reserved `verified`/provider-reported financial semantics for real evidence:
+  bundled sample rows are estimated or detected/unverified, legacy persisted
+  samples are demoted on read, and the initiating sample scan now returns an
+  explicit demo-only boundary while skipping local discovery. Agent-facing
+  discovery uses deterministic opaque references for repository-controlled
+  descendant paths and secret identifiers. `list_sources` keeps only the
+  approved root and canonical product capabilities readable; persisted prose,
+  forged lane metadata, and credential metadata are not echoed.
+- Added a machine-local connected-state integrity receipt outside the
+  repository. It binds the canonical root plus exact `spend.json` and
+  `sources.json` hashes, so cloned or edited repository state cannot promote
+  connected totals, Apply actions, or source-status truth axes.
+- Hardened provider ingestion against malformed and schema-invalid rows,
+  transformed credential variants, terminal control sequences, and partial
+  pagination. Returned rows retain their own financial labels while missing
+  coverage remains explicit in reports and recommendation evidence.
+- Reordered the terminal receipt around mode/trust, source evidence, plan
+  context, bounded recommendations, context evidence, Apply/Verify, and the
+  shareable AI Receipt CTA. Modeled opportunity remains amber and is never
+  presented as verified savings.
+- Corrected missing connected cost so it stays unavailable instead of becoming
+  `$0.00`, preserved sub-cent values as `<$0.01` throughout the evidence ledger,
+  and neutralized raw HTML/control injection in shareable report artifacts.
+- Added a restrained Teams & Agencies design-partner path for planned
+  monitoring, alerts, shared workspaces, and white-label reports, with tested
+  `source_ref=teams` attribution and no public pricing.
+- Expanded the public-boundary gate for private monetization, build-spec,
+  research, and fundraising material, concrete macOS/Linux/Windows developer
+  paths, and unreviewed symbolic links. Added packed-package content checks,
+  isolated five-tarball install smoke coverage, and production dependency
+  overrides that audit with zero known vulnerabilities. Removed Glance's
+  developer-specific checkout fallback in favor of explicit, current-checkout,
+  or installed CLI resolution.
+
 ## 0.5.9 — 2026-08-03
 
 Recommendation-truth hotfix for the public beta.

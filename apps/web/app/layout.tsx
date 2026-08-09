@@ -79,11 +79,6 @@ export default function RootLayout({
             downloadUrl: "https://www.npmjs.com/package/aibill",
             codeRepository: "https://github.com/futurastudio/ai-spend-agent",
             license: "https://opensource.org/license/mit",
-            offers: {
-              "@type": "Offer",
-              price: "0",
-              priceCurrency: "USD",
-            },
           }}
         />
         {/* Scroll-reveal is progressive enhancement — without JS, content

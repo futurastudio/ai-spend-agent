@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { generateCutList } from "./cutList.js";
 import {
   createProviderConnection,
@@ -15,6 +16,14 @@ import {
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
+
+function providerFixtureJson(name: string): unknown {
+  return JSON.parse(readFileSync(new URL(`./fixtures/providers/${name}`, import.meta.url), "utf8"));
+}
+
+function providerFixtureText(name: string): string {
+  return readFileSync(new URL(`./fixtures/providers/${name}`, import.meta.url), "utf8");
+}
 
 describe("real provider connector implementations", () => {
   it("normalizes OpenAI Usage API token evidence by project, user, model, and API key without overclaiming spend", () => {
@@ -93,15 +102,11 @@ describe("real provider connector implementations", () => {
     ]);
   });
 
-  it("reconciles GitHub Copilot billing seats into estimated seat-cost records", () => {
-    const records = normalizeGitHubCopilotSeatResponse({
-      total_seats: 2,
-      plan_type: "business",
-      seats: [
-        { assignee: { login: "alice" }, last_activity_at: "2026-05-02T12:00:00Z" },
-        { assignee: { login: "bob" }, last_activity_at: null }
-      ]
-    }, { sourceId: "github-copilot-provider-api", observedFrom: "GitHub Copilot billing seats API", accountId: "futurastudio" });
+  it("derives GitHub Copilot seat estimates from each official seat plan_type and preserves unknown tiers", () => {
+    const records = normalizeGitHubCopilotSeatResponse(
+      providerFixtureJson("github-copilot-seats-mixed.json"),
+      { sourceId: "github-copilot-provider-api", observedFrom: "GitHub Copilot billing seats API", accountId: "futurastudio" }
+    );
 
     expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -112,13 +117,21 @@ describe("real provider connector implementations", () => {
         projectId: "futurastudio",
         providerCostType: "copilot_seat_reconciliation",
         usageGranularity: "seat",
-        operation: "GitHub Copilot business seat; last activity 2026-05-02T12:00:00Z"
+        operation: "GitHub Copilot business seat; last activity 2026-08-01T12:00:00Z"
       }),
       expect.objectContaining({
         userId: "bob",
-        amountUsd: 19,
+        model: "github-copilot-enterprise-seat",
+        amountUsd: 39,
         costConfidence: "estimated",
-        operation: "GitHub Copilot business seat; no recent activity reported"
+        operation: "GitHub Copilot enterprise seat; last activity 2026-08-01T13:00:00Z"
+      }),
+      expect.objectContaining({
+        userId: "casey",
+        model: "github-copilot-unknown-seat",
+        amountUsd: null,
+        costConfidence: "missing",
+        operation: "GitHub Copilot unknown seat; no recent activity reported"
       })
     ]));
   });
@@ -222,6 +235,210 @@ describe("real provider connector implementations", () => {
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
+  it("keeps valid OpenAI billed rows but marks malformed cost rows as partial schema drift", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? {
+              data: [{
+                start_time: 1761955200,
+                results: [
+                  { amount: { value: "2.00", currency: "usd" }, line_item: "valid billed row", project_id: "proj_valid" },
+                  { amount: { value: "not-a-number", currency: "usd" }, line_item: "malformed billed row", project_id: "proj_bad" },
+                  null
+                ]
+              }],
+              has_more: false
+            }
+          : { data: [], has_more: false }
+      })
+    });
+
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        projectId: "proj_valid",
+        amountUsd: 2,
+        costConfidence: "verified",
+        providerCostType: "openai_cost"
+      })
+    ]);
+    expect(result.financials).toMatchObject({ providerReportedBilledUsd: 2, headlineUsd: 2 });
+    expect(result.qa.pagination.every((page) => page.stoppedBecause === "complete")).toBe(true);
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: "OpenAI costs API",
+        field: "data[0].results[1].amount.value",
+        issue: expect.stringContaining("excluded")
+      }),
+      expect.objectContaining({
+        label: "OpenAI costs API",
+        field: "data[0].results[2]",
+        issue: expect.stringContaining("non-object")
+      })
+    ]));
+    expect(result.qa.coverage).toBe("partial");
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.source.financialEvidence).toBe("detected_unverified");
+  });
+
+  it("never claims complete provider coverage for negative or fractional usage schema", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? {
+              data: [{
+                start_time: 1761955200,
+                results: [{
+                  amount: { value: "2.00", currency: "usd" },
+                  line_item: "valid billed row",
+                  quantity: -3
+                }]
+              }],
+              has_more: false
+            }
+          : {
+              data: [{
+                start_time: 1761955200,
+                results: [{
+                  input_tokens: 100,
+                  output_tokens: -2,
+                  input_cached_tokens: 1.5,
+                  num_model_requests: -1,
+                  model: "gpt-5.1"
+                }]
+              }],
+              has_more: false
+            }
+      })
+    });
+
+    expect(result.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        providerCostType: "openai_cost",
+        amountUsd: 2,
+        quantity: undefined
+      }),
+      expect.objectContaining({
+        providerCostType: "openai_usage_evidence",
+        inputTokens: 100,
+        outputTokens: 0,
+        quantity: undefined
+      })
+    ]));
+    expect(result.records.every((record) =>
+      Number.isInteger(record.inputTokens) && record.inputTokens >= 0 &&
+      Number.isInteger(record.outputTokens) && record.outputTokens >= 0 &&
+      (record.quantity === undefined || record.quantity >= 0)
+    )).toBe(true);
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "data[0].results[0].quantity", issue: expect.stringContaining("excluded") }),
+      expect.objectContaining({ field: "data[0].results[0].output_tokens", issue: expect.stringContaining("non-negative integer") }),
+      expect.objectContaining({ field: "data[0].results[0].input_cached_tokens", issue: expect.stringContaining("non-negative integer") }),
+      expect.objectContaining({ field: "data[0].results[0].num_model_requests", issue: expect.stringContaining("non-negative integer") })
+    ]));
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.source.financialEvidence).toBe("detected_unverified");
+  });
+
+  it("marks malformed Anthropic and Copilot usage quantities incomplete", async () => {
+    const anthropic = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("cost_report")
+          ? {
+              data: [{
+                starting_at: "2026-05-01T00:00:00Z",
+                results: [{ amount: "250", currency: "USD", cost_type: "tokens" }]
+              }],
+              has_more: false
+            }
+          : {
+              data: [{
+                date: "2026-05-01",
+                actor: { id: "dev" },
+                core_metrics: { num_sessions: -1 },
+                model_breakdown: [{
+                  model: "claude-sonnet-4-6",
+                  tokens: { input: -100, output: 1.5 },
+                  estimated_cost: { amount: 123, currency: "USD" }
+                }]
+              }],
+              has_more: false
+            }
+      })
+    });
+
+    expect(anthropic.coverage).toBe("partial");
+    expect(anthropic.completeness).toBe("detected_unverified");
+    expect(anthropic.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "data[0].core_metrics.num_sessions" }),
+      expect.objectContaining({ field: "data[0].model_breakdown[0].tokens.input" }),
+      expect.objectContaining({ field: "data[0].model_breakdown[0].tokens.output" })
+    ]));
+    expect(anthropic.records.find((record) => record.providerCostType === "anthropic_claude_code_usage")).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      quantity: 0
+    });
+
+    const copilotReport = JSON.stringify({
+      day_totals: [{
+        day: "2026-08-01",
+        daily_active_users: 1,
+        totals_by_model_feature: [],
+        totals_by_cli: {
+          request_count: -1,
+          prompt_count: 1,
+          session_count: 1,
+          token_usage: { prompt_tokens_sum: -100, output_tokens_sum: 2.5, avg_tokens_per_request: 0 }
+        }
+      }]
+    });
+    const copilot = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      enterprise: "futura",
+      fetcher: async (url) => url.includes("api.github.com")
+        ? { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/invalid.ndjson"] }) }
+        : { ok: true, status: 200, json: async () => ({}), text: async () => copilotReport }
+    });
+
+    expect(copilot.coverage).toBe("partial");
+    expect(copilot.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "day_totals[0].totals_by_cli.request_count" }),
+      expect.objectContaining({ field: "day_totals[0].totals_by_cli.token_usage.prompt_tokens_sum" }),
+      expect.objectContaining({ field: "day_totals[0].totals_by_cli.token_usage.output_tokens_sum" })
+    ]));
+    expect(copilot.records).toEqual([
+      expect.objectContaining({ inputTokens: 0, outputTokens: 0 })
+    ]);
+  });
+
   it("captures live-provider QA for response drift, pagination boundaries, and rate-limit headers", async () => {
     const calls: string[] = [];
     const fetcher = async (url: string) => {
@@ -288,6 +505,174 @@ describe("real provider connector implementations", () => {
     })).rejects.toThrow(/Missing GitHub Copilot org or enterprise read scopes/);
   });
 
+  it("strips terminal controls from provider errors without weakening exact credential redaction", async () => {
+    const opaqueToken = "opaque.ArbitraryCredential-control-test";
+    const splitToken = `${opaqueToken.slice(0, 10)}\u001b[31m${opaqueToken.slice(10)}`;
+    const failure = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      fetcher: async () => ({
+        ok: false,
+        status: 403,
+        statusText: `Forbidden\u001b[2J\rFORGED ${splitToken}`,
+        json: async () => ({
+          message: `denied \u001b]8;;https://evil.example\u0007click\u001b]8;;\u0007\n${splitToken}`
+        })
+      })
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : String(failure);
+    expect(message).toContain("[REDACTED]");
+    expect(message).not.toContain(opaqueToken);
+    expect(message).not.toContain("evil.example");
+    expect(message).not.toContain("\u001b");
+    expect(message).not.toContain("\u0007");
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("\r");
+  });
+
+  it("exact-redacts raw and Cursor-derived credentials from errors and returned QA", async () => {
+    const opaqueToken = "opaque.ArbitraryCredential-7zQ9-no-known-prefix?";
+    const cursorBasicPayload = Buffer.from(`${opaqueToken}:`).toString("base64");
+    const cursorUnpaddedPayload = cursorBasicPayload.replace(/=+$/g, "");
+    const cursorBase64UrlPayload = cursorUnpaddedPayload.replace(/\+/g, "-").replace(/\//g, "_");
+    const cursorAuthorization = `Basic ${cursorBasicPayload}`;
+    const encodedCursorAuthorization = encodeURIComponent(cursorAuthorization);
+    const providerFailure = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      fetcher: async () => ({
+        ok: false,
+        status: 403,
+        statusText: `Forbidden ${opaqueToken}`,
+        json: async () => ({ message: `provider echoed bare credential ${opaqueToken}` })
+      })
+    }).catch((error: unknown) => error);
+
+    const transportFailure = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      fetcher: async () => {
+        throw new Error(`transport echoed bare credential ${opaqueToken}`);
+      }
+    }).catch((error: unknown) => error);
+
+    const cursorFailure = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      accountId: "team-acme",
+      fetcher: async (_url, init) => {
+        const authorization = init?.headers?.Authorization ?? "";
+        throw new Error(`transport echoed ${authorization}; payload ${cursorBasicPayload}; unpadded ${cursorUnpaddedPayload}; base64url ${cursorBase64UrlPayload}; encoded ${encodeURIComponent(authorization)}`);
+      }
+    }).catch((error: unknown) => error);
+
+    for (const failure of [providerFailure, transportFailure, cursorFailure]) {
+      expect(failure).toBeInstanceOf(Error);
+      const message = failure instanceof Error ? failure.message : String(failure);
+      expect(message).not.toContain(opaqueToken);
+      expect(message).not.toContain(cursorBasicPayload);
+      expect(message).not.toContain(cursorUnpaddedPayload);
+      expect(message).not.toContain(cursorBase64UrlPayload);
+      expect(message).not.toContain(cursorAuthorization);
+      expect(message).not.toContain(encodedCursorAuthorization);
+      expect(message).toContain("[REDACTED]");
+    }
+
+    const partialResult = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      fetcher: async (url) => {
+        if (url.includes("/organization/costs") && !url.includes("page=second")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: [], has_more: true, next_page: "second" })
+          };
+        }
+        if (url.includes("/organization/costs")) {
+          return {
+            ok: false,
+            status: 403,
+            statusText: "Forbidden",
+            json: async () => ({ message: `partial-page error echoed ${opaqueToken}` })
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [], has_more: false })
+        };
+      }
+    });
+
+    expect(JSON.stringify(partialResult)).not.toContain(opaqueToken);
+    expect(partialResult.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stoppedBecause: "fetch_error",
+        note: expect.stringContaining("[REDACTED]")
+      })
+    ]));
+
+    let cursorPage = 0;
+    const cursorPartialResult = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => opaqueToken,
+      startTime: 1761955200,
+      accountId: "team-acme",
+      fetcher: async (_url, init) => {
+        cursorPage += 1;
+        if (cursorPage === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              teamMemberSpend: [{ email: "developer@example.com", spendCents: 250 }],
+              subscriptionCycleStart: 1761955200000,
+              totalMembers: 2,
+              totalPages: 2
+            })
+          };
+        }
+        const authorization = init?.headers?.Authorization ?? "";
+        throw new Error(`page two echoed ${authorization}; payload ${cursorBasicPayload}; unpadded ${cursorUnpaddedPayload}; base64url ${cursorBase64UrlPayload}; encoded ${encodeURIComponent(authorization)}`);
+      }
+    });
+
+    const serializedCursorResult = JSON.stringify(cursorPartialResult);
+    expect(cursorPartialResult.records).toEqual([
+      expect.objectContaining({ userId: "developer@example.com", amountUsd: 2.5, costConfidence: "estimated" })
+    ]);
+    expect(cursorPartialResult.coverage).toBe("partial");
+    expect(serializedCursorResult).not.toContain(opaqueToken);
+    expect(serializedCursorResult).not.toContain(cursorBasicPayload);
+    expect(serializedCursorResult).not.toContain(cursorUnpaddedPayload);
+    expect(serializedCursorResult).not.toContain(cursorBase64UrlPayload);
+    expect(serializedCursorResult).not.toContain(cursorAuthorization);
+    expect(serializedCursorResult).not.toContain(encodedCursorAuthorization);
+    expect(cursorPartialResult.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stoppedBecause: "fetch_error", note: expect.stringContaining("[REDACTED]") })
+    ]));
+  });
+
   it("fails loudly (not silently $0) when Cursor returns an unrecognized shape", async () => {
     await expect(fetchProviderUsageRecords({
       provider: "cursor",
@@ -298,7 +683,7 @@ describe("real provider connector implementations", () => {
       accountId: "team-acme",
       // API answers OK but with fields we don't map — must throw, never report $0.
       fetcher: async () => ({ ok: true, status: 200, statusText: "OK", json: async () => ({ teamMembers: [{ cents_spent: 4200 }] }) })
-    })).rejects.toThrow(/no spend fields this connector recognizes/);
+    })).rejects.toThrow(/missing canonical teamMemberSpend/);
   });
 
   it("fetches OpenAI costs grouped by project, api key, and line item without returning the raw token", async () => {
@@ -372,7 +757,13 @@ describe("real provider connector implementations", () => {
       expect.objectContaining({ providerCostType: "openai_cost", apiKeyId: "key_123" }),
       expect.objectContaining({ providerCostType: "openai_usage_evidence", userId: "user_123", model: "gpt-5.1", costConfidence: "missing" })
     ]));
-    expect(result.source).toMatchObject({ verification: "verified", provider: "openai", authReference: "env:OPENAI_ADMIN_KEY" });
+    expect(result.source).toMatchObject({
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY"
+    });
     expect(result.qa.responseDrift).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
@@ -437,6 +828,84 @@ describe("real provider connector implementations", () => {
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
+  it("keeps valid Anthropic billed rows but marks malformed cost rows as partial schema drift", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_API_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organizations/cost_report")
+          ? {
+              data: [{
+                starting_at: "2026-05-01T00:00:00Z",
+                results: [
+                  { amount: "250", currency: "USD", model: "claude-opus", workspace_id: "wrk_valid", cost_type: "tokens" },
+                  { amount: "not-a-number", currency: "USD", model: "claude-sonnet", workspace_id: "wrk_bad", cost_type: "tokens" },
+                  { amount: "100", currency: 840, model: "claude-haiku", workspace_id: "wrk_bad_currency", cost_type: "tokens" }
+                ]
+              }],
+              has_more: false
+            }
+          : { data: [], has_more: false }
+      })
+    });
+
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        workspaceId: "wrk_valid",
+        amountUsd: 2.5,
+        costConfidence: "verified",
+        providerCostType: "tokens"
+      })
+    ]);
+    expect(result.financials).toMatchObject({ providerReportedBilledUsd: 2.5, headlineUsd: 2.5 });
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: "Anthropic Admin cost report",
+        field: "data[0].results[1].amount",
+        issue: expect.stringContaining("excluded")
+      }),
+      expect.objectContaining({
+        label: "Anthropic Admin cost report",
+        field: "data[0].results[2].currency",
+        issue: expect.stringContaining("unsupported currency")
+      })
+    ]));
+    expect(result.qa.coverage).toBe("partial");
+    expect(result.coverage).toBe("partial");
+    expect(result.completeness).toBe("detected_unverified");
+    expect(result.source.financialEvidence).toBe("detected_unverified");
+  });
+
+  it("keeps explicit zero provider costs verified and complete", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? { data: [{ start_time: 1761955200, results: [{ amount: { value: "0", currency: "usd" }, line_item: "zero billed row" }] }], has_more: false }
+          : { data: [], has_more: false }
+      })
+    });
+
+    expect(result.records).toEqual([
+      expect.objectContaining({ amountUsd: 0, costConfidence: "verified", providerCostType: "openai_cost" })
+    ]);
+    expect(result.qa.responseDrift).toEqual([]);
+    expect(result.coverage).toBe("complete");
+    expect(result.completeness).toBe("verified");
+    expect(result.financials.headlineUsd).toBe(0);
+  });
+
   it("normalizes GitHub Copilot enterprise/org usage metrics as verified usage evidence", () => {
     const records = normalizeGitHubCopilotMetricsResponse({
       day_totals: [{
@@ -467,10 +936,20 @@ describe("real provider connector implementations", () => {
     ]));
   });
 
-  it("fetches GitHub Copilot metrics for org or enterprise account references", async () => {
+  it("fetches every signed GitHub Copilot NDJSON report with the current API version and no credential forwarding", async () => {
     const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const manifest = providerFixtureJson("github-copilot-metrics-manifest.json");
     const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {
       calls.push({ url, headers: init?.headers ?? {} });
+      if (url.includes("/copilot/metrics/reports/organization-28-day/latest")) {
+        return { ok: true, status: 200, headers: { "x-ratelimit-remaining": "4999" }, json: async () => manifest };
+      }
+      if (url.includes("reports.example.com/copilot/part-1.ndjson")) {
+        return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+      }
+      if (url.includes("reports.example.com/copilot/part-2.ndjson")) {
+        return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-2.ndjson") };
+      }
       if (url.includes("/copilot/billing/seats") && !url.includes("page=2")) {
         return {
           ok: true,
@@ -479,21 +958,17 @@ describe("real provider connector implementations", () => {
             link: '<https://api.github.com/orgs/futurastudio/copilot/billing/seats?per_page=100&page=2>; rel="next"',
             "x-ratelimit-remaining": "4999"
           },
-          json: async () => ({ total_seats: 2, plan_type: "business", seats: [{ assignee: { login: "alice" } }] })
+          json: async () => ({ total_seats: 2, seats: [{ assignee: { login: "alice" }, plan_type: "business" }] })
         };
       }
       if (url.includes("/copilot/billing/seats") && url.includes("page=2")) {
         return {
           ok: true,
           status: 200,
-          json: async () => ({ total_seats: 2, plan_type: "business", seats: [{ assignee: { login: "bob" } }] })
+          json: async () => ({ total_seats: 2, seats: [{ assignee: { login: "bob" }, plan_type: "enterprise" }] })
         };
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ day_totals: [{ day: "2026-05-01", totals_by_cli: { request_count: 1, token_usage: { prompt_tokens_sum: 100, output_tokens_sum: 25 } } }] })
-      };
+      throw new Error(`Unexpected fixture URL: ${url}`);
     };
 
     const result = await fetchProviderUsageRecords({
@@ -507,16 +982,23 @@ describe("real provider connector implementations", () => {
     });
 
     expect(calls[0].url).toContain("https://api.github.com/orgs/futurastudio/copilot/metrics/reports/organization-28-day/latest");
+    expect(calls[0].headers["X-GitHub-Api-Version"]).toBe("2026-03-10");
     expect(calls.map((call) => call.url)).toEqual(expect.arrayContaining([
+      expect.stringContaining("reports.example.com/copilot/part-1.ndjson"),
+      expect.stringContaining("reports.example.com/copilot/part-2.ndjson"),
       expect.stringContaining("/copilot/billing/seats?per_page=100"),
       expect.stringContaining("page=2")
     ]));
     expect(calls[0].headers.Authorization).toBe(`Bearer ${fakeToken}`);
+    expect(calls.filter((call) => call.url.includes("reports.example.com")).every((call) => call.headers.Authorization === undefined)).toBe(true);
     expect(result.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ model: "gpt-5", providerCostType: "copilot_usage_metrics" }),
+      expect.objectContaining({ model: "claude-sonnet-4.5", providerCostType: "copilot_usage_metrics" }),
       expect.objectContaining({ userId: "alice", providerCostType: "copilot_seat_reconciliation" }),
-      expect.objectContaining({ userId: "bob", providerCostType: "copilot_seat_reconciliation" })
+      expect.objectContaining({ userId: "bob", amountUsd: 39, providerCostType: "copilot_seat_reconciliation" })
     ]));
     expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "GitHub Copilot metrics reports", pagesFetched: 2, stoppedBecause: "complete" }),
       expect.objectContaining({ label: "GitHub Copilot seats", pagesFetched: 2, stoppedBecause: "complete", limitPerPage: 100 })
     ]));
     expect(result.qa.rateLimits).toEqual(expect.arrayContaining([
@@ -526,7 +1008,11 @@ describe("real provider connector implementations", () => {
     // and source labels must say estimated — never "verified" over estimates.
     expect(result.completeness).toBe("estimated");
     expect(result.coverage).toBe("complete");
-    expect(result.source).toMatchObject({ provider: "github-copilot", verification: "estimated" });
+    expect(result.source).toMatchObject({
+      provider: "github-copilot",
+      validationCoverage: "fixture_verified",
+      financialEvidence: "estimated"
+    });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
@@ -534,15 +1020,21 @@ describe("real provider connector implementations", () => {
     const calls: Array<{ url: string; authorization?: string }> = [];
     const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {
       calls.push({ url, authorization: init?.headers?.Authorization });
+      if (url.includes("/copilot/metrics/reports/")) {
+        return { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/metrics.ndjson"], report_start_day: "2026-07-05", report_end_day: "2026-08-01" }) };
+      }
+      if (url.includes("reports.example.com/copilot/metrics.ndjson")) {
+        return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+      }
       if (url.includes("/copilot/billing/seats")) {
         return {
           ok: true,
           status: 200,
           headers: { link: '<https://evil.example/steal>; rel="next"' },
-          json: async () => ({ total_seats: 1, plan_type: "business", seats: [{ assignee: { login: "alice" } }] })
+          json: async () => ({ total_seats: 1, seats: [{ assignee: { login: "alice" }, plan_type: "business" }] })
         };
       }
-      return { ok: true, status: 200, json: async () => ({ day_totals: [] }) };
+      throw new Error(`Unexpected fixture URL: ${url}`);
     };
 
     const result = await fetchProviderUsageRecords({
@@ -566,22 +1058,151 @@ describe("real provider connector implementations", () => {
     ]));
   });
 
-  it("normalizes Cursor Admin API spend when a real team API path is available", () => {
-    const records = normalizeCursorSpendResponse({
-      users: [{ email: "dev@example.com", spendCents: 345, usageBasedCents: 200 }]
-    }, { sourceId: "cursor-provider-api", observedFrom: "Cursor Admin API", accountId: "futura-team" });
+  it("rejects missing, unsafe, or malformed Copilot report downloads instead of silently returning zero", async () => {
+    const base = {
+      provider: "github-copilot" as const,
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      enterprise: "futura"
+    };
 
-    expect(records).toEqual([
+    await expect(fetchProviderUsageRecords({
+      ...base,
+      fetcher: async () => ({ ok: true, status: 200, json: async () => ({ report_start_day: "2026-07-05", report_end_day: "2026-08-01" }) })
+    })).rejects.toThrow(/no signed NDJSON download_links/);
+
+    const unsafeCalls: string[] = [];
+    await expect(fetchProviderUsageRecords({
+      ...base,
+      fetcher: async (url) => {
+        unsafeCalls.push(url);
+        return { ok: true, status: 200, json: async () => ({ download_links: ["http://127.0.0.1/private.ndjson"] }) };
+      }
+    })).rejects.toThrow(/unsafe signed download URL/);
+    expect(unsafeCalls).toHaveLength(1);
+
+    await expect(fetchProviderUsageRecords({
+      ...base,
+      fetcher: async (url) => url.includes("api.github.com")
+        ? { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/bad.ndjson"] }) }
+        : { ok: true, status: 200, json: async () => ({}), text: async () => `{not-json-${fakeToken}}` }
+    })).rejects.toThrow(/malformed NDJSON at line 1/);
+  });
+
+  it("marks Copilot seat coverage partial when total_seats exceeds returned pages", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      fetcher: async (url) => {
+        if (url.includes("/copilot/metrics/reports/")) {
+          return { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/metrics.ndjson"] }) };
+        }
+        if (url.includes("reports.example.com")) {
+          return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+        }
+        return { ok: true, status: 200, json: async () => ({ total_seats: 2, seats: [{ assignee: { login: "alice" }, plan_type: "business" }] }) };
+      }
+    });
+
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "GitHub Copilot seats", stoppedBecause: "missing_cursor", note: expect.stringContaining("reported 2 seats") })
+    ]));
+  });
+
+  it("normalizes Cursor Admin API spend when a real team API path is available", () => {
+    const records = normalizeCursorSpendResponse(
+      providerFixtureJson("cursor-spend-page-1.json"),
+      { sourceId: "cursor-provider-api", observedFrom: "Cursor Admin API", accountId: "futura-team" }
+    );
+
+    expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({
         model: "cursor-team-usage",
-        amountUsd: 3.45,
         // Cursor connector is spec-built, not live-verified: estimated.
         costConfidence: "estimated",
-        userId: "dev@example.com",
+        userId: "developer@example.com",
         projectId: "futura-team",
         providerCostType: "cursor_spend"
       })
+    ]));
+    expect(records.find((record) => record.userId === "developer@example.com")?.amountUsd).toBeCloseTo(24.50125487, 8);
+  });
+
+  it("fetches every canonical Cursor spend page and proves member completeness", async () => {
+    const member = (index: number) => ({ email: `developer-${index}@example.com`, spendCents: 100 + index });
+    const pageOne = { teamMemberSpend: Array.from({ length: 100 }, (_, index) => member(index)), subscriptionCycleStart: 1785542400000, totalMembers: 101, totalPages: 2 };
+    const pageTwo = { teamMemberSpend: [member(100)], subscriptionCycleStart: 1785542400000, totalMembers: 101, totalPages: 2 };
+    const calls: Array<{ authorization?: string; body?: string }> = [];
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "team-acme",
+      fetcher: async (_url, init) => {
+        calls.push({ authorization: init?.headers?.Authorization, body: init?.body });
+        const requestedPage = JSON.parse(init?.body ?? "{}").page;
+        return { ok: true, status: 200, json: async () => requestedPage === 1 ? pageOne : pageTwo };
+      }
+    });
+
+    expect(calls.map((call) => JSON.parse(call.body ?? "{}"))).toEqual([
+      { page: 1, pageSize: 100 },
+      { page: 2, pageSize: 100 }
     ]);
+    expect(calls.every((call) => call.authorization?.startsWith("Basic "))).toBe(true);
+    expect(result.records).toHaveLength(101);
+    expect(result.coverage).toBe("complete");
+    expect(result.qa.pagination).toEqual([
+      expect.objectContaining({ label: "Cursor Admin API spend", pagesFetched: 2, stoppedBecause: "complete", limitPerPage: 100 })
+    ]);
+    expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("does not claim complete Cursor coverage when pagination metadata is malformed or changes", async () => {
+    await expect(fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async () => ({ ok: true, status: 200, json: async () => ({ teamMemberSpend: [], totalMembers: 0 }) })
+    })).rejects.toThrow(/invalid or missing totalPages/);
+
+    await expect(fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          teamMemberSpend: [{ email: "one@example.com", spendCents: 100, fastPremiumRequests: -1 }],
+          totalMembers: 1,
+          totalPages: 1
+        })
+      })
+    })).rejects.toThrow(/invalid fastPremiumRequests quantity/);
+
+    const first = { teamMemberSpend: [{ email: "one@example.com", spendCents: 100 }], totalMembers: 2, totalPages: 2 };
+    const second = { teamMemberSpend: [{ email: "two@example.com", spendCents: 100 }], totalMembers: 2, totalPages: 3 };
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (_url, init) => ({ ok: true, status: 200, json: async () => JSON.parse(init?.body ?? "{}").page === 1 ? first : second })
+    });
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.pagination[0]).toMatchObject({ stoppedBecause: "fetch_error", note: expect.stringContaining("pagination metadata changed") });
   });
 
   it("resolves only reference-based tokens and rejects plaintext-looking secret references", () => {
@@ -603,15 +1224,45 @@ describe("real provider connector implementations", () => {
       id: "openai-provider-api",
       type: "provider_api",
       provider: "openai",
-      verification: "verified",
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
       fieldsVerified: expect.arrayContaining(["organization costs", "project usage"]),
       authMode: "oauth",
       tokenStorage: "local_reference_only",
       authReference: "env:OPENAI_ADMIN_KEY"
     });
-    expect(source.scope).toContain("3 verified records");
+    expect(source.scope).toContain("3 record(s); financial evidence: verified");
     expect(source.scope).toContain("$42.50");
     expect(JSON.stringify(source)).not.toContain(fakeToken);
+  });
+
+  it("keeps an unavailable provider headline missing instead of inventing $0.00", () => {
+    const source = createProviderConnection({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      verifiedRecordCount: 0,
+      totalUsd: null,
+      completeness: "missing"
+    });
+
+    expect(source.financialEvidence).toBe("missing");
+    expect(source.scope).toContain("an unavailable financial headline");
+    expect(source.scope).not.toContain("$0.00");
+  });
+
+  it("labels a positive sub-cent provider headline without rounding it to zero", () => {
+    const source = createProviderConnection({
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      verifiedRecordCount: 1,
+      totalUsd: 0.004,
+      completeness: "verified"
+    });
+
+    expect(source.scope).toContain("less than $0.01");
+    expect(source.scope).not.toContain("$0.00");
   });
 
   it("retries transient 429s (honoring retry-after) and succeeds", async () => {
@@ -722,7 +1373,7 @@ describe("real provider connector implementations", () => {
     expect(result.qa.responseDrift).toEqual([]);
     expect(result.coverage).toBe("complete");
     expect(result.completeness).toBe("verified");
-    expect(result.source.verification).toBe("verified");
+    expect(result.source.financialEvidence).toBe("verified");
     expect(result.financials).toEqual({
       providerReportedBilledUsd: 2.5,
       apiEquivalentEstimatedUsd: 1.23,
@@ -771,10 +1422,16 @@ describe("real provider connector implementations", () => {
 
   it("reports zero response drift for legitimate copilot and cursor fields", async () => {
     const copilotFetcher = async (url: string) => {
-      if (url.includes("/copilot/billing/seats")) {
-        return { ok: true, status: 200, json: async () => ({ total_seats: 1, plan_type: "business", seats: [{ assignee: { login: "alice" }, last_activity_at: "2026-06-30T00:00:00Z", plan_type: "business" }] }) };
+      if (url.includes("/copilot/metrics/reports/")) {
+        return { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/metrics.ndjson"], report_start_day: "2026-07-05", report_end_day: "2026-08-01" }) };
       }
-      return { ok: true, status: 200, json: async () => ({ day_totals: [{ day: "2026-05-01", totals_by_model_feature: [{ model: "gpt-4.1", feature: "chat" }], totals_by_cli: { token_usage: { prompt_tokens_sum: 100, output_tokens_sum: 25 } } }] }) };
+      if (url.includes("reports.example.com/copilot/metrics.ndjson")) {
+        return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+      }
+      if (url.includes("/copilot/billing/seats")) {
+        return { ok: true, status: 200, json: async () => ({ total_seats: 1, seats: [{ assignee: { login: "alice" }, last_activity_at: "2026-06-30T00:00:00Z", plan_type: "business" }] }) };
+      }
+      throw new Error(`Unexpected fixture URL: ${url}`);
     };
     const copilot = await fetchProviderUsageRecords({
       provider: "github-copilot",
@@ -794,7 +1451,7 @@ describe("real provider connector implementations", () => {
       tokenResolver: () => fakeToken,
       startTime: 1761955200,
       accountId: "team-acme",
-      fetcher: async () => ({ ok: true, status: 200, json: async () => ({ users: [{ email: "dev@example.com", spendCents: 345 }] }) })
+      fetcher: async () => ({ ok: true, status: 200, json: async () => ({ teamMemberSpend: [{ email: "dev@example.com", spendCents: 345 }], subscriptionCycleStart: 1785542400000, totalMembers: 1, totalPages: 1 }) })
     });
     expect(cursor.qa.responseDrift).toEqual([]);
     // Cursor is spec-built, not live-verified: never labeled verified.
@@ -809,8 +1466,8 @@ describe("real provider connector implementations", () => {
       ...normalizeOpenAiUsageResponse({ data: [{ start_time: 1761955200, results: [{ input_tokens: 200_000, output_tokens: 1_000, num_model_requests: 20, model: "gpt-5.5" }] }] }, options),
       ...normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-05-01T00:00:00Z", results: [{ amount: "4000", currency: "USD", cost_type: "tokens", description: "research_summary", model: "claude-fable-5" }] }] }, options),
       ...normalizeAnthropicClaudeCodeUsageResponse({ data: [{ date: "2026-05-01", actor: { id: "dev" }, core_metrics: { num_sessions: 3 }, model_breakdown: [{ model: "claude-fable-5", tokens: { input: 200_000, output: 1_000 }, estimated_cost: { amount: 4000, currency: "USD" } }] }] }, options),
-      ...normalizeGitHubCopilotSeatResponse({ plan_type: "business", seats: [{ assignee: { login: "dev" } }] }, options),
-      ...normalizeCursorSpendResponse({ users: [{ email: "dev@example.com", spendCents: 4_000 }] }, options)
+      ...normalizeGitHubCopilotSeatResponse({ seats: [{ assignee: { login: "dev" }, plan_type: "business" }] }, options),
+      ...normalizeCursorSpendResponse({ teamMemberSpend: [{ email: "dev@example.com", spendCents: 4_000 }], totalPages: 1, totalMembers: 1 }, options)
     ];
 
     expect(new Set(records.map((record) => record.usageGranularity))).toEqual(new Set([

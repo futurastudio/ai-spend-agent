@@ -10,8 +10,8 @@ describe("spend analysis", () => {
     expect(summary.recordCount).toBe(9);
     expect(summary.confidence).toBe("detected_unverified");
     expect(summary.confidenceBreakdown).toEqual({
-      verified: 8.1,
-      estimated: 48.5,
+      verified: 0,
+      estimated: 56.6,
       detected_unverified: 30.4,
       missing: 0
     });

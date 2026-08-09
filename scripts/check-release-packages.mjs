@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+  findDeveloperPathLeaks,
+  isForbiddenPublicPath
+} from "./public-boundary-rules.mjs";
 
 const root = resolve(import.meta.dirname, "..");
-const expectedVersion = "0.5.9";
+const expectedVersion = JSON.parse(
+  await readFile(resolve(root, "packages/core/package.json"), "utf8")
+).version;
 const packages = [
   { directory: "packages/core", name: "@agent-finops/core" },
   { directory: "packages/report", name: "@agent-finops/report" },
@@ -22,12 +28,13 @@ const requiredReleaseDependencies = new Map([
   ["aibill", { "ai-spend-agent": expectedVersion }]
 ]);
 const coordinatedNames = new Set(packages.map((entry) => entry.name));
-const forbiddenPathPatterns = [
-  /(^|\/)(?:ARTIFACT_ROADMAP(?:\.[^/]*)?|AUDIT_PUBLIC_REPO(?:_[^/]*)?\.md)$/i,
-  /(^|\/)(?:docs\/)?(?:research|gtm)(?:\/|$)/i,
-  /(^|\/)(?:internal|private)(?:\/|$)/i,
+const packagingOnlyForbiddenPathPatterns = [
   /(^|\/)\.(?:git|github|codex|claude|agents)(?:\/|$)/i,
-  /(^|\/)\.npmrc$/i
+];
+const forbiddenPackedContentPatterns = [
+  /\bCODEX_(?:BUILD|CLOUD)_SPEC(?:_[A-Z0-9-]+)?\.md\b/i,
+  /\bARTIFACT_ROADMAP(?:_[A-Z0-9-]+)?\.md\b/i,
+  /(?:^|[\s`"'])docs\/(?:gtm|research|internal|private)\//im
 ];
 
 const manifests = new Map();
@@ -105,6 +112,32 @@ for (const releasePackage of packages) {
     forbidden.length === 0,
     `${releasePackage.name} would publish internal/private paths: ${forbidden.join(", ")}`
   );
+  const contentLeaks = [];
+  const symbolicLinks = [];
+  for (const filePath of filePaths) {
+    const absolutePath = resolve(root, releasePackage.directory, filePath);
+    const info = await lstat(absolutePath).catch(() => undefined);
+    if (info?.isSymbolicLink()) {
+      symbolicLinks.push(filePath);
+      continue;
+    }
+    const content = await readFile(absolutePath, "utf8")
+      .catch(() => "");
+    if (
+      findDeveloperPathLeaks(content).length > 0 ||
+      forbiddenPackedContentPatterns.some((pattern) => pattern.test(content))
+    ) {
+      contentLeaks.push(filePath);
+    }
+  }
+  assert(
+    contentLeaks.length === 0,
+    `${releasePackage.name} would publish internal/private content in: ${contentLeaks.join(", ")}`
+  );
+  assert(
+    symbolicLinks.length === 0,
+    `${releasePackage.name} would publish symbolic links requiring explicit review: ${symbolicLinks.join(", ")}`
+  );
   for (const requiredFile of ["package.json", "README.md", "LICENSE"]) {
     assert(
       filePaths.includes(requiredFile),
@@ -135,7 +168,8 @@ console.log(JSON.stringify({
   status: "pass",
   expectedVersion,
   packages: packed,
-  internalPrivatePaths: 0
+  internalPrivatePaths: 0,
+  internalPrivateContentFiles: 0
 }));
 
 function normalizePath(path) {
@@ -144,7 +178,7 @@ function normalizePath(path) {
 
 function isForbiddenPath(path) {
   if (/(^|\/)\.env($|\.)/.test(path) && !path.endsWith(".env.example")) return true;
-  return forbiddenPathPatterns.some((pattern) => pattern.test(path));
+  return isForbiddenPublicPath(path) || packagingOnlyForbiddenPathPatterns.some((pattern) => pattern.test(path));
 }
 
 function exportTargets(exportsField) {

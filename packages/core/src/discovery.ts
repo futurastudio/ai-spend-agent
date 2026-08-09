@@ -1,5 +1,6 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { basename, join, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, join, relative, sep } from "node:path";
 import { resolveSafeScanRoot } from "./scanGuard.js";
 
 export type UsageSignalKind = "dependency" | "config" | "environment" | "source_code" | "provider_export" | "invoice";
@@ -7,6 +8,7 @@ export type UsageSignalKind = "dependency" | "config" | "environment" | "source_
 export type UsageSignal = {
   provider: string;
   kind: UsageSignalKind;
+  /** Deterministic opaque reference; never a repository-controlled filename. */
   filePath: string;
   /** Stable rule identity; present on scanner-produced signals. */
   ruleId?: string;
@@ -18,6 +20,7 @@ export type UsageSignal = {
 };
 
 export type UsageSignalEvidence = {
+  /** Same deterministic opaque reference as UsageSignal.filePath. */
   file: string;
   provider: string;
   signal: UsageSignalKind;
@@ -27,12 +30,14 @@ export type UsageSignalEvidence = {
 export type LocalDiscoveryResult = {
   rootPath: string;
   scannedFiles: number;
+  /** Deterministic opaque references for denied/heavy descendant directories. */
   skippedDirectories: string[];
-  /** Symbolic links found below the approved root. They are never followed. */
+  /** Opaque references for symbolic links below the approved root. They are never followed. */
   skippedSymlinks: string[];
-  /** Paths that could not be read (permissions, vanished entries, non-UTF8) — skipped, never fatal. */
+  /** Opaque references for unreadable descendants — skipped, never fatal. */
   unreadablePaths: string[];
   signals: UsageSignal[];
+  /** Deterministic opaque references for detected secret assignments. */
   secretsDetected: string[];
   redactedEvidence: string[];
 };
@@ -139,15 +144,17 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
       return;
     }
     const redacted = redactSecrets(raw);
-    const relativePath = relative(canonicalRoot, path) || basename(path);
+    const relativePath = relative(canonicalRoot, path) || ".";
+    const pathReference = opaquePathReference(relativePath);
     result.scannedFiles += 1;
 
     for (const name of detectSecretNames(raw)) {
-      secrets.add(name);
-      result.redactedEvidence.push(`${relativePath}: ${name}=[REDACTED]`);
+      const secretReference = opaqueSecretReference(name);
+      secrets.add(secretReference);
+      result.redactedEvidence.push(`${pathReference}: ${secretReference}=[REDACTED]`);
     }
 
-    for (const signal of detectExportSignals(relativePath, redacted)) {
+    for (const signal of detectExportSignals(relativePath, redacted, pathReference)) {
       result.signals.push(signal);
     }
 
@@ -158,11 +165,11 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
       }
 
       const kind = inferKind(path, rule.kind);
-      const evidenceMeta = buildEvidence(relativePath, rule.provider, kind, rule.id);
+      const evidenceMeta = buildEvidence(pathReference, rule.provider, kind, rule.id);
       result.signals.push({
         provider: rule.provider,
         kind,
-        filePath: relativePath,
+        filePath: pathReference,
         ruleId: rule.id,
         evidenceMeta,
         evidence: encodeEvidence(evidenceMeta),
@@ -171,12 +178,14 @@ export async function scanLocalUsageSignals(rootPath: string): Promise<LocalDisc
     }
   }, skipped, symlinks, unreadable);
 
-  result.skippedDirectories = Array.from(skipped).sort();
+  result.skippedDirectories = Array.from(skipped)
+    .map((path) => opaquePathReference(relative(canonicalRoot, path) || "."))
+    .sort();
   result.skippedSymlinks = Array.from(symlinks)
-    .map((path) => relative(canonicalRoot, path) || basename(path))
+    .map((path) => opaquePathReference(relative(canonicalRoot, path) || "."))
     .sort();
   result.unreadablePaths = Array.from(unreadable)
-    .map((path) => relative(canonicalRoot, path) || basename(path))
+    .map((path) => opaquePathReference(relative(canonicalRoot, path) || "."))
     .sort();
   result.secretsDetected = Array.from(secrets).sort();
   result.signals = dedupeSignals(result.signals).sort((left, right) => {
@@ -228,7 +237,7 @@ async function walk(
     }
     if (entry.isDirectory()) {
       if (skippedDirectoryNames.has(entry.name)) {
-        skipped.add(entry.name);
+        skipped.add(path);
         continue;
       }
       await walk(path, visit, skipped, symlinks, unreadable);
@@ -268,7 +277,11 @@ function inferKind(path: string, fallback: UsageSignalKind): UsageSignalKind {
   return fallback;
 }
 
-function detectExportSignals(filePath: string, redacted: string): UsageSignal[] {
+function detectExportSignals(
+  filePath: string,
+  redacted: string,
+  pathReference: string
+): UsageSignal[] {
   const lowerPath = filePath.toLowerCase();
   const lowerText = redacted.toLowerCase();
   const providers = ["openai", "anthropic", "cursor", "helicone", "langfuse", "gemini", "google", "replit"];
@@ -286,11 +299,11 @@ function detectExportSignals(filePath: string, redacted: string): UsageSignal[] 
   const normalizedProvider = provider === "google" ? "gemini" : provider;
   const kind: UsageSignalKind = isInvoice ? "invoice" : "provider_export";
   const ruleId = `export.${normalizedProvider}.${kind}`;
-  const evidenceMeta = buildEvidence(filePath, normalizedProvider, kind, ruleId);
+  const evidenceMeta = buildEvidence(pathReference, normalizedProvider, kind, ruleId);
   return [{
     provider: normalizedProvider,
     kind,
-    filePath,
+    filePath: pathReference,
     ruleId,
     evidenceMeta,
     evidence: encodeEvidence(evidenceMeta),
@@ -309,6 +322,25 @@ function buildEvidence(
 
 function encodeEvidence(evidence: UsageSignalEvidence): string {
   return JSON.stringify(evidence);
+}
+
+/**
+ * Repository-controlled descendant names are untrusted metadata. Discovery may
+ * use the real relative path internally for classification, but persisted and
+ * agent-facing output receives only this stable, non-semantic reference.
+ */
+function opaquePathReference(relativePath: string): string {
+  // Normalize only the current platform's separator. A literal backslash is
+  // a valid POSIX filename character and must not alias a nested POSIX path.
+  const normalized = (relativePath || ".").split(sep).join("/");
+  const digest = createHash("sha256").update(normalized, "utf8").digest("hex").slice(0, 16);
+  return `path-${digest}`;
+}
+
+/** Repository-controlled environment names are untrusted metadata too. */
+function opaqueSecretReference(name: string): string {
+  const digest = createHash("sha256").update(name, "utf8").digest("hex").slice(0, 16);
+  return `secret-${digest}`;
 }
 
 function dedupeSignals(signals: UsageSignal[]): UsageSignal[] {

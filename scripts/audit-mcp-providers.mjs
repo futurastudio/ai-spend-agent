@@ -7,10 +7,21 @@ import {
   redactSecrets
 } from "../packages/core/dist/index.js";
 
-const envPath = resolve(process.cwd(), process.argv[2] ?? ".env");
+const cliArgs = process.argv.slice(2);
+const sinceDaysIndex = cliArgs.indexOf("--since-days");
+const sinceDays = sinceDaysIndex >= 0
+  ? Number(cliArgs[sinceDaysIndex + 1])
+  : 7;
+if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 365) {
+  throw new Error("--since-days must be an integer from 1 to 365");
+}
+const envArgument = cliArgs.find((argument, index) => (
+  argument !== "--since-days" && index !== sinceDaysIndex + 1
+)) ?? ".env";
+const envPath = resolve(process.cwd(), envArgument);
 const envValues = parseEnv(await readFile(envPath, "utf8"));
 const endTime = Math.floor(Date.now() / 1000);
-const startTime = endTime - 7 * 24 * 60 * 60;
+const startTime = endTime - sinceDays * 24 * 60 * 60;
 const providers = [
   ["openai", "OPENAI_ADMIN_KEY"],
   ["anthropic", "ANTHROPIC_ADMIN_KEY"]
@@ -35,6 +46,11 @@ for (const [provider, envName] of providers) {
     console.log(JSON.stringify({
       provider,
       status: "ok",
+      window: {
+        sinceDays,
+        start: new Date(startTime * 1000).toISOString(),
+        end: new Date(endTime * 1000).toISOString()
+      },
       records: result.records.length,
       totalUsd: summary.totalUsd,
       completeness: result.completeness,
@@ -58,6 +74,7 @@ for (const [provider, envName] of providers) {
     console.log(JSON.stringify({
       provider,
       status: "error",
+      window: { sinceDays },
       message: sanitize(error instanceof Error ? error.message : String(error))
     }));
   }

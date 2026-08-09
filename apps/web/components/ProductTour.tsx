@@ -131,7 +131,7 @@ export function ProductTour() {
         receipt. Terminal replays the real CLI with deterministic sample data;
         in sample mode, Apply is a non-executable demonstration. On real local
         evidence, npx aibill apply adds read-only checks, explicit approval,
-        rollback, and matched future-session verification. Estimated value,
+        rollback, and a matched future-session comparison. Estimated value,
         provider-reported cost, detected plans, and missing limits remain
         visibly separate.
       </p>

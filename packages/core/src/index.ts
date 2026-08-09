@@ -17,4 +17,6 @@ export * from "./sampleData.js";
 export * from "./scanGuard.js";
 export * from "./schema.js";
 export * from "./sourceRegistry.js";
+export * from "./sourceStatus.js";
+export * from "./stateTrust.js";
 export * from "./providerConnectors.js";

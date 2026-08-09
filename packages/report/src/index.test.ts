@@ -20,11 +20,11 @@ const sourceRegistry: SourceRegistry = {
   deniedGlobs: [".env*"],
   supportedSourceTypes: ["local_folder", "provider_export", "provider_api", "browser_account", "local_tool_detection", "mcp_tool", "internal_system"],
   ingestionLanes: [
-    { id: "local_files_exports", label: "Local files and provider exports", sourceTypes: ["local_folder", "provider_export"], defaultVerification: "estimated" },
-    { id: "provider_apis", label: "Official provider APIs", sourceTypes: ["provider_api"], defaultVerification: "verified" },
-    { id: "browser_account_ui", label: "Browser Account UI", sourceTypes: ["browser_account"], defaultVerification: "verified" },
-    { id: "local_cli_tool_detection", label: "Local CLI/tool detection path", sourceTypes: ["local_tool_detection"], defaultVerification: "detected_unverified" },
-    { id: "mcp_internal_systems", label: "MCP and internal systems", sourceTypes: ["mcp_tool", "internal_system"], defaultVerification: "verified" }
+    { id: "local_files_exports", label: "Local files and provider exports", sourceTypes: ["local_folder", "provider_export"], defaultFinancialEvidence: "estimated" },
+    { id: "provider_apis", label: "Official provider APIs", sourceTypes: ["provider_api"], defaultFinancialEvidence: "verified" },
+    { id: "browser_account_ui", label: "Browser Account UI", sourceTypes: ["browser_account"], defaultFinancialEvidence: "verified" },
+    { id: "local_cli_tool_detection", label: "Local CLI/tool detection path", sourceTypes: ["local_tool_detection"], defaultFinancialEvidence: "detected_unverified" },
+    { id: "mcp_internal_systems", label: "MCP and internal systems", sourceTypes: ["mcp_tool", "internal_system"], defaultFinancialEvidence: "verified" }
   ],
   approvedSources: [
     {
@@ -37,7 +37,9 @@ const sourceRegistry: SourceRegistry = {
       scope: "Read-only local folder",
       lane: "local_files_exports",
       accessMethod: "file",
-      verification: "verified",
+      boundaryApproval: "approved",
+      validationCoverage: "untested",
+      financialEvidence: "missing",
       fieldsVerified: ["approved folder boundary"],
       fieldsEstimated: [],
       fieldsMissing: ["provider account billing data"]
@@ -52,7 +54,9 @@ const sourceRegistry: SourceRegistry = {
       scope: "Read-only provider API/account usage source. Store token references only; no raw secrets.",
       lane: "provider_apis",
       accessMethod: "api",
-      verification: "missing",
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "missing",
       fieldsVerified: ["organization cost report", "Claude Code usage"],
       fieldsEstimated: [],
       fieldsMissing: ["admin API token reference", "organization id"]
@@ -189,7 +193,7 @@ const input: SpendReportInput = {
     {
       provider: "openai",
       status: "detected_unverified",
-      reason: "OpenAI was detected locally, but no verified provider/API/browser/export source is connected.",
+      reason: "OpenAI was detected locally, but no approved provider/API/browser/export boundary has current financial evidence. Connector validation is reported separately.",
       detectedEvidence: ["package.json imports openai"],
       suggestedConnector: "connect openai --type provider_api",
       suggestedSourceTypes: ["provider_api", "browser_account"]
@@ -253,6 +257,8 @@ describe("board-style report generation", () => {
     expect(markdown).toContain("## Source coverage and connection gaps");
     expect(markdown).toContain("Local files and provider exports: 1 approved source");
     expect(markdown).toContain("Official provider APIs: 1 approved source");
+    expect(markdown).toContain("### Source truth axes");
+    expect(markdown).toContain("Approved local scan root: boundary approved; validation untested; financial evidence missing");
     expect(markdown).toContain("OpenAI was detected locally");
     expect(markdown).toContain("connect openai --type provider_api");
     expect(markdown).toContain("## Confirmed mappings");
@@ -314,6 +320,10 @@ describe("board-style report generation", () => {
     expect(html).toContain("ownership/concentration is not savings or change evidence");
     expect(html).not.toContain("Margin risk");
     expect(html).toContain(".workflow-watch { margin-top: 16px; border-radius: 22px; padding: 24px; }");
+    expect(html).toContain("background: linear-gradient(90deg, #7170ff, #8b8aff)");
+    expect(html).toContain(".apply-prompt { margin-top: 14px; padding: 12px; border: 1px solid rgba(217,119,6,0.24);");
+    expect(html).not.toContain("background: linear-gradient(90deg, #7170ff, #10b981)");
+    expect(html).not.toContain(".apply-prompt { margin-top: 14px; padding: 12px; border-radius: 12px; background: rgba(16,185,129,0.075)");
     expect(html).toContain("@media (max-width: 760px)");
     expect(html).toContain('class="source-coverage"');
     expect(html).toContain('class="source-lane-grid"');
@@ -342,6 +352,12 @@ describe("board-style report generation", () => {
     expect(html).toContain('class="evidence-quality-grid"');
     expect(html).toContain('class="evidence-quality-card evidence-quality-card--verified"');
     expect(html).toContain('class="evidence-quality-card evidence-quality-card--estimated"');
+    expect(html).toContain(".bar-segment--verified { background: #10b981; }");
+    expect(html).toContain(".bar-segment--estimated { background: #fbbf24; }");
+    expect(html).toContain(".evidence-quality-card--estimated { border-color: rgba(251,191,36,0.34); }");
+    expect(html).toContain('class="metric-card metric-card--estimated"');
+    expect(html).toContain(".metric-card--estimated .metric-value { color: #fbbf24; }");
+    expect(html).toContain(".impact-line { display: block; color: #fbbf24;");
     expect(html).toContain('class="evidence-quality-card evidence-quality-card--usage"');
     expect(html).toContain('class="evidence-quality-card evidence-quality-card--missing"');
     expect(html).toContain('class="provider-qa"');
@@ -415,6 +431,27 @@ describe("board-style report generation", () => {
     expect(artifact).toContain("owner attribution=client-a / project-a / agent-a / research_summary");
     expect(artifact).toContain("Modeled monthly opportunity=");
     expect(artifact).toContain("this is not verified savings");
+  });
+
+  it("preserves partial provider coverage in connected Apply evidence and approval gates", () => {
+    const complete = generateApplyArtifactMarkdown({
+      ...input,
+      dataMode: "connected_provider",
+      providerCoverage: "complete"
+    });
+    const partial = generateApplyArtifactMarkdown({
+      ...input,
+      dataMode: "connected_provider",
+      providerCoverage: "partial"
+    });
+
+    expect(complete).toContain("Provider response coverage: complete");
+    expect(complete).not.toContain("PARTIAL-COVERAGE APPROVAL GATE");
+    expect(partial).toContain("Provider response coverage: partial");
+    expect(partial).toContain("PARTIAL-COVERAGE APPROVAL GATE");
+    expect(partial).toContain("name the missing provider scope");
+    expect(partial).toContain("Do not approve a financial target or claim complete spend");
+    expect(partial).not.toBe(complete);
   });
 
   it("makes sample Apply and support artifacts explicitly non-executable", () => {
@@ -1021,6 +1058,16 @@ describe("board-style report generation", () => {
     expect(html).toContain("npx aibill");
     expect(html).toContain("my-app");
     expect(html).toContain("$80.00 observed value");
+    expect(html).toContain('class="hero-big estimated-value"');
+    expect(html).toContain('class="stat estimated-card"');
+    expect(html).toContain('class="cut-v"><strong class="estimated-value">$80.00 observed value</strong>');
+    expect(html).toContain(".estimated-value { color: #fbbf24; }");
+    expect(html).toContain(".stat.estimated-card strong { color: #fbbf24; }");
+    expect(html).toContain(".row .v.estimated-value { color: #fbbf24; }");
+    expect(html).toContain(".cut-v strong.estimated-value { color: #fbbf24;");
+    expect(html).toContain("linear-gradient(90deg, #22d3ee, #fbbf24)");
+    expect(html).not.toContain(".stat.primary strong { color: #4ade80; }");
+    expect(html).not.toContain(".cut-v strong { color: #4ade80;");
     expect(html).toContain(">ACT<");
     expect(html).toContain("inspection plan, approval + rollback");
     expect(html).toContain("a cash claim requires a later matched provider-reported cost source");
@@ -1052,6 +1099,151 @@ describe("board-style report generation", () => {
     });
     expect(emptyHtml).toContain("No supported scoped action in this window");
     expect(emptyHtml).not.toContain("No cuts above the reporting threshold");
+  });
+
+  it("derives connected Markdown and HTML headlines from financial evidence, including missing and sub-cent values", () => {
+    const estimatedRecord: UsageRecord = {
+      ...providerRecords[1]!,
+      id: "connected-estimated",
+      amountUsd: 2.5,
+      costConfidence: "estimated",
+      source: { ...providerRecords[1]!.source, confidence: "estimated" }
+    };
+    const estimatedInput: SpendReportInput = {
+      ...input,
+      allRecords: [estimatedRecord],
+      providerRecords: [estimatedRecord],
+      summary: analyzeSpend([estimatedRecord])
+    };
+    const estimatedMarkdown = generateMarkdownReport(estimatedInput);
+    const estimatedHtml = generateHtmlReport(estimatedInput);
+
+    expect(estimatedMarkdown).toContain("- Connected estimated cost/value: $2.50");
+    expect(estimatedMarkdown).not.toContain("- Provider-reported cost: $2.50");
+    expect(estimatedHtml).toContain('<span class="metric-label">Connected estimated cost/value</span>');
+    expect(estimatedHtml).not.toContain('<span class="metric-label">Provider-reported cost</span>');
+
+    const missingRecord: UsageRecord = {
+      ...providerRecords[2]!,
+      id: "connected-missing",
+      amountUsd: null,
+      costConfidence: "missing"
+    };
+    const missingInput: SpendReportInput = {
+      ...input,
+      allRecords: [missingRecord],
+      providerRecords: [missingRecord],
+      summary: analyzeSpend([missingRecord])
+    };
+    const missingMarkdown = generateMarkdownReport(missingInput);
+    const missingHtml = generateHtmlReport(missingInput);
+
+    expect(missingMarkdown).toContain("- Connected cost/value: Unavailable");
+    expect(missingMarkdown).toContain("missing/null amounts are not treated as zero");
+    expect(missingMarkdown).toContain("Provider-reported cost: Not reported");
+    expect(missingMarkdown).toContain("missing: Not reported");
+    expect(missingMarkdown).not.toContain("$0.00");
+    expect(missingHtml).toContain('<span class="metric-label">Connected cost/value</span>');
+    expect(missingHtml).toContain('<strong class="metric-value">Unavailable</strong>');
+    expect(missingHtml).toContain("missing/null is not zero");
+    expect(missingHtml).not.toContain("$0.00");
+
+    const tinyRecord: UsageRecord = {
+      ...estimatedRecord,
+      id: "connected-sub-cent",
+      amountUsd: 0.0075
+    };
+    const tinyInput: SpendReportInput = {
+      ...estimatedInput,
+      allRecords: [tinyRecord],
+      providerRecords: [tinyRecord],
+      summary: analyzeSpend([tinyRecord])
+    };
+    const tinyMarkdown = generateMarkdownReport(tinyInput);
+    const tinyHtml = generateHtmlReport(tinyInput);
+
+    expect(tinyMarkdown).toContain("- Connected estimated cost/value: <$0.01");
+    expect(tinyMarkdown).not.toContain("- Connected estimated cost/value: $0.00");
+    expect(tinyMarkdown).toContain("- estimated: <$0.01");
+    expect(tinyMarkdown).toContain("Estimated cost/value: <$0.01 across 1 record");
+    expect(tinyMarkdown).toContain("claude-sonnet-4: <$0.01 across 1 records");
+    expect(tinyMarkdown).toContain("Observed cost/value evidence: <$0.01 across 1 records");
+    expect(tinyHtml).toContain('<strong class="metric-value">&lt;$0.01</strong>');
+    expect(tinyHtml).toContain("Estimated cost/value");
+    expect(tinyHtml).toContain("&lt;$0.01");
+  });
+
+  it("keeps persisted partial provider coverage explicit across all provider QA entries", () => {
+    const providerQa: SpendReportInput["providerQa"] = [
+      {
+        provider: "openai",
+        coverage: "partial",
+        requestedEndpoints: ["OpenAI costs"],
+        pagination: [{ label: "OpenAI costs", pagesFetched: 1, stoppedBecause: "fetch_error", maxPages: 50 }],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      },
+      {
+        provider: "anthropic",
+        coverage: "partial",
+        requestedEndpoints: ["Anthropic cost report"],
+        pagination: [{ label: "Anthropic cost report", pagesFetched: 50, stoppedBecause: "max_pages", maxPages: 50 }],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      },
+      {
+        provider: "cursor",
+        coverage: "complete",
+        requestedEndpoints: ["Cursor Admin API spend"],
+        pagination: [{ label: "Cursor Admin API spend", pagesFetched: 1, stoppedBecause: "complete", maxPages: 50 }],
+        rateLimits: [],
+        responseDrift: [],
+        instructions: []
+      }
+    ];
+    const markdown = generateMarkdownReport({ ...input, providerCoverage: "partial", providerQa });
+    const html = generateHtmlReport({ ...input, providerCoverage: "partial", providerQa });
+
+    expect(markdown).toContain("Overall provider sync coverage: partial");
+    expect(markdown).toContain("**openai** coverage: partial");
+    expect(markdown).toContain("**anthropic** coverage: partial");
+    expect(markdown).toContain("**cursor** coverage: complete");
+    expect(html).toContain("Partial provider coverage:");
+    expect(html).toContain('class="impact-pill impact-pill--attention">Partial coverage</span>');
+    expect(html).toContain('class="verification-note verification-note--partial"');
+    expect(html).toContain('class="provider-qa-card provider-qa-card--failed"');
+    expect(html).toContain('class="provider-qa-card provider-qa-card--partial"');
+    expect(html).toContain(".provider-qa-card--failed h3 { color: #f87171; }");
+    expect(html).toContain("partial coverage");
+    expect(html).toContain("complete coverage");
+  });
+
+  it("HTML-escapes persisted source labels before rendering source coverage", () => {
+    const maliciousLabel = 'Trusted source</p><script data-x="1">alert(1)</script><p>';
+    const hostileRegistry: SourceRegistry = {
+      ...sourceRegistry,
+      approvedSources: [{ ...sourceRegistry.approvedSources[0]!, label: maliciousLabel }]
+    };
+    const html = generateHtmlReport({ ...input, sourceRegistry: hostileRegistry });
+
+    expect(html).toContain("Trusted source&lt;/p&gt;&lt;script data-x=&quot;1&quot;&gt;alert(1)&lt;/script&gt;&lt;p&gt;");
+    expect(html).not.toContain('<script data-x="1">');
+  });
+
+  it("neutralizes raw HTML and control-line injection in shareable Markdown metadata", () => {
+    const maliciousLabel = 'Trusted source</p><script data-x="1">alert(1)</script><p>\n# FORGED\u001b[31mRED\u001b[0m';
+    const hostileRegistry: SourceRegistry = {
+      ...sourceRegistry,
+      approvedSources: [{ ...sourceRegistry.approvedSources[0]!, label: maliciousLabel }]
+    };
+    const markdown = generateMarkdownReport({ ...input, sourceRegistry: hostileRegistry });
+
+    expect(markdown).toContain("Trusted source&lt;/p&gt;&lt;script data-x=\"1\"&gt;alert(1)&lt;/script&gt;&lt;p&gt; # FORGEDRED");
+    expect(markdown).not.toContain('<script data-x="1">');
+    expect(markdown).not.toContain("\n# FORGED");
+    expect(markdown).not.toContain("\u001b");
   });
 
   it("quotes dynamic YAML values in policy/config drafts", () => {

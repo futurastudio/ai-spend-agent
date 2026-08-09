@@ -50,6 +50,14 @@ export type LocalAgentCall = {
   latestTurnUsage?: LocalAgentTurnUsage;
   /** Whether `usage` is one model turn or the session's cumulative financial total. */
   usageScope?: "turn" | "session_cumulative";
+  /**
+   * Whether the transcript exposed the input/output components required for
+   * pricing. A total-only snapshot is still usage evidence, but pricing it as
+   * zero would be false precision.
+   */
+  usageSupport?: "complete" | "unsupported_token_shape";
+  /** Provider-reported total retained when component fields are unavailable. */
+  reportedTotalTokens?: number;
   usage: TokenUsage;
   sessionId?: string;
   /** Provider-reported plan windows embedded in the transcript, when present. */
@@ -134,6 +142,32 @@ export type LocalAgentLogOptions = {
   collectCodexInvocationEvidence?: boolean;
 };
 
+export type LocalAgentLogDiagnosticCode =
+  | "directory_missing"
+  | "directory_unreadable"
+  | "file_unreadable"
+  | "malformed_jsonl"
+  | "unsupported_token_shape";
+
+export type LocalAgentLogDiagnostic = {
+  agent: LocalAgentCall["agent"];
+  code: LocalAgentLogDiagnosticCode;
+  severity: "info" | "warning" | "error";
+  /** Privacy-safe summary; absolute local paths and transcript text are omitted. */
+  message: string;
+  count: number;
+};
+
+export type LocalAgentSourceScan = {
+  agent: LocalAgentCall["agent"];
+  directoryStatus: "readable" | "missing" | "unreadable";
+  filesDiscovered: number;
+  filesParsed: number;
+  malformedLines: number;
+  unreadableFiles: number;
+  unsupportedUsageSnapshots: number;
+};
+
 export type LocalAgentLogResult = {
   records: UsageRecord[];
   /** Per-call entries before aggregation (for drill-down/debugging). */
@@ -141,9 +175,20 @@ export type LocalAgentLogResult = {
   filesParsed: number;
   /** Which agents actually had data on this machine. */
   agentsDetected: Array<LocalAgentCall["agent"]>;
+  /** Per-source scan outcome, including honest empty and unsupported states. */
+  sourceScans: LocalAgentSourceScan[];
+  /** Structured, privacy-safe failures/warnings encountered during the scan. */
+  diagnostics: LocalAgentLogDiagnostic[];
   /** Present only when requested; contains counts/basenames, never raw text. */
   codexInvocationFiles?: ParsedInvocationFile[];
 };
+
+type TranscriptParseDiagnostic = {
+  code: "malformed_jsonl" | "unsupported_token_shape";
+  count: number;
+};
+
+type TranscriptParseDiagnosticHandler = (diagnostic: TranscriptParseDiagnostic) => void;
 
 /**
  * Codex rollout/compaction files can repeat the same session's cumulative
@@ -186,7 +231,8 @@ function totalUsageTokens(usage: TokenUsage): number {
 export function parseClaudeCodeTranscript(
   content: string,
   filePath = "",
-  sinceMs?: number
+  sinceMs?: number,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
 ): LocalAgentCall[] {
   const calls: LocalAgentCall[] = [];
   const seen = new Set<string>();
@@ -201,12 +247,14 @@ export function parseClaudeCodeTranscript(
   let latestActivityKey: string | undefined;
   let isSubagent = filePath.split(sep).includes("subagents");
   let parentSessionId: string | undefined;
+  let malformedLines = 0;
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     let entry: unknown;
     try {
       entry = JSON.parse(line);
     } catch {
+      malformedLines += 1;
       continue;
     }
     if (!isRecord(entry)) continue;
@@ -312,13 +360,17 @@ export function parseClaudeCodeTranscript(
       localActivityScopeKey(call.sessionId, call.workingDirectory, call.project)
     );
   }
+  if (malformedLines > 0) {
+    onDiagnostic?.({ code: "malformed_jsonl", count: malformedLines });
+  }
   return calls;
 }
 
 /** Parse one Codex rollout file (JSONL event stream). Exported for tests. */
 export function parseCodexRollout(
   content: string,
-  onEntry?: (entry: Record<string, unknown>) => void
+  onEntry?: (entry: Record<string, unknown>) => void,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
 ): LocalAgentCall[] {
   let model: string | undefined;
   let rootCwd: string | undefined;
@@ -338,12 +390,14 @@ export function parseCodexRollout(
   let toolCallCount = 0;
   let isSubagent = false;
   let parentSessionId: string | undefined;
+  let malformedLines = 0;
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     let entry: unknown;
     try {
       entry = JSON.parse(line);
     } catch {
+      malformedLines += 1;
       continue;
     }
     if (!isRecord(entry)) continue;
@@ -438,22 +492,47 @@ export function parseCodexRollout(
   // safer than charging the parent cumulative counter again. Likewise, a
   // recognized boundary with no later total_token_usage is not a financial
   // call yet.
+  if (malformedLines > 0) {
+    onDiagnostic?.({ code: "malformed_jsonl", count: malformedLines });
+  }
   if (!lastTotal || isSubagent && !rootTaskStarted) return [];
+  const rawInput = numberOf(lastTotal.input_tokens);
+  const rawOutput = numberOf(lastTotal.output_tokens);
+  const rawCached = numberOf(lastTotal.cached_input_tokens);
+  const rawReportedTotal = numberOf(lastTotal.total_tokens);
+  const baselineInput = numberOf(inheritedUsageBaseline?.input_tokens);
+  const baselineOutput = numberOf(inheritedUsageBaseline?.output_tokens);
+  const baselineReportedTotal = numberOf(inheritedUsageBaseline?.total_tokens);
+  const currentComponentsComplete = rawInput !== undefined && rawOutput !== undefined && !(
+    (rawReportedTotal ?? 0) > 0 && rawInput === 0 && rawOutput === 0
+  );
+  const baselineComponentsComplete = !inheritedUsageBaseline || (
+    baselineInput !== undefined && baselineOutput !== undefined && !(
+      (baselineReportedTotal ?? 0) > 0 && baselineInput === 0 && baselineOutput === 0
+    )
+  );
+  const usageSupport = currentComponentsComplete && baselineComponentsComplete
+    ? "complete" as const
+    : "unsupported_token_shape" as const;
+  if (usageSupport === "unsupported_token_shape") {
+    onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
+  }
   const input = Math.max(
     0,
-    (numberOf(lastTotal.input_tokens) ?? 0) -
-      (numberOf(inheritedUsageBaseline?.input_tokens) ?? 0)
+    (rawInput ?? 0) - (baselineInput ?? 0)
   );
   const cached = Math.max(
     0,
-    (numberOf(lastTotal.cached_input_tokens) ?? 0) -
+    (rawCached ?? 0) -
       (numberOf(inheritedUsageBaseline?.cached_input_tokens) ?? 0)
   );
   const output = Math.max(
     0,
-    (numberOf(lastTotal.output_tokens) ?? 0) -
-      (numberOf(inheritedUsageBaseline?.output_tokens) ?? 0)
+    (rawOutput ?? 0) - (baselineOutput ?? 0)
   );
+  const reportedTotalTokens = rawReportedTotal === undefined
+    ? undefined
+    : Math.max(0, rawReportedTotal - (baselineReportedTotal ?? 0));
   const latestTurnUsage = lastTurn
     ? codexTurnUsage(lastTurn)
     : undefined;
@@ -479,6 +558,8 @@ export function parseCodexRollout(
     activity,
     latestTurnUsage,
     usageScope: "session_cumulative",
+    usageSupport,
+    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
     usage: {
       // Codex input_tokens INCLUDES cached tokens; split them out.
       inputTokens: Math.max(0, input - cached),
@@ -568,22 +649,47 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
   let filesParsed = 0;
   const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
+  const diagnostics: LocalAgentLogDiagnostic[] = [];
+  const sourceScans: LocalAgentSourceScan[] = [
+    emptySourceScan("claude-code"),
+    emptySourceScan("codex")
+  ];
+  const claudeScan = sourceScans[0]!;
+  const codexScan = sourceScans[1]!;
 
-  for (const file of await listJsonlFiles(claudeDir)) {
-    const content = await readFile(file, "utf8").catch(() => "");
+  for (const file of await listJsonlFiles(claudeDir, claudeScan, diagnostics)) {
+    let content: string;
+    try {
+      content = await readFile(file, "utf8");
+    } catch (error) {
+      recordUnreadableFile("claude-code", claudeScan, diagnostics, error);
+      continue;
+    }
     if (!content) continue;
     filesParsed += 1;
-    calls.push(...parseClaudeCodeTranscript(content, file, sinceMs));
+    claudeScan.filesParsed += 1;
+    calls.push(...parseClaudeCodeTranscript(content, file, sinceMs, (diagnostic) => {
+      recordParseDiagnostic("claude-code", claudeScan, diagnostics, diagnostic);
+    }));
   }
-  for (const file of await listJsonlFiles(codexDir)) {
+  for (const file of await listJsonlFiles(codexDir, codexScan, diagnostics)) {
     if (!basename(file).startsWith("rollout-")) continue;
-    const content = await readFile(file, "utf8").catch(() => "");
+    let content: string;
+    try {
+      content = await readFile(file, "utf8");
+    } catch (error) {
+      recordUnreadableFile("codex", codexScan, diagnostics, error);
+      continue;
+    }
     if (!content) continue;
     filesParsed += 1;
+    codexScan.filesParsed += 1;
     const collector = codexInvocationFiles
       ? createCodexInvocationCollector(sinceMs)
       : undefined;
-    calls.push(...parseCodexRollout(content, collector?.consume));
+    calls.push(...parseCodexRollout(content, collector?.consume, (diagnostic) => {
+      recordParseDiagnostic("codex", codexScan, diagnostics, diagnostic);
+    }));
     if (collector) codexInvocationFiles!.push(collector.finish());
   }
 
@@ -597,6 +703,8 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
     calls: filtered,
     filesParsed,
     agentsDetected: [...new Set(filtered.map((call) => call.agent))],
+    sourceScans,
+    diagnostics,
     ...(codexInvocationFiles ? { codexInvocationFiles } : {})
   };
 }
@@ -620,8 +728,9 @@ export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
       cacheWrite5mTokens: sum(groupCalls, (c) => c.usage.cacheWrite5mTokens ?? 0),
       cacheWrite1hTokens: sum(groupCalls, (c) => c.usage.cacheWrite1hTokens ?? 0)
     };
-    const amountUsd = estimateTokenCostUsd(model, usage);
-    const priced = typeof amountUsd === "number";
+    const usageSupported = groupCalls.every((call) => call.usageSupport !== "unsupported_token_shape");
+    const amountUsd = usageSupported ? estimateTokenCostUsd(model, usage) : undefined;
+    const priced = usageSupported && typeof amountUsd === "number";
     records.push({
       id: slug(["local", agent, day, model, project].join("-")),
       timestamp: new Date(`${day}T00:00:00Z`).toISOString(),
@@ -651,21 +760,146 @@ export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
   return records.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-async function listJsonlFiles(root: string): Promise<string[]> {
-  const exists = await stat(root).then((s) => s.isDirectory()).catch(() => false);
-  if (!exists) return [];
+async function listJsonlFiles(
+  root: string,
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[]
+): Promise<string[]> {
+  let rootStat;
+  try {
+    rootStat = await stat(root);
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) {
+      scan.directoryStatus = "missing";
+      diagnostics.push({
+        agent: scan.agent,
+        code: "directory_missing",
+        severity: "info",
+        message: `${agentLabel(scan.agent)} transcript directory was not found.`,
+        count: 1
+      });
+    } else {
+      scan.directoryStatus = "unreadable";
+      diagnostics.push({
+        agent: scan.agent,
+        code: "directory_unreadable",
+        severity: "error",
+        message: `${agentLabel(scan.agent)} transcript directory could not be read${errorCodeSuffix(error)}.`,
+        count: 1
+      });
+    }
+    return [];
+  }
+  if (!rootStat.isDirectory()) {
+    scan.directoryStatus = "unreadable";
+    diagnostics.push({
+      agent: scan.agent,
+      code: "directory_unreadable",
+      severity: "error",
+      message: `${agentLabel(scan.agent)} transcript path is not a readable directory.`,
+      count: 1
+    });
+    return [];
+  }
+  scan.directoryStatus = "readable";
   const out: string[] = [];
   const queue = [root];
   while (queue.length > 0) {
     const dir = queue.pop()!;
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      scan.directoryStatus = "unreadable";
+      diagnostics.push({
+        agent: scan.agent,
+        code: "directory_unreadable",
+        severity: "error",
+        message: `${agentLabel(scan.agent)} transcript directory could not be read${errorCodeSuffix(error)}.`,
+        count: 1
+      });
+      continue;
+    }
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) queue.push(path);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        out.push(path);
+        scan.filesDiscovered += 1;
+      }
     }
   }
   return out;
+}
+
+function emptySourceScan(agent: LocalAgentCall["agent"]): LocalAgentSourceScan {
+  return {
+    agent,
+    directoryStatus: "readable",
+    filesDiscovered: 0,
+    filesParsed: 0,
+    malformedLines: 0,
+    unreadableFiles: 0,
+    unsupportedUsageSnapshots: 0
+  };
+}
+
+function recordUnreadableFile(
+  agent: LocalAgentCall["agent"],
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[],
+  error: unknown
+): void {
+  scan.unreadableFiles += 1;
+  diagnostics.push({
+    agent,
+    code: "file_unreadable",
+    severity: "error",
+    message: `${agentLabel(agent)} transcript file could not be read${errorCodeSuffix(error)}.`,
+    count: 1
+  });
+}
+
+function recordParseDiagnostic(
+  agent: LocalAgentCall["agent"],
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[],
+  diagnostic: TranscriptParseDiagnostic
+): void {
+  if (diagnostic.code === "malformed_jsonl") {
+    scan.malformedLines += diagnostic.count;
+    diagnostics.push({
+      agent,
+      code: diagnostic.code,
+      severity: "warning",
+      message: `${diagnostic.count} malformed JSONL line(s) were skipped in ${agentLabel(agent)} transcripts.`,
+      count: diagnostic.count
+    });
+    return;
+  }
+  scan.unsupportedUsageSnapshots += diagnostic.count;
+  diagnostics.push({
+    agent,
+    code: diagnostic.code,
+    severity: "warning",
+    message: `${diagnostic.count} ${agentLabel(agent)} token snapshot(s) lacked the input/output components required for pricing.`,
+    count: diagnostic.count
+  });
+}
+
+function agentLabel(agent: LocalAgentCall["agent"]): string {
+  return agent === "claude-code" ? "Claude Code" : "Codex";
+}
+
+function errorCodeSuffix(error: unknown): string {
+  const code = error instanceof Error
+    ? (error as NodeJS.ErrnoException).code
+    : undefined;
+  return code && /^[A-Z0-9_]+$/.test(code) ? ` (${code})` : "";
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
 function projectFromCwd(cwd: string | undefined): string | undefined {

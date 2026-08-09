@@ -17,10 +17,17 @@ describe("generateReportCardSvg", () => {
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
     expect(svg).toContain("AI RECEIPT");
+    expect(svg).toContain("AI RECEIPT · DEMO SAMPLE");
+    expect(svg).toContain('aria-label="AI receipt demo sample"');
     expect(svg).toContain("$87.00");
     expect(svg).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
     expect(svg).toContain("modeled API-rate opportunity");
     expect(svg).toMatch(/~\$[\d,]+\.\d{2}\/mo/);
+    expect(svg).toContain('.modeled { fill: #fbbf24;');
+    expect(svg).toContain('.cutImpact { fill: #fbbf24;');
+    expect(svg).not.toContain("#4ade80");
+    expect(svg).not.toContain('class="save"');
+    expect(svg).not.toContain('class="cutSave"');
     expect(svg).toContain("aibill · local-first · npx aibill");
     expect(svg).not.toContain("ai-spend-agent · local-first");
   });
@@ -116,6 +123,7 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain("$20.00");
     expect(svg).toContain("API-equivalent exposure · savings unavailable");
     expect(svg).toContain("$20.00 observed exposure");
+    expect(svg).toContain('<tspan class="modeled">$20.00</tspan>');
     expect(svg).toContain("1 daily aggregate");
     expect(svg).not.toContain("1 call");
     expect(svg).not.toContain("$0.00/mo modeled");
@@ -131,6 +139,7 @@ describe("generateReportCardSvg", () => {
     const records = await sample();
     const summary = analyzeSpend(records);
     const caption = generateReportCardCaption({ summary, records, mode: "demo" });
+    expect(caption).toMatch(/^DEMO SAMPLE — My AI receipt:/);
     expect(caption).toContain("$87.00");
     expect(caption).toContain("/mo");
     expect(caption).toContain("modeled opportunities to test—not verified savings");
@@ -164,10 +173,136 @@ describe("generateReportCardSvg", () => {
         usageGranularity: "billing_bucket"
       }
     ];
-    const svg = generateReportCardSvg({ summary: analyzeSpend(records), records, mode: "connected" });
+    const summary = analyzeSpend(records);
+    const svg = generateReportCardSvg({ summary, records, mode: "connected" });
+    const caption = generateReportCardCaption({ summary, records, mode: "connected" });
 
     expect(svg).toContain("1 provider · 2 provider records · detected/unverified");
+    expect(svg).toContain("CONNECTED UNVERIFIED COST / VALUE");
+    expect(svg).not.toContain("PROVIDER-REPORTED COST");
+    expect(caption).toContain("connected unverified cost/value");
+    expect(caption).not.toContain("in provider-reported cost");
     expect(svg).not.toContain("2 providers");
     expect(svg).not.toContain("2 calls");
+  });
+
+  it("uses provider-reported wording only for verified priced records", () => {
+    const records: UsageRecord[] = [{
+      id: "verified-cost",
+      timestamp: "2026-08-03T12:00:00.000Z",
+      source: {
+        id: "openai-cost",
+        name: "OpenAI costs",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "test"
+      },
+      model: "cost bucket",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 10,
+      costConfidence: "verified",
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    }];
+    const summary = analyzeSpend(records);
+
+    const svg = generateReportCardSvg({ summary, records, mode: "connected" });
+    const caption = generateReportCardCaption({ summary, records, mode: "connected" });
+
+    expect(svg).toContain("PROVIDER-REPORTED COST (THIS WINDOW)");
+    expect(caption).toContain("in provider-reported cost");
+  });
+
+  it("labels partial provider coverage without downgrading verified rows", () => {
+    const records: UsageRecord[] = [{
+      id: "partial-verified-cost",
+      timestamp: "2026-08-03T12:00:00.000Z",
+      source: {
+        id: "openai-cost",
+        name: "OpenAI costs",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "test"
+      },
+      model: "cost bucket",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 10,
+      costConfidence: "verified",
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    }];
+    const summary = analyzeSpend(records);
+    const input = { summary, records, mode: "connected" as const, providerCoverage: "partial" as const };
+
+    const svg = generateReportCardSvg(input);
+    const caption = generateReportCardCaption(input);
+
+    expect(svg).toContain("partial coverage · verified rows");
+    expect(svg).not.toContain("provider records · verified</text>");
+    expect(caption).toContain("Provider coverage was partial");
+    expect(caption).toContain("available rows retain their evidence labels");
+  });
+
+  it("renders positive sub-cent headlines and captions as less than one cent", () => {
+    const records: UsageRecord[] = [{
+      id: "positive-sub-cent",
+      timestamp: "2026-08-03T12:00:00.000Z",
+      source: {
+        id: "openai-cost",
+        name: "OpenAI costs",
+        provider: "openai",
+        confidence: "estimated",
+        observedFrom: "test"
+      },
+      model: "estimated bucket",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 0.004,
+      costConfidence: "estimated",
+      providerCostType: "openai_usage",
+      usageGranularity: "billing_bucket"
+    }];
+    const summary = analyzeSpend(records);
+
+    const svg = generateReportCardSvg({ summary, records, mode: "connected" });
+    const caption = generateReportCardCaption({ summary, records, mode: "connected" });
+
+    expect(svg).toContain("&lt;$0.01");
+    expect(svg).not.toContain(">$0.00</text>");
+    expect(caption).toContain("My AI receipt: <$0.01");
+    expect(caption).not.toContain("My AI receipt: $0.00");
+  });
+
+  it("never renders missing connected financial evidence as a zero-dollar receipt", () => {
+    const records: UsageRecord[] = [{
+      id: "usage-without-cost",
+      timestamp: "2026-08-08T12:00:00.000Z",
+      source: {
+        id: "openai-usage",
+        name: "OpenAI usage",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "usage API"
+      },
+      model: "gpt-5.5",
+      inputTokens: 120,
+      outputTokens: 20,
+      amountUsd: null,
+      costConfidence: "missing",
+      providerCostType: "openai_usage_evidence",
+      usageGranularity: "usage_bucket"
+    }];
+    const input = { summary: analyzeSpend(records), records, mode: "connected" as const };
+
+    const svg = generateReportCardSvg(input);
+    const caption = generateReportCardCaption(input);
+
+    expect(svg).toContain("CONNECTED COST / VALUE UNAVAILABLE");
+    expect(svg).toContain(">Unavailable</text>");
+    expect(svg).not.toContain("$0.00");
+    expect(caption).toContain("cost/value unavailable (no priced financial evidence)");
+    expect(caption).not.toContain("$0.00");
   });
 });

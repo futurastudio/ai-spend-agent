@@ -13,16 +13,21 @@ import {
   detectLocalPlans,
   redactSecrets,
   readSafeStateText,
+  invalidateConnectedSpendTrustReceipt,
   resolveSafeScanRoot,
   resolveSafeStateDirectory,
   subscriptionPlans,
   unsafeScanRootReason,
   selectProviderFinancialHeadlineRecords,
   writeSafeStateText,
+  verifyConnectedSpendTrustReceipt,
+  verifyConnectedSourceRegistryTrustReceipt,
+  writeConnectedSpendTrustReceipt,
   type DetectedPlan,
   loadDeadContext,
   sampleDeadContext,
   latestObservedWorkingDirectory,
+  downgradeSampleUsageEvidence,
   isBundledSampleUsage,
   loadLocalAgentUsage,
   loadSampleUsageData,
@@ -35,7 +40,12 @@ import {
   createScanAuditLog,
   fetchProviderUsageRecords,
   addApprovedSource,
+  normalizeSourceRegistry,
+  downgradeUntrustedSourceRegistryClaims,
+  buildSourceStatuses,
   slugifySourceId,
+  financialEvidenceForRecords,
+  formatSourceStatuses,
   type AttributionMapping,
   type ConfirmedMapping,
   type DetectedCredential,
@@ -45,7 +55,11 @@ import {
   type SourceType,
   type SpendSummary,
   type UsageRecord,
+  type ProviderCoverageStatus,
   type ProviderQaSummary,
+  type SourceStatusObservation,
+  type LocalAgentLogDiagnostic,
+  type LocalAgentSourceScan,
   type ContextHealthResult,
   type ParsedInvocationFile
 } from "@agent-finops/core";
@@ -106,6 +120,7 @@ type ParsedArgs = {
   plan?: string;
   sinceDays?: number;
   json?: boolean;
+  sources?: boolean;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
@@ -211,13 +226,14 @@ type InstantReadData = {
   records: UsageRecord[];
   mode: InstantReadMode;
   warnings: string[];
+  providerCoverage?: ProviderCoverageStatus;
   codexInvocationFiles?: ParsedInvocationFile[];
 };
 
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
-  const { records, mode, warnings, codexInvocationFiles } = await loadInstantReadData(args);
+  const { records, mode, warnings, providerCoverage, codexInvocationFiles } = await loadInstantReadData(args);
   const summaryRecords = mode === "connected"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -297,6 +313,7 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     groupBy,
     color,
     mode,
+    ...(providerCoverage ? { providerCoverage } : {}),
     nextSteps,
     deadContext,
     detectedPlans,
@@ -463,22 +480,80 @@ function quickstartNextSteps(
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
     steps.push(`npx aibill connect ${detected[0]!.provider}   add official provider-reported cost (ADMIN/owner key)`);
   }
-  steps.push("npx aibill report              write a shareable Markdown + HTML report");
+  steps.push(
+    mode === "demo"
+      ? "npx aibill report --sample     write a clearly labeled demo Markdown + HTML report"
+      : "npx aibill report              write a shareable Markdown + HTML report"
+  );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
   steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app");
   return steps;
 }
 
-type PersistedSpend = { mode?: PersistedDataMode; records: UsageRecord[] };
+type PersistedSpend = {
+  mode?: PersistedDataMode;
+  records: UsageRecord[];
+  providerCoverage?: ProviderCoverageStatus;
+  accounting?: Record<string, unknown>;
+  connectedTrust?: Awaited<ReturnType<typeof verifyConnectedSpendTrustReceipt>>;
+};
 
 async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | undefined> {
   const stateDir = join(rootPath, ".ai-spend-agent");
   try {
-    const spend = await readJson<{ mode?: PersistedDataMode; records?: UsageRecord[] }>(join(stateDir, "spend.json"));
-    return { mode: spend.mode, records: spend.records ?? [] };
+    const exactSpendContents = await readSafeStateText(stateDir, "spend.json");
+    const spend = JSON.parse(exactSpendContents) as unknown;
+    if (!isPlainObject(spend) || !Array.isArray(spend.records)) {
+      throw new Error("persisted spend state must contain a records array");
+    }
+    const parsedRecords = spend.records.map((record) => parseUsageRecord(record));
+    const storedMode = isPersistedDataMode(spend.mode) ? spend.mode : undefined;
+    // The bundled fixture fingerprint is authoritative over a conflicting mode
+    // tag. A copied/tampered sample must never become connected billing merely
+    // because `mode` was changed in JSON.
+    const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
+    const records = mode === "sample" || mode === undefined
+      ? downgradeSampleUsageEvidence(parsedRecords)
+      : parsedRecords;
+    const providerCoverage = persistedProviderCoverage(spend.accounting);
+    const connectedTrust = mode === "connected_provider"
+      ? await verifyConnectedSpendTrustReceipt(rootPath, exactSpendContents)
+      : undefined;
+    return {
+      mode,
+      records,
+      ...(providerCoverage ? { providerCoverage } : {}),
+      ...(isPlainObject(spend.accounting) ? { accounting: spend.accounting } : {}),
+      ...(connectedTrust ? { connectedTrust } : {})
+    };
   } catch {
     return undefined;
   }
+}
+
+function persistedProviderCoverage(accounting: unknown): ProviderCoverageStatus | undefined {
+  if (accounting === undefined) return undefined;
+  if (!isPlainObject(accounting)) {
+    throw new Error("persisted accounting state has an invalid shape");
+  }
+  if (accounting.coverageByProvider === undefined) return undefined;
+  if (!isPlainObject(accounting.coverageByProvider)) {
+    throw new Error("persisted provider coverage has an invalid shape");
+  }
+  const coverage = Object.values(accounting.coverageByProvider);
+  if (coverage.some((value) => value !== "complete" && value !== "partial")) {
+    throw new Error("persisted provider coverage contains an invalid status");
+  }
+  if (coverage.length === 0) return undefined;
+  return coverage.includes("partial") ? "partial" : "complete";
+}
+
+function trustedAccountingMap<T>(
+  accounting: Record<string, unknown> | undefined,
+  field: string
+): Record<string, T> {
+  const value = accounting?.[field];
+  return isPlainObject(value) ? value as Record<string, T> : {};
 }
 
 async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
@@ -497,8 +572,25 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   const looksConnected = (persisted?.records ?? []).some(
     (record) => record.providerCostType !== "local_agent_logs"
   );
-  if (persisted && persisted.records.length > 0 && persisted.mode === "connected_provider" && looksConnected) {
-    return { records: persisted.records, mode: "connected", warnings };
+  if (
+    persisted &&
+    persisted.records.length > 0 &&
+    persisted.mode === "connected_provider" &&
+    looksConnected &&
+    persisted.connectedTrust?.trusted === true
+  ) {
+    return {
+      records: persisted.records,
+      mode: "connected",
+      warnings,
+      ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {})
+    };
+  }
+
+  if (persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === false) {
+    warnings.push(
+      `${persisted.connectedTrust.message} CLI: run \`npx aibill connect <provider>\` or repeat the prior \`npx aibill sync-provider ...\` command. The repository-provided connected totals were ignored.`
+    );
   }
 
   // Real local agent logs (Claude Code / Codex) beat any sample/legacy state.
@@ -514,7 +606,7 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     // same data source we just re-read — superseding it silently is correct,
     // not worth a scary "sample/legacy" warning.
     if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider" && persisted.mode !== "local_logs") {
-      warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `ai-spend-agent reset` to clear it, or pass --ignore-state.");
+      warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `npx aibill reset` to clear it, or pass --ignore-state.");
     }
     return {
       records: logs.records,
@@ -526,11 +618,17 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
 
   // No real logs. Persisted sample/legacy state may still be shown, but only as
   // DEMO (never as connected), with a warning when its origin is unknown.
-  if (persisted && persisted.records.length > 0) {
+  if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider" && persisted.mode !== "local_logs") {
     if (persisted.mode === undefined) {
-      warnings.push("Persisted state in .ai-spend-agent/spend.json is from an older format with no data-mode tag — treating it as demo. Run `ai-spend-agent reset`, then re-scan to refresh.");
+      warnings.push("Persisted state in .ai-spend-agent/spend.json is from an older format with no data-mode tag — treating it as demo. Run `npx aibill reset`, then re-scan to refresh.");
     }
     return { records: persisted.records, mode: "demo", warnings };
+  }
+
+  if (persisted?.mode === "local_logs") {
+    warnings.push(
+      "Ignored persisted local-log cache because no current Claude Code/Codex source records were found. Re-run the local agent activity first; repository state alone cannot authorize an Apply action."
+    );
   }
 
   // loadSampleUsageData resolves the bundled CSVs relative to the installed
@@ -546,11 +644,20 @@ function dataModeBanner(mode: InstantReadMode): string {
 }
 
 async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
+  if (args.sources) {
+    return doctorSourcesCommand(args);
+  }
+
   const rootPath = resolve(args.path);
   const stateDir = join(rootPath, ".ai-spend-agent");
 
   const persisted = await readPersistedSpend(rootPath);
-  const stateMode = persisted ? (persisted.mode ?? "unknown legacy") : "no state";
+  const connectedStateTrusted = persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true;
+  const stateMode = persisted
+    ? persisted.mode === "connected_provider" && !connectedStateTrusted
+      ? "connected_provider (UNTRUSTED — ignored)"
+      : (persisted.mode ?? "unknown legacy")
+    : "no state";
 
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
@@ -576,12 +683,15 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
     : "none detected (use --plan to declare one)";
 
   const warnings: string[] = [];
-  if (stateMode === "sample") warnings.push("sample state present — it will be shown as DEMO and cannot mask real logs; run `ai-spend-agent reset` to clear it");
-  if (stateMode === "unknown legacy") warnings.push("legacy state with no data-mode tag — run `ai-spend-agent reset`, then re-scan");
+  if (stateMode === "sample") warnings.push("sample state present — it will be shown as DEMO and cannot mask real logs; run `npx aibill reset` to clear it");
+  if (stateMode === "unknown legacy") warnings.push("legacy state with no data-mode tag — run `npx aibill reset`, then re-scan");
+  if (persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === false) {
+    warnings.push(`${persisted.connectedTrust.message} Run \`npx aibill connect <provider>\` or repeat the prior \`npx aibill sync-provider ...\` command.`);
+  }
   if (!hasLogs) warnings.push("no real Claude Code / Codex logs found — a first run here will show DEMO sample data");
   if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic to add official provider-reported cost (local logs stay API-equivalent estimates)");
 
-  const predictedMode = stateMode === "connected_provider"
+  const predictedMode = connectedStateTrusted
     ? "connected provider billing"
     : hasLogs
       ? "your local agent logs (estimated at API-equivalent rates)"
@@ -607,6 +717,497 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   return ok(lines.join("\n"));
 }
 
+type PersistedProviderStatusState = {
+  provider?: string;
+  fetchedAt?: string;
+  records?: UsageRecord[];
+  qa?: ProviderQaSummary;
+  qaByProvider?: Record<string, ProviderQaSummary>;
+};
+
+type PersistedSourceAttemptState = {
+  version: 1;
+  providers: Partial<Record<"openai" | "anthropic" | "cursor" | "github-copilot", {
+    checkedAt: string;
+    lastError: string | null;
+  }>>;
+};
+
+const providerStatusIds = ["openai", "anthropic", "cursor", "github-copilot"] as const;
+type ProviderStatusId = typeof providerStatusIds[number];
+
+/**
+ * Show connector validation maturity and this machine's financial evidence as
+ * separate axes. This command reads local state only; it never contacts a
+ * provider or treats a connector capability claim as current financial data.
+ */
+async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootPath = resolve(args.path);
+  const stateDir = join(rootPath, ".ai-spend-agent");
+  const now = new Date();
+  const observations: SourceStatusObservation[] = [];
+
+  let localLogs: Awaited<ReturnType<typeof loadLocalAgentUsage>> | undefined;
+  let localError: string | undefined;
+  try {
+    localLogs = await loadLocalAgentUsage({
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+    });
+  } catch (error) {
+    localError = sanitizeSecretishError(error instanceof Error ? error.message : String(error));
+  }
+
+  const checkedAt = now.toISOString();
+  for (const id of ["claude-code", "codex"] as const) {
+    const records = (localLogs?.records ?? []).filter((record) => record.agentId === id);
+    const evidence = financialEvidenceForRecords(records);
+    const scan = localLogs?.sourceScans.find((entry) => entry.agent === id);
+    const diagnostics = (localLogs?.diagnostics ?? []).filter((entry) => entry.agent === id);
+    const diagnosticError = localAgentDiagnosticSummary(diagnostics);
+    const validationFailed = Boolean(localError) || localDiagnosticsRequireFailure(records, scan, diagnostics);
+    const lastError = localError ?? diagnosticError;
+    observations.push({
+      id,
+      financialEvidence: evidence,
+      financialEvidenceNote: localFinancialEvidenceNote(records, evidence, scan),
+      checkedAt,
+      latestEvidenceAt: latestRecordTimestamp(records),
+      ...(lastError ? { lastError } : {}),
+      ...(validationFailed ? { validationCoverage: "failed" as const } : {})
+    });
+  }
+
+  let providerState: PersistedProviderStatusState = {};
+  let providerStateError: string | undefined;
+  const persistedSpend = await readPersistedSpend(rootPath);
+  if (persistedSpend?.mode === "connected_provider" && persistedSpend.connectedTrust?.trusted === true) {
+    providerState = {
+      records: persistedSpend.records,
+      qaByProvider: trustedAccountingMap<ProviderQaSummary>(persistedSpend.accounting, "qaByProvider")
+    };
+  } else if (persistedSpend?.mode === "connected_provider" && persistedSpend.connectedTrust?.trusted === false) {
+    providerStateError = `${persistedSpend.connectedTrust.message} Provider financial evidence was ignored.`;
+  } else {
+    try {
+      await readSafeStateText(stateDir, "provider-records.json");
+      providerStateError = "provider records have no matching trusted connected spend receipt; financial evidence was ignored";
+    } catch (error) {
+      if (!isNodeError(error, "ENOENT")) {
+        providerStateError = "provider state could not be safely read; financial evidence was ignored";
+      }
+    }
+  }
+  const registry = await readSourceRegistry(stateDir, rootPath);
+  let attemptState: PersistedSourceAttemptState = { version: 1, providers: {} };
+  let attemptStateError: string | undefined;
+  try {
+    const parsed = parsePersistedSourceAttemptState(
+      await readJson<unknown>(join(stateDir, "source-status.json"))
+    );
+    attemptState = parsed.state;
+    attemptStateError = parsed.error;
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) {
+      attemptStateError = "source attempt state could not be parsed; recorded freshness and errors were ignored";
+    }
+  }
+  const providerRecords = Array.isArray(providerState.records) ? providerState.records : [];
+
+  for (const id of providerStatusIds) {
+    const records = providerRecords.filter((record) => record.source?.provider === id);
+    const evidence = financialEvidenceForRecords(records);
+    const qa = providerState.qaByProvider?.[id]
+      ?? (providerState.provider === id ? providerState.qa : undefined);
+    const attempt = attemptState.providers?.[id];
+    const lastError = providerStateError
+      ?? attemptStateError
+      ?? sanitizePersistedStatusText(attempt?.lastError ?? undefined)
+      ?? providerQaLastError(qa);
+    const registeredSource = (Array.isArray(registry.approvedSources) ? registry.approvedSources : [])
+      .filter((source) => source && source.provider === id && typeof source.approvedAt === "string")
+      .sort((left, right) => right.approvedAt.localeCompare(left.approvedAt))[0];
+    const stateCheckedAt = attempt?.checkedAt
+      ?? (providerState.provider === id ? providerState.fetchedAt : undefined);
+    observations.push({
+      id,
+      financialEvidence: evidence,
+      financialEvidenceNote: providerFinancialEvidenceNote(records, evidence),
+      // A connector stub is only configuration, not a source check. Older
+      // successful syncs predate source-status.json, so their non-missing
+      // registry approval time is the conservative migration fallback.
+      checkedAt: stateCheckedAt ?? (registeredSource?.financialEvidence !== "missing" ? registeredSource?.approvedAt : undefined),
+      latestEvidenceAt: latestRecordTimestamp(records),
+      ...(lastError ? { lastError, validationCoverage: "failed" as const } : {})
+    });
+  }
+
+  const statuses = buildSourceStatuses(observations, now);
+  return ok([
+    "aibill doctor --sources",
+    "local status only: no provider was contacted",
+    "status axes (never interchangeable):",
+    "  validation coverage: live_verified | fixture_verified | untested | failed",
+    "  financial evidence: verified | estimated | detected_unverified | missing",
+    "",
+    formatSourceStatuses(statuses)
+  ].join("\n"));
+}
+
+function localFinancialEvidenceNote(
+  records: readonly UsageRecord[],
+  evidence: ReturnType<typeof financialEvidenceForRecords>,
+  scan?: LocalAgentSourceScan
+): string {
+  if (records.length === 0) {
+    if (!scan) return "The local transcript scan did not complete.";
+    if (scan.directoryStatus === "missing") {
+      return "No local transcript directory was found for this agent; no usage evidence was available.";
+    }
+    if (scan.directoryStatus === "unreadable") {
+      return "The local transcript path could not be read; absence of usage cannot be confirmed.";
+    }
+    if (scan.filesDiscovered === 0) {
+      return "The local transcript directory was readable, but no JSONL files were found.";
+    }
+    if (scan.unreadableFiles > 0) {
+      return `${scan.filesDiscovered} transcript file(s) were found, but ${scan.unreadableFiles} could not be read; absence of usage cannot be confirmed.`;
+    }
+    if (scan.malformedLines > 0) {
+      return `${scan.filesDiscovered} transcript file(s) were found, but no valid usage rows were parsed; ${scan.malformedLines} malformed JSONL line(s) were skipped.`;
+    }
+    return `${scan.filesDiscovered} transcript file(s) were found, but no supported usage rows were observed.`;
+  }
+  if (evidence === "estimated") {
+    const estimatedRows = records.filter((record) => (
+      record.costConfidence === "estimated" && typeof record.amountUsd === "number"
+    )).length;
+    const missingRows = records.length - estimatedRows;
+    if (missingRows > 0 || (scan?.unsupportedUsageSnapshots ?? 0) > 0) {
+      const unsupportedCount = scan?.unsupportedUsageSnapshots ?? 0;
+      const unsupported = unsupportedCount > 0
+        ? `; ${unsupportedCount} token snapshot(s) lacked input/output components and were not priced`
+        : "";
+      const otherMissing = Math.max(0, missingRows - unsupportedCount);
+      const unpricedModels = otherMissing > 0
+        ? `; ${otherMissing} other row(s) lacked a supported model price`
+        : "";
+      return `${estimatedRows} of ${records.length} local aggregate row(s) were priced at published API rates${unsupported}${unpricedModels}; missing rows are excluded, and estimates are not billed subscription spend.`;
+    }
+    return `${records.length} local aggregate row(s) priced at published API rates; this is not billed subscription spend.`;
+  }
+  if (evidence === "missing") {
+    if ((scan?.unsupportedUsageSnapshots ?? 0) > 0) {
+      return `${records.length} local aggregate row(s) were observed, but ${scan!.unsupportedUsageSnapshots} token snapshot(s) lacked input/output components required for pricing.`;
+    }
+    return `${records.length} local aggregate row(s) were observed, but no supported price basis was available.`;
+  }
+  return `${records.length} local aggregate row(s) were observed with ${evidence} financial evidence.`;
+}
+
+function localAgentDiagnosticSummary(
+  diagnostics: readonly LocalAgentLogDiagnostic[]
+): string | undefined {
+  const relevant = diagnostics.filter((diagnostic) => diagnostic.code !== "directory_missing");
+  const unsupported = relevant.filter((diagnostic) => diagnostic.code === "unsupported_token_shape");
+  const malformed = relevant.filter((diagnostic) => diagnostic.code === "malformed_jsonl");
+  const messages = [...new Set(
+    relevant
+      .filter((diagnostic) => !["unsupported_token_shape", "malformed_jsonl"].includes(diagnostic.code))
+      .map((diagnostic) => diagnostic.message)
+  )];
+  const unsupportedCount = unsupported
+    .reduce((total, diagnostic) => total + diagnostic.count, 0);
+  if (unsupportedCount > 0) {
+    messages.push(`${unsupportedCount} ${unsupported[0]!.agent === "codex" ? "Codex" : "Claude Code"} token snapshot(s) lacked the input/output components required for pricing.`);
+  }
+  const malformedCount = malformed
+    .reduce((total, diagnostic) => total + diagnostic.count, 0);
+  if (malformedCount > 0) {
+    messages.push(`${malformedCount} malformed JSONL line(s) were skipped in ${malformed[0]!.agent === "codex" ? "Codex" : "Claude Code"} transcripts.`);
+  }
+  return messages.length > 0 ? messages.join(" ") : undefined;
+}
+
+function localDiagnosticsRequireFailure(
+  records: readonly UsageRecord[],
+  scan: LocalAgentSourceScan | undefined,
+  diagnostics: readonly LocalAgentLogDiagnostic[]
+): boolean {
+  if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) return true;
+  // A partially malformed active JSONL can still yield supported evidence.
+  // If nothing valid survived, however, an empty result is not trustworthy.
+  return records.length === 0 && (scan?.malformedLines ?? 0) > 0;
+}
+
+function providerFinancialEvidenceNote(
+  records: readonly UsageRecord[],
+  evidence: ReturnType<typeof financialEvidenceForRecords>
+): string {
+  if (records.length === 0) return "No provider financial evidence is present in local aibill state.";
+  const verifiedRows = records.filter((record) => (
+    record.costConfidence === "verified" && typeof record.amountUsd === "number"
+  )).length;
+  const estimatedRows = records.filter((record) => (
+    record.costConfidence === "estimated" && typeof record.amountUsd === "number"
+  )).length;
+  const detectedRows = records.filter((record) => (
+    record.costConfidence === "detected_unverified" && typeof record.amountUsd === "number"
+  )).length;
+  const missingRows = records.length - verifiedRows - estimatedRows - detectedRows;
+
+  // Keep the concise homogeneous messages, but never let a single verified
+  // row promote every mixed provider row to official billed cost.
+  if (evidence === "verified" && verifiedRows === records.length) {
+    return `${records.length} provider row(s) include official provider-reported cost.`;
+  }
+  if (evidence === "estimated" && estimatedRows === records.length) {
+    return `${records.length} provider row(s) include estimated cost; reconcile before treating it as billed spend.`;
+  }
+  if (evidence === "detected_unverified" && detectedRows === records.length) {
+    return `${records.length} provider row(s) were detected with partial or unreconciled financial coverage.`;
+  }
+  if (evidence === "missing" && missingRows === records.length) {
+    return `${records.length} provider row(s) were observed without a supported cost basis.`;
+  }
+
+  const parts: string[] = [];
+  if (verifiedRows > 0) {
+    parts.push(`${verifiedRows} of ${records.length} provider row(s) include official provider-reported cost`);
+  }
+  if (estimatedRows > 0) {
+    parts.push(`${estimatedRows} provider row(s) include estimated cost`);
+  }
+  if (detectedRows > 0) {
+    parts.push(`${detectedRows} provider row(s) have partial or unreconciled financial coverage`);
+  }
+  if (missingRows > 0) {
+    parts.push(`${missingRows} provider row(s) have no supported cost basis`);
+  }
+  return `${parts.join("; ")}. Row-level financial evidence remains separate.`;
+}
+
+function latestRecordTimestamp(records: readonly UsageRecord[]): string | undefined {
+  return records
+    .map((record) => record.timestamp)
+    .filter((timestamp) => Number.isFinite(Date.parse(timestamp)))
+    .sort((left, right) => right.localeCompare(left))[0];
+}
+
+function providerQaLastError(qa: ProviderQaSummary | undefined): string | undefined {
+  const incompletePage = qa?.pagination.find((entry) => entry.stoppedBecause !== "complete");
+  if (incompletePage) {
+    const fallback = incompletePage.stoppedBecause === "fetch_error"
+      ? "provider fetch failed"
+      : incompletePage.stoppedBecause === "max_pages"
+        ? "pagination stopped at the connector page safety cap"
+        : incompletePage.stoppedBecause === "max_range_days"
+          ? "requested range exceeded the connector coverage cap"
+          : incompletePage.stoppedBecause === "unsafe_next_link"
+            ? "an unsafe pagination link was rejected"
+            : "pagination ended before the provider marked it complete";
+    return sanitizePersistedStatusText(incompletePage.note
+      ? `${incompletePage.label}: ${incompletePage.note}`
+      : `${incompletePage.label}: ${fallback}`);
+  }
+  const drift = qa?.responseDrift[0];
+  if (drift) {
+    return sanitizePersistedStatusText(`${drift.label}: ${drift.field} ${drift.issue}`);
+  }
+  if (qa?.coverage === "partial") {
+    return sanitizePersistedStatusText(`${qa.provider}: provider returned partial coverage`);
+  }
+  return undefined;
+}
+
+function parsePersistedProviderStatusState(value: unknown): {
+  state: PersistedProviderStatusState;
+  error?: string;
+} {
+  if (!isPlainObject(value)) {
+    return { state: {}, error: "provider state has an invalid shape; financial evidence was ignored" };
+  }
+  if (value.provider !== undefined && typeof value.provider !== "string") {
+    return { state: {}, error: "provider state has an invalid provider id; financial evidence was ignored" };
+  }
+  if (value.fetchedAt !== undefined && !validIsoString(value.fetchedAt)) {
+    return { state: {}, error: "provider state has an invalid freshness timestamp; financial evidence was ignored" };
+  }
+  if (value.records !== undefined && !Array.isArray(value.records)) {
+    return { state: {}, error: "provider state has invalid financial records; financial evidence was ignored" };
+  }
+
+  let records: UsageRecord[] = [];
+  try {
+    records = (value.records ?? []).map((record) => parseUsageRecord(record));
+  } catch {
+    return { state: {}, error: "provider state has invalid financial records; financial evidence was ignored" };
+  }
+
+  const qa = value.qa === undefined ? undefined : parsePersistedProviderQa(value.qa);
+  if (value.qa !== undefined && !qa) {
+    return { state: {}, error: "provider state has invalid QA metadata; financial evidence was ignored" };
+  }
+
+  const qaByProvider: Record<string, ProviderQaSummary> = {};
+  if (value.qaByProvider !== undefined) {
+    if (!isPlainObject(value.qaByProvider)) {
+      return { state: {}, error: "provider state has invalid QA metadata; financial evidence was ignored" };
+    }
+    for (const [provider, rawQa] of Object.entries(value.qaByProvider)) {
+      // Unknown providers are forward-compatible but irrelevant to this
+      // four-provider doctor view. Known providers must pass the full shape.
+      if (!isProviderStatusId(provider)) continue;
+      const parsedQa = parsePersistedProviderQa(rawQa);
+      if (!parsedQa) {
+        return { state: {}, error: "provider state has invalid QA metadata; financial evidence was ignored" };
+      }
+      qaByProvider[provider] = parsedQa;
+    }
+  }
+
+  return {
+    state: {
+      ...(typeof value.provider === "string" ? { provider: value.provider } : {}),
+      ...(typeof value.fetchedAt === "string" ? { fetchedAt: value.fetchedAt } : {}),
+      records,
+      ...(qa ? { qa } : {}),
+      ...(Object.keys(qaByProvider).length > 0 ? { qaByProvider } : {})
+    }
+  };
+}
+
+function parsePersistedSourceAttemptState(value: unknown): {
+  state: PersistedSourceAttemptState;
+  error?: string;
+} {
+  const empty: PersistedSourceAttemptState = { version: 1, providers: {} };
+  if (!isPlainObject(value) || value.version !== 1 || !isPlainObject(value.providers)) {
+    return { state: empty, error: "source attempt state has an invalid shape; recorded freshness and errors were ignored" };
+  }
+
+  const providers: PersistedSourceAttemptState["providers"] = {};
+  for (const [provider, rawAttempt] of Object.entries(value.providers)) {
+    if (!isProviderStatusId(provider) || !isPlainObject(rawAttempt) || !validIsoString(rawAttempt.checkedAt)) {
+      return { state: empty, error: "source attempt state has an invalid provider or timestamp; recorded freshness and errors were ignored" };
+    }
+    if (rawAttempt.lastError !== null && typeof rawAttempt.lastError !== "string") {
+      return { state: empty, error: "source attempt state has an invalid error field; recorded freshness and errors were ignored" };
+    }
+    providers[provider] = {
+      checkedAt: rawAttempt.checkedAt,
+      lastError: rawAttempt.lastError === null
+        ? null
+        : (sanitizePersistedStatusText(rawAttempt.lastError) ?? "invalid empty provider error")
+    };
+  }
+  return { state: { version: 1, providers } };
+}
+
+function parsePersistedProviderQa(value: unknown): ProviderQaSummary | undefined {
+  if (!isPlainObject(value) || typeof value.provider !== "string") return undefined;
+  if (value.coverage !== undefined && value.coverage !== "complete" && value.coverage !== "partial") return undefined;
+  if (!isStringArray(value.requestedEndpoints) || !Array.isArray(value.pagination) ||
+      !Array.isArray(value.rateLimits) || !Array.isArray(value.responseDrift) ||
+      !isStringArray(value.instructions)) {
+    return undefined;
+  }
+
+  const pagination: ProviderQaSummary["pagination"] = [];
+  for (const entry of value.pagination) {
+    if (!isPlainObject(entry) || typeof entry.label !== "string" ||
+        !isFiniteNumber(entry.pagesFetched) || !isFiniteNumber(entry.maxPages) ||
+        !isProviderPaginationStop(entry.stoppedBecause) ||
+        (entry.limitPerPage !== undefined && !isFiniteNumber(entry.limitPerPage)) ||
+        (entry.note !== undefined && typeof entry.note !== "string")) {
+      return undefined;
+    }
+    pagination.push({
+      label: entry.label,
+      pagesFetched: entry.pagesFetched,
+      stoppedBecause: entry.stoppedBecause,
+      maxPages: entry.maxPages,
+      ...(typeof entry.limitPerPage === "number" ? { limitPerPage: entry.limitPerPage } : {}),
+      ...(typeof entry.note === "string" ? { note: sanitizePersistedStatusText(entry.note) ?? "empty provider error" } : {})
+    });
+  }
+
+  const rateLimits: ProviderQaSummary["rateLimits"] = [];
+  for (const entry of value.rateLimits) {
+    if (!isPlainObject(entry) || typeof entry.label !== "string" ||
+        (entry.remainingRequests !== undefined && !isFiniteNumber(entry.remainingRequests)) ||
+        (entry.retryAfterSeconds !== undefined && !isFiniteNumber(entry.retryAfterSeconds))) {
+      return undefined;
+    }
+    rateLimits.push({
+      label: entry.label,
+      ...(typeof entry.remainingRequests === "number" ? { remainingRequests: entry.remainingRequests } : {}),
+      ...(typeof entry.retryAfterSeconds === "number" ? { retryAfterSeconds: entry.retryAfterSeconds } : {})
+    });
+  }
+
+  const responseDrift: ProviderQaSummary["responseDrift"] = [];
+  for (const entry of value.responseDrift) {
+    if (!isPlainObject(entry) || typeof entry.label !== "string" ||
+        typeof entry.field !== "string" || typeof entry.issue !== "string") {
+      return undefined;
+    }
+    responseDrift.push({
+      label: entry.label,
+      field: entry.field,
+      issue: entry.issue
+    });
+  }
+
+  return {
+    provider: value.provider,
+    ...(value.coverage === "complete" || value.coverage === "partial" ? { coverage: value.coverage } : {}),
+    requestedEndpoints: value.requestedEndpoints,
+    pagination,
+    rateLimits,
+    responseDrift,
+    instructions: value.instructions
+  };
+}
+
+function sanitizePersistedStatusText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const sanitized = sanitizeSecretishError(value)
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+  return sanitized || undefined;
+}
+
+function isProviderStatusId(value: string): value is ProviderStatusId {
+  return (providerStatusIds as readonly string[]).includes(value);
+}
+
+function isProviderPaginationStop(value: unknown): value is ProviderQaSummary["pagination"][number]["stoppedBecause"] {
+  return value === "complete" || value === "missing_cursor" || value === "max_pages" ||
+    value === "max_range_days" || value === "fetch_error" || value === "unsafe_next_link";
+}
+
+function validIsoString(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function cliVersion(): Promise<string> {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
@@ -619,6 +1220,9 @@ async function cliVersion(): Promise<string> {
 
 async function resetCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = await resolveSafeScanRoot(args.path);
+  // The trust receipt is deliberately outside the repository. Reset must
+  // clear it too so restoring an old spend.json cannot replay prior trust.
+  await invalidateConnectedSpendTrustReceipt(rootPath);
   let stateDir: string;
   try {
     stateDir = await resolveSafeStateDirectory(rootPath);
@@ -633,7 +1237,7 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
   }
   // Clear derived spend state so a prior `scan --sample` (or stale provider
   // sync) can never mask the next real local-log read. Leaves sources/audit.
-  const targets = ["spend.json", "mappings.json", "provider-records.json", "watch-latest.json", "watch-history.json"];
+  const targets = ["spend.json", "mappings.json", "provider-records.json", "source-status.json", "watch-latest.json", "watch-history.json"];
   const removed: string[] = [];
   for (const file of targets) {
     try {
@@ -666,9 +1270,9 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
     sourceRegistry: "sources.json",
     auditLog: "audit-log.json",
     nextCommands: [
-      "ai-spend-agent doctor",
-      `ai-spend-agent scan --sample --path ${rootPath}`,
-      `ai-spend-agent report --out ai-spend-report --path ${rootPath}`
+      "npx aibill doctor",
+      `npx aibill scan --sample --path ${rootPath}`,
+      `npx aibill report --sample --out ai-spend-report --path ${rootPath}`
     ]
   });
   await writeJson(join(stateDir, "sources.json"), registry);
@@ -689,7 +1293,7 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
     "cloud upload: disabled",
     "cron jobs: disabled in V0 demo",
     `state directory: ${stateDir}`,
-    `next: ai-spend-agent scan --sample --path ${rootPath}`
+    `next: npx aibill scan --sample --path ${rootPath}`
   ].join("\n"));
 }
 
@@ -878,12 +1482,16 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     records = await loadSampleUsageData();
     mode = "sample";
   } else {
-    const providerState = await readOptionalJson<{ records: UsageRecord[] }>(
-      join(stateDir, "provider-records.json"),
-      { records: [] }
-    );
-    if (providerState.records.length > 0) {
-      records = providerState.records;
+    const persisted = await readPersistedSpend(dirname(stateDir));
+    if (
+      persisted?.mode === "connected_provider" &&
+      persisted.connectedTrust?.trusted === true &&
+      persisted.records.length > 0
+    ) {
+      // Watch may observe an already trusted provider snapshot, but it may not
+      // mint trust from repository-authored provider-records.json or rewrite
+      // connected state. Only an explicit provider sync can do that.
+      records = persisted.records;
       mode = "connected_provider";
     } else {
       // Same freshness rule as quickstart/report: re-read local logs live,
@@ -907,7 +1515,9 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     : records;
   const summary = analyzeSpend(headlineRecords);
   const mappings = attributeUsageRecords(records);
-  await writeLocalSpendState(stateDir, records, summary, mappings, mode);
+  if (mode !== "connected_provider") {
+    await writeLocalSpendState(stateDir, records, summary, mappings, mode);
+  }
 
   const snapshot: WatchSnapshot = {
     capturedAt: new Date().toISOString(),
@@ -997,6 +1607,7 @@ async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
     path: sourcePath,
     provider: args.provider
   });
+  const addedSource = nextRegistry.approvedSources.find((source) => source.id === id)!;
   await writeJson(join(stateDir, "sources.json"), nextRegistry);
   await appendAuditEvent(stateDir, {
     timestamp: nextRegistry.updatedAt,
@@ -1012,7 +1623,10 @@ async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
     `type: ${args.sourceType}`,
     `path: ${sourcePath}`,
     `provider: ${args.provider ?? "unknown"}`,
-    "read-only: true"
+    "read-only: true",
+    `boundary approval: ${addedSource.boundaryApproval}`,
+    `validation coverage: ${addedSource.validationCoverage}`,
+    `financial evidence: ${addedSource.financialEvidence}`
   ].join("\n"));
 }
 
@@ -1025,7 +1639,12 @@ async function listSourcesCommand(args: ParsedArgs): Promise<CliResult> {
     `approved sources: ${registry.approvedSources.length}`
   ];
   for (const source of registry.approvedSources) {
-    lines.push(`- ${source.id} | ${source.type} | ${source.label} | ${source.provider ?? "unknown"} | ${source.path ?? "no path"}`);
+    lines.push(
+      `- ${source.id} | ${source.type} | ${source.label} | ${source.provider ?? "unknown"} | ${source.path ?? "no path"}`,
+      `  boundary approval: ${source.boundaryApproval}`,
+      `  validation coverage: ${source.validationCoverage}`,
+      `  financial evidence: ${source.financialEvidence}`
+    );
   }
   return ok(lines.join("\n"));
 }
@@ -1058,11 +1677,11 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
       stdout: "",
       stderr: [
         "connect requires a provider. Start with one you can self-serve in ~2 min:",
-        "  ai-spend-agent connect openai      (org-owner Admin key)",
-        "  ai-spend-agent connect anthropic   (Admin key)",
+        "  npx aibill connect openai      (org-owner Admin credential reference)",
+        "  npx aibill connect anthropic   (Admin credential reference)",
         "Team/billing-admin upgrades:",
-        "  ai-spend-agent connect cursor          (Cursor team-admin key, Business plan)",
-        "  ai-spend-agent connect github-copilot  (GitHub billing-admin token)"
+        "  npx aibill connect cursor          (Cursor team-admin credential reference)",
+        "  npx aibill connect github-copilot  (GitHub billing-admin credential reference)"
       ].join("\n")
     };
   }
@@ -1092,7 +1711,9 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     `provider: ${provider}`,
     `type: ${type}`,
     `access method: ${source.accessMethod}`,
-    `verification: ${source.verification}`,
+    `boundary approval: ${source.boundaryApproval}`,
+    `validation coverage: ${source.validationCoverage}`,
+    `financial evidence: ${source.financialEvidence}`,
     "secrets: no raw secrets stored; we only reference a local env var such as env:OPENAI_ADMIN_KEY"
   ];
 
@@ -1111,17 +1732,17 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     lines.push(`auto-detected: a ${provider} key in ${detected.reference} (${detected.hint}) from ${describeOrigin(detected)}`);
     if (detected.isLikelyAdminKey) {
       const adminRef = providerAdminEnvHint[provider] ?? detected.reference;
-      lines.push(`next: ai-spend-agent sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+      lines.push(`next: npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
     } else {
       const adminRef = providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY";
       lines.push(`this looks like a regular key — for COST data set an admin key in ${adminRef}, then:`);
-      lines.push(`  ai-spend-agent sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+      lines.push(`  npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
     }
   } else {
     const adminRef = providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY";
     lines.push("");
     lines.push(`next: export an admin key reference, e.g. ${adminRef}, then run:`);
-    lines.push(`  ai-spend-agent sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+    lines.push(`  npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
   }
 
   lines.push(`missing: ${source.fieldsMissing.join(", ")}`);
@@ -1165,6 +1786,15 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
   }
 
   try {
+    // A provider sync may merge only a prior connected snapshot whose exact
+    // repository bytes have a matching external machine receipt. A cloned
+    // provider-records.json is never allowed to launder fake rows into a new
+    // trusted multi-provider snapshot.
+    const priorSpend = await readPersistedSpend(rootPath);
+    const trustedPrior = priorSpend?.mode === "connected_provider" &&
+      priorSpend.connectedTrust?.trusted === true
+      ? priorSpend
+      : undefined;
     const result = await fetchProviderUsageRecords({
       provider: args.provider,
       sourceId: `${args.provider}-provider-api`,
@@ -1175,14 +1805,8 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       enterprise: args.enterprise,
       accountId: args.accountId
     });
-    const priorProviderState = await readOptionalJson<{
-      records: UsageRecord[];
-      qaByProvider?: Record<string, ProviderQaSummary>;
-      coverageByProvider?: Record<string, string>;
-      financialsByProvider?: Record<string, unknown>;
-    }>(join(stateDir, "provider-records.json"), { records: [] });
     const records = [
-      ...priorProviderState.records.filter((record) => record.source.provider !== result.provider),
+      ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
       ...result.records
     ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const registry = await readSourceRegistry(stateDir, rootPath);
@@ -1191,17 +1815,21 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     const summary = analyzeSpend(headlineRecords);
     const mappings = attributeUsageRecords(records);
     const qaByProvider = {
-      ...(priorProviderState.qaByProvider ?? {}),
+      ...trustedAccountingMap<ProviderQaSummary>(trustedPrior?.accounting, "qaByProvider"),
       [result.provider]: result.qa
     };
     const coverageByProvider = {
-      ...(priorProviderState.coverageByProvider ?? {}),
+      ...trustedAccountingMap<ProviderCoverageStatus>(trustedPrior?.accounting, "coverageByProvider"),
       [result.provider]: result.coverage
     };
     const financialsByProvider = {
-      ...(priorProviderState.financialsByProvider ?? {}),
+      ...trustedAccountingMap<unknown>(trustedPrior?.accounting, "financialsByProvider"),
       [result.provider]: result.financials
     };
+    // Invalidate any earlier receipt before the first mutation. If a later
+    // local write fails, the partially updated repository state stays
+    // untrusted rather than inheriting the previous sync's authority.
+    await invalidateConnectedSpendTrustReceipt(rootPath);
     await mkdir(stateDir, { recursive: true });
     await writeJson(join(stateDir, "sources.json"), nextRegistry);
     await writeJson(join(stateDir, "provider-records.json"), {
@@ -1217,6 +1845,14 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       coverageByProvider,
       financialsByProvider
     });
+    await recordProviderSourceAttempt(
+      stateDir,
+      result.provider,
+      result.fetchedAt,
+      result.coverage === "partial"
+        ? (providerQaLastError(result.qa) ?? `${result.provider}: provider returned partial coverage`)
+        : null
+    );
     await writeLocalSpendState(
       stateDir,
       records,
@@ -1227,6 +1863,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
         policy: "provider_reported_billed_cost_preferred",
         note: "Official provider-reported billed costs are the spend headline. API-equivalent estimates remain separate evidence and are not added to that total.",
         coverageByProvider,
+        qaByProvider,
         financialsByProvider
       }
     );
@@ -1236,29 +1873,80 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       sourceId: result.source.id,
       detail: `${args.provider} provider connector synced ${result.records.length} evidence records with ${result.coverage} coverage. Auth reference only; no raw secrets stored.`
     });
+    await writeConnectedSpendTrustReceipt(
+      rootPath,
+      await readSafeStateText(stateDir, "spend.json"),
+      { sourceRegistryContents: await readSafeStateText(stateDir, "sources.json") }
+    );
 
     return ok([
       "aibill sync-provider",
       `provider: ${result.provider}`,
       `source: ${result.source.id}`,
-      `verification: ${result.source.verification}`,
+      `boundary approval: ${result.source.boundaryApproval}`,
+      `validation coverage: ${result.source.validationCoverage}`,
+      `financial evidence: ${result.source.financialEvidence}`,
       `coverage: ${result.coverage}`,
       `records fetched: ${result.records.length}`,
       `headline basis: ${result.financials.headlineBasis}`,
-      `synced provider headline: $${(result.financials.headlineUsd ?? 0).toFixed(2)}`,
-      `combined headline spend: $${summary.totalUsd.toFixed(2)}`,
+      `synced provider headline: ${formatOptionalUsd(result.financials.headlineUsd)}`,
+      `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
       ...(result.financials.apiEquivalentEstimatedUsd !== null
         ? [`API-equivalent estimate (kept separate): $${result.financials.apiEquivalentEstimatedUsd.toFixed(2)}`]
         : []),
       "auth: reference-only; raw secrets were not persisted or printed"
     ].join("\n"));
   } catch (error) {
+    const sanitizedError = sanitizeSecretishError(error instanceof Error ? error.message : String(error), args.authReference);
+    await recordProviderSourceAttempt(stateDir, args.provider, new Date().toISOString(), sanitizedError).catch(() => {
+      // Source-status state is diagnostic only. Do not hide the provider's
+      // real error if derived-state persistence is unavailable.
+    });
     return {
       exitCode: 1,
       stdout: "",
-      stderr: sanitizeSecretishError(error instanceof Error ? error.message : String(error), args.authReference)
+      stderr: sanitizedError
     };
   }
+}
+
+function formatOptionalUsd(value: number | null): string {
+  if (value === null) return "unavailable";
+  if (value > 0 && value < 0.01) return "<$0.01";
+  return `$${value.toFixed(2)}`;
+}
+
+async function recordProviderSourceAttempt(
+  stateDir: string,
+  provider: string,
+  checkedAt: string,
+  lastError: string | null
+): Promise<void> {
+  if (!isProviderStatusId(provider) || !validIsoString(checkedAt)) {
+    return;
+  }
+  let prior: PersistedSourceAttemptState = { version: 1, providers: {} };
+  try {
+    prior = parsePersistedSourceAttemptState(
+      await readJson<unknown>(join(stateDir, "source-status.json"))
+    ).state;
+  } catch {
+    // Missing/corrupt derived status state is safe to replace. Provider
+    // financial records live in a separate file and are never touched here.
+  }
+  await mkdir(stateDir, { recursive: true });
+  await writeJson(join(stateDir, "source-status.json"), {
+    version: 1,
+    providers: {
+      ...(prior.providers ?? {}),
+      [provider]: {
+        checkedAt,
+        lastError: lastError === null
+          ? null
+          : (sanitizePersistedStatusText(lastError) ?? "empty provider error")
+      }
+    }
+  } satisfies PersistedSourceAttemptState);
 }
 
 async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
@@ -1307,10 +1995,15 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
   try {
     const sinceDays = args.sinceDays ?? 30;
     if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
-    const reportInput = await buildReportInput(stateDir, rootPath, sinceDays);
+    // Like Apply, an explicit sample report is a strict privacy boundary. It
+    // must not inspect local transcripts, account metadata, or persisted state.
+    const reportInput = args.sample
+      ? await buildExplicitSampleReportInput(rootPath)
+      : await buildReportInput(stateDir, rootPath, sinceDays);
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
     const markdownPath = `${outBase}.md`;
     const htmlPath = `${outBase}.html`;
+    await mkdir(stateDir, { recursive: true });
     await writeLocalReportFile(markdownPath, generateMarkdownReport(reportInput), stateDir);
     await writeLocalReportFile(htmlPath, generateHtmlReport(reportInput), stateDir);
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
@@ -1325,13 +2018,17 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `policy/config draft: ${artifactPaths.policyConfigDraft}`,
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
-      `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
+      reportInput.dataMode === "sample"
+        ? `DEMO SAMPLE · illustrative cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)} · not user data`
+        : `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
       "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
       `  less ${markdownPath}       read it in the terminal`,
-      "  npx aibill apply       print the paste-ready coding-agent prompt"
+      reportInput.dataMode === "sample"
+        ? "  npx aibill apply --sample  print the non-executable demo boundary"
+        : "  npx aibill apply       print the paste-ready coding-agent prompt"
     ].join("\n"));
   } catch (error) {
     return {
@@ -1357,8 +2054,11 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   try {
-    const rootPath = await resolveSafeScanRoot(args.path);
-    const { records, mode } = await loadInstantReadData(args);
+    // Explicit sample mode reads no workspace data, so a broad-root scan guard
+    // would reject a harmless receipt written from the user's home directory.
+    // Output still goes through the safe-write/symlink checks below.
+    const rootPath = args.sample ? resolve(args.path) : await resolveSafeScanRoot(args.path);
+    const { records, mode, providerCoverage } = await loadInstantReadData(args);
 
     const headlineRecords = mode === "connected"
       ? selectProviderFinancialHeadlineRecords(records)
@@ -1369,11 +2069,18 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
     await writeSafeStateText(
       dirname(outPath),
       basename(outPath),
-      generateReportCardSvg({ summary, records: headlineRecords, mode })
+      generateReportCardSvg({
+        summary,
+        records: headlineRecords,
+        mode,
+        ...(providerCoverage ? { providerCoverage } : {})
+      })
     );
 
     const dataLine = mode === "demo"
-      ? "data: DEMO sample data — run without --sample on a machine with Claude Code/Codex logs for your own numbers."
+      ? args.sample
+        ? "data: DEMO sample data — explicit illustrative mode; no local transcripts or persisted spend state were read."
+        : "data: DEMO sample data — no supported local Claude Code/Codex evidence was found; use --sample to reproduce this demo explicitly."
       : mode === "local-logs"
         ? "data: local Claude Code/Codex logs priced at API-equivalent rates."
         : "data: connected local spend state with provider-reported cost kept separate from API-equivalent estimates.";
@@ -1384,7 +2091,12 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
       dataLine,
       "",
       "Caption to share:",
-      generateReportCardCaption({ summary, records: headlineRecords, mode }),
+      generateReportCardCaption({
+        summary,
+        records: headlineRecords,
+        mode,
+        ...(providerCoverage ? { providerCoverage } : {})
+      }),
       "",
       "privacy: rendered locally; only totals, generic candidate categories, and evidence labels are included."
     ].join("\n"));
@@ -1477,10 +2189,22 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
   const sinceIso = sinceIsoForDays(sinceDays, generatedAt);
   let freshLocalCalls: Awaited<ReturnType<typeof loadLocalAgentUsage>>["calls"] | undefined;
   let freshCodexInvocationFiles: ParsedInvocationFile[] | undefined;
-  let spendState = await readOptionalJson<{ summary: SpendSummary; records?: UsageRecord[]; mode?: PersistedDataMode } | undefined>(
-    join(stateDir, "spend.json"),
-    undefined
-  );
+  let exactSpendContents: string | undefined;
+  try {
+    exactSpendContents = await readSafeStateText(stateDir, "spend.json");
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+  }
+  let spendState = exactSpendContents === undefined
+    ? undefined
+    : JSON.parse(exactSpendContents) as {
+    summary: SpendSummary;
+    records?: UsageRecord[];
+    mode?: PersistedDataMode;
+    accounting?: unknown;
+  };
+  let untrustedConnectedStateMessage: string | undefined;
+  let unavailablePersistedLocalLogs = false;
   let mappings = await readOptionalJson<AttributionMapping[] | undefined>(join(stateDir, "mappings.json"), undefined);
 
   // Never trust a persisted summary or an absent mode. Re-parse the records,
@@ -1488,16 +2212,39 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
   // releases, and recompute decision output under the current evidence rules.
   // Any other unlabeled state remains unlabeled and therefore non-executable.
   if (spendState?.records && spendState.records.length > 0) {
-    const records = spendState.records.map((record) => parseUsageRecord(record));
-    const mode = spendState.mode ?? (isBundledSampleUsage(records) ? "sample" : undefined);
+    const parsedRecords = spendState.records.map((record) => parseUsageRecord(record));
+    const storedMode = isPersistedDataMode(spendState.mode) ? spendState.mode : undefined;
+    // A bundled sample remains sample even if a conflicting mode was written.
+    // This guards report and Apply separately from the quickstart read path.
+    const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
+    const records = mode === "sample" || mode === undefined
+      ? downgradeSampleUsageEvidence(parsedRecords)
+      : parsedRecords;
+    unavailablePersistedLocalLogs = mode === "local_logs";
     const headlineRecords = mode === "connected_provider"
       ? selectProviderFinancialHeadlineRecords(records)
       : records;
     spendState = {
       records,
       mode,
-      summary: analyzeSpend(headlineRecords)
+      summary: analyzeSpend(headlineRecords),
+      ...(spendState.accounting !== undefined ? { accounting: spendState.accounting } : {})
     };
+    if (mode === "connected_provider" && exactSpendContents !== undefined) {
+      const trust = await verifyConnectedSpendTrustReceipt(rootPath, exactSpendContents);
+      if (!trust.trusted) {
+        untrustedConnectedStateMessage = [
+          trust.message,
+          "CLI: run `npx aibill connect <provider>` or repeat the prior `npx aibill sync-provider ...` command."
+        ].join(" ");
+        spendState = undefined;
+        mappings = undefined;
+      } else {
+        // Derived attribution is rebuilt from the receipt-bound records. A
+        // repository-authored mappings.json cannot steer Apply ownership.
+        mappings = attributeUsageRecords(records);
+      }
+    }
   }
 
   // Local-log state is a CACHE, not a source of truth: the quickstart always
@@ -1536,23 +2283,74 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
       await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
       spendState = { summary, records, mode: "local_logs" };
       mappings = liveMappings;
+      unavailablePersistedLocalLogs = false;
+    } else if (unavailablePersistedLocalLogs) {
+      // Persisted local_logs is only a cache. If the source transcripts are no
+      // longer present, repository-authored rows cannot become an executable
+      // Apply artifact merely by claiming local_logs mode.
+      spendState = undefined;
+      mappings = undefined;
     }
-    // else: logs vanished — an existing local_logs snapshot (if any) is used below.
   }
   if (!spendState?.summary || !spendState.records || spendState.records.length === 0) {
+    if (untrustedConnectedStateMessage) {
+      throw new Error(`${untrustedConnectedStateMessage} No connected totals or Apply actions were generated.`);
+    }
+    if (unavailablePersistedLocalLogs) {
+      throw new Error(
+        "Persisted local-log state is an untrusted cache and its source Claude Code/Codex records are unavailable. " +
+          "Re-run `npx aibill` while the local transcripts are available; no report or Apply action was generated from repository state alone."
+      );
+    }
     throw new Error(
       "no persisted spend state and no local Claude Code/Codex logs found. " +
         "Run `npx aibill` first (or `npx aibill scan --sample --path <dir>` for a demo-data report)."
     );
   }
 
-  const [discovery, sourceRegistry, missingSourcePrompts, confirmedMappings, providerRecordsState] = await Promise.all([
+  const [discovery, sourceRegistry, missingSourcePrompts, confirmedMappings, persistedProviderRecordsState] = await Promise.all([
     readOptionalJson<LocalDiscoveryResult>(join(stateDir, "discovery.json"), emptyDiscovery(rootPath)),
     readSourceRegistry(stateDir, rootPath),
     readOptionalJson(join(stateDir, "missing-sources.json"), []),
     readConfirmedMappings(stateDir),
-    readOptionalJson<{ records: UsageRecord[]; qa?: ProviderQaSummary }>(join(stateDir, "provider-records.json"), { records: [] })
+    readOptionalJson<{
+      records: UsageRecord[];
+      qa?: ProviderQaSummary;
+      qaByProvider?: Record<string, ProviderQaSummary>;
+      coverageByProvider?: Record<string, ProviderCoverageStatus>;
+    }>(join(stateDir, "provider-records.json"), { records: [] })
   ]);
+
+  const providerRecordsState = spendState.mode === "connected_provider"
+    ? {
+        records: spendState.records,
+        qaByProvider: trustedAccountingMap<ProviderQaSummary>(
+          isPlainObject(spendState.accounting) ? spendState.accounting : undefined,
+          "qaByProvider"
+        ),
+        coverageByProvider: trustedAccountingMap<ProviderCoverageStatus>(
+          isPlainObject(spendState.accounting) ? spendState.accounting : undefined,
+          "coverageByProvider"
+        )
+      }
+    : persistedProviderRecordsState;
+
+  const providerQa = providerRecordsState.qaByProvider
+    ? Object.values(providerRecordsState.qaByProvider).sort((left, right) => left.provider.localeCompare(right.provider))
+    : providerRecordsState.qa
+      ? [providerRecordsState.qa]
+      : [];
+  const spendProviderCoverage = persistedProviderCoverage(spendState.accounting);
+  const coverageStatuses = [
+    ...Object.values(providerRecordsState.coverageByProvider ?? {}),
+    ...providerQa.map((qa) => qa.coverage).filter((coverage): coverage is ProviderCoverageStatus => coverage === "complete" || coverage === "partial"),
+    ...(spendProviderCoverage ? [spendProviderCoverage] : [])
+  ];
+  const providerCoverage: ProviderCoverageStatus | undefined = coverageStatuses.includes("partial")
+    ? "partial"
+    : coverageStatuses.includes("complete")
+      ? "complete"
+      : undefined;
 
   // Named dead-context items feed the apply artifact for local-log users —
   // the concrete "remove these" list, from the same engine as the readout.
@@ -1614,9 +2412,13 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     mappings: mappings ?? [],
     sourceRegistry,
     missingSourcePrompts,
-    confirmedMappings,
+    // Confirmed mappings are mutable repository state with a different user-
+    // approval lifecycle. Until they receive their own receipt, they cannot
+    // be promoted into connected-provider Apply actions.
+    confirmedMappings: spendState.mode === "connected_provider" ? [] : confirmedMappings,
     providerRecords: providerRecordsState.records,
-    providerQa: providerRecordsState.qa ? [providerRecordsState.qa] : []
+    providerQa,
+    ...(providerCoverage ? { providerCoverage } : {})
   };
 }
 
@@ -1694,6 +2496,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--json") {
       parsed.json = true;
+      continue;
+    }
+    if (arg === "--sources") {
+      parsed.sources = true;
       continue;
     }
     if (arg === "--ignore-state") {
@@ -1930,11 +2736,27 @@ function parseArgs(argv: string[]): ParsedArgs {
 function sanitizeSecretishError(message: string, authReference?: string): string {
   // Core's redactSecrets covers sk-*/ghp_*/github_pat_*/JWT/AIza/xox/AKIA and
   // secret-suffixed env assignments; the sk- fallback keeps short keys covered.
-  let sanitized = redactSecrets(message).replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]");
+  // Strip terminal controls first so escapes cannot split a secret pattern or
+  // forge extra CLI lines, then exact-redact again after normalization.
+  const withoutAuthReference = authReference && !authReference.startsWith("env:")
+    ? message.split(authReference).join("[REDACTED]")
+    : message;
+  let sanitized = redactSecrets(stripTerminalControlSequences(withoutAuthReference))
+    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED]");
   if (authReference && !authReference.startsWith("env:")) {
     sanitized = sanitized.split(authReference).join("[REDACTED]");
   }
-  return sanitized;
+  return sanitized.trim();
+}
+
+function stripTerminalControlSequences(message: string): string {
+  return message
+    .replace(/(?:\u001b\]|\u009d)[\s\S]*?(?:\u0007|\u001b\\|\u009c|$)/gu, "")
+    .replace(/(?:\u001b(?:P|X|\^|_)|[\u0090\u0098\u009e\u009f])[\s\S]*?(?:\u001b\\|\u009c|$)/gu, "")
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\u001b[@-_]/gu, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ");
 }
 
 /**
@@ -1942,6 +2764,10 @@ function sanitizeSecretishError(message: string, authReference?: string): string
  * `scan --sample` can never be silently re-served as if it were real/connected.
  */
 type PersistedDataMode = "sample" | "local_logs" | "connected_provider";
+
+function isPersistedDataMode(value: unknown): value is PersistedDataMode {
+  return value === "sample" || value === "local_logs" || value === "connected_provider";
+}
 
 async function writeLocalSpendState(
   stateDir: string,
@@ -1951,6 +2777,9 @@ async function writeLocalSpendState(
   mode: PersistedDataMode,
   accounting?: unknown
 ): Promise<void> {
+  if (mode !== "connected_provider") {
+    await invalidateConnectedSpendTrustReceipt(dirname(stateDir));
+  }
   await writeJson(join(stateDir, "spend.json"), {
     mode,
     records,
@@ -1962,7 +2791,25 @@ async function writeLocalSpendState(
 
 async function readSourceRegistry(stateDir: string, rootPath: string): Promise<SourceRegistry> {
   try {
-    return await readJson<SourceRegistry>(join(stateDir, "sources.json"));
+    const exactSourceRegistryContents = await readSafeStateText(stateDir, "sources.json");
+    const registry = normalizeSourceRegistry(JSON.parse(exactSourceRegistryContents));
+    try {
+      const exactSpendContents = await readSafeStateText(stateDir, "spend.json");
+      const parsedSpend = JSON.parse(exactSpendContents) as { mode?: unknown };
+      if (parsedSpend.mode === "connected_provider") {
+        const trust = await verifyConnectedSourceRegistryTrustReceipt(
+          rootPath,
+          exactSpendContents,
+          exactSourceRegistryContents
+        );
+        if (trust.trusted) return registry;
+      }
+    } catch {
+      // A source boundary remains usable as configuration, but its repository-
+      // controlled validation/evidence claims are never promoted without the
+      // matching external provider-sync receipt.
+    }
+    return downgradeUntrustedSourceRegistryClaims(registry);
   } catch {
     return createLocalFolderSourceRegistry(rootPath);
   }
@@ -2034,17 +2881,17 @@ function helpText(): string {
   return [
     "aibill — your AI cost and usage evidence in one private view",
     "",
-    "Run with no command for an instant, zero-key demo:",
-    "  ai-spend-agent                       Show available AI cost/value evidence (sample or local data)",
-    "  ai-spend-agent --group-by agent      Drill down by source|model|client|project|agent|user|workspace|apiKey",
-    "  ai-spend-agent --plan <id>           Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
+    "Run with no command for an instant, zero-key local readout:",
+    "  npx aibill                           Show available AI cost/value evidence (sample or local data)",
+    "  npx aibill --group-by agent          Drill down by source|model|client|project|agent|user|workspace|apiKey",
+    "  npx aibill --plan <id>               Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
-    "  ai-spend-agent connect openai        Requires an org-owner Admin key",
-    "  ai-spend-agent connect anthropic     Requires an Admin key",
-    "  ai-spend-agent connect cursor        Upgrade: requires a Cursor team-admin key (Business plan)",
-    "  ai-spend-agent connect github-copilot Upgrade: requires a GitHub billing-admin token",
-    "  ai-spend-agent sync-provider ...     Pull provider cost/usage evidence via a local env: reference (never a raw key)",
+    "  npx aibill connect openai            Requires an org-owner Admin credential reference",
+    "  npx aibill connect anthropic         Requires an Admin credential reference",
+    "  npx aibill connect cursor            Beta: requires a Cursor team-admin credential reference",
+    "  npx aibill connect github-copilot    Beta: requires a GitHub billing-admin credential reference",
+    "  npx aibill sync-provider ...         Pull provider cost/usage evidence via a local env: reference (never a raw credential)",
     "",
     "Watch continuously (deltas + anomalies):",
     "  watch [--interval N]    Re-run analysis on an interval and report deltas/anomalies",
@@ -2053,14 +2900,14 @@ function helpText(): string {
     "Other commands:",
     "  --version, -v           Print the package version without reading local data",
     "  init [--path <dir>]     Initialize local state",
-    "  doctor                  Launch-grade diagnostics: data mode, logs found, provider keys, warnings",
+    "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
     "  scan [--path <dir>]     Scan a local workspace for AI usage signals",
     "  scan --sample           Include deterministic sample spend analysis",
     "  quickstart [--sample] [--since-days N] Plain-English local readout (default 30 days)",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: project for local logs; model otherwise",
-    "  report [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
+    "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",
@@ -2069,9 +2916,10 @@ function helpText(): string {
     "  apply-artifact          Same as `apply` (long form)",
     "",
     "Cron (production watch): add a crontab entry such as:",
-    "  0 * * * * cd /path/to/workspace && ai-spend-agent watch --interval 3600 --cycles 1 >> ai-spend-watch.log 2>&1",
+    "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
     "",
-    "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference; secrets are never printed or persisted."
+    "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
+    "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
   ].join("\n");
 }
 
@@ -2100,8 +2948,8 @@ export async function runMain(): Promise<void> {
   const major = Number(process.versions.node.split(".")[0]);
   if (Number.isFinite(major) && major < 22) {
     console.error(
-      `ai-spend-agent needs Node 22 or newer (you have ${process.versions.node}).\n` +
-        "Upgrade Node, then run: npx ai-spend-agent"
+      `aibill needs Node 22 or newer (you have ${process.versions.node}).\n` +
+        "Upgrade Node, then run: npx aibill"
     );
     process.exit(1);
   }
@@ -2133,9 +2981,9 @@ export async function runMain(): Promise<void> {
       exitCode: 1,
       stdout: "",
       stderr: [
-        `ai-spend-agent hit an unexpected error: ${message}`,
+        `aibill hit an unexpected error: ${message}`,
         "Nothing was uploaded; local state is unchanged.",
-        "Try `ai-spend-agent doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
+        "Try `npx aibill doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
       ].join("\n")
     };
   } finally {

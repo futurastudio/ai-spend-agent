@@ -35,9 +35,9 @@ documented in the README and release notes.
   workload semantics that support that specific counterfactual; otherwise
   Apply returns the missing evidence instead of inventing a cut.
 - A shared data contract across CLI, MCP/plugin, and the Glance source preview.
-- Optional read-only billing reconciliation: Anthropic is live-verified;
-  OpenAI auth and endpoint access are exercised, with non-empty cost
-  reconciliation still pending.
+- Optional read-only billing reconciliation: Anthropic and non-empty OpenAI
+  API reads are live-verified. The remaining OpenAI gate is a manual comparison
+  against the provider UI/final invoice, not connector access or empty data.
 - Cursor and GitHub Copilot connectors labeled fixture-verified beta until live
   account validation is complete.
 

@@ -142,4 +142,10 @@ struct GlanceRefreshPresentationTests {
   func loaderTimeoutHeadroom() {
     #expect(SnapshotLoader.timeoutSeconds == 75)
   }
+
+  @Test("does not render a positive sub-cent value as zero")
+  func subCentCurrency() {
+    #expect(GlanceFormatting.dollars(0.004) == "<$0.01")
+    #expect(GlanceFormatting.dollars(nil) == "Unpriced")
+  }
 }

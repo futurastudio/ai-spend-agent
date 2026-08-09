@@ -55,6 +55,8 @@ export type PlainEnglishSummaryOptions = {
   mode?: "demo" | "connected" | "local-logs";
   /** Optional next-step CTA lines printed in the footer. */
   nextSteps?: string[];
+  /** Provider response completeness; independent from row-level confidence. */
+  providerCoverage?: "complete" | "partial";
   /**
    * Optional dead-context cost (loaded-but-never-invoked tools), priced from
    * the local agent inventory vs. real transcript invocations. Rendered only
@@ -77,11 +79,21 @@ export type PlainEnglishSummaryOptions = {
 };
 
 /**
- * Best-in-class terminal summary: a clearly labeled cost/value headline, a
- * ranked ACTIONABLE opportunity list, then a drill-down table by
- * the chosen dimension. Degrades gracefully (no color, ASCII) when not a TTY.
+ * Evidence-first terminal receipt: mode/trust, headline, sources, plan context,
+ * actionable cuts, context evidence, Apply/Verify, then one deterministic
+ * receipt CTA. Degrades gracefully (no color, ASCII) when not a TTY.
  */
 export function generatePlainEnglishSummary(
+  summary: SpendSummary,
+  options: PlainEnglishSummaryOptions
+): string {
+  return renderPlainEnglishSummary(
+    sanitizeTerminalMetadata(summary),
+    sanitizeTerminalMetadata(options)
+  );
+}
+
+function renderPlainEnglishSummary(
   summary: SpendSummary,
   options: PlainEnglishSummaryOptions
 ): string {
@@ -93,17 +105,29 @@ export function generatePlainEnglishSummary(
   // Deduplicated so the modeled opportunity can never exceed the value it draws
   // from (overlapping recommendations are shown separately, non-additively).
   const plan = buildRecommendedPlan(cutList);
+  const detectedPlans = options.detectedPlans ?? [];
+  const subscriptionPlansDetected = detectedPlans.filter((detectedPlan) => detectedPlan.billing === "subscription");
+  const subscriptionPersona = subscriptionPlansDetected.length > 0 && options.mode === "local-logs";
+  const planChecks = computePlanChecks(options.records, detectedPlans);
+  const primaryValueCheck = planChecks.find(
+    (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
+  );
+  const presentationBasis = financialPresentationBasis(options.mode, options.records);
+  const rawTotalUsd = options.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
+  const hasHeadlineAmount = presentationBasis !== "connected_missing";
+  const rawSourceAmounts = rawBreakdownAmounts(options.records, "source");
+  const rawGroupAmounts = rawBreakdownAmounts(options.records, groupBy);
 
   const lines: string[] = [];
 
-  // --- Headline ----------------------------------------------------------
+  // --- Mode / trust, then headline ---------------------------------------
   lines.push("");
   lines.push(c.dim(rule(width)));
+  lines.push(modeTrustLine(options.mode, summary.confidence, options.providerCoverage, c));
+  lines.push("");
   lines.push(
-    `  ${c.bold(headlineMetricLabel(options.mode))}  ${c.dim("evidence-labeled financial view")}`
+    `  ${c.bold(headlineMetricLabel(presentationBasis))}  ${c.dim("evidence-labeled financial view")}`
   );
-  lines.push(c.dim(rule(width)));
-  lines.push("");
   // Local-log records are day-level session aggregates — calling them "calls"
   // overstates precision to the audience most likely to check.
   const recordNoun = options.mode === "local-logs"
@@ -114,55 +138,20 @@ export function generatePlainEnglishSummary(
   const totalDescription = options.mode === "demo"
     ? `combined illustrative evidence across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`
     : `tracked across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`;
-  lines.push(`  ${c.bold(c.cyan(formatBigUsd(summary.totalUsd)))}  ${c.dim(totalDescription)}`);
+  const headlineAmount = hasHeadlineAmount
+    ? formatBigUsd(summary.totalUsd, rawTotalUsd)
+    : "Unavailable";
+  lines.push(`  ${c.bold(evidenceAmount(headlineAmount, summary.confidence, c))}  ${c.dim(totalDescription)}`);
   lines.push(
-    `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(coverageLine(summary))}`
+    `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(`· evidence mix: ${coverageLine(summary, options.records)}`)}`
   );
-  if (options.mode === "demo") {
-    lines.push("");
-    lines.push(
-      `  ${c.yellow("DEMO")} ${c.dim("sample data — combined cost/value evidence, not one invoice or homogeneous spend basis")}`
-    );
-    lines.push(
-      `  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("without --sample for your local evidence")}`
-    );
-  }
-  if (options.mode === "local-logs") {
-    lines.push("");
-    lines.push(
-      `  ${c.green("YOUR USAGE")} ${c.dim("found in local agent logs (Claude Code / Codex) — priced at API-equivalent rates")}`
-    );
-  }
-  // Persona line: when the agents' own local config tells us the user's plan,
-  // say so up front — the whole readout reads differently on a flat-price plan.
-  const detectedPlans = options.detectedPlans ?? [];
-  const subscriptionPlansDetected = detectedPlans.filter((plan) => plan.billing === "subscription");
-  const subscriptionPersona = subscriptionPlansDetected.length > 0 && options.mode === "local-logs";
-  // Plan checks are needed up front for the value-led header (and again in
-  // the DIAGNOSE section) — pure computation, so hoisting is free.
-  const planChecks = computePlanChecks(options.records, detectedPlans);
-  if (subscriptionPlansDetected.length > 0 && options.mode !== "demo") {
-    lines.push(
-      `  ${c.green("PLAN")} ${c.dim(`${subscriptionPlansDetected.map((plan) => plan.planLabel).join(" · ")} — detected from your agents' local config (read-only, nothing connected)`)}`
-    );
-  }
-  // Subscription users' headline stat is a comparison, not billed spend: the
-  // dollars above are API-equivalent estimates. Keep that boundary explicit.
-  const primaryValueCheck = planChecks.find(
-    (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
-  );
-  if (subscriptionPersona && primaryValueCheck) {
-    lines.push(
-      `  ${c.green(c.bold("COMPARED WITH"))} ${c.bold(`${primaryValueCheck.suggestedPlan!.name} ($${primaryValueCheck.suggestedPlan!.monthlyUsd}/mo)`)} ${c.dim("— API-equivalent usage is")} ${c.bold(`~${primaryValueCheck.valueMultiple}×`)} ${c.dim("the listed price")}`
-    );
-  }
   lines.push("");
 
   // Focused drill-down: an explicit --group-by asks one question — render
   // just the answer (table + definition + data window), not the whole loop.
   if (options.view === "breakdown") {
     const focusedEntries = breakdownFor(summary, groupBy);
-    lines.push(c.bold(`  ${evidenceBreakdownLabel(options.mode)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+    lines.push(c.bold(`  ${evidenceBreakdownLabel(presentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
     if (groupBy === "project" && options.mode === "local-logs") {
       lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
@@ -173,57 +162,17 @@ export function generatePlainEnglishSummary(
       summary.totalUsd,
       c,
       useColor,
-      evidenceAmountColumnLabel(options.mode),
-      options.mode === "demo" ? "Illustrative records" : "Records",
-      groupBy === "project" && options.mode === "local-logs"
+      evidenceAmountColumnLabel(presentationBasis),
+      "#",
+      groupBy === "project" && options.mode === "local-logs",
+      rawGroupAmounts,
+      rawTotalUsd,
+      hasHeadlineAmount
     ), "  "));
     lines.push("");
     lines.push(`  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
     lines.push("");
-    return lines.join("\n");
-  }
-
-  // TL;DR before the detail: an engineer decides in the first five lines
-  // whether the next sixty are worth reading. Three bullets — value, where it
-  // goes, the one action — each traceable to a section below.
-  if (options.mode === "local-logs") {
-    const tldr: string[] = [];
-    if (primaryValueCheck) {
-      const limits = planChecks.some((check) => check.upgradeHint) ? " — check the reported limit signal" : "";
-      tldr.push(`API-equivalent usage is ~${primaryValueCheck.valueMultiple}× the ${primaryValueCheck.suggestedPlan!.name} list price${limits}`);
-    }
-    const topProject = summary.byProject[0];
-    if (topProject && summary.totalUsd > 0) {
-      const share = Math.round((topProject.amountUsd / summary.totalUsd) * 100);
-      tldr.push(
-        isUnattributedProjectKey(topProject.key)
-          ? `${share}% is not yet attributable to a project · sessions launched from home need stronger folder evidence`
-          : `${labelOf(topProject.key)} accounts for ${share}% of it`
-      );
-    }
-    const dcCount = options.deadContext && options.deadContext.hasData && !options.deadContext.isSample ? options.deadContext.deadCount : 0;
-    const topCut = cutList[0];
-    if (topCut || dcCount > 0) {
-      const cutPhrase = topCut?.impactBasis === "observed_value_no_counterfactual"
-        ? "investigate cumulative context"
-        : topCut?.kind === "context_trim"
-          ? "trim heavy context"
-          : topCut
-            ? topCut.title.toLowerCase()
-            : "";
-      const parts = [
-        dcCount > 0
-          ? `inspect ${dcCount} context candidate${dcCount === 1 ? "" : "s"} with no matching invocation`
-          : "",
-        cutPhrase
-      ].filter(Boolean);
-      tldr.push(`one action: ${parts.join(" + ")} — run npx aibill apply`);
-    }
-    if (tldr.length > 0) {
-      lines.push(c.bold("  TL;DR"));
-      for (const line of tldr) lines.push(`  ${c.cyan("›")} ${line}`);
-      lines.push("");
-    }
+    return renderTerminalLines(lines, width);
   }
 
   // The readout is structured as the loop the product sells: DIAGNOSE what
@@ -237,93 +186,88 @@ export function generatePlainEnglishSummary(
 
   // Basis-aware source bars: at-a-glance evidence without implying a mixed
   // sample total is one invoice or one homogeneous spend basis.
-  const spendBars = renderSpendBars(summary.bySource, summary.totalUsd, c);
+  const spendBars = renderSpendBars(
+    summary.bySource,
+    summary.totalUsd,
+    c,
+    rawSourceAmounts,
+    rawTotalUsd,
+    hasHeadlineAmount
+  );
   if (spendBars.length > 0) {
-    lines.push(c.bold(`  ${sourceBreakdownLabel(options.mode)}`) + c.dim("  (by source)"));
+    lines.push(c.bold(`  ${sourceBreakdownLabel(presentationBasis)}`) + c.dim("  (by source)"));
     lines.push("");
     lines.push(...spendBars);
     lines.push("");
   }
 
-  // --- Context candidates: configured/catalogued, no matching invocation --
-  // Count-led (the defensible, shareable part). A token/$ figure shows ONLY
-  // for items we measured (skills/agents); MCP servers are counted, not priced.
-  const dc = options.deadContext;
-  if (dc && dc.hasData && dc.deadCount > 0) {
-    const pct = Math.round(dc.wastePercent * 100);
-    const header = c.bold("  Context candidates") + c.dim(`  (configured/catalogued, no matching invocation in ${dc.windowDays} days)`);
-    lines.push(dc.isSample ? `${header}  ${c.yellow("SAMPLE")}` : header);
-    lines.push("");
-    lines.push(
-      `  ${c.bold(`${dc.deadCount} of ${dc.loadedCount}`)} ${c.dim(`observable inventory items had no matching invocation (${pct}%)`)}`
-    );
-    if (dc.measuredDeadCount > 0 && dc.monthlyDeadTokens > 0) {
-      const plural = dc.measuredDeadCount === 1 ? "" : "s";
-      lines.push(
-        `  ${c.cyan(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} modeled catalog tokens/mo`))} ` +
-          c.dim(`from ${dc.measuredDeadCount} skill${plural}/agent${plural} with no matching invocation · modeled context cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
-      );
-    }
-    if (dc.unmeasuredDeadCount > 0) {
-      const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
-      lines.push(
-        `  ${c.dim(`${dc.unmeasuredDeadCount} configured MCP server${plural} had no matching invocation — schema loading and token weight are unmeasured; verify host loading and future need before changing config`)}`
-      );
-    }
-    if (dc.isSample) {
-      lines.push(`  ${c.dim("illustrative — your first run shows your own skills, agents, and MCP")}`);
-    }
-    lines.push("");
-  } else if (dc && dc.hasData && dc.deadCount === 0 && !dc.isSample) {
-    // A genuinely clean setup gets congratulated, never shown fabricated waste.
-    lines.push(c.bold("  Context candidates") + c.dim(`  (configured/catalogued, no matching invocation in ${dc.windowDays} days)`));
-    lines.push("");
-    lines.push(
-      `  ${c.green("none found")} ${c.dim(`— every one of ${dc.loadedCount} observable inventory item${dc.loadedCount === 1 ? "" : "s"} had matching use in the last ${dc.windowDays} days.`)}`
-    );
-    lines.push("");
-  }
-
-  // Plan check (subscription vs API arbitrage) — part of the diagnosis.
-  if (planChecks.length > 0) {
-    lines.push(c.bold("  Plan check") + c.dim("  (subscription vs pay-per-token — the math no provider shows you)"));
-    lines.push("");
-    for (const check of planChecks) {
-      // Headlines are fact-dense; split at the first dash so narrow terminals
-      // get a short lead line + a dim continuation instead of a 200-char wrap.
-      const [head, ...rest] = check.headline.split(" — ");
-      lines.push(`  ${c.cyan("›")} ${head}`);
-      if (rest.length > 0) {
-        lines.push(`    ${c.dim(rest.join(" — "))}`);
-      }
-      if (check.upgradeHint) {
-        lines.push(`    ${c.yellow("!")} ${c.dim(check.upgradeHint)}`);
-      }
-    }
-    lines.push(
-      planChecks.some((check) => check.detectedPlan)
-        ? `  ${c.dim("plan read from your agents' local config (read-only); prices are published list prices — no account was accessed")}`
-        : `  ${c.dim("compares published list prices — this tool never sees or connects to your subscription account")}`
-    );
-    lines.push("");
-  }
-
-  // Drill-down table — the last diagnostic block.
+  // Source attribution table. The plan comparison intentionally follows all
+  // source evidence so a detected subscription can never redefine the money.
   const entries = breakdownFor(summary, groupBy);
-  lines.push(c.bold(`  ${evidenceBreakdownLabel(options.mode)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+  lines.push(c.bold(`  ${evidenceBreakdownLabel(presentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${groupBy})`));
   if (groupBy === "project" && options.mode === "local-logs") {
     lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
+  lines.push(`  ${c.dim(dataWindowLine(options.records))}`);
   lines.push("");
   lines.push(indentBlock(renderBreakdownTable(
     entries,
     summary.totalUsd,
     c,
     useColor,
-    evidenceAmountColumnLabel(options.mode),
-    options.mode === "demo" ? "Illustrative records" : "Records",
-    groupBy === "project" && options.mode === "local-logs"
+    evidenceAmountColumnLabel(presentationBasis),
+    "#",
+    groupBy === "project" && options.mode === "local-logs",
+    rawGroupAmounts,
+    rawTotalUsd,
+    hasHeadlineAmount
   ), "  "));
+  lines.push("");
+  const topProject = summary.byProject[0];
+  if (
+    options.mode === "local-logs" &&
+    groupBy === "project" &&
+    topProject &&
+    summary.totalUsd > 0 &&
+    isUnattributedProjectKey(topProject.key)
+  ) {
+    const share = Math.round((topProject.amountUsd / summary.totalUsd) * 100);
+    lines.push(`  ${c.yellow("ATTRIBUTION GAP")} ${share}% is not yet attributable to a project`);
+    lines.push("");
+  }
+
+  // Plan context (detected locally and modeled against published list prices).
+  lines.push(c.bold("  Plan context") + c.dim("  (subscription vs API; published list prices)"));
+  lines.push("");
+  if (subscriptionPlansDetected.length > 0 && options.mode !== "demo") {
+    lines.push(
+      `  ${c.yellow("DETECTED PLAN")} ${subscriptionPlansDetected.map((detectedPlan) => detectedPlan.planLabel).join(" · ")} ${c.dim("— detected from your agents' local config (read-only; nothing connected)")}`
+    );
+  }
+  if (subscriptionPersona && primaryValueCheck) {
+    lines.push(
+      `  ${c.yellow(c.bold("COMPARED WITH"))} ${c.bold(`${primaryValueCheck.suggestedPlan!.name} ($${primaryValueCheck.suggestedPlan!.monthlyUsd}/mo)`)} ${c.dim("— API-equivalent usage is")} ${c.yellow(c.bold(`~${primaryValueCheck.valueMultiple}×`))} ${c.dim("the listed price")}`
+    );
+  }
+  if (planChecks.length > 0) {
+    for (const check of planChecks) {
+      // Split the evidence label from its caveat to keep the lead line legible
+      // at the default width; these remain modeled/detected, therefore amber.
+      const [head, ...rest] = check.headline.split(" — ");
+      lines.push(`  ${c.yellow("›")} ${head}`);
+      if (rest.length > 0) lines.push(`    ${c.dim(rest.join(" — "))}`);
+      if (check.upgradeHint) lines.push(`    ${c.yellow("!")} ${c.dim(check.upgradeHint)}`);
+    }
+    lines.push(
+      planChecks.some((check) => check.detectedPlan)
+        ? `  ${c.dim("published list-price comparison; no subscription account was accessed")}`
+        : `  ${c.dim("published list-price comparison; no subscription account was connected")}`
+    );
+  } else if (subscriptionPlansDetected.length > 0) {
+    lines.push(`  ${c.dim("Plan metadata was detected, but no comparable usage record matched it in this window.")}`);
+  } else {
+    lines.push(`  ${c.dim("No local subscription-plan metadata detected; keep cost/value and plan price as separate evidence.")}`);
+  }
   lines.push("");
 
   // ══ 2 · RECOMMEND ═══════════════════════════════════════════════════════
@@ -372,7 +316,7 @@ export function generatePlainEnglishSummary(
         .filter((action) => action.impactBasis === "observed_value_no_counterfactual")
         .reduce((total, action) => total + action.affectedSpendUsd, 0);
       lines.push(
-        `  ${c.cyan(c.bold(formatUsd(observedValue)))} ${c.dim(`API-equivalent value observed in flagged daily aggregates — potential reduction and cash savings are not established`)}`
+        `  ${c.yellow(c.bold(formatUsd(observedValue)))} ${c.dim(`API-equivalent value observed in flagged daily aggregates — potential reduction and cash savings are not established`)}`
       );
       lines.push(
         `  ${c.dim(`apply one approved change, then compare matched future sessions and accepted output; the ${days}-day evidence window is a baseline, not a monthly forecast`)}`
@@ -383,7 +327,7 @@ export function generatePlainEnglishSummary(
       );
     } else {
       lines.push(
-        `  ${c.green(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`modeled API-rate opportunity (deduplicated) — verify quality and the next provider report; projected from ${days} day${days === 1 ? "" : "s"} of data`)}`
+        `  ${c.yellow(c.bold(`~${formatUsd(plan.recommendedSavingsUsd)}/mo`))} ${c.dim(`modeled API-rate opportunity (deduplicated) — verify quality and the next provider report; projected from ${days} day${days === 1 ? "" : "s"} of data`)}`
       );
     }
     if (plan.additionalSavingsUsd > 0) {
@@ -419,6 +363,10 @@ export function generatePlainEnglishSummary(
   }
   lines.push("");
 
+  // Context evidence follows the actionable cuts: it explains why a context
+  // hypothesis was surfaced without turning absence of invocation into proof.
+  lines.push(...renderContextEvidence(options.deadContext, c));
+
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
   lines.push(sectionHeader(
     3,
@@ -434,7 +382,7 @@ export function generatePlainEnglishSummary(
   // "command not found" for exactly the person who just got motivated.
   if (options.mode === "demo") {
     lines.push(
-      `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a NON-EXECUTABLE DEMO boundary; it does not authorize or propose a user change")}`
+      `  ${c.cyan("›")} ${c.bold("npx aibill apply --sample")}   ${c.dim("prints a NON-EXECUTABLE DEMO boundary; it does not authorize or propose a user change")}`
     );
     lines.push(
       `  ${c.dim("    run npx aibill without --sample, or connect a provider, before generating an evidence-scoped Apply plan (long form: npx aibill apply-artifact)")}`
@@ -476,7 +424,8 @@ export function generatePlainEnglishSummary(
   }
   lines.push("");
 
-  // --- Footer / next steps ----------------------------------------------
+  // Supporting next steps stay ahead of the deterministic receipt CTA so the
+  // last visible action is always the shareable evidence artifact.
   const nextSteps = options.nextSteps ?? defaultNextSteps(options.mode);
   if (nextSteps.length > 0) {
     lines.push(c.dim(rule(width)));
@@ -484,15 +433,47 @@ export function generatePlainEnglishSummary(
     for (const step of nextSteps) {
       lines.push(`  ${c.cyan("›")} ${step}`);
     }
+    lines.push("");
   }
+  lines.push(c.dim(rule(width)));
+  lines.push(c.bold("  AI RECEIPT") + c.dim("  evidence labels + generic action candidates in one redacted card"));
+  const receiptCommand = options.mode === "demo"
+    ? "npx aibill report-card --sample"
+    : "npx aibill report-card";
+  lines.push(`  ${c.cyan("›")} ${c.bold(receiptCommand)}  ${c.dim("write a redacted, shareable SVG + caption")}`);
   lines.push("");
 
-  return lines.join("\n");
+  return renderTerminalLines(lines, width);
 }
 
 /** Numbered stage banner: `── 2 · RECOMMEND ──  blurb`. */
 function sectionHeader(step: number, name: string, blurb: string, c: Colors): string {
   return `  ${c.dim("──")} ${c.bold(c.cyan(`${step} · ${name}`))} ${c.dim("──")}  ${c.dim(blurb)}`;
+}
+
+function modeTrustLine(
+  mode: PlainEnglishSummaryOptions["mode"],
+  confidence: CostConfidence,
+  providerCoverage: PlainEnglishSummaryOptions["providerCoverage"],
+  c: Colors
+): string {
+  const prefix = c.dim("  MODE / TRUST");
+  if (mode === "demo") {
+    return `${prefix}  ${c.yellow(c.bold("DEMO SAMPLE"))}\n  ${c.dim("illustrative only · not one invoice or homogeneous spend basis")}`;
+  }
+  if (mode === "local-logs") {
+    return `${prefix}  ${c.yellow(c.bold("LOCAL ESTIMATE"))}\n  ${c.dim("transcript evidence × published API rates · not billed spend")}`;
+  }
+  if (mode === "connected" && providerCoverage === "partial") {
+    return `${prefix}  ${c.yellow(c.bold("CONNECTED · PARTIAL COVERAGE"))}\n  ${c.dim("available rows keep their financial evidence labels; some requested data was not returned")}`;
+  }
+  if (mode === "connected" && confidence === "verified") {
+    return `${prefix}  ${c.green(c.bold("CONNECTED · PROVIDER-REPORTED"))}\n  ${c.dim("reconcile against the final invoice")}`;
+  }
+  if (mode === "connected") {
+    return `${prefix}  ${c.yellow(c.bold(`CONNECTED · ${confidenceWord(confidence).toUpperCase()}`))}\n  ${c.dim("not fully provider-verified")}`;
+  }
+  return `${prefix}  ${c.yellow(c.bold("ESTIMATED EVIDENCE"))}\n  ${c.dim("confirm the source before acting")}`;
 }
 
 /** "window: 14 days of data (2026-06-20 → 2026-07-04)" for drill-down tables. */
@@ -513,7 +494,7 @@ function cutActionLines(
     ? c.yellow(c.bold(`illustrative model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`))
     : action.impactBasis === "observed_value_no_counterfactual"
     ? c.yellow(c.bold("reduction unproven"))
-    : c.green(c.bold(`model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
+    : c.yellow(c.bold(`model ~${formatUsd(action.estimatedMonthlySavingsUsd)}/mo`));
   const head = `  ${c.bold(`${rank}.`)} ${c.bold(action.title)}  ${opportunity}`;
   const detail = `     ${c.dim(action.action)}`;
   // Honest unit: local-log records are day-level session aggregates, not calls.
@@ -529,14 +510,71 @@ function cutActionLines(
   return [head, detail, grounding, ""];
 }
 
+function renderContextEvidence(dc: DeadContextResult | undefined, c: Colors): string[] {
+  const lines = [
+    c.bold("  Context evidence") + c.dim("  (configured/catalogued inventory vs observed invocation)"),
+    ""
+  ];
+
+  if (!dc || !dc.hasData) {
+    lines.push(`  ${c.dim("No context-inventory evidence available; no context action inferred.")}`);
+    lines.push("");
+    return lines;
+  }
+
+  if (dc.deadCount === 0 && !dc.isSample) {
+    lines.push(
+      `  ${c.green("none found")} ${c.dim(`— all ${dc.loadedCount} observable inventory item${dc.loadedCount === 1 ? "" : "s"} had matching use in ${dc.windowDays} days`)}`
+    );
+    lines.push("");
+    return lines;
+  }
+
+  if (dc.deadCount === 0) {
+    lines.push(`  ${c.yellow("SAMPLE")} ${c.dim("no illustrative context candidate in this fixture")}`);
+    lines.push("");
+    return lines;
+  }
+
+  const pct = Math.round(dc.wastePercent * 100);
+  const sampleLabel = dc.isSample ? ` ${c.yellow("SAMPLE")}` : "";
+  lines.push(
+    `  ${c.bold(`inspect ${dc.deadCount} context candidate${dc.deadCount === 1 ? "" : "s"} with no matching invocation`)}${sampleLabel}`
+  );
+  lines.push(
+    `  ${c.dim(`${dc.deadCount} of ${dc.loadedCount} observable inventory items (${pct}%) · candidate evidence, not removal or waste proof`)}`
+  );
+  if (dc.measuredDeadCount > 0 && dc.monthlyDeadTokens > 0) {
+    const plural = dc.measuredDeadCount === 1 ? "" : "s";
+    lines.push(
+      `  ${c.yellow(c.bold(`~${formatTokens(dc.monthlyDeadTokens)} modeled catalog tokens/mo`))} ` +
+        c.dim(`from ${dc.measuredDeadCount} skill${plural}/agent${plural} · modeled context cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
+    );
+  }
+  if (dc.unmeasuredDeadCount > 0) {
+    const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
+    lines.push(
+      `  ${c.dim(`${dc.unmeasuredDeadCount} MCP server${plural}: loading/token weight unmeasured · verify host loading and future need before any change`)}`
+    );
+  }
+  if (dc.isSample) {
+    lines.push(`  ${c.dim("illustrative only — a real run inventories this user's own skills, agents, and MCP")}`);
+  }
+  lines.push("");
+  return lines;
+}
+
 function renderBreakdownTable(
   entries: SpendBreakdownEntry[],
   total: number,
   c: Colors,
   useColor: boolean,
   amountLabel = "Evidence",
-  recordLabel = "Calls",
-  labelUnattributedProject = false
+  recordLabel = "#",
+  labelUnattributedProject = false,
+  rawAmounts: ReadonlyMap<string, number> = new Map(),
+  rawTotal = total,
+  amountsAvailable = true
 ): string {
   if (entries.length === 0) {
     return c.dim("(no breakdown available for this dimension)");
@@ -544,20 +582,23 @@ function renderBreakdownTable(
 
   const table = new Table({
     head: [c.bold(""), c.bold(amountLabel), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
+    colWidths: [18, amountsAvailable ? 9 : 11, 14, 3, amountsAvailable ? 20 : 18],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
-      ? { head: [], border: ["dim"] }
-      : { head: [], border: [] },
+      ? { head: [], border: ["dim"], "padding-left": 0, "padding-right": 1 }
+      : { head: [], border: [], "padding-left": 0, "padding-right": 1 },
     chars: tableChars()
   });
 
   for (const entry of entries.slice(0, 10)) {
-    const share = total > 0 ? entry.amountUsd / total : 0;
+    const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
+    const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
+    const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
     table.push([
       labelUnattributedProject && isUnattributedProjectKey(entry.key)
         ? "Unattributed"
         : labelOf(entry.key),
-      formatUsd(entry.amountUsd),
+      amountsAvailable ? formatUsd(displayAmount) : "Not priced",
       `${bar(share, c)} ${formatPercent(share)}`,
       String(entry.recordCount),
       confidenceWord(entry.confidence)
@@ -577,16 +618,35 @@ function localProjectDefinition(): string {
 
 // --- formatting helpers ---------------------------------------------------
 
-function coverageLine(summary: SpendSummary): string {
+function coverageLine(summary: SpendSummary, records: readonly UsageRecord[]): string {
   const breakdown = summary.confidenceBreakdown;
   const verified = breakdown.verified ?? 0;
   const estimated = breakdown.estimated ?? 0;
   const detected = breakdown.detected_unverified ?? 0;
+  const rawByConfidence = (confidence: CostConfidence): number => records.reduce(
+    (total, record) => total + (record.costConfidence === confidence ? record.amountUsd ?? 0 : 0),
+    0
+  );
+  const verifiedRaw = rawByConfidence("verified");
+  const estimatedRaw = rawByConfidence("estimated");
+  const detectedRaw = rawByConfidence("detected_unverified");
   const parts: string[] = [];
-  if (verified > 0) parts.push(`${formatUsd(verified)} provider-reported`);
-  if (estimated > 0) parts.push(`${formatUsd(estimated)} API-equivalent/estimated`);
-  if (detected > 0) parts.push(`${formatUsd(detected)} detected/unverified`);
+  if (verifiedRaw > 0) parts.push(`${formatUsd(verifiedRaw < 0.01 ? verifiedRaw : verified)} provider-reported`);
+  if (estimatedRaw > 0) parts.push(`${formatUsd(estimatedRaw < 0.01 ? estimatedRaw : estimated)} API-equivalent/estimated`);
+  if (detectedRaw > 0) parts.push(`${formatUsd(detectedRaw < 0.01 ? detectedRaw : detected)} detected/unverified`);
+  const missingRecords = records.filter((record) => (
+    record.costConfidence === "missing" || typeof record.amountUsd !== "number"
+  )).length;
+  if (missingRecords > 0) {
+    parts.push(`${missingRecords} record${missingRecords === 1 ? "" : "s"} missing cost`);
+  }
   return parts.length > 0 ? parts.join(" · ") : "no cost breakdown yet";
+}
+
+function evidenceAmount(value: string, confidence: CostConfidence, c: Colors): string {
+  if (confidence === "verified") return c.green(value);
+  if (confidence === "estimated" || confidence === "detected_unverified") return c.yellow(value);
+  return c.dim(value);
 }
 
 function confidenceBadge(confidence: CostConfidence, c: Colors): string {
@@ -653,48 +713,124 @@ function labelOf(key: string): string {
   return key === "unmapped" ? "(unmapped)" : key;
 }
 
-function headlineMetricLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
-  if (mode === "connected") return "PROVIDER-REPORTED COST";
-  if (mode === "local-logs") return "OBSERVED API-EQUIVALENT VALUE";
-  return "ILLUSTRATIVE COST / VALUE EVIDENCE";
+function rawBreakdownAmounts(
+  records: readonly UsageRecord[],
+  dimension: GroupByDimension
+): ReadonlyMap<string, number> {
+  const amounts = new Map<string, number>();
+  for (const record of records) {
+    const key = rawBreakdownKey(record, dimension) ?? "unmapped";
+    amounts.set(key, (amounts.get(key) ?? 0) + (record.amountUsd ?? 0));
+  }
+  return amounts;
 }
 
-function evidenceBreakdownLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
-  if (mode === "connected") return "Provider-reported cost";
-  if (mode === "local-logs") return "API-equivalent value";
-  return "Cost/value evidence";
+function rawBreakdownKey(record: UsageRecord, dimension: GroupByDimension): string | undefined {
+  switch (dimension) {
+    case "source": return record.source.id;
+    case "client": return record.clientId;
+    case "project": return record.projectId;
+    case "agent": return record.agentId;
+    case "user": return record.userId;
+    case "workspace": return record.workspaceId;
+    case "apiKey": return record.apiKeyId;
+    case "model": return record.model;
+  }
 }
 
-function evidenceAmountColumnLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
-  if (mode === "connected") return "Cost";
-  if (mode === "local-logs") return "Value";
+type FinancialPresentationBasis =
+  | "demo"
+  | "local_estimate"
+  | "provider_reported"
+  | "connected_estimated"
+  | "connected_unverified"
+  | "connected_mixed"
+  | "connected_missing";
+
+/**
+ * Presentation follows the cost-bearing records, never merely the fact that a
+ * provider was connected. Cursor/Copilot and usage-only provider responses can
+ * be valid connected evidence without being provider-reported billed cost.
+ */
+function financialPresentationBasis(
+  mode: PlainEnglishSummaryOptions["mode"],
+  records: readonly UsageRecord[]
+): FinancialPresentationBasis {
+  if (mode === "local-logs") return "local_estimate";
+  if (mode !== "connected") return "demo";
+
+  const priced = records.filter((record) => typeof record.amountUsd === "number");
+  if (priced.length === 0) return "connected_missing";
+
+  const hasVerified = priced.some((record) => record.costConfidence === "verified");
+  const hasEstimated = priced.some((record) => record.costConfidence === "estimated");
+  const hasUnverified = priced.some((record) => record.costConfidence === "detected_unverified");
+  const hasMissing = priced.some((record) => record.costConfidence === "missing");
+  const bearingKinds = [hasVerified, hasEstimated, hasUnverified, hasMissing].filter(Boolean).length;
+
+  if (hasVerified && bearingKinds === 1) return "provider_reported";
+  if (hasEstimated && bearingKinds === 1) return "connected_estimated";
+  if (hasUnverified && bearingKinds === 1) return "connected_unverified";
+  return "connected_mixed";
+}
+
+function headlineMetricLabel(basis: FinancialPresentationBasis): string {
+  switch (basis) {
+    case "provider_reported": return "PROVIDER-REPORTED COST";
+    case "connected_estimated": return "CONNECTED ESTIMATED COST / VALUE";
+    case "connected_unverified": return "CONNECTED UNVERIFIED COST / VALUE";
+    case "connected_mixed": return "MIXED CONNECTED COST / VALUE EVIDENCE";
+    case "connected_missing": return "CONNECTED COST / VALUE UNAVAILABLE";
+    case "local_estimate": return "OBSERVED API-EQUIVALENT VALUE";
+    default: return "ILLUSTRATIVE COST / VALUE EVIDENCE";
+  }
+}
+
+function evidenceBreakdownLabel(basis: FinancialPresentationBasis): string {
+  switch (basis) {
+    case "provider_reported": return "Provider-reported cost";
+    case "connected_estimated": return "Connected estimated cost/value";
+    case "connected_unverified": return "Connected unverified cost/value";
+    case "connected_mixed": return "Mixed connected cost/value evidence";
+    case "connected_missing": return "Connected cost/value coverage";
+    case "local_estimate": return "API-equivalent value";
+    default: return "Cost/value evidence";
+  }
+}
+
+function evidenceAmountColumnLabel(basis: FinancialPresentationBasis): string {
+  if (basis === "provider_reported") return "Cost";
+  if (basis === "local_estimate") return "Value";
   return "Evidence";
 }
 
-function sourceBreakdownLabel(mode: PlainEnglishSummaryOptions["mode"]): string {
-  if (mode === "connected") return "Where provider-reported cost goes";
-  if (mode === "local-logs") return "Where observed API-equivalent value goes";
-  return "Cost/value evidence by source";
+function sourceBreakdownLabel(basis: FinancialPresentationBasis): string {
+  switch (basis) {
+    case "provider_reported": return "Where provider-reported cost goes";
+    case "connected_estimated": return "Where connected estimated cost/value appears";
+    case "connected_unverified": return "Where connected unverified cost/value appears";
+    case "connected_mixed": return "Where mixed connected cost/value evidence appears";
+    case "connected_missing": return "Connected source coverage";
+    case "local_estimate": return "Where observed API-equivalent value goes";
+    default: return "Cost/value evidence by source";
+  }
 }
 
 function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
   if (mode === "connected") {
     return [
-      "npx aibill report           write a shareable Markdown + HTML report",
       "npx aibill --group-by agent drill into another dimension"
     ];
   }
   if (mode === "local-logs") {
     return [
-      "npx aibill report              write a shareable Markdown + HTML report",
       "npx aibill --group-by project  see which project has the most observed activity",
       "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app"
     ];
   }
   return [
     "npx aibill connect openai    add official OpenAI-reported cost (org-owner admin key)",
-    "npx aibill connect anthropic add official Anthropic-reported cost (admin key)",
-    "npx aibill report            write a shareable Markdown + HTML report"
+    "npx aibill connect anthropic add official Anthropic-reported cost (admin key)"
   ];
 }
 
@@ -703,14 +839,23 @@ function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
  * + share. This is the screenshot-able artifact — kept deliberately compact
  * (top 5 sources) so the terminal stays clean.
  */
-function renderSpendBars(entries: SpendBreakdownEntry[], total: number, c: Colors): string[] {
+function renderSpendBars(
+  entries: SpendBreakdownEntry[],
+  total: number,
+  c: Colors,
+  rawAmounts: ReadonlyMap<string, number> = new Map(),
+  rawTotal = total,
+  amountsAvailable = true
+): string[] {
   if (entries.length === 0) return [];
   const top = entries.slice(0, 5);
   const labelWidth = Math.min(16, Math.max(...top.map((entry) => labelOf(entry.key).length)));
   return top.map((entry) => {
-    const share = total > 0 ? entry.amountUsd / total : 0;
+    const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
+    const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const label = labelOf(entry.key).slice(0, labelWidth).padEnd(labelWidth);
-    const amount = formatUsd(entry.amountUsd).padStart(9);
+    const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
+    const amount = (amountsAvailable ? formatUsd(displayAmount) : "Not priced").padStart(10);
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
@@ -727,7 +872,7 @@ function spendBar(ratio: number, c: Colors): string {
 
 /** Unicode bar that degrades to ASCII when color is off. */
 function bar(ratio: number, c: Colors): string {
-  const slots = 10;
+  const slots = 8;
   const filled = Math.max(0, Math.min(slots, Math.round(ratio * slots)));
   const full = c.cyan("█".repeat(filled));
   const empty = c.dim("░".repeat(slots - filled));
@@ -745,14 +890,114 @@ function indentBlock(block: string, indent: string): string {
     .join("\n");
 }
 
-function formatBigUsd(amount: number): string {
+/**
+ * Persisted labels are untrusted terminal input. Strip OSC hyperlinks, ANSI
+ * control sequences, and line/control injection before adding our own color.
+ */
+function sanitizeTerminalMetadata<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizeTerminalText(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeTerminalMetadata(entry)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeTerminalMetadata(entry)])
+    ) as T;
+  }
+  return value;
+}
+
+function sanitizeTerminalText(value: string): string {
+  return value
+    // OSC sequences (including hyperlinks), terminated by BEL/ST or EOF.
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\|$)/gu, "")
+    .replace(/\u009d[\s\S]*?(?:\u0007|\u009c|$)/gu, "")
+    // CSI plus remaining two-character escape sequences.
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/\u001b[@-_]/gu, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function renderTerminalLines(lines: string[], width: number): string {
+  return lines
+    .flatMap((line) => line.split("\n"))
+    .flatMap((line) => wrapProseLine(line, width))
+    .join("\n");
+}
+
+function wrapProseLine(line: string, width: number): string[] {
+  const safeWidth = Math.max(24, width);
+  if (
+    visibleLength(line) <= safeWidth ||
+    /^\s*[┌┬┐├┼┤└┴┘│]/u.test(line) ||
+    /^\s*─+\s*$/u.test(line)
+  ) {
+    return [line];
+  }
+
+  const leading = line.match(/^\s*/u)?.[0] ?? "";
+  const text = line.slice(leading.length);
+  const continuation = /^›\s/u.test(text)
+    ? `${leading}  `
+    : /^\d+\.\s/u.test(text)
+      ? `${leading}   `
+      : leading.length >= 5
+        ? leading
+        : `${leading}  `;
+  const protectedText = text.replace(
+    /npx (?:aibill|ai-spend-agent)(?: (?:apply-artifact|apply|watch|connect|sync-provider|report-card|report|--group-by(?: [a-zA-Z]+)?))?/gu,
+    (command) => command.replace(/ /gu, "\uE000")
+  );
+  const words = protectedText.split(/\s+/u);
+  const wrapped: string[] = [];
+  let current = leading;
+
+  for (const word of words) {
+    const separator = current.trim().length > 0 ? " " : "";
+    if (
+      current.trim().length > 0 &&
+      visibleLength(current) + 1 + visibleLength(word) > safeWidth
+    ) {
+      wrapped.push(current);
+      current = `${continuation}${word}`;
+    } else {
+      current += `${separator}${word}`;
+    }
+  }
+  if (current.length > 0) wrapped.push(current);
+  return wrapped.map((wrappedLine) => wrappedLine.replace(/\uE000/gu, " "));
+}
+
+function visibleLength(text: string): number {
+  let length = 0;
+  let inAnsi = false;
+  for (const char of text) {
+    if (!inAnsi && char.charCodeAt(0) === 27) {
+      inAnsi = true;
+      continue;
+    }
+    if (inAnsi) {
+      if (char === "m") inAnsi = false;
+      continue;
+    }
+    length += 1;
+  }
+  return length;
+}
+
+function formatBigUsd(amount: number, rawAmount = amount): string {
+  if (rawAmount > 0 && rawAmount < 0.01) return "<$0.01";
   return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatUsd(amount: number): string {
   // A real-but-tiny amount rendered as "$0.00" reads as a data bug to a
   // technical audience; "<$0.01" says what actually happened.
-  if (amount > 0 && amount < 0.005) return "<$0.01";
+  if (amount > 0 && amount < 0.01) return "<$0.01";
   return `$${amount.toFixed(2)}`;
 }
 

@@ -5,12 +5,17 @@ Cursor, and other MCP clients answer sourced questions about local Claude
 Code/Codex work, cost evidence, attribution, runway, and Context Health—or add
 provider billing evidence to the same aibill report.
 
-The protocol is client-neutral. Provider ingestion currently supports OpenAI,
-Anthropic, GitHub Copilot, and Cursor. Anthropic is implemented and
-live-verified. OpenAI authentication and endpoint access were exercised, while
-non-empty cost reconciliation is still pending. Copilot and Cursor are
-connector-fixture verified and still need live-account QA. Local transcript
-support is Claude Code and Codex.
+The protocol is client-neutral. Local Claude Code and Codex readers are
+`live_verified` against an adversarial local corpus. Provider ingestion currently
+supports OpenAI, Anthropic, GitHub Copilot, and Cursor. OpenAI and Anthropic
+have non-empty live-API verification. OpenAI QA reconciled the tested Costs
+total to invoiced API credits less the current provider-UI balance with `$0.00`
+variance; each user's final invoice remains separate. Copilot and Cursor pass
+current official-format fixtures but remain `fixture_verified` beta until
+live-account QA. Connector validation coverage is separate from each number's financial-evidence label;
+`npx aibill doctor --sources` shows both.
+`list_sources` also exposes read-boundary approval separately. An approved
+folder boundary never means its financial contents were verified.
 
 ## Run from npm
 
@@ -33,26 +38,30 @@ MCP client configuration:
 
 Provider sync accepts only references such as `env:OPENAI_ADMIN_KEY`. The
 referenced variable must be inherited by the MCP server process. Raw keys are
-rejected and never persisted.
+rejected. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 
 ## Tools
 
 | Tool | Purpose |
 | --- | --- |
-| `scan_ai_spend` | Discover provider files/configuration; `sample: true` is explicitly demo-only. |
+| `scan_ai_spend` | Discover provider files/configuration using opaque descendant-path references; `sample: true` skips local discovery and is explicitly demo-only. |
 | `sync_local_agent_spend` | Build an estimated API-equivalent usage-value report from local Claude Code/Codex metadata. Totals are not billed spend; day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. |
 | `sync_provider_spend` | Pull read-only provider billing evidence through an `env:NAME` reference, with billed cost, estimates, and coverage kept separate. |
 | `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. An explicit `path` wins; otherwise project inventory follows the latest transcript cwd, matching CLI. |
 | `get_context_health` | Distinguish discoverable, configured, explicitly invoked, hook-injected, and invocation-unobservable context without assuming MCP schemas loaded or running hook commands. |
-| `list_sources` | List locally registered sources and verification levels. |
-| `get_spend_report` | Return the active records, data mode, and analyzed summary. |
-| `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. Use `npx aibill apply` for approval, rollback, and matched verification. |
+| `list_sources` | List canonical product-authored source names/scopes, the approved local root, ingestion methods, and separate boundary/validation/financial axes without trusting persisted capability or credential metadata. |
+| `get_spend_report` | Return the active records, data mode, analyzed summary, and separate connector-validation, financial-evidence, freshness, and last-error source statuses. With no synced state, it returns a clearly labeled, non-persisted in-memory sample; malformed or untrusted real state still fails closed. |
+| `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. Use `npx aibill apply` for approval, rollback, and a matched future-session comparison. |
 
 State tools use an absolute project `path`; broad roots, state symlinks, and
-symlinked state files are refused. State is written only to
-`<path>/.ai-spend-agent/`. `get_usage_glance` is read-only and
-reads known Claude Code/Codex transcript metadata. See
-[`docs/MCP.md`](../../docs/MCP.md) for inputs, provider support, development
+symlinked state files are refused. Project state is written to
+`<path>/.ai-spend-agent/`. A successful provider sync also writes a hash-only,
+credential-free machine trust receipt under `~/.aibill/state-receipts/`
+(override: `AI_SPEND_STATE_TRUST_DIR`) so repository-authored connected state
+fails closed. It binds hashes of both `spend.json` and `sources.json`; it never
+contains spend rows, source records, or credentials. `get_usage_glance` is read-only and reads known Claude Code/Codex
+transcript metadata. See the
+[MCP guide](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md) for inputs, provider support, development
 configuration, and troubleshooting.
 
 aibill sends no telemetry or transcripts to an aibill service. Explicit

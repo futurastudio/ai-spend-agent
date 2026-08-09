@@ -79,15 +79,20 @@ enum SnapshotLoader {
     let environment = ProcessInfo.processInfo.environment
     let home = FileManager.default.homeDirectoryForCurrentUser
     let explicit = environment["AIBILL_GLANCE_COMMAND"].map(URL.init(fileURLWithPath:))
-    let localCli = home
-      .appendingPathComponent("agent-finops")
+    let checkoutCli = URL(
+      fileURLWithPath: FileManager.default.currentDirectoryPath,
+      isDirectory: true
+    )
       .appendingPathComponent("packages/cli/dist/index.js")
-    let installedExecutables = [
-      home.appendingPathComponent(".local/bin/ai-spend-agent"),
-      home.appendingPathComponent(".npm-global/bin/ai-spend-agent"),
-      URL(fileURLWithPath: "/opt/homebrew/bin/ai-spend-agent"),
-      URL(fileURLWithPath: "/usr/local/bin/ai-spend-agent")
+    let installedDirectories = [
+      home.appendingPathComponent(".local/bin"),
+      home.appendingPathComponent(".npm-global/bin"),
+      URL(fileURLWithPath: "/opt/homebrew/bin"),
+      URL(fileURLWithPath: "/usr/local/bin")
     ]
+    let installedExecutables = installedDirectories.flatMap { directory in
+      ["aibill", "ai-spend-agent"].map(directory.appendingPathComponent)
+    }
 
     var commands: [Command] = []
     if let explicit, explicit.pathExtension == "js", fileExists(explicit) {
@@ -98,8 +103,8 @@ enum SnapshotLoader {
         arguments: ["glance", "--since-days", "30"]
       ))
     }
-    if fileExists(localCli) {
-      commands.append(contentsOf: nodeCommands(for: localCli))
+    if fileExists(checkoutCli) {
+      commands.append(contentsOf: nodeCommands(for: checkoutCli))
     }
     commands.append(contentsOf: installedExecutables
       .filter { FileManager.default.isExecutableFile(atPath: $0.path) }

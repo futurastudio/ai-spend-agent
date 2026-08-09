@@ -1,0 +1,8 @@
+{
+  "download_links": [
+    "https://reports.example.com/copilot/part-1.ndjson?signature=fixture-one",
+    "https://reports.example.com/copilot/part-2.ndjson?signature=fixture-two"
+  ],
+  "report_start_day": "2026-07-05",
+  "report_end_day": "2026-08-01"
+}

@@ -1,4 +1,5 @@
 import type { UsageSignal } from "./discovery.js";
+import type { FinancialEvidenceStatus, SourceValidationCoverage } from "./sourceStatus.js";
 
 export type SourceType =
   | "local_folder"
@@ -15,7 +16,10 @@ export type ConnectorAuthMode = "oauth" | "api_token_ref" | "browser_session" | 
 
 export type ConnectorTokenStorage = "local_reference_only" | "keychain_reference" | "none";
 
-export type SourceVerificationStatus = "verified" | "estimated" | "detected_unverified" | "missing";
+/** @deprecated Use FinancialEvidenceStatus. Kept only for persisted v1 migration. */
+export type SourceVerificationStatus = FinancialEvidenceStatus;
+
+export type SourceBoundaryApproval = "approved";
 
 export type IngestionLaneId =
   | "local_files_exports"
@@ -28,7 +32,7 @@ export type IngestionLane = {
   id: IngestionLaneId;
   label: string;
   sourceTypes: SourceType[];
-  defaultVerification: SourceVerificationStatus;
+  defaultFinancialEvidence: FinancialEvidenceStatus;
 };
 
 export type ApprovedSource = {
@@ -42,7 +46,12 @@ export type ApprovedSource = {
   scope: string;
   lane: IngestionLaneId;
   accessMethod: SourceAccessMethod;
-  verification: SourceVerificationStatus;
+  /** Permission to read this exact boundary. This is never financial proof. */
+  boundaryApproval: SourceBoundaryApproval;
+  /** How thoroughly the connector/parser itself has been exercised. */
+  validationCoverage: SourceValidationCoverage;
+  /** Quality of the financial numbers currently emitted by this source. */
+  financialEvidence: FinancialEvidenceStatus;
   fieldsVerified: string[];
   fieldsEstimated: string[];
   fieldsMissing: string[];
@@ -107,7 +116,7 @@ export type ProviderConnectorCatalogEntry = {
 
 export type MissingSourcePrompt = {
   provider: string;
-  status: Extract<SourceVerificationStatus, "detected_unverified" | "missing">;
+  status: Extract<FinancialEvidenceStatus, "detected_unverified" | "missing">;
   reason: string;
   detectedEvidence: string[];
   suggestedConnector: string;
@@ -135,31 +144,31 @@ export const ingestionLanes: IngestionLane[] = [
     id: "local_files_exports",
     label: "Local files and provider exports",
     sourceTypes: ["local_folder", "provider_export"],
-    defaultVerification: "estimated"
+    defaultFinancialEvidence: "estimated"
   },
   {
     id: "provider_apis",
     label: "Official provider APIs",
     sourceTypes: ["provider_api"],
-    defaultVerification: "verified"
+    defaultFinancialEvidence: "verified"
   },
   {
     id: "browser_account_ui",
     label: "Browser Account UI",
     sourceTypes: ["browser_account"],
-    defaultVerification: "verified"
+    defaultFinancialEvidence: "verified"
   },
   {
     id: "local_cli_tool_detection",
     label: "Local CLI/tool detection path",
     sourceTypes: ["local_tool_detection"],
-    defaultVerification: "detected_unverified"
+    defaultFinancialEvidence: "detected_unverified"
   },
   {
     id: "mcp_internal_systems",
     label: "MCP and internal systems",
     sourceTypes: ["mcp_tool", "internal_system"],
-    defaultVerification: "verified"
+    defaultFinancialEvidence: "verified"
   }
 ];
 
@@ -332,7 +341,9 @@ export function createLocalFolderSourceRegistry(rootPath: string, now = new Date
         scope: "Read-only scan of the explicit --path root. No writes outside .ai-spend-agent. No cloud upload.",
         lane: "local_files_exports",
         accessMethod: "file",
-        verification: "verified",
+        boundaryApproval: "approved",
+        validationCoverage: "untested",
+        financialEvidence: "missing",
         fieldsVerified: ["approved local folder boundary"],
         fieldsEstimated: [],
         fieldsMissing: ["provider account billing data"]
@@ -347,19 +358,29 @@ export function createLocalFolderSourceRegistry(rootPath: string, now = new Date
 
 export function addApprovedSource(
   registry: SourceRegistry,
-  source: Omit<ApprovedSource, "approvedAt" | "readOnly" | "scope" | "lane" | "accessMethod" | "verification" | "fieldsVerified" | "fieldsEstimated" | "fieldsMissing"> &
-    Partial<Pick<ApprovedSource, "readOnly" | "scope" | "lane" | "accessMethod" | "verification" | "fieldsVerified" | "fieldsEstimated" | "fieldsMissing" | "authMode" | "authScopes" | "tokenStorage" | "authReference">>,
+  source: Omit<ApprovedSource, "approvedAt" | "readOnly" | "scope" | "lane" | "accessMethod" | "boundaryApproval" | "validationCoverage" | "financialEvidence" | "fieldsVerified" | "fieldsEstimated" | "fieldsMissing"> &
+    Partial<Pick<ApprovedSource, "readOnly" | "scope" | "lane" | "accessMethod" | "boundaryApproval" | "validationCoverage" | "financialEvidence" | "fieldsVerified" | "fieldsEstimated" | "fieldsMissing" | "authMode" | "authScopes" | "tokenStorage" | "authReference">>,
   now = new Date()
 ): SourceRegistry {
   const timestamp = now.toISOString();
+  const canonicalRegistry = normalizeSourceRegistry(registry);
+  if (source.readOnly === false) {
+    throw new Error("Approved source boundaries must remain read-only.");
+  }
   const nextSource: ApprovedSource = {
-    ...source,
-    readOnly: source.readOnly ?? true,
+    id: source.id,
+    type: source.type,
+    label: source.label,
+    ...(source.path ? { path: source.path } : {}),
+    ...(source.provider ? { provider: source.provider } : {}),
+    readOnly: true,
     approvedAt: timestamp,
     scope: source.scope ?? defaultScopeForSource(source.type),
     lane: source.lane ?? laneForSourceType(source.type),
     accessMethod: source.accessMethod ?? accessMethodForSourceType(source.type),
-    verification: source.verification ?? ingestionLanes.find((lane) => lane.sourceTypes.includes(source.type))?.defaultVerification ?? "estimated",
+    boundaryApproval: source.boundaryApproval ?? "approved",
+    validationCoverage: source.validationCoverage ?? "untested",
+    financialEvidence: source.type === "local_folder" ? "missing" : (source.financialEvidence ?? "missing"),
     fieldsVerified: source.fieldsVerified ?? [],
     fieldsEstimated: source.fieldsEstimated ?? [],
     fieldsMissing: source.fieldsMissing ?? [],
@@ -368,11 +389,11 @@ export function addApprovedSource(
     tokenStorage: source.tokenStorage,
     authReference: source.authReference
   };
-  const withoutExisting = registry.approvedSources.filter((candidate) => candidate.id !== nextSource.id);
+  const withoutExisting = canonicalRegistry.approvedSources.filter((candidate) => candidate.id !== nextSource.id);
   return {
-    ...registry,
-    ingestionLanes: registry.ingestionLanes ?? ingestionLanes,
-    supportedSourceTypes: registry.supportedSourceTypes ?? supportedSourceTypes,
+    ...canonicalRegistry,
+    ingestionLanes: canonicalRegistry.ingestionLanes ?? ingestionLanes,
+    supportedSourceTypes: canonicalRegistry.supportedSourceTypes ?? supportedSourceTypes,
     approvedSources: [...withoutExisting, nextSource],
     updatedAt: timestamp
   };
@@ -396,13 +417,182 @@ export function createProviderConnectorStub(
     scope: defaultScopeForSource(type),
     lane: laneForSourceType(type),
     accessMethod: accessMethodForSourceType(type, catalogEntry),
-    verification: "missing",
+    boundaryApproval: "approved",
+    // Registering a read-only boundary is not evidence that a connector ran.
+    // A successful provider result promotes this axis explicitly.
+    validationCoverage: "untested",
+    financialEvidence: "missing",
     fieldsVerified: catalogEntry?.verifiedFields ?? [],
     fieldsEstimated: [],
     fieldsMissing: catalogEntry?.missingFields ?? ["approved account/API/export source"],
     authMode: authModeForConnectorType(type, connectorEntry),
     authScopes: connectorEntry?.scopes ?? [],
     tokenStorage: tokenStorageForConnectorType(type, connectorEntry)
+  };
+}
+
+/**
+ * Read a persisted source registry into the canonical three-axis contract.
+ *
+ * Version 1 registries used `verification` for several unrelated meanings.
+ * It is accepted here only as a migration input for financial evidence and is
+ * deliberately omitted from the returned object. A local-folder approval is
+ * permission metadata, so even a legacy `verification: "verified"` migrates
+ * to `financialEvidence: "missing"`.
+ */
+export function normalizeSourceRegistry(value: unknown): SourceRegistry {
+  if (!isObject(value) || value.version !== 1 || value.localOnly !== true || value.cloudUpload !== false) {
+    throw new Error("Invalid local source registry: expected the canonical local-only registry shape.");
+  }
+  if (
+    !Array.isArray(value.approvedSources) ||
+    !Array.isArray(value.deniedGlobs) ||
+    !Array.isArray(value.ingestionLanes) ||
+    !Array.isArray(value.supportedSourceTypes) ||
+    !isValidIso(value.updatedAt) ||
+    !isStringList(value.deniedGlobs) ||
+    !value.supportedSourceTypes.every(isSourceTypeValue)
+  ) {
+    throw new Error("Invalid local source registry: expected valid source, lane, and deny lists.");
+  }
+
+  const normalizedLanes = value.ingestionLanes.map(normalizeIngestionLane);
+  const normalizedSources = value.approvedSources.map(normalizeApprovedSource);
+  return {
+    version: 1,
+    localOnly: true,
+    cloudUpload: false,
+    approvedSources: normalizedSources,
+    deniedGlobs: [...value.deniedGlobs],
+    ingestionLanes: normalizedLanes,
+    supportedSourceTypes: [...value.supportedSourceTypes],
+    updatedAt: value.updatedAt
+  };
+}
+
+function normalizeIngestionLane(value: unknown): IngestionLane {
+  if (
+    !isObject(value) ||
+    !isIngestionLaneId(value.id) ||
+    !isNonEmptyString(value.label) ||
+    !Array.isArray(value.sourceTypes) ||
+    !value.sourceTypes.every(isSourceTypeValue)
+  ) {
+    throw new Error("Invalid local source registry: an ingestion lane has a malformed shape.");
+  }
+  if (value.defaultFinancialEvidence !== undefined && !isFinancialEvidence(value.defaultFinancialEvidence)) {
+    throw new Error("Invalid local source registry: an ingestion lane has invalid financial evidence.");
+  }
+  if (value.defaultVerification !== undefined && !isFinancialEvidence(value.defaultVerification)) {
+    throw new Error("Invalid local source registry: an ingestion lane has an invalid legacy verification value.");
+  }
+  const financialEvidence = isFinancialEvidence(value.defaultFinancialEvidence)
+    ? value.defaultFinancialEvidence
+    : isFinancialEvidence(value.defaultVerification)
+      ? value.defaultVerification
+      : undefined;
+  if (!financialEvidence) {
+    throw new Error("Invalid local source registry: an ingestion lane is missing its financial-evidence default.");
+  }
+  return {
+    id: value.id,
+    label: value.label,
+    sourceTypes: [...value.sourceTypes],
+    defaultFinancialEvidence: financialEvidence
+  };
+}
+
+function normalizeApprovedSource(value: unknown): ApprovedSource {
+  if (
+    !isObject(value) ||
+    !isNonEmptyString(value.id) ||
+    !isSourceTypeValue(value.type) ||
+    !isNonEmptyString(value.label) ||
+    value.readOnly !== true ||
+    !isValidIso(value.approvedAt) ||
+    !isNonEmptyString(value.scope) ||
+    !isIngestionLaneId(value.lane) ||
+    !isAccessMethod(value.accessMethod) ||
+    !isStringList(value.fieldsVerified) ||
+    !isStringList(value.fieldsEstimated) ||
+    !isStringList(value.fieldsMissing)
+  ) {
+    throw new Error("Invalid local source registry: an approved source has a malformed shape.");
+  }
+  if (value.boundaryApproval !== undefined && value.boundaryApproval !== "approved") {
+    throw new Error("Invalid local source registry: an approved source has an invalid boundary approval.");
+  }
+  if (value.validationCoverage !== undefined && !isValidationCoverage(value.validationCoverage)) {
+    throw new Error("Invalid local source registry: an approved source has an invalid validation coverage.");
+  }
+  if (value.financialEvidence !== undefined && !isFinancialEvidence(value.financialEvidence)) {
+    throw new Error("Invalid local source registry: an approved source has invalid financial evidence.");
+  }
+  if (value.verification !== undefined && !isFinancialEvidence(value.verification)) {
+    throw new Error("Invalid local source registry: an approved source has an invalid legacy verification value.");
+  }
+  const provider = optionalNonEmptyString(value.provider, "provider");
+  const path = optionalNonEmptyString(value.path, "path");
+  const authReference = optionalNonEmptyString(value.authReference, "auth reference");
+  const authMode = optionalEnum(value.authMode, isAuthMode, "auth mode");
+  const tokenStorage = optionalEnum(value.tokenStorage, isTokenStorage, "token storage");
+  if (value.authScopes !== undefined && !isStringList(value.authScopes)) {
+    throw new Error("Invalid local source registry: an approved source has invalid auth scopes.");
+  }
+
+  const migratedEvidence = isFinancialEvidence(value.financialEvidence)
+    ? value.financialEvidence
+    : isFinancialEvidence(value.verification)
+      ? value.verification
+      : "missing";
+  return {
+    id: value.id,
+    type: value.type,
+    label: value.label,
+    ...(path ? { path } : {}),
+    ...(provider ? { provider } : {}),
+    readOnly: true,
+    approvedAt: value.approvedAt,
+    scope: value.scope,
+    lane: value.lane,
+    accessMethod: value.accessMethod,
+    boundaryApproval: "approved",
+    validationCoverage: isValidationCoverage(value.validationCoverage)
+      ? value.validationCoverage
+      : "untested",
+    financialEvidence: value.type === "local_folder" ? "missing" : migratedEvidence,
+    fieldsVerified: [...value.fieldsVerified],
+    fieldsEstimated: [...value.fieldsEstimated],
+    fieldsMissing: [...value.fieldsMissing],
+    ...(authMode ? { authMode } : {}),
+    ...(value.authScopes ? { authScopes: [...value.authScopes] } : {}),
+    ...(tokenStorage ? { tokenStorage } : {}),
+    ...(authReference ? { authReference } : {})
+  };
+}
+
+/**
+ * Persisted source registries are repository-controlled configuration. Until
+ * an external provider-sync receipt binds their exact bytes, keep only the
+ * approved read-only boundary and remove any self-asserted validation or
+ * financial-evidence claims.
+ */
+export function downgradeUntrustedSourceRegistryClaims(registry: SourceRegistry): SourceRegistry {
+  const canonical = normalizeSourceRegistry(registry);
+  return {
+    ...canonical,
+    approvedSources: canonical.approvedSources.map((source) => ({
+      ...source,
+      validationCoverage: "untested",
+      financialEvidence: "missing",
+      fieldsVerified: source.fieldsVerified.filter((field) =>
+        /approved|boundary|read-only|folder/i.test(field)
+      ),
+      fieldsMissing: Array.from(new Set([
+        ...source.fieldsMissing,
+        "machine-bound provider validation and financial evidence"
+      ]))
+    }))
   };
 }
 
@@ -417,7 +607,7 @@ export function buildMissingSourcePrompts(signals: UsageSignal[], registry: Sour
 
   const prompts: MissingSourcePrompt[] = [];
   for (const [provider, detectedSignals] of Array.from(providerSignals.entries())) {
-    if (hasVerifiedProviderSource(registry, provider)) {
+    if (hasCurrentProviderFinancialEvidence(registry, provider)) {
       continue;
     }
     const catalogEntry = providerCatalog.find((entry) => entry.id === provider);
@@ -426,7 +616,7 @@ export function buildMissingSourcePrompts(signals: UsageSignal[], registry: Sour
     prompts.push({
       provider,
       status: "detected_unverified",
-      reason: `${provider} was detected locally, but no verified provider/API/browser/export source is connected.`,
+      reason: `${provider} was detected locally, but no approved provider/API/browser/export boundary has current financial evidence. Connector validation is reported separately.`,
       detectedEvidence: detectedSignals.map((signal) => signal.evidence),
       suggestedConnector: `connect ${provider} --type ${preferredType}`,
       suggestedSourceTypes
@@ -469,16 +659,23 @@ export function slugifySourceId(label: string): string {
   return slug || "approved-source";
 }
 
-function hasVerifiedProviderSource(registry: SourceRegistry, provider: string): boolean {
+function hasCurrentProviderFinancialEvidence(registry: SourceRegistry, provider: string): boolean {
   return registry.approvedSources.some((source) => {
     if (source.provider !== provider) {
       return false;
     }
-    if (source.verification === "verified" && source.type !== "local_tool_detection") {
-      return true;
-    }
-    return source.type === "provider_export" || source.type === "provider_api" || source.type === "browser_account" || source.type === "internal_system";
+    return source.boundaryApproval === "approved" &&
+      source.validationCoverage !== "failed" &&
+      source.financialEvidence !== "missing" &&
+      source.type !== "local_tool_detection";
   });
+}
+
+function validationCoverageForSource(provider: string | undefined, type: SourceType): SourceValidationCoverage {
+  if (type === "provider_api" && (provider === "openai" || provider === "anthropic")) return "live_verified";
+  if (type === "provider_api" && (provider === "cursor" || provider === "github-copilot" || provider === "copilot")) return "fixture_verified";
+  if (provider === "local-agent-logs" && type === "local_tool_detection") return "live_verified";
+  return "untested";
 }
 
 function authModeForConnectorType(type: SourceType, connectorEntry?: ProviderConnectorCatalogEntry): ConnectorAuthMode {
@@ -525,4 +722,68 @@ function accessMethodForSourceType(type: SourceType, catalogEntry?: ProviderCata
   if (type === "mcp_tool") return "mcp";
   if (type === "internal_system") return "internal";
   return "file";
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isValidIso(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isSourceTypeValue(value: unknown): value is SourceType {
+  return supportedSourceTypes.includes(value as SourceType);
+}
+
+function isIngestionLaneId(value: unknown): value is IngestionLaneId {
+  return value === "local_files_exports" ||
+    value === "provider_apis" ||
+    value === "browser_account_ui" ||
+    value === "local_cli_tool_detection" ||
+    value === "mcp_internal_systems";
+}
+
+function isAccessMethod(value: unknown): value is SourceAccessMethod {
+  return value === "file" || value === "api" || value === "browser" || value === "cli_detection" || value === "mcp" || value === "internal" || value === "manual";
+}
+
+function isFinancialEvidence(value: unknown): value is FinancialEvidenceStatus {
+  return value === "verified" || value === "estimated" || value === "detected_unverified" || value === "missing";
+}
+
+function isValidationCoverage(value: unknown): value is SourceValidationCoverage {
+  return value === "live_verified" || value === "fixture_verified" || value === "untested" || value === "failed";
+}
+
+function isAuthMode(value: unknown): value is ConnectorAuthMode {
+  return value === "oauth" || value === "api_token_ref" || value === "browser_session" || value === "mcp_auth" || value === "manual_export" || value === "none";
+}
+
+function isTokenStorage(value: unknown): value is ConnectorTokenStorage {
+  return value === "local_reference_only" || value === "keychain_reference" || value === "none";
+}
+
+function optionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isNonEmptyString(value)) {
+    throw new Error(`Invalid local source registry: an approved source has an invalid ${label}.`);
+  }
+  return value;
+}
+
+function optionalEnum<T>(value: unknown, predicate: (candidate: unknown) => candidate is T, label: string): T | undefined {
+  if (value === undefined) return undefined;
+  if (!predicate(value)) {
+    throw new Error(`Invalid local source registry: an approved source has an invalid ${label}.`);
+  }
+  return value;
 }
