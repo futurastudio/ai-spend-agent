@@ -1162,10 +1162,26 @@ describe("MCP analyst tools", () => {
     const sourceStatusState = JSON.parse(
       await readFile(join(dir, ".ai-spend-agent", "source-status.json"), "utf8")
     ) as { providers: Record<string, { checkedAt: string; lastError: string | null }> };
-    const spendState = await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8");
+    const spendStateRaw = await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8");
+    const spendState = JSON.parse(spendStateRaw) as {
+      accounting: {
+        checkedAtByProvider?: Record<string, string>;
+        coverageIntervalsByProvider?: Record<string, {
+          coverageStart: string;
+          coverageEnd: string;
+        }>;
+      };
+    };
     const report = await getSpendReportTool({ path: dir }) as {
       records: Array<{ source: { provider: string } }>;
       summary: { totalUsd: number };
+      accounting: {
+        checkedAtByProvider?: Record<string, string>;
+        coverageIntervalsByProvider?: Record<string, {
+          coverageStart: string;
+          coverageEnd: string;
+        }>;
+      };
       sourceStatuses: Array<{
         id: string;
         financialEvidence: string;
@@ -1179,7 +1195,11 @@ describe("MCP analyst tools", () => {
     expect(openAiResult).toMatchObject({
       boundaryApproval: "approved",
       validationCoverage: "live_verified",
-      financialEvidence: "verified"
+      financialEvidence: "verified",
+      coverageInterval: {
+        coverageStart: "2025-06-15T15:06:40.000Z",
+        coverageEnd: "2025-06-15T15:06:40.000Z"
+      }
     });
     expect(anthropicResult.syncedRecordCount).toBe(2);
     expect(anthropicResult.combinedRecordCount).toBe(3);
@@ -1212,9 +1232,57 @@ describe("MCP analyst tools", () => {
     });
     expect(sourceStatusState.providers.openai?.lastError).toBeNull();
     expect(sourceStatusState.providers.anthropic?.lastError).toBeNull();
-    expect(spendState).toContain('"policy": "provider_reported_billed_cost_preferred"');
+    expect(spendState.accounting.coverageIntervalsByProvider).toEqual({
+      openai: {
+        coverageStart: "2025-06-15T15:06:40.000Z",
+        coverageEnd: "2025-06-15T15:06:40.000Z"
+      },
+      anthropic: {
+        coverageStart: "2025-06-15T15:06:40.000Z",
+        coverageEnd: "2025-06-15T15:06:40.000Z"
+      }
+    });
+    expect(report.accounting.coverageIntervalsByProvider).toEqual(
+      spendState.accounting.coverageIntervalsByProvider
+    );
+    expect(spendState.accounting.checkedAtByProvider).toEqual({
+      openai: openAiResult.fetchedAt,
+      anthropic: anthropicResult.fetchedAt
+    });
+    expect(report.accounting.checkedAtByProvider).toEqual(
+      spendState.accounting.checkedAtByProvider
+    );
+    expect(spendStateRaw).toContain('"policy": "provider_reported_billed_cost_preferred"');
     expect(providerState).not.toContain(openAiToken);
     expect(providerState).not.toContain(anthropicToken);
+
+    const openEndedResult = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime
+    }, {
+      tokenResolver: () => openAiToken,
+      fetcher: async () => okResponse({ data: [], has_more: false })
+    });
+    const openEndedState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8")
+    ) as {
+      accounting: {
+        coverageIntervalsByProvider?: Record<string, {
+          coverageStart: string;
+          coverageEnd: string;
+        }>;
+      };
+    };
+
+    expect(openEndedResult.coverageInterval).toBeUndefined();
+    expect(openEndedState.accounting.coverageIntervalsByProvider).toEqual({
+      anthropic: {
+        coverageStart: "2025-06-15T15:06:40.000Z",
+        coverageEnd: "2025-06-15T15:06:40.000Z"
+      }
+    });
   });
 
   it("surfaces partial connected coverage without downgrading verified financial rows", async () => {
@@ -1284,6 +1352,41 @@ describe("MCP analyst tools", () => {
     expect(sourceStatusState.providers.openai?.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
     expect(recommendations.recommendations.join("\n")).toContain("PARTIAL COVERAGE: openai");
     expect(recommendations.recommendations.join("\n")).toContain("missing rows can change totals");
+  });
+
+  it("rejects a persisted provider coverage interval when either receipt bound is missing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-provider-coverage-bounds-"));
+    const startTime = 1_761_955_200;
+    await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime,
+      endTime: startTime + 86_400
+    }, {
+      tokenResolver: () => "synthetic-openai-secret",
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ data: [], has_more: false })
+      })
+    });
+    const statePath = join(dir, ".ai-spend-agent", "spend.json");
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      accounting: {
+        coverageIntervalsByProvider: Record<string, {
+          coverageStart: string;
+          coverageEnd?: string;
+        }>;
+      };
+    };
+    delete state.accounting.coverageIntervalsByProvider.openai?.coverageEnd;
+    await writeFile(statePath, JSON.stringify(state));
+
+    await expect(getSpendReportTool({ path: dir })).rejects.toThrow(
+      /must have ISO coverageStart and coverageEnd timestamps/
+    );
   });
 
   it("rejects raw provider credentials before any connector request", async () => {
@@ -1600,9 +1703,11 @@ describe("MCP analyst tools", () => {
     expect(copilot.syncedRecordCount).toBe(3);
     expect(copilot.completeness).toBe("estimated");
     expect(copilot.financials.providerEstimatedUsd).toBe(58);
+    expect(copilot.coverageInterval).toBeUndefined();
     expect(cursor.syncedRecordCount).toBe(1);
     expect(cursor.completeness).toBe("estimated");
     expect(cursor.coverage).toBe("complete");
+    expect(cursor.coverageInterval).toBeUndefined();
     expect(cursor.combinedRecordCount).toBe(4);
     expect(JSON.parse(cursorBodies[0] ?? "{}")).toEqual({ page: 1, pageSize: 100 });
     expect(report.sourceStatuses.find((status) => status.id === "github-copilot")).toMatchObject({
@@ -1652,7 +1757,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.6.0" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.6.1" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",

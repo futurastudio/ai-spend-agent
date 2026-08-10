@@ -30,6 +30,16 @@ export type ProviderQaPagination = {
 
 export type ProviderCoverageStatus = "complete" | "partial";
 
+/**
+ * Exact provider interval requested by a sync. It is intentionally absent
+ * when the caller leaves the end open: a successful narrow/open-ended read
+ * must never be promoted into an assumed 30-day coverage claim.
+ */
+export type ProviderCoverageInterval = {
+  coverageStart: string;
+  coverageEnd: string;
+};
+
 export type ProviderFinancialSummary = {
   providerReportedBilledUsd: number | null;
   apiEquivalentEstimatedUsd: number | null;
@@ -94,6 +104,7 @@ export type ProviderConnectorResult = {
   records: UsageRecord[];
   fetchedAt: string;
   coverage: ProviderCoverageStatus;
+  coverageInterval?: ProviderCoverageInterval;
   financials: ProviderFinancialSummary;
   completeness: "verified" | "estimated" | "detected_unverified" | "missing";
   qa: ProviderQaSummary;
@@ -468,6 +479,12 @@ export function normalizeCursorSpendResponse(response: unknown, options: Normali
 }
 
 export async function fetchProviderUsageRecords(input: ProviderConnectorInput): Promise<ProviderConnectorResult> {
+  // Validate explicit bounds before resolving a credential or making a request.
+  // The interval-aware OpenAI/Anthropic result paths call the same pure helper
+  // to attach normalized bounds only after a successful fetch. Copilot and
+  // Cursor do not currently constrain their reads to these requested bounds,
+  // so they deliberately return no coverage interval.
+  requestedCoverageInterval(input);
   const token = (input.tokenResolver ?? defaultTokenResolver)(input.authReference);
   const fetcher = input.fetcher ?? defaultFetcher;
   const sourceId = input.sourceId ?? `${input.provider}-provider-api`;
@@ -581,7 +598,14 @@ async function fetchOpenAi(input: ProviderConnectorInput, token: string, fetcher
     ...costFetch.pages.flatMap((page) => normalizeOpenAiCostResponse(page, { sourceId, observedFrom: "OpenAI organization costs API" })),
     ...usageFetch.pages.flatMap((page) => normalizeOpenAiUsageResponse(page, { sourceId, observedFrom: "OpenAI organization usage API" }))
   ];
-  return providerResult("openai", sourceId, input.authReference, records, qaSummary("openai", [costFetch, usageFetch]));
+  return providerResult(
+    "openai",
+    sourceId,
+    input.authReference,
+    records,
+    qaSummary("openai", [costFetch, usageFetch]),
+    requestedCoverageInterval(input)
+  );
 }
 
 async function fetchAnthropic(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -599,7 +623,14 @@ async function fetchAnthropic(input: ProviderConnectorInput, token: string, fetc
     ...costFetch.pages.flatMap((page) => normalizeAnthropicCostResponse(page, { sourceId, observedFrom: "Anthropic Admin Cost Report" })),
     ...claudeCodeFetches.flatMap((fetchResult) => fetchResult.pages.flatMap((page) => normalizeAnthropicClaudeCodeUsageResponse(page, { sourceId, observedFrom: "Anthropic Claude Code Usage Report", accountId: input.accountId })))
   ];
-  return providerResult("anthropic", sourceId, input.authReference, records, qaSummary("anthropic", [costFetch, ...claudeCodeFetches]));
+  return providerResult(
+    "anthropic",
+    sourceId,
+    input.authReference,
+    records,
+    qaSummary("anthropic", [costFetch, ...claudeCodeFetches]),
+    requestedCoverageInterval(input)
+  );
 }
 
 async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -618,14 +649,26 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
   if (seatFetch) assessGitHubCopilotSeatCompleteness(seatFetch);
   const metricsRecords = metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId }));
   const seatRecords = seatFetch ? seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })) : [];
-  return providerResult("github-copilot", sourceId, input.authReference, [...metricsRecords, ...seatRecords], qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])]));
+  return providerResult(
+    "github-copilot",
+    sourceId,
+    input.authReference,
+    [...metricsRecords, ...seatRecords],
+    qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])])
+  );
 }
 
 async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
   const accountId = input.accountId ?? input.org ?? "cursor-team";
   const spendFetch = await fetchCursorSpendPages(fetcher, token);
   const records = spendFetch.pages.flatMap((page) => normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId }));
-  return providerResult("cursor", sourceId, input.authReference, records, qaSummary("cursor", [spendFetch]));
+  return providerResult(
+    "cursor",
+    sourceId,
+    input.authReference,
+    records,
+    qaSummary("cursor", [spendFetch])
+  );
 }
 
 async function fetchCursorSpendPages(fetcher: Fetcher, token: string): Promise<FetchPagesResult> {
@@ -1486,7 +1529,14 @@ function sumAmounts(records: UsageRecord[]): number | null {
   return amounts.length > 0 ? amounts.reduce((sum, amount) => sum + amount, 0) : null;
 }
 
-function providerResult(provider: string, sourceId: string, authReference: string, records: UsageRecord[], qa?: ProviderQaSummary): ProviderConnectorResult {
+function providerResult(
+  provider: string,
+  sourceId: string,
+  authReference: string,
+  records: UsageRecord[],
+  qa?: ProviderQaSummary,
+  coverageInterval?: ProviderCoverageInterval
+): ProviderConnectorResult {
   const resolvedQa = qa ?? qaSummary(provider, []);
   const coverage: ProviderCoverageStatus = resolvedQa.coverage
     ?? (resolvedQa.pagination.every((pagination) => pagination.stoppedBecause === "complete") ? "complete" : "partial");
@@ -1506,9 +1556,33 @@ function providerResult(provider: string, sourceId: string, authReference: strin
     records,
     fetchedAt: new Date().toISOString(),
     coverage,
+    ...(coverageInterval ? { coverageInterval } : {}),
     financials,
     completeness,
     qa: resolvedQa
+  };
+}
+
+function requestedCoverageInterval(
+  input: Pick<ProviderConnectorInput, "startTime" | "endTime">
+): ProviderCoverageInterval | undefined {
+  if (input.endTime === undefined) return undefined;
+  if (!Number.isFinite(input.startTime) || !Number.isFinite(input.endTime) ||
+      !Number.isInteger(input.startTime) || !Number.isInteger(input.endTime) ||
+      input.startTime < 0 || input.endTime < input.startTime) {
+    throw new Error("Provider coverage interval requires non-negative whole-second bounds with endTime at or after startTime.");
+  }
+  const coverageStart = new Date(input.startTime * 1_000);
+  const coverageEnd = new Date(input.endTime * 1_000);
+  if (Number.isNaN(coverageStart.getTime()) || Number.isNaN(coverageEnd.getTime())) {
+    throw new Error("Provider coverage interval falls outside the supported timestamp range.");
+  }
+  if (coverageEnd.getTime() > Date.now()) {
+    throw new Error("Provider coverage endTime cannot be in the future.");
+  }
+  return {
+    coverageStart: coverageStart.toISOString(),
+    coverageEnd: coverageEnd.toISOString()
   };
 }
 

@@ -8,6 +8,7 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   buildUsageGlance,
+  buildActivitySnapshot,
   loadContextHealth,
   detectLocalCredentials,
   detectLocalPlans,
@@ -30,6 +31,7 @@ import {
   downgradeSampleUsageEvidence,
   isBundledSampleUsage,
   loadLocalAgentUsage,
+  loadLocalAgentFinancialUsage,
   loadSampleUsageData,
   parseUsageRecord,
   scanLocalUsageSignals,
@@ -46,6 +48,15 @@ import {
   slugifySourceId,
   financialEvidenceForRecords,
   formatSourceStatuses,
+  readActivitySnapshot,
+  recordActivitySnapshotRefreshFailure,
+  sourceStatusDefinitions,
+  writeActivitySnapshot,
+  type ActivitySnapshot,
+  type ActivitySnapshotApiEquivalentWindows,
+  type ActivitySnapshotProvider,
+  type ActivitySnapshotProviderCoverageInput,
+  type ActivitySnapshotRefreshErrorCode,
   type AttributionMapping,
   type ConfirmedMapping,
   type DetectedCredential,
@@ -56,6 +67,7 @@ import {
   type SpendSummary,
   type UsageRecord,
   type ProviderCoverageStatus,
+  type ProviderCoverageInterval,
   type ProviderQaSummary,
   type SourceStatusObservation,
   type LocalAgentLogDiagnostic,
@@ -493,12 +505,16 @@ function quickstartNextSteps(
 type PersistedSpend = {
   mode?: PersistedDataMode;
   records: UsageRecord[];
+  checkedAt?: string;
   providerCoverage?: ProviderCoverageStatus;
   accounting?: Record<string, unknown>;
   connectedTrust?: Awaited<ReturnType<typeof verifyConnectedSpendTrustReceipt>>;
 };
 
-async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | undefined> {
+async function readPersistedSpend(
+  rootPath: string,
+  options: { strict?: boolean } = {}
+): Promise<PersistedSpend | undefined> {
   const stateDir = join(rootPath, ".ai-spend-agent");
   try {
     const exactSpendContents = await readSafeStateText(stateDir, "spend.json");
@@ -515,6 +531,9 @@ async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | un
     const records = mode === "sample" || mode === undefined
       ? downgradeSampleUsageEvidence(parsedRecords)
       : parsedRecords;
+    if (spend.checkedAt !== undefined && !validIsoString(spend.checkedAt)) {
+      throw new Error("persisted spend checkedAt must be an ISO timestamp");
+    }
     const providerCoverage = persistedProviderCoverage(spend.accounting);
     const connectedTrust = mode === "connected_provider"
       ? await verifyConnectedSpendTrustReceipt(rootPath, exactSpendContents)
@@ -522,11 +541,17 @@ async function readPersistedSpend(rootPath: string): Promise<PersistedSpend | un
     return {
       mode,
       records,
+      ...(typeof spend.checkedAt === "string" ? { checkedAt: spend.checkedAt } : {}),
       ...(providerCoverage ? { providerCoverage } : {}),
       ...(isPlainObject(spend.accounting) ? { accounting: spend.accounting } : {}),
       ...(connectedTrust ? { connectedTrust } : {})
     };
-  } catch {
+  } catch (error) {
+    if (options.strict && !isNodeError(error, "ENOENT")) {
+      throw new Error(
+        "Existing .ai-spend-agent/spend.json is invalid or unsafe; it was preserved and init stopped."
+      );
+    }
     return undefined;
   }
 }
@@ -1256,45 +1281,559 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function initCommand(args: ParsedArgs): Promise<CliResult> {
-  const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
-  await mkdir(stateDir, { recursive: true });
+  if (args.sample) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "aibill init only initializes from real local evidence; --sample was not used and no state or cache was changed. Run `npx aibill --sample` for the illustrative demo."
+    };
+  }
 
-  const registry = createLocalFolderSourceRegistry(rootPath);
-  await writeJson(join(stateDir, "manifest.json"), {
+  let detectedPlanOverride: DetectedPlan[] | undefined;
+  if (args.plan) {
+    const override = planOverrideFromFlag(args.plan);
+    if (!override) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+      };
+    }
+    detectedPlanOverride = [override];
+  }
+
+  const rootPath = await resolveSafeScanRoot(args.path);
+  const cacheDirectory = process.env.AIBILL_CACHE_DIR;
+  await preflightInitCache(cacheDirectory);
+
+  let stateDir: string;
+  let stateDirectoryExists = true;
+  try {
+    stateDir = await resolveSafeStateDirectory(rootPath);
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+    stateDirectoryExists = false;
+    stateDir = join(rootPath, ".ai-spend-agent");
+  }
+  const statePreparedAt = new Date();
+
+  // Preflight every existing project file before any mutation. Valid files are
+  // left byte-for-byte alone so a repeated init cannot erase connector
+  // configuration, audit history, provider trust, spend state, or unknown
+  // forward-compatible fields. The manifest remains the completion marker and
+  // is written last.
+  const existingManifest = stateDirectoryExists
+    ? await readInitJsonObject(stateDir, "manifest.json", { allowMissing: true })
+    : undefined;
+  const existingRegistry = stateDirectoryExists
+    ? await readInitJsonObject(stateDir, "sources.json", { allowMissing: true })
+    : undefined;
+  const existingAuditLog = stateDirectoryExists
+    ? await readInitJsonObject(stateDir, "audit-log.json", { allowMissing: true })
+    : undefined;
+  if (existingRegistry) normalizeSourceRegistry(existingRegistry);
+  validateInitAuditLog(existingAuditLog);
+
+  // Capture one attempt anchor immediately before the concurrent detection /
+  // backfill reads. Snapshot windows, refresh ordering, and the manifest all
+  // refer to this same moment.
+  const asOf = new Date();
+  const planPromise = detectedPlanOverride
+    ? Promise.resolve(detectedPlanOverride)
+    : detectLocalPlans({
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+      }).catch(() => [] as DetectedPlan[]);
+  // Attach the rejection handler now. A malformed spend file can fail before
+  // the bounded transcript scan completes; leaving that promise unattended
+  // during the scan would create an unhandled rejection.
+  const persistedPromise = readPersistedSpend(rootPath, { strict: true }).then(
+    (persisted) => ({ persisted }),
+    (error: unknown) => ({ error })
+  );
+
+  let logs: Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>> | undefined;
+  let scanError: string | undefined;
+  try {
+    logs = await loadLocalAgentFinancialUsage({
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      sinceIso: sinceIsoForDays(30, asOf)
+    });
+  } catch (error) {
+    scanError = sanitizeSecretishError(error instanceof Error ? error.message : String(error));
+  }
+  const [detectedPlans, persistedResult] = await Promise.all([planPromise, persistedPromise]);
+  if ("error" in persistedResult) throw persistedResult.error;
+  const persisted = persistedResult.persisted;
+
+  const trustedProviderRecords = persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+    ? selectProviderFinancialHeadlineRecords(persisted.records)
+    : [];
+  let activitySnapshot: ActivitySnapshot | undefined;
+  let cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+  const structuredSourceFailure = logs !== undefined &&
+    logs.sourceScans.some((scan) => scan.directoryStatus === "unreadable") &&
+    !logs.sourceScans.some((scan) => scan.directoryStatus === "readable");
+  if (logs && !structuredSourceFailure) {
+    let refreshErrorCode: ActivitySnapshotRefreshErrorCode = "invalid_evidence";
+    try {
+      const generatedAt = new Date().toISOString();
+      activitySnapshot = buildActivitySnapshot({
+        asOf: asOf.toISOString(),
+        generatedAt,
+        records: [...logs.records, ...trustedProviderRecords],
+        calls: logs.calls,
+        detectedPlans,
+        sourceScans: logs.sourceScans,
+        trustedProviderRecordIds: trustedProviderRecords.map((record) => record.id),
+        billedOverageRecordIds: [],
+        providerCoverage: initProviderCoverage(
+          trustedProviderRecords,
+          persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+            ? trustedAccountingMap<ProviderCoverageStatus>(persisted.accounting, "coverageByProvider")
+            : {},
+          persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+            ? trustedAccountingMap<string>(persisted.accounting, "checkedAtByProvider")
+            : {},
+          persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+            ? trustedAccountingMap<ProviderCoverageInterval>(persisted.accounting, "coverageIntervalsByProvider")
+            : {},
+          persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+            ? persisted.checkedAt ?? persisted.connectedTrust.trustedAt
+            : undefined
+        ),
+        sampleData: false
+      });
+      refreshErrorCode = "cache_write_failed";
+      const written = await writeActivitySnapshot(activitySnapshot, { cacheDirectory });
+      cacheStatus = written.status === "written" ? "refreshed" : "kept newer snapshot";
+    } catch {
+      scanError = refreshErrorCode === "invalid_evidence"
+        ? "the observed evidence could not produce a valid activity snapshot"
+        : "the private activity cache could not be updated";
+      const failed = await recordActivitySnapshotRefreshFailure(
+        asOf.toISOString(),
+        refreshErrorCode,
+        { cacheDirectory }
+      );
+      activitySnapshot = failed.snapshot;
+      cacheStatus = "refresh failed";
+    }
+  } else {
+    const failed = await recordActivitySnapshotRefreshFailure(
+      asOf.toISOString(),
+      structuredSourceFailure ? "source_unreadable" : "scan_failed",
+      { cacheDirectory }
+    );
+    activitySnapshot = failed.snapshot;
+    cacheStatus = "refresh failed";
+  }
+
+  if (!stateDirectoryExists) {
+    stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+  }
+  await preserveOrCreateInitRegistry(stateDir, rootPath, statePreparedAt, existingRegistry);
+  await preserveOrCreateInitAuditLog(stateDir, rootPath, statePreparedAt, existingAuditLog);
+  const manifest = buildInitManifest(existingManifest, asOf);
+  await writeSafeStateText(stateDir, "manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+
+  return ok(formatInitReceipt({
+    rootPath,
+    asOf,
+    activitySnapshot,
+    logs,
+    detectedPlans,
+    trustedProviderRecords,
+    providerCoverage: persisted?.providerCoverage,
+    untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
+    scanError,
+    cacheStatus
+  }));
+}
+
+async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
+  const existing = await readActivitySnapshot({ cacheDirectory });
+  if (existing.status !== "error") return;
+  throw new Error(
+    `Existing private activity cache is ${existing.code.replaceAll("_", " ")}; ` +
+    "it was preserved and init stopped. Remove the cache explicitly before rebuilding it."
+  );
+}
+
+async function preserveOrCreateInitRegistry(
+  stateDir: string,
+  rootPath: string,
+  asOf: Date,
+  existing: Record<string, unknown> | undefined
+): Promise<void> {
+  if (existing) {
+    // Leave the valid contract byte-for-byte alone. Rewriting would drop
+    // unknown future fields and could invalidate a connected-state receipt
+    // bound to the exact source-registry bytes.
+    return;
+  }
+  await writeSafeStateText(
+    stateDir,
+    "sources.json",
+    `${JSON.stringify(createLocalFolderSourceRegistry(rootPath, asOf), null, 2)}\n`
+  );
+}
+
+async function preserveOrCreateInitAuditLog(
+  stateDir: string,
+  rootPath: string,
+  asOf: Date,
+  existing: Record<string, unknown> | undefined
+): Promise<void> {
+  if (existing) return;
+  const timestamp = asOf.toISOString();
+  await writeSafeStateText(
+    stateDir,
+    "audit-log.json",
+    `${JSON.stringify(createScanAuditLog([{
+      timestamp,
+      action: "source_registered",
+      sourceId: "local-root",
+      path: rootPath,
+      detail: "Explicit local folder source approved during init."
+    }]), null, 2)}\n`
+  );
+}
+
+function validateInitAuditLog(existing: Record<string, unknown> | undefined): void {
+  if (existing && (existing.version !== 1 || existing.localOnly !== true || !Array.isArray(existing.events))) {
+    throw new Error("Invalid local audit log: expected the canonical local-only audit shape.");
+  }
+}
+
+async function readInitJsonObject(
+  stateDir: string,
+  fileName: string,
+  options: { allowMissing: boolean }
+): Promise<Record<string, unknown> | undefined> {
+  let contents: string;
+  try {
+    contents = await readSafeStateText(stateDir, fileName);
+  } catch (error) {
+    if (options.allowMissing && isNodeError(error, "ENOENT")) return undefined;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents) as unknown;
+  } catch {
+    throw new Error(`Invalid local ${fileName}: expected JSON; the existing file was preserved.`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`Invalid local ${fileName}: expected a JSON object; the existing file was preserved.`);
+  }
+  return parsed;
+}
+
+function buildInitManifest(
+  existing: Record<string, unknown> | undefined,
+  asOf: Date
+): Record<string, unknown> {
+  const timestamp = asOf.toISOString();
+  return {
+    ...(existing ?? {}),
     product: "aibill",
-    mode: "local-first-demo",
+    mode: "local-first",
     cloudUpload: false,
     cronJobsEnabled: false,
     redactionPolicy: "secrets are never printed; detected values are written only as [REDACTED]",
     sourceRegistry: "sources.json",
     auditLog: "audit-log.json",
+    backfillWindowDays: 30,
+    statusSnapshot: {
+      schema: "aibill.activity_snapshot/v1",
+      storage: "private external cache",
+      networkUploaded: false
+    },
+    initializedAt: typeof existing?.initializedAt === "string" ? existing.initializedAt : timestamp,
+    lastInitializedAt: timestamp,
     nextCommands: [
-      "npx aibill doctor",
-      `npx aibill scan --sample --path ${rootPath}`,
-      `npx aibill report --sample --out ai-spend-report --path ${rootPath}`
+      "npx aibill",
+      "npx aibill doctor --sources",
+      "npx aibill report"
     ]
-  });
-  await writeJson(join(stateDir, "sources.json"), registry);
-  await writeJson(join(stateDir, "audit-log.json"), createScanAuditLog([
-    {
-      timestamp: registry.updatedAt,
-      action: "source_registered",
-      sourceId: "local-root",
-      path: rootPath,
-      detail: "Explicit local folder source approved during init."
-    }
-  ]));
+  };
+}
 
-  return ok([
+type InitReceiptInput = {
+  rootPath: string;
+  asOf: Date;
+  activitySnapshot?: ActivitySnapshot;
+  logs?: Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>;
+  detectedPlans: DetectedPlan[];
+  trustedProviderRecords: UsageRecord[];
+  providerCoverage?: ProviderCoverageStatus;
+  untrustedProviderState: boolean;
+  scanError?: string;
+  cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+};
+
+function initProviderCoverage(
+  records: readonly UsageRecord[],
+  coverageByProvider: Readonly<Record<string, ProviderCoverageStatus>>,
+  checkedAtByProvider: Readonly<Record<string, string>>,
+  coverageIntervalsByProvider: Readonly<Record<string, ProviderCoverageInterval>>,
+  fallbackCheckedAt?: string
+): ActivitySnapshotProviderCoverageInput[] {
+  const providerGroups = new Map<ActivitySnapshotProvider, {
+    rawProviders: Set<string>;
+    records: UsageRecord[];
+  }>();
+  for (const record of records) {
+    const rawProvider = record.source.provider;
+    const provider = activitySnapshotProvider(rawProvider);
+    const group = providerGroups.get(provider) ?? {
+      rawProviders: new Set<string>(),
+      records: []
+    };
+    group.rawProviders.add(rawProvider);
+    group.records.push(record);
+    providerGroups.set(provider, group);
+  }
+  for (const rawProvider of new Set([
+    ...Object.keys(coverageByProvider),
+    ...Object.keys(checkedAtByProvider),
+    ...Object.keys(coverageIntervalsByProvider)
+  ])) {
+    const provider = activitySnapshotProvider(rawProvider);
+    const group = providerGroups.get(provider) ?? {
+      rawProviders: new Set<string>(),
+      records: []
+    };
+    group.rawProviders.add(rawProvider);
+    providerGroups.set(provider, group);
+  }
+  return [...providerGroups.entries()].map(([provider, group]) => {
+    const coverages = [...group.rawProviders]
+      .map((rawProvider) => coverageByProvider[rawProvider] ?? coverageByProvider[provider])
+      .filter((coverage): coverage is ProviderCoverageStatus => coverage !== undefined);
+    const status: ActivitySnapshotProviderCoverageInput["status"] =
+      coverages.length === group.rawProviders.size && coverages.every((coverage) => coverage === "complete")
+      ? "complete"
+      : coverages.some((coverage) => coverage === "complete" || coverage === "partial")
+        ? "partial"
+        : "unavailable";
+    const checkedValues = [...group.rawProviders]
+      .map((rawProvider) => checkedAtByProvider[rawProvider] ?? checkedAtByProvider[provider])
+      .filter((value): value is string => validIsoString(value));
+    const checkedAt = checkedValues.length === group.rawProviders.size
+      ? checkedValues.sort()[0]
+      : providerGroups.size === 1 && validIsoString(fallbackCheckedAt)
+        ? fallbackCheckedAt
+        : undefined;
+    const latestEvidenceAt = group.records
+      .map((record) => record.timestamp)
+      .filter(validIsoString)
+      .sort()
+      .at(-1);
+    const intervals = [...group.rawProviders]
+      .map((rawProvider) => coverageIntervalsByProvider[rawProvider] ?? coverageIntervalsByProvider[provider])
+      .filter(validProviderCoverageInterval);
+    const coverageStart = intervals.length === group.rawProviders.size
+      ? intervals.map((interval) => interval.coverageStart).sort().at(-1)
+      : undefined;
+    const coverageEnd = intervals.length === group.rawProviders.size
+      ? intervals.map((interval) => interval.coverageEnd).sort()[0]
+      : undefined;
+    return {
+      provider,
+      status,
+      validationCoverage: sourceStatusDefinitions.find((definition) => definition.id === provider)?.validationCoverage
+        ?? "untested",
+      ...(checkedAt ? { checkedAt } : {}),
+      ...(latestEvidenceAt ? { latestEvidenceAt } : {}),
+      ...(coverageStart && coverageEnd && Date.parse(coverageStart) <= Date.parse(coverageEnd)
+        ? { coverageStart, coverageEnd }
+        : {})
+    };
+  }).sort((left, right) => left.provider.localeCompare(right.provider));
+}
+
+function validProviderCoverageInterval(value: unknown): value is ProviderCoverageInterval {
+  return isPlainObject(value) &&
+    validIsoString(value.coverageStart) &&
+    validIsoString(value.coverageEnd) &&
+    Date.parse(value.coverageStart) <= Date.parse(value.coverageEnd);
+}
+
+function activitySnapshotProvider(provider: string): ActivitySnapshotProvider {
+  if (provider === "openai" || provider === "anthropic" || provider === "cursor" || provider === "github-copilot") {
+    return provider;
+  }
+  return "other";
+}
+
+function formatInitReceipt(input: InitReceiptInput): string {
+  const records = input.logs?.records ?? [];
+  const pricedRecords = records.filter((record) => typeof record.amountUsd === "number");
+  const sourceFailures = (input.logs?.sourceScans ?? []).some((scan) => scan.directoryStatus === "unreadable") ||
+    (input.logs?.diagnostics ?? []).some((diagnostic) => diagnostic.severity === "error");
+  const receiptLines = input.scanError || sourceFailures && records.length === 0
+    ? ["API-equivalent usage value: unavailable — the local scan could not prove an empty result"]
+    : input.activitySnapshot
+      ? initApiEquivalentWindowLines(input.activitySnapshot)
+      : ["API-equivalent usage value: unavailable — no snapshot was produced"];
+
+  const planLine = input.detectedPlans.length > 0
+    ? input.detectedPlans.map((plan) => {
+        const known = plan.planId ?? "unrecognized plan";
+        return `${plan.agent}: ${known} (${plan.billing})`;
+      }).join("; ")
+    : "none detected (billing mode remains unresolved)";
+
+  const sourceLines = (input.logs?.sourceScans ?? [
+    emptyInitSourceScan("claude-code"),
+    emptyInitSourceScan("codex")
+  ]).map((scan) => {
+    const agentRecords = records.filter((record) => record.agentId === scan.agent);
+    const priced = agentRecords.filter((record) => typeof record.amountUsd === "number").length;
+    const skipped = scan.filesSkippedBeforeWindow ?? 0;
+    const validation = scan.jsonlValidationCoverage === "financial_events_only"
+      ? "; financial-event JSONL validation only"
+      : "";
+    return `  ${scan.agent}: ${scan.directoryStatus}; ${scan.filesParsed}/${scan.filesDiscovered} files parsed; ${priced}/${agentRecords.length} rows priced${skipped > 0 ? `; ${skipped} old files skipped` : ""}${validation}`;
+  });
+  const diagnosticLines = (input.logs?.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.code !== "directory_missing")
+    .map((diagnostic) => `  ! ${sanitizeSecretishError(diagnostic.message)} (${diagnostic.count})`);
+
+  const providerLines = formatInitProviderEvidence(input);
+
+  return [
     "aibill init",
-    `path: ${rootPath}`,
-    "demo mode: local-first sample workflow",
-    "cloud upload: disabled",
-    "cron jobs: disabled in V0 demo",
-    `state directory: ${stateDir}`,
-    `next: npx aibill scan --sample --path ${rootPath}`
-  ].join("\n"));
+    `state project: ${sanitizeSecretishError(basename(input.rootPath))}`,
+    "local usage scope: all Claude Code + Codex activity on this machine (last 30 days)",
+    "provider scope: trusted connected billing from this state project only (shown separately)",
+    "",
+    "FIRST RECEIPT · API-equivalent usage value · last 30 days",
+    ...receiptLines,
+    `observed records: ${records.length}; priced: ${pricedRecords.length}; unpriced: ${records.length - pricedRecords.length}`,
+    ...providerLines,
+    `plans: ${planLine}`,
+    "",
+    "source diagnostics (same backfill scan; no second scan):",
+    ...sourceLines,
+    ...diagnosticLines,
+    input.scanError ? `  ! scan failed: ${input.scanError}` : "",
+    "",
+    `status cache: ${input.cacheStatus} · private local aggregate · nothing uploaded`,
+    "state: .ai-spend-agent",
+    "manifest: written last",
+    "next: npx aibill doctor --sources"
+  ].filter((line) => line !== "").join("\n");
+}
+
+function formatInitProviderEvidence(input: InitReceiptInput): string[] {
+  const windowStart = input.asOf.getTime() - 30 * 24 * 60 * 60 * 1_000;
+  const inWindow = input.trustedProviderRecords.filter((record) => {
+    const timestamp = Date.parse(record.timestamp);
+    return Number.isFinite(timestamp) && timestamp >= windowStart && timestamp <= input.asOf.getTime();
+  });
+  const priced = inWindow.filter((record) => typeof record.amountUsd === "number");
+  const verified = priced.filter((record) => record.costConfidence === "verified");
+  const estimatedApiEquivalent = priced.filter((record) =>
+    record.costConfidence === "estimated" &&
+    record.providerCostType === "anthropic_claude_code_usage"
+  );
+  const estimated = priced.filter((record) =>
+    record.costConfidence === "estimated" &&
+    record.providerCostType !== "anthropic_claude_code_usage"
+  );
+  const detected = priced.filter((record) => record.costConfidence === "detected_unverified");
+  const unpriced = inWindow.length - priced.length;
+  const lines: string[] = [];
+  if (verified.length > 0) {
+    const billedWindow = input.activitySnapshot?.metered?.providerBilled.thirtyDays;
+    lines.push(billedWindow?.amountUsd !== null && billedWindow?.amountUsd !== undefined
+      ? `provider-billed cost: ${formatOptionalUsd(billedWindow.amountUsd)} verified (kept separate)`
+      : "provider-billed cost: unavailable — billed bucket boundaries do not prove an exact 30-day amount");
+  }
+  if (estimated.length > 0) {
+    lines.push(`provider financial estimate: ${formatOptionalUsd(analyzeSpend(estimated).totalUsd)} estimated; not verified billed spend (kept separate)`);
+  }
+  if (estimatedApiEquivalent.length > 0) {
+    lines.push(`provider API-equivalent estimate: ${formatOptionalUsd(analyzeSpend(estimatedApiEquivalent).totalUsd)} estimated value; not verified billed spend (kept separate)`);
+  }
+  if (detected.length > 0) {
+    lines.push(`provider cost: ${formatOptionalUsd(analyzeSpend(detected).totalUsd)} detected_unverified; not billed spend (kept separate)`);
+  }
+  if (unpriced > 0) {
+    lines.push(`provider cost: unavailable — ${unpriced} trusted row(s) lacked a supported cost amount`);
+  }
+  const provedEmptyBilledWindow = input.activitySnapshot?.metered?.providerBilled.thirtyDays;
+  if (verified.length === 0 && provedEmptyBilledWindow?.amountUsd === 0 &&
+      provedEmptyBilledWindow.financialEvidence === "verified") {
+    lines.push("provider-billed cost: $0.00 verified for the receipt-bound 30-day interval");
+  }
+  if (lines.length === 0) {
+    lines.push(
+      input.untrustedProviderState
+        ? "provider-billed cost: unavailable — untrusted repository state was ignored"
+        : input.trustedProviderRecords.length > 0
+          ? "provider cost: unavailable — connected evidence had no supported row in the last 30 days"
+          : "provider-billed cost: not connected"
+    );
+  }
+  if (input.providerCoverage) lines.push(`provider coverage: ${input.providerCoverage}`);
+  return lines;
+}
+
+function initApiEquivalentWindowLines(snapshot: ActivitySnapshot): string[] {
+  if (snapshot.mode === "error") {
+    return ["API-equivalent usage value: unavailable — refresh failed"];
+  }
+  if (snapshot.mode === "empty") {
+    const completeZero = snapshot.coverage.validationStatus === "complete" &&
+      snapshot.coverage.recordsParsed === 0 &&
+      snapshot.coverage.agents.length > 0 &&
+      snapshot.coverage.agents.every((agent) => agent.directoryStatus === "readable");
+    return [completeZero
+      ? "API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)"
+      : "API-equivalent usage value: unavailable — local source coverage is incomplete; no zero total was inferred"];
+  }
+  if (snapshot.mode === "unresolved" && snapshot.unresolved) {
+    return [formatInitApiWindows("billing unresolved", snapshot.unresolved.apiEquivalent)];
+  }
+
+  const lines: string[] = [];
+  for (const agent of snapshot.subscription?.agents ?? []) {
+    lines.push(formatInitApiWindows(`${agent.agent} subscription value`, agent.apiEquivalent));
+  }
+  if (snapshot.metered && snapshot.metered.apiEquivalent.thirtyDays.recordCount > 0) {
+    lines.push(formatInitApiWindows("metered API-equivalent value", snapshot.metered.apiEquivalent));
+  }
+  if (snapshot.unresolved && snapshot.unresolved.apiEquivalent.thirtyDays.recordCount > 0) {
+    lines.push(formatInitApiWindows("billing unresolved", snapshot.unresolved.apiEquivalent));
+  }
+  return lines.length > 0
+    ? lines
+    : ["API-equivalent usage value: unavailable — no priced local value was observed"];
+}
+
+function formatInitApiWindows(
+  label: string,
+  windows: ActivitySnapshotApiEquivalentWindows
+): string {
+  const amount = (value: number | null) => value === null ? "unavailable" : `~${formatOptionalUsd(value)}`;
+  return `${label}: ${amount(windows.oneDay.amountUsd)} 1d · ${amount(windows.sevenDays.amountUsd)} 7d · ${amount(windows.thirtyDays.amountUsd)} 30d (API-equivalent; not billed spend)`;
+}
+
+function emptyInitSourceScan(agent: "claude-code" | "codex"): LocalAgentSourceScan {
+  return {
+    agent,
+    directoryStatus: "unreadable",
+    filesDiscovered: 0,
+    filesParsed: 0,
+    malformedLines: 0,
+    unreadableFiles: 0,
+    unsupportedUsageSnapshots: 0
+  };
 }
 
 async function scanCommand(args: ParsedArgs): Promise<CliResult> {
@@ -1826,6 +2365,21 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       ...trustedAccountingMap<unknown>(trustedPrior?.accounting, "financialsByProvider"),
       [result.provider]: result.financials
     };
+    const checkedAtByProvider = {
+      ...trustedAccountingMap<string>(trustedPrior?.accounting, "checkedAtByProvider"),
+      [result.provider]: result.fetchedAt
+    };
+    const priorCoverageIntervals = trustedAccountingMap<ProviderCoverageInterval>(
+      trustedPrior?.accounting,
+      "coverageIntervalsByProvider"
+    );
+    const coverageIntervalsByProvider = Object.fromEntries(
+      Object.entries(priorCoverageIntervals).filter(([provider]) => provider !== result.provider)
+    ) as Record<string, ProviderCoverageInterval>;
+    const requestedCoverageInterval = result.coverageInterval;
+    if (requestedCoverageInterval) {
+      coverageIntervalsByProvider[result.provider] = requestedCoverageInterval;
+    }
     // Invalidate any earlier receipt before the first mutation. If a later
     // local write fails, the partially updated repository state stays
     // untrusted rather than inheriting the previous sync's authority.
@@ -1842,7 +2396,11 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       records,
       qa: result.qa,
       qaByProvider,
+      checkedAtByProvider,
       coverageByProvider,
+      ...(Object.keys(coverageIntervalsByProvider).length > 0
+        ? { coverageIntervalsByProvider }
+        : {}),
       financialsByProvider
     });
     await recordProviderSourceAttempt(
@@ -1863,9 +2421,12 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
         policy: "provider_reported_billed_cost_preferred",
         note: "Official provider-reported billed costs are the spend headline. API-equivalent estimates remain separate evidence and are not added to that total.",
         coverageByProvider,
+        checkedAtByProvider,
+        coverageIntervalsByProvider,
         qaByProvider,
         financialsByProvider
-      }
+      },
+      result.fetchedAt
     );
     await appendAuditEvent(stateDir, {
       timestamp: result.fetchedAt,
@@ -2775,13 +3336,15 @@ async function writeLocalSpendState(
   summary: SpendSummary,
   mappings: AttributionMapping[],
   mode: PersistedDataMode,
-  accounting?: unknown
+  accounting?: unknown,
+  checkedAt?: string
 ): Promise<void> {
   if (mode !== "connected_provider") {
     await invalidateConnectedSpendTrustReceipt(dirname(stateDir));
   }
   await writeJson(join(stateDir, "spend.json"), {
     mode,
+    ...(checkedAt && validIsoString(checkedAt) ? { checkedAt } : {}),
     records,
     summary,
     ...(accounting ? { accounting } : {})
@@ -2899,7 +3462,7 @@ function helpText(): string {
     "",
     "Other commands:",
     "  --version, -v           Print the package version without reading local data",
-    "  init [--path <dir>]     Initialize local state",
+    "  init [--path <dir>]     Backfill 30 days machine-wide, print the first evidence-labeled receipt, and cache a private snapshot",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
@@ -2982,7 +3545,7 @@ export async function runMain(): Promise<void> {
       stdout: "",
       stderr: [
         `aibill hit an unexpected error: ${message}`,
-        "Nothing was uploaded; local state is unchanged.",
+        "Nothing was uploaded. The command stopped without completing; run diagnostics before retrying.",
         "Try `npx aibill doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
       ].join("\n")
     };

@@ -42,6 +42,7 @@ import {
   type Fetcher,
   type FinancialEvidenceStatus,
   type LocalDiscoveryResult,
+  type ProviderCoverageInterval,
   type ProviderCoverageStatus,
   type ProviderFinancialSummary,
   type ProviderQaSummary,
@@ -105,7 +106,9 @@ type PersistedSpendState = {
   mode: "sample" | "local_logs" | "connected_provider";
   /** Time this persisted source read completed; separate from row timestamps. */
   checkedAt?: string;
+  checkedAtByProvider?: Record<string, string>;
   coverageByProvider?: Record<string, ProviderCoverageStatus>;
+  coverageIntervalsByProvider?: Record<string, ProviderCoverageInterval>;
   qaByProvider?: Record<string, ProviderQaSummary>;
   financialsByProvider?: Record<string, ProviderFinancialSummary>;
   records: UsageRecord[];
@@ -116,7 +119,9 @@ type ProviderRecordsState = {
   records: UsageRecord[];
   qa?: unknown;
   qaByProvider?: Record<string, unknown>;
+  checkedAtByProvider?: Record<string, string>;
   coverageByProvider?: Record<string, ProviderCoverageStatus>;
+  coverageIntervalsByProvider?: Record<string, ProviderCoverageInterval>;
   financialsByProvider?: Record<string, ProviderFinancialSummary>;
 };
 
@@ -292,6 +297,12 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
             : "unavailable_mode_unverified",
       ...(persisted.coverageByProvider
         ? { coverageByProvider: persisted.coverageByProvider }
+        : {}),
+      ...(persisted.checkedAtByProvider
+        ? { checkedAtByProvider: persisted.checkedAtByProvider }
+        : {}),
+      ...(persisted.coverageIntervalsByProvider
+        ? { coverageIntervalsByProvider: persisted.coverageIntervalsByProvider }
         : {}),
       financialsByProvider
     },
@@ -500,6 +511,7 @@ export async function syncProviderSpendTool(
   fetchedAt: string;
   completeness: string;
   coverage: ProviderCoverageStatus;
+  coverageInterval?: ProviderCoverageInterval;
   financials: ProviderFinancialSummary;
   syncedRecordCount: number;
   combinedRecordCount: number;
@@ -542,6 +554,17 @@ export async function syncProviderSpendTool(
       ...(trustedPrior?.coverageByProvider ?? {}),
       [result.provider]: result.coverage
     };
+    const checkedAtByProvider = {
+      ...(trustedPrior?.checkedAtByProvider ?? {}),
+      [result.provider]: result.fetchedAt
+    };
+    const coverageIntervalsByProvider = Object.fromEntries(
+      Object.entries(trustedPrior?.coverageIntervalsByProvider ?? {})
+        .filter(([provider]) => provider !== result.provider)
+    ) as Record<string, ProviderCoverageInterval>;
+    if (result.coverageInterval) {
+      coverageIntervalsByProvider[result.provider] = result.coverageInterval;
+    }
     const financialsByProvider = {
       ...(trustedPrior?.financialsByProvider ?? {}),
       [result.provider]: result.financials
@@ -559,7 +582,11 @@ export async function syncProviderSpendTool(
       records,
       qa: result.qa,
       qaByProvider,
+      checkedAtByProvider,
       coverageByProvider,
+      ...(Object.keys(coverageIntervalsByProvider).length > 0
+        ? { coverageIntervalsByProvider }
+        : {}),
       financialsByProvider
     });
     await writeJson(join(stateDir, "spend.json"), {
@@ -571,6 +598,10 @@ export async function syncProviderSpendTool(
         policy: "provider_reported_billed_cost_preferred",
         note: "Official provider-reported billed costs are the spend headline. API-equivalent estimates remain available as evidence and are not added to that total.",
         coverageByProvider,
+        checkedAtByProvider,
+        ...(Object.keys(coverageIntervalsByProvider).length > 0
+          ? { coverageIntervalsByProvider }
+          : {}),
         qaByProvider,
         financialsByProvider
       }
@@ -606,6 +637,7 @@ export async function syncProviderSpendTool(
       fetchedAt: result.fetchedAt,
       completeness: result.completeness,
       coverage: result.coverage,
+      ...(result.coverageInterval ? { coverageInterval: result.coverageInterval } : {}),
       financials: result.financials,
       syncedRecordCount: result.records.length,
       combinedRecordCount: records.length,
@@ -1110,6 +1142,15 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
         "local spend accounting"
       )
     : undefined;
+  const checkedAtByProvider = mode === "connected_provider"
+    ? parseCheckedAtByProvider(accounting?.checkedAtByProvider, "local spend accounting")
+    : undefined;
+  const coverageIntervalsByProvider = mode === "connected_provider"
+    ? parseCoverageIntervalsByProvider(
+        accounting?.coverageIntervalsByProvider,
+        "local spend accounting"
+      )
+    : undefined;
   const qaByProvider = mode === "connected_provider" && isRecord(accounting?.qaByProvider)
     ? accounting.qaByProvider as Record<string, ProviderQaSummary>
     : undefined;
@@ -1120,6 +1161,8 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
     mode,
     ...(typeof value.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}),
     ...(coverageByProvider ? { coverageByProvider } : {}),
+    ...(checkedAtByProvider ? { checkedAtByProvider } : {}),
+    ...(coverageIntervalsByProvider ? { coverageIntervalsByProvider } : {}),
     ...(qaByProvider ? { qaByProvider } : {}),
     ...(financialsByProvider ? { financialsByProvider } : {}),
     records,
@@ -1224,14 +1267,68 @@ function parseProviderRecordsState(value: unknown): ProviderRecordsState {
     throw new Error("Invalid local provider state: expected a records array.");
   }
   const coverageByProvider = parseCoverageByProvider(value.coverageByProvider, "local provider state");
+  const checkedAtByProvider = parseCheckedAtByProvider(
+    value.checkedAtByProvider,
+    "local provider state"
+  );
+  const coverageIntervalsByProvider = parseCoverageIntervalsByProvider(
+    value.coverageIntervalsByProvider,
+    "local provider state"
+  );
   return {
     records: value.records.map((record) => parseUsageRecord(record)),
     ...(isRecord(value.qaByProvider) ? { qaByProvider: value.qaByProvider } : {}),
+    ...(checkedAtByProvider ? { checkedAtByProvider } : {}),
     ...(coverageByProvider ? { coverageByProvider } : {}),
+    ...(coverageIntervalsByProvider ? { coverageIntervalsByProvider } : {}),
     ...(isRecord(value.financialsByProvider)
       ? { financialsByProvider: value.financialsByProvider as Record<string, ProviderFinancialSummary> }
       : {})
   };
+}
+
+function parseCheckedAtByProvider(
+  value: unknown,
+  context: string
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${context}: checkedAtByProvider must be an object.`);
+  }
+  const checkedAt: Record<string, string> = {};
+  for (const [provider, timestamp] of Object.entries(value)) {
+    if (!validIsoString(timestamp)) {
+      throw new Error(`Invalid ${context}: ${provider} checkedAt must be an ISO timestamp.`);
+    }
+    checkedAt[provider] = timestamp;
+  }
+  return Object.keys(checkedAt).length > 0 ? checkedAt : undefined;
+}
+
+function parseCoverageIntervalsByProvider(
+  value: unknown,
+  context: string
+): Record<string, ProviderCoverageInterval> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${context}: coverageIntervalsByProvider must be an object.`);
+  }
+  const intervals: Record<string, ProviderCoverageInterval> = {};
+  for (const [provider, interval] of Object.entries(value)) {
+    if (!isRecord(interval) ||
+        !validIsoString(interval.coverageStart) ||
+        !validIsoString(interval.coverageEnd)) {
+      throw new Error(`Invalid ${context}: ${provider} must have ISO coverageStart and coverageEnd timestamps.`);
+    }
+    if (Date.parse(interval.coverageStart) > Date.parse(interval.coverageEnd)) {
+      throw new Error(`Invalid ${context}: ${provider} coverageEnd must not precede coverageStart.`);
+    }
+    intervals[provider] = {
+      coverageStart: interval.coverageStart,
+      coverageEnd: interval.coverageEnd
+    };
+  }
+  return Object.keys(intervals).length > 0 ? intervals : undefined;
 }
 
 function parseCoverageByProvider(

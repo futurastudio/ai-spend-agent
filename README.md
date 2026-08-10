@@ -49,17 +49,22 @@ terminal copy.*
 
 ## Get started
 
-1. **Establish the private baseline:** `npx aibill`
-2. **Get the current session decision:** `npx aibill context`
-3. **Draft one evidence-constrained action from real local evidence:**
+1. **Initialize a private personal baseline:** run `npx aibill init` from a
+   project. It detects Claude Code and Codex, backfills machine-wide activity
+   from the last 30 days, prints the first evidence-labeled receipt, and stores only a small aggregate
+   snapshot under `~/.aibill/cache/`. Empty or unavailable evidence stays
+   explicit; init never substitutes sample dollars for your own.
+2. **Open the complete private view:** `npx aibill`
+3. **Get the current session decision:** `npx aibill context`
+4. **Draft one evidence-constrained action from real local evidence:**
    `npx aibill apply`. Inspect the candidate evidence, approve at most one
    bounded change, then verify matched future sessions before calling the
    result savings. In sample mode, Apply is an explicitly non-executable demo.
-4. **Optional—add official provider-reported cost:** `npx aibill connect
+5. **Optional—add official provider-reported cost:** `npx aibill connect
    openai` or `npx aibill connect anthropic`. The provider report remains
    separate from local API-equivalent estimates.
-5. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
-6. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
+6. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
+7. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
    caption without client, project, or user names.
 
 ## Who this is for
@@ -110,6 +115,13 @@ investigate and how to verify it.
 
 ## What you get
 
+- **Fast private initialization**: `npx aibill init` performs one machine-wide
+  financial-only transcript pass, labels the selected project as the state
+  location rather than the usage scope, prints an honest first receipt, preserves
+  existing connected/source state, and writes an atomic aggregate cache for
+  lightweight local surfaces. The cache contains no prompts, responses,
+  project names, transcript paths, session IDs, or credential references and
+  is never trusted as authorization for Report or Apply.
 - **Evidence ledger**: provider-reported cost, local API-equivalent value,
   detected subscription context, missing cost, source, freshness, and coverage
   stay visibly separate.
@@ -236,6 +248,7 @@ env:NAME`). aibill never sits in the inference path and never stores, prints, or
 | Command | What it does |
 | --- | --- |
 | _(no command)_ | Zero-key instant readout: your local agent logs if present, sample demo otherwise |
+| `init [--path <dir>]` | Detect Claude Code/Codex, backfill 30 days of machine-wide activity, print the first private receipt, and atomically seed the aggregate cache; never substitutes sample data |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Connect a provider's cost data (admin-gated) |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
