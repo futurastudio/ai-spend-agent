@@ -5,7 +5,7 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.6.1 — Unreleased
+## 0.6.1 — 2026-08-10
 
 - Rebuilt `aibill init` as an idempotent first-value transaction: it detects
   Claude Code and Codex, performs one machine-wide financial-only 30-day
