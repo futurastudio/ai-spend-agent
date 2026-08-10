@@ -120,11 +120,14 @@ body {
   text-indent: -2ch;
 }
 
-.tl-playing .tl-line {
+/* Reveal gate: only a .tl-playing container (class added by JS right
+   before the storyboard starts) hides timed elements — no-JS and
+   reduced-motion visitors always see the settled receipt. */
+.tl-playing [data-at] {
   opacity: 0;
 }
 
-.tl-playing .tl-line.is-on {
+.tl-playing [data-at].is-on {
   opacity: 1;
 }
 
@@ -1417,8 +1420,7 @@ body {
     scroll-behavior: auto;
   }
   .reveal,
-  .tl-playing .tl-line,
-  .tl-playing .tl-bar-row {
+  .tl-playing [data-at] {
     opacity: 1 !important;
     transform: none !important;
     transition: none !important;
