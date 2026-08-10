@@ -49,6 +49,8 @@ remain later milestones and must stay labeled as such.
 ## Now: reliability, runway, and distribution
 
 - Make clean CLI and MCP installation the fastest path to first value.
+- Make `aibill init` a sub-30-second, idempotent personal backfill and publish
+  one private plan-aware aggregate snapshot for lightweight local surfaces.
 - Finish the human-readable limits/runway view over the existing canonical
   contract; never infer a window a provider or coding agent did not report.
 - Resolve installation, privacy, data-trust, and semantic issues reported by

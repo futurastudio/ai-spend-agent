@@ -5,6 +5,37 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.6.1 — 2026-08-10
+
+- Rebuilt `aibill init` as an idempotent first-value transaction: it detects
+  Claude Code and Codex, performs one machine-wide financial-only 30-day
+  backfill, explicitly distinguishes the state project from the usage scope,
+  prints an evidence-labeled personal receipt, reports source coverage, and
+  preserves existing source, audit, connected-provider, and spend state.
+- Added a strict plan-aware activity snapshot with separate metered,
+  subscription, and mixed cohorts. API-equivalent estimates, subscription
+  runway, trusted provider-billed cost, and missing evidence remain separate;
+  sample data cannot seed the cache, and no limit window is inferred.
+- Added a private external cache with bounded schema validation, symlink and
+  non-regular-file refusal, `0700`/`0600` permissions, atomic writes, writer
+  locking, newer-snapshot protection, and last-good preservation after a
+  failed refresh. The aggregate contains no prompts, paths, project/session
+  identifiers, credentials, or auth references and is never an evidence-trust
+  or action-authorization source.
+- Added a streaming financial-only local-log path so init can reach first value
+  without running the heavier focus, tool-invocation, or Glance analysis. Its
+  financial and transcript-reported limit fields remain fixture-equivalent to
+  the canonical full reader.
+- Made rolling windows exact at call boundaries and conservative at daily or
+  billing-bucket boundaries. Missing/unsupported token shapes remain missing,
+  financially bounded JSONL scans report partial validation, and provider
+  billed zero requires a trusted sync interval that spans the displayed
+  window.
+- Hardened legacy connected-provider migration without borrowing freshness
+  across providers, kept provider and local-source coverage independent, and
+  rejected contradictory cumulative token counters or invalid provider time
+  bounds before they can enter financial output.
+
 ## 0.6.0 — 2026-08-08
 
 - Added the canonical two-axis source-status contract and `aibill doctor

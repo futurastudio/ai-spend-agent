@@ -26,6 +26,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "seq-home-"));
     process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
     process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
+    process.env.AIBILL_CACHE_DIR = await mkdtemp(join(tmpdir(), "seq-cache-"));
 
     const projDir = join(process.env.AI_SPEND_CLAUDE_LOGS_DIR, "-Users-dev-myapp");
     await mkdir(projDir, { recursive: true });
@@ -44,10 +45,16 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
     delete process.env.AI_SPEND_CODEX_AUTH;
+    delete process.env.AIBILL_CACHE_DIR;
   });
 
-  it("quickstart → watch → quickstart → report → apply: modes stay truthful, totals agree, artifacts stay local-flavored", async () => {
+  it("init → quickstart → watch → quickstart → report → apply: modes stay truthful, totals agree, artifacts stay local-flavored", async () => {
     const dir = await mkdtemp(join(tmpdir(), "seq-state-"));
+
+    const initialized = await runCli(["init", "--path", dir]);
+    expect(initialized.exitCode).toBe(0);
+    expect(initialized.stdout).toContain("billing unresolved: ~$7.50 1d · ~$7.50 7d · ~$7.50 30d (API-equivalent; not billed spend)");
+    expect(initialized.stdout).not.toContain("demo sample");
 
     const first = await runCli(["--path", dir, "--no-color"]);
     expect(first.stdout).toContain("DATA MODE: your local agent logs");

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { generateCutList } from "./cutList.js";
 import {
@@ -232,6 +232,10 @@ describe("real provider connector implementations", () => {
     expect(result.records).toHaveLength(4);
     expect(result.records.filter((record) => record.costConfidence === "verified")).toHaveLength(2);
     expect(result.records.filter((record) => record.costConfidence === "missing")).toHaveLength(2);
+    expect(result.coverageInterval).toEqual({
+      coverageStart: "2025-11-01T00:00:00.000Z",
+      coverageEnd: "2025-11-03T00:00:00.000Z"
+    });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
   });
 
@@ -285,8 +289,129 @@ describe("real provider connector implementations", () => {
     ]));
     expect(result.qa.coverage).toBe("partial");
     expect(result.coverage).toBe("partial");
+    expect(result.coverageInterval).toBeUndefined();
     expect(result.completeness).toBe("detected_unverified");
     expect(result.source.financialEvidence).toBe("detected_unverified");
+  });
+
+  it("rejects an inverted explicit provider coverage interval before persisting a false window", async () => {
+    const fetcher = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [], has_more: false })
+    });
+
+    await expect(fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1_761_955_200,
+      endTime: 1_761_955_199,
+      fetcher
+    })).rejects.toThrow(/endTime at or after startTime/);
+  });
+
+  it("rejects a future provider coverage end before resolving credentials or fetching", async () => {
+    const endTime = Math.floor(Date.now() / 1_000) + 3_600;
+    const tokenResolver = vi.fn(() => fakeToken);
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [], has_more: false })
+    }));
+
+    await expect(fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver,
+      startTime: endTime - 60,
+      endTime,
+      fetcher
+    })).rejects.toThrow(/endTime cannot be in the future/);
+    expect(tokenResolver).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["negative", -1],
+    ["fractional", 1_761_955_200.5]
+  ])("rejects a %s open-ended provider coverage start before resolving credentials or fetching", async (_label, startTime) => {
+    const tokenResolver = vi.fn(() => fakeToken);
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [], has_more: false })
+    }));
+
+    await expect(fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver,
+      startTime,
+      fetcher
+    })).rejects.toThrow(/startTime requires a non-negative whole-second timestamp/);
+    expect(tokenResolver).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects a future open-ended provider coverage start before resolving credentials or fetching", async () => {
+    const tokenResolver = vi.fn(() => fakeToken);
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [], has_more: false })
+    }));
+
+    await expect(fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver,
+      startTime: Math.floor(Date.now() / 1_000) + 3_600,
+      fetcher
+    })).rejects.toThrow(/startTime cannot be in the future/);
+    expect(tokenResolver).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit epoch endTime in OpenAI and Anthropic request URLs", async () => {
+    const openAiCalls: string[] = [];
+    await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 0,
+      endTime: 0,
+      fetcher: async (url) => {
+        openAiCalls.push(url);
+        return { ok: true, status: 200, json: async () => ({ data: [], has_more: false }) };
+      }
+    });
+
+    expect(openAiCalls).toHaveLength(2);
+    expect(openAiCalls.every((url) => new URL(url).searchParams.get("end_time") === "0")).toBe(true);
+
+    const anthropicCalls: string[] = [];
+    await fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_API_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 0,
+      endTime: 0,
+      fetcher: async (url) => {
+        anthropicCalls.push(url);
+        return { ok: true, status: 200, json: async () => ({ data: [], has_more: false }) };
+      }
+    });
+
+    const costUrl = anthropicCalls.find((url) => url.includes("/cost_report"));
+    expect(costUrl).toBeDefined();
+    expect(new URL(costUrl!).searchParams.get("ending_at")).toBe("1970-01-01T00:00:00.000Z");
   });
 
   it("never claims complete provider coverage for negative or fractional usage schema", async () => {
@@ -1387,7 +1512,7 @@ describe("real provider connector implementations", () => {
   });
 
   it("marks Anthropic coverage partial when a requested date range exceeds the connector cap", async () => {
-    const startTime = 1_761_955_200;
+    const startTime = Math.floor(Date.now() / 1_000) - 400 * 24 * 60 * 60;
     const fetcher = async (url: string) => ({
       ok: true,
       status: 200,

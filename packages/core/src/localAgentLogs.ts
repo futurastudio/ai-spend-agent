@@ -1,6 +1,8 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, open, readdir, readFile, stat, type FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
+import { createInterface } from "node:readline";
 import { estimateTokenCostUsd, type TokenUsage } from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
 import { redactSecrets } from "./discovery.js";
@@ -142,6 +144,16 @@ export type LocalAgentLogOptions = {
   collectCodexInvocationEvidence?: boolean;
 };
 
+/**
+ * Options accepted by the financial-only loader. Invocation collection is
+ * intentionally unavailable: this path reads only the evidence needed for a
+ * financial snapshot and transcript-reported plan limits.
+ */
+export type LocalAgentFinancialLogOptions = Omit<
+  LocalAgentLogOptions,
+  "collectCodexInvocationEvidence"
+>;
+
 export type LocalAgentLogDiagnosticCode =
   | "directory_missing"
   | "directory_unreadable"
@@ -163,9 +175,22 @@ export type LocalAgentSourceScan = {
   directoryStatus: "readable" | "missing" | "unreadable";
   filesDiscovered: number;
   filesParsed: number;
+  /** Malformed lines observed inside `jsonlValidationCoverage`. */
   malformedLines: number;
   unreadableFiles: number;
   unsupportedUsageSnapshots: number;
+  /** Regular files safely excluded because their metadata predates `sinceIso`. */
+  filesSkippedBeforeWindow?: number;
+  /** Codex files resolved from bounded head/tail financial evidence. */
+  filesReadFinancially?: number;
+  /** Bytes not replayed as events after the required Codex financial state was proved. */
+  bytesSkippedAsNonFinancialHistory?: number;
+  /** JSONL lines classified from their envelope and skipped before JSON decoding. */
+  nonFinancialLinesPrefiltered?: number;
+  /** Bytes covered by the non-financial event prefilter. */
+  nonFinancialBytesPrefiltered?: number;
+  /** Whether JSON syntax was checked for every line or financial events only. */
+  jsonlValidationCoverage?: "complete" | "financial_events_only";
 };
 
 export type LocalAgentLogResult = {
@@ -225,6 +250,180 @@ function totalUsageTokens(usage: TokenUsage): number {
     (usage.cacheReadTokens ?? 0) +
     (usage.cacheWrite5mTokens ?? 0) +
     (usage.cacheWrite1hTokens ?? 0);
+}
+
+type ParsedClaudeFinancialUsage = {
+  usage: TokenUsage;
+  latestTurnUsage?: LocalAgentTurnUsage;
+  usageSupport?: "unsupported_token_shape";
+  reportedTotalTokens?: number;
+};
+
+function parseClaudeFinancialUsage(
+  value: Record<string, unknown>,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
+): ParsedClaudeFinancialUsage {
+  const inputTokens = tokenComponentOf(value.input_tokens);
+  const outputTokens = tokenComponentOf(value.output_tokens);
+  const cacheReadField = optionalTokenComponent(value, "cache_read_input_tokens");
+  const writeTotalField = optionalTokenComponent(value, "cache_creation_input_tokens");
+  const reportedTotalField = optionalTokenComponent(value, "total_tokens");
+  const cacheCreationPresent = Object.prototype.hasOwnProperty.call(value, "cache_creation");
+  const cacheCreation = isRecord(value.cache_creation) ? value.cache_creation : undefined;
+  const write5mField = cacheCreation
+    ? optionalTokenComponent(cacheCreation, "ephemeral_5m_input_tokens")
+    : { present: false };
+  const write1hField = cacheCreation
+    ? optionalTokenComponent(cacheCreation, "ephemeral_1h_input_tokens")
+    : { present: false };
+  const componentsSupported = inputTokens !== undefined &&
+    outputTokens !== undefined &&
+    (!cacheReadField.present || cacheReadField.value !== undefined) &&
+    (!writeTotalField.present || writeTotalField.value !== undefined) &&
+    (!reportedTotalField.present || reportedTotalField.value !== undefined) &&
+    (!cacheCreationPresent || Boolean(cacheCreation)) &&
+    (!write5mField.present || write5mField.value !== undefined) &&
+    (!write1hField.present || write1hField.value !== undefined);
+  const usage: TokenUsage = {
+    // Retain every valid component for partial evidence, but never let a
+    // missing/invalid required field become a priceable zero-dollar call.
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cacheReadTokens: cacheReadField.value ?? 0,
+    // Prefer the 5m/1h breakdown; fall back to the total as 5m (cheaper bound).
+    cacheWrite5mTokens: write5mField.value ?? writeTotalField.value ?? 0,
+    cacheWrite1hTokens: write1hField.value ?? 0
+  };
+  if (componentsSupported) {
+    return {
+      usage,
+      latestTurnUsage: toTurnUsage(usage, "assistant_message_usage")
+    };
+  }
+  onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
+  const reportedTotalTokens = reportedTotalField.value;
+  return {
+    usage,
+    usageSupport: "unsupported_token_shape",
+    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {})
+  };
+}
+
+type OptionalTokenComponent = {
+  present: boolean;
+  value?: number;
+};
+
+function optionalTokenComponent(
+  record: Record<string, unknown>,
+  key: string
+): OptionalTokenComponent {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return { present: false };
+  const value = tokenComponentOf(record[key]);
+  return value === undefined ? { present: true } : { present: true, value };
+}
+
+type ParsedCodexCumulativeUsage = {
+  usage: TokenUsage;
+  supported: boolean;
+  reportedTotalTokens?: number;
+};
+
+function parseCodexCumulativeUsage(
+  current: Record<string, unknown>,
+  baseline?: Record<string, unknown>
+): ParsedCodexCumulativeUsage {
+  const rawInput = tokenComponentOf(current.input_tokens);
+  const rawOutput = tokenComponentOf(current.output_tokens);
+  const currentCachedField = optionalTokenComponent(current, "cached_input_tokens");
+  const currentTotalField = optionalTokenComponent(current, "total_tokens");
+  const rawCached = currentCachedField.value ?? 0;
+  const rawReportedTotal = currentTotalField.value;
+
+  const baselineInput = baseline ? tokenComponentOf(baseline.input_tokens) : undefined;
+  const baselineOutput = baseline ? tokenComponentOf(baseline.output_tokens) : undefined;
+  const baselineCachedField = baseline
+    ? optionalTokenComponent(baseline, "cached_input_tokens")
+    : { present: false };
+  const baselineTotalField = baseline
+    ? optionalTokenComponent(baseline, "total_tokens")
+    : { present: false };
+  const baselineCached = baselineCachedField.value ?? 0;
+  const baselineReportedTotal = baselineTotalField.value;
+
+  const currentSupported = rawInput !== undefined &&
+    rawOutput !== undefined &&
+    (!currentCachedField.present || currentCachedField.value !== undefined) &&
+    (!currentTotalField.present || currentTotalField.value !== undefined) &&
+    rawCached <= rawInput &&
+    (rawReportedTotal === undefined || rawReportedTotal >= rawInput + rawOutput) &&
+    !((rawReportedTotal ?? 0) > 0 && rawInput === 0 && rawOutput === 0);
+  const baselineSupported = !baseline || (
+    baselineInput !== undefined &&
+    baselineOutput !== undefined &&
+    (!baselineCachedField.present || baselineCachedField.value !== undefined) &&
+    (!baselineTotalField.present || baselineTotalField.value !== undefined) &&
+    baselineCached <= baselineInput &&
+    (baselineReportedTotal === undefined ||
+      baselineReportedTotal >= baselineInput + baselineOutput) &&
+    !((baselineReportedTotal ?? 0) > 0 && baselineInput === 0 && baselineOutput === 0)
+  );
+  const monotonic = !baseline || (
+    rawInput !== undefined && baselineInput !== undefined && rawInput >= baselineInput &&
+    rawOutput !== undefined && baselineOutput !== undefined && rawOutput >= baselineOutput &&
+    rawCached >= baselineCached &&
+    rawInput - rawCached >= baselineInput - baselineCached &&
+    (rawReportedTotal === undefined ||
+      baselineReportedTotal === undefined ||
+      rawReportedTotal >= baselineReportedTotal)
+  );
+
+  const input = Math.max(0, (rawInput ?? 0) - (baselineInput ?? 0));
+  const cached = Math.max(0, rawCached - baselineCached);
+  const output = Math.max(0, (rawOutput ?? 0) - (baselineOutput ?? 0));
+  const reportedTotalTokens = rawReportedTotal === undefined
+    ? undefined
+    : Math.max(0, rawReportedTotal - (baselineReportedTotal ?? 0));
+  return {
+    usage: {
+      // Codex input_tokens includes cached input; expose the non-cached split.
+      inputTokens: Math.max(0, input - cached),
+      outputTokens: output,
+      cacheReadTokens: cached
+    },
+    supported: currentSupported && baselineSupported && monotonic,
+    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {})
+  };
+}
+
+function parseCodexTurnUsage(value: Record<string, unknown>): {
+  supported: boolean;
+  usage?: LocalAgentTurnUsage;
+} {
+  const rawInput = tokenComponentOf(value.input_tokens);
+  const rawOutput = tokenComponentOf(value.output_tokens);
+  const cachedField = optionalTokenComponent(value, "cached_input_tokens");
+  const totalField = optionalTokenComponent(value, "total_tokens");
+  const cached = cachedField.value ?? 0;
+  const total = totalField.value;
+  const supported = rawInput !== undefined &&
+    rawOutput !== undefined &&
+    (!cachedField.present || cachedField.value !== undefined) &&
+    (!totalField.present || totalField.value !== undefined) &&
+    cached <= rawInput &&
+    (total === undefined || total >= rawInput + rawOutput);
+  if (!supported) return { supported: false };
+  return {
+    supported: true,
+    usage: {
+      inputTokens: rawInput - cached,
+      outputTokens: rawOutput,
+      cacheReadTokens: cached,
+      contextTokens: rawInput,
+      totalTokens: total ?? rawInput + rawOutput,
+      source: "transcript_last_token_usage"
+    }
+  };
 }
 
 /** Parse one Claude Code transcript (JSONL). Exported for tests. */
@@ -289,18 +488,7 @@ export function parseClaudeCodeTranscript(
       pendingPrompts.length = 0;
       continue;
     }
-    const cacheCreation = isRecord(usage.cache_creation) ? usage.cache_creation : undefined;
-    const write5m = numberOf(cacheCreation?.ephemeral_5m_input_tokens);
-    const write1h = numberOf(cacheCreation?.ephemeral_1h_input_tokens);
-    const writeTotal = numberOf(usage.cache_creation_input_tokens) ?? 0;
-    const parsedUsage: TokenUsage = {
-      inputTokens: numberOf(usage.input_tokens) ?? 0,
-      outputTokens: numberOf(usage.output_tokens) ?? 0,
-      cacheReadTokens: numberOf(usage.cache_read_input_tokens) ?? 0,
-      // Prefer the 5m/1h breakdown; fall back to the total as 5m (cheaper bound).
-      cacheWrite5mTokens: write5m ?? writeTotal,
-      cacheWrite1hTokens: write1h ?? 0
-    };
+    const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
     const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
     const project = projectFromCwd(workingDirectory) ?? projectFromTranscriptPath(filePath);
     const sessionId = stringOf(entry.sessionId);
@@ -311,9 +499,15 @@ export function parseClaudeCodeTranscript(
       project,
       workingDirectory,
       sessionId,
-      latestTurnUsage: toTurnUsage(parsedUsage, "assistant_message_usage"),
+      ...(parsedUsage.latestTurnUsage
+        ? { latestTurnUsage: parsedUsage.latestTurnUsage }
+        : {}),
       usageScope: "turn",
-      usage: parsedUsage
+      ...(parsedUsage.usageSupport ? { usageSupport: parsedUsage.usageSupport } : {}),
+      ...(parsedUsage.reportedTotalTokens !== undefined
+        ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+        : {}),
+      usage: parsedUsage.usage
     };
     calls.push(call);
 
@@ -496,46 +690,16 @@ export function parseCodexRollout(
     onDiagnostic?.({ code: "malformed_jsonl", count: malformedLines });
   }
   if (!lastTotal || isSubagent && !rootTaskStarted) return [];
-  const rawInput = numberOf(lastTotal.input_tokens);
-  const rawOutput = numberOf(lastTotal.output_tokens);
-  const rawCached = numberOf(lastTotal.cached_input_tokens);
-  const rawReportedTotal = numberOf(lastTotal.total_tokens);
-  const baselineInput = numberOf(inheritedUsageBaseline?.input_tokens);
-  const baselineOutput = numberOf(inheritedUsageBaseline?.output_tokens);
-  const baselineReportedTotal = numberOf(inheritedUsageBaseline?.total_tokens);
-  const currentComponentsComplete = rawInput !== undefined && rawOutput !== undefined && !(
-    (rawReportedTotal ?? 0) > 0 && rawInput === 0 && rawOutput === 0
-  );
-  const baselineComponentsComplete = !inheritedUsageBaseline || (
-    baselineInput !== undefined && baselineOutput !== undefined && !(
-      (baselineReportedTotal ?? 0) > 0 && baselineInput === 0 && baselineOutput === 0
-    )
-  );
-  const usageSupport = currentComponentsComplete && baselineComponentsComplete
+  const parsedUsage = parseCodexCumulativeUsage(lastTotal, inheritedUsageBaseline);
+  const parsedTurn = lastTurn
+    ? parseCodexTurnUsage(lastTurn)
+    : { supported: true as const };
+  const usageSupport = parsedUsage.supported && parsedTurn.supported
     ? "complete" as const
     : "unsupported_token_shape" as const;
   if (usageSupport === "unsupported_token_shape") {
     onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
   }
-  const input = Math.max(
-    0,
-    (rawInput ?? 0) - (baselineInput ?? 0)
-  );
-  const cached = Math.max(
-    0,
-    (rawCached ?? 0) -
-      (numberOf(inheritedUsageBaseline?.cached_input_tokens) ?? 0)
-  );
-  const output = Math.max(
-    0,
-    (rawOutput ?? 0) - (baselineOutput ?? 0)
-  );
-  const reportedTotalTokens = rawReportedTotal === undefined
-    ? undefined
-    : Math.max(0, rawReportedTotal - (baselineReportedTotal ?? 0));
-  const latestTurnUsage = lastTurn
-    ? codexTurnUsage(lastTurn)
-    : undefined;
   const workingDirectory = absoluteWorkingDirectory(dominantCodexCwd(rootCwd, toolWorkdirs));
   const project = projectFromCwd(workingDirectory);
   const activity = buildLocalAgentActivity({
@@ -556,16 +720,15 @@ export function parseCodexRollout(
     sessionId,
     rateLimits: lastRateLimits,
     activity,
-    latestTurnUsage,
+    ...(usageSupport === "complete" && parsedTurn.usage
+      ? { latestTurnUsage: parsedTurn.usage }
+      : {}),
     usageScope: "session_cumulative",
     usageSupport,
-    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
-    usage: {
-      // Codex input_tokens INCLUDES cached tokens; split them out.
-      inputTokens: Math.max(0, input - cached),
-      outputTokens: output,
-      cacheReadTokens: cached
-    }
+    ...(parsedUsage.reportedTotalTokens !== undefined
+      ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+      : {}),
+    usage: parsedUsage.usage
   }];
 }
 
@@ -706,6 +869,725 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
     sourceScans,
     diagnostics,
     ...(codexInvocationFiles ? { codexInvocationFiles } : {})
+  };
+}
+
+type StreamedJsonlResult = {
+  hadContent: boolean;
+  malformedLines: number;
+};
+
+type CodexFinancialFileResult = StreamedJsonlResult & {
+  entries: Record<string, unknown>[];
+  bytesSkipped: number;
+  prefilteredLines: number;
+  prefilteredBytes: number;
+};
+
+type CodexFinancialStreamState = {
+  model?: string;
+  rootCwd?: string;
+  sessionId?: string;
+  rootSessionMetaSeen: boolean;
+  startedAt?: string;
+  rootStartedAtMs?: number;
+  rootTaskStarted: boolean;
+  isSubagent: boolean;
+  inheritedUsageBaseline?: Record<string, unknown>;
+  lastActivityAt?: string;
+  lastTotal?: Record<string, unknown>;
+  lastTurn?: Record<string, unknown>;
+  lastRateLimits?: LocalAgentRateLimitSnapshot;
+};
+
+/**
+ * Stream only the financial evidence required by init/status snapshots.
+ *
+ * Unlike `loadLocalAgentUsage`, this path never derives prompts, file focus,
+ * tool activity, or invocation evidence. It deliberately returns the same
+ * result contract so callers can preserve the existing evidence and
+ * diagnostics vocabulary without maintaining a second loader schema. Codex
+ * project attribution intentionally uses only root metadata; home-launched
+ * tool-workdir inference remains exclusive to the full qualitative loader.
+ */
+export async function loadLocalAgentFinancialUsage(
+  options: LocalAgentFinancialLogOptions = {}
+): Promise<LocalAgentLogResult> {
+  const home = homedir();
+  const claudeDir = options.claudeProjectsDir ?? join(home, ".claude", "projects");
+  const codexDir = options.codexSessionsDir ?? join(home, ".codex", "sessions");
+  const claudeCalls: LocalAgentCall[] = [];
+  const codexCalls: LocalAgentCall[] = [];
+  const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
+  const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
+  const claudeDiagnostics: LocalAgentLogDiagnostic[] = [];
+  const codexDiagnostics: LocalAgentLogDiagnostic[] = [];
+  const sourceScans: LocalAgentSourceScan[] = [
+    {
+      ...emptySourceScan("claude-code"),
+      filesSkippedBeforeWindow: 0,
+      jsonlValidationCoverage: "complete"
+    },
+    {
+      ...emptySourceScan("codex"),
+      filesSkippedBeforeWindow: 0,
+      filesReadFinancially: 0,
+      bytesSkippedAsNonFinancialHistory: 0,
+      nonFinancialLinesPrefiltered: 0,
+      nonFinancialBytesPrefiltered: 0,
+      jsonlValidationCoverage: "complete"
+    }
+  ];
+  const claudeScan = sourceScans[0]!;
+  const codexScan = sourceScans[1]!;
+
+  const scanClaude = async (): Promise<void> => {
+    for (const file of await listJsonlFiles(claudeDir, claudeScan, claudeDiagnostics)) {
+      if (!await shouldStreamFile(file, sinceMs, "claude-code", claudeScan, claudeDiagnostics)) {
+        continue;
+      }
+      const fileCalls: LocalAgentCall[] = [];
+      const fileDiagnostics: TranscriptParseDiagnostic[] = [];
+      const seen = new Set<string>();
+      let streamed: StreamedJsonlResult;
+      try {
+        streamed = await streamJsonlRecords(file, (entry) => {
+          const call = parseClaudeFinancialEntry(
+            entry,
+            file,
+            sinceMs,
+            seen,
+            (diagnostic) => fileDiagnostics.push(diagnostic)
+          );
+          if (call) fileCalls.push(call);
+        });
+      } catch (error) {
+        recordUnreadableFile("claude-code", claudeScan, claudeDiagnostics, error);
+        continue;
+      }
+      if (!streamed.hadContent) continue;
+      claudeScan.filesParsed += 1;
+      claudeCalls.push(...fileCalls);
+      for (const diagnostic of fileDiagnostics) {
+        recordParseDiagnostic("claude-code", claudeScan, claudeDiagnostics, diagnostic);
+      }
+      if (streamed.malformedLines > 0) {
+        recordParseDiagnostic("claude-code", claudeScan, claudeDiagnostics, {
+          code: "malformed_jsonl",
+          count: streamed.malformedLines
+        });
+      }
+    }
+  };
+
+  const scanCodex = async (): Promise<void> => {
+    for (const file of await listJsonlFiles(codexDir, codexScan, codexDiagnostics)) {
+      if (!basename(file).startsWith("rollout-")) continue;
+      if (!await shouldStreamFile(file, sinceMs, "codex", codexScan, codexDiagnostics)) {
+        continue;
+      }
+      let financialFile: CodexFinancialFileResult;
+      try {
+        financialFile = await readCodexFinancialFile(file);
+      } catch (error) {
+        recordUnreadableFile("codex", codexScan, codexDiagnostics, error);
+        continue;
+      }
+      if (!financialFile.hadContent) continue;
+      codexScan.filesParsed += 1;
+      codexScan.filesReadFinancially = (codexScan.filesReadFinancially ?? 0) + 1;
+      codexScan.bytesSkippedAsNonFinancialHistory =
+        (codexScan.bytesSkippedAsNonFinancialHistory ?? 0) + financialFile.bytesSkipped;
+      codexScan.nonFinancialLinesPrefiltered =
+        (codexScan.nonFinancialLinesPrefiltered ?? 0) + financialFile.prefilteredLines;
+      codexScan.nonFinancialBytesPrefiltered =
+        (codexScan.nonFinancialBytesPrefiltered ?? 0) + financialFile.prefilteredBytes;
+      if (financialFile.bytesSkipped > 0 || financialFile.prefilteredLines > 0) {
+        codexScan.jsonlValidationCoverage = "financial_events_only";
+      }
+      if (financialFile.malformedLines > 0) {
+        recordParseDiagnostic("codex", codexScan, codexDiagnostics, {
+          code: "malformed_jsonl",
+          count: financialFile.malformedLines
+        });
+      }
+      const state = createCodexFinancialStreamState();
+      for (const entry of financialFile.entries) {
+        consumeCodexFinancialEntry(state, entry);
+      }
+      const call = finishCodexFinancialStream(state, (diagnostic) => {
+        recordParseDiagnostic("codex", codexScan, codexDiagnostics, diagnostic);
+      });
+      if (call) codexCalls.push(call);
+    }
+  };
+
+  // The sources are independent and can be traversed concurrently without
+  // changing per-file ordering or cumulative-session deduplication.
+  await Promise.all([scanClaude(), scanCodex()]);
+
+  const calls = [...claudeCalls, ...codexCalls];
+  const normalizedCalls = dedupeCumulativeSessionCalls(calls);
+  const filtered = typeof sinceMs === "number"
+    ? normalizedCalls.filter((call) => Date.parse(call.timestamp) >= sinceMs)
+    : normalizedCalls;
+
+  return {
+    records: aggregateCalls(filtered),
+    calls: filtered,
+    filesParsed: claudeScan.filesParsed + codexScan.filesParsed,
+    agentsDetected: [...new Set(filtered.map((call) => call.agent))],
+    sourceScans,
+    diagnostics: [...claudeDiagnostics, ...codexDiagnostics]
+  };
+}
+
+async function streamJsonlRecords(
+  file: string,
+  onRecord: (entry: Record<string, unknown>) => void
+): Promise<StreamedJsonlResult> {
+  const input = createReadStream(file, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let hadContent = false;
+  let malformedLines = 0;
+  try {
+    for await (const line of lines) {
+      hadContent = true;
+      if (!line.trim()) continue;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        malformedLines += 1;
+        continue;
+      }
+      // Parsed event type is checked before any deeper traversal. This keeps
+      // qualitative payloads out of the fast path while still validating
+      // every JSONL line and reporting malformed coverage honestly.
+      if (isRecord(entry)) onRecord(entry);
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+  return { hadContent, malformedLines };
+}
+
+const FINANCIAL_REVERSE_CHUNK_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Codex token counters are cumulative. Reading the root metadata plus the
+ * newest complete financial tail is therefore equivalent to replaying copied
+ * prompt/tool history, while avoiding multi-gigabyte inherited histories in
+ * compaction and subagent rollouts.
+ *
+ * The reverse scan has proof-based stopping conditions. A normal rollout must
+ * expose the newest total, last-turn usage, model, and rate-limit snapshot.
+ * Subagent rollouts always continue to byte zero because the full parser's
+ * first qualifying task boundary cannot be proved from timestamps alone. If
+ * any normal-session proof is missing, it also continues to byte zero; no
+ * byte/line cap silently truncates evidence.
+ */
+async function readCodexFinancialFile(file: string): Promise<CodexFinancialFileResult> {
+  const handle = await open(file, "r");
+  try {
+    const fileStat = await handle.stat();
+    if (fileStat.size === 0) {
+      return {
+        hadContent: false,
+        malformedLines: 0,
+        entries: [],
+        bytesSkipped: 0,
+        prefilteredLines: 0,
+        prefilteredBytes: 0
+      };
+    }
+    const rootEntry = await readFirstJsonlRecord(handle, fileStat.size);
+    const rootPayload = rootEntry?.type === "session_meta" && isRecord(rootEntry.payload)
+      ? rootEntry.payload
+      : undefined;
+    const isSubagent = Boolean(rootPayload) && (
+      stringOf(rootPayload?.thread_source) === "subagent" ||
+      isRecord(rootPayload?.source) && "subagent" in rootPayload.source
+    );
+    const entriesReverse: Record<string, unknown>[] = [];
+    let malformedLines = 0;
+    let prefilteredLines = 0;
+    let prefilteredBytes = 0;
+    let position = fileStat.size;
+    // Chunks for one cross-boundary line are retained newest-first. Appending
+    // is O(1); they are ordered only once when the line's start is found.
+    let suffixPartsReverse: Buffer[] = [];
+    let stoppedEarly = false;
+    let bytesSkipped = 0;
+    const proof = createCodexReverseProof(isSubagent, !rootPayload);
+
+    while (position > 0 && !stoppedEarly) {
+      const chunkStart = Math.max(0, position - FINANCIAL_REVERSE_CHUNK_BYTES);
+      const length = position - chunkStart;
+      const chunk = Buffer.allocUnsafe(length);
+      const { bytesRead } = await handle.read(chunk, 0, length, chunkStart);
+      if (bytesRead !== length) {
+        throw newErrorWithCode("EIO");
+      }
+      const current = chunk.subarray(0, bytesRead);
+      let lineEnd = current.length;
+      let newline = current.lastIndexOf(0x0a, lineEnd - 1);
+      while (newline >= 0) {
+        const leadingPart = current.subarray(newline + 1, lineEnd);
+        const parts = suffixPartsReverse.length > 0
+          ? [leadingPart, ...suffixPartsReverse.slice().reverse()]
+          : [leadingPart];
+        const observed = parseCodexFinancialLine(parts);
+        if (observed.malformed) malformedLines += 1;
+        if (observed.prefilteredBytes > 0) {
+          prefilteredLines += 1;
+          prefilteredBytes += observed.prefilteredBytes;
+        }
+        if (observed.entry) {
+          entriesReverse.push(observed.entry);
+          if (observeCodexReverseProof(proof, observed.entry)) {
+            stoppedEarly = true;
+            bytesSkipped = chunkStart + newline;
+            break;
+          }
+        }
+        suffixPartsReverse = [];
+        lineEnd = newline;
+        newline = current.lastIndexOf(0x0a, lineEnd - 1);
+      }
+      if (!stoppedEarly) {
+        const prefix = current.subarray(0, lineEnd);
+        if (prefix.length > 0) suffixPartsReverse.push(prefix);
+        position = chunkStart;
+      }
+    }
+
+    if (!stoppedEarly && suffixPartsReverse.length > 0) {
+      const observed = parseCodexFinancialLine(suffixPartsReverse.slice().reverse());
+      if (observed.malformed) malformedLines += 1;
+      if (observed.prefilteredBytes > 0) {
+        prefilteredLines += 1;
+        prefilteredBytes += observed.prefilteredBytes;
+      }
+      if (observed.entry) entriesReverse.push(observed.entry);
+    }
+
+    const entries = entriesReverse.reverse();
+    // A proof-complete tail does not contain byte-zero root metadata. Inject
+    // the separately parsed first record so session identity/start/cwd remain
+    // identical to the full parser. A full scan already contains that record.
+    if (stoppedEarly && rootEntry) entries.unshift(rootEntry);
+    return {
+      hadContent: true,
+      malformedLines,
+      entries,
+      bytesSkipped: Math.max(0, bytesSkipped),
+      prefilteredLines,
+      prefilteredBytes
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readFirstJsonlRecord(
+  handle: FileHandle,
+  fileSize: number
+): Promise<Record<string, unknown> | undefined> {
+  const chunks: Buffer[] = [];
+  let position = 0;
+  while (position < fileSize) {
+    const length = Math.min(FINANCIAL_REVERSE_CHUNK_BYTES, fileSize - position);
+    const chunk = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(chunk, 0, length, position);
+    if (bytesRead <= 0) break;
+    const value = chunk.subarray(0, bytesRead);
+    const newline = value.indexOf(0x0a);
+    if (newline >= 0) {
+      chunks.push(value.subarray(0, newline));
+      break;
+    }
+    chunks.push(value);
+    position += bytesRead;
+  }
+  if (chunks.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type ParsedCodexFinancialLine = {
+  entry?: Record<string, unknown>;
+  malformed: boolean;
+  prefilteredBytes: number;
+};
+
+const CODEX_ENVELOPE_PREFIX_BYTES = 16 * 1024;
+
+function parseCodexFinancialLine(parts: readonly Buffer[]): ParsedCodexFinancialLine {
+  const byteLength = parts.reduce((total, part) => total + part.length, 0);
+  if (byteLength === 0) return { malformed: false, prefilteredBytes: 0 };
+  const prefix = bufferPartsPrefix(parts, CODEX_ENVELOPE_PREFIX_BYTES).toString("utf8");
+  const classification = classifyCodexFinancialEnvelope(prefix);
+  if (classification === "nonfinancial") {
+    return { malformed: false, prefilteredBytes: byteLength };
+  }
+  const text = Buffer.concat(parts, byteLength).toString("utf8").trim();
+  if (!text) return { malformed: false, prefilteredBytes: 0 };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { malformed: true, prefilteredBytes: 0 };
+  }
+  if (!isRecord(parsed)) return { malformed: false, prefilteredBytes: 0 };
+  const payload = isRecord(parsed.payload) ? parsed.payload : undefined;
+  const financial = parsed.type === "session_meta" ||
+    parsed.type === "turn_context" ||
+    parsed.type === "event_msg" && (
+      payload?.type === "token_count" || payload?.type === "task_started"
+    );
+  return financial
+    ? { entry: parsed, malformed: false, prefilteredBytes: 0 }
+    : { malformed: false, prefilteredBytes: byteLength };
+}
+
+function bufferPartsPrefix(parts: readonly Buffer[], limit: number): Buffer {
+  const selected: Buffer[] = [];
+  let remaining = limit;
+  for (const part of parts) {
+    if (remaining <= 0) break;
+    const value = part.subarray(0, Math.min(part.length, remaining));
+    if (value.length > 0) selected.push(value);
+    remaining -= value.length;
+  }
+  return selected.length === 1
+    ? selected[0]!
+    : Buffer.concat(selected, limit - remaining);
+}
+
+function classifyCodexFinancialEnvelope(
+  prefix: string
+): "financial" | "nonfinancial" | "unknown" {
+  // JSON property order is not semantic. Scan string/object depth so a nested
+  // payload type can never be mistaken for the top-level event type. If the
+  // bounded prefix does not prove the envelope, return unknown and let the
+  // complete line go through JSON.parse rather than silently prefiltering it.
+  const { topLevelType, payloadType } = scanCodexEnvelopeTypes(prefix);
+  if (!topLevelType) return "unknown";
+  if (topLevelType === "session_meta" || topLevelType === "turn_context") {
+    return "financial";
+  }
+  if (topLevelType !== "event_msg") return "nonfinancial";
+  if (!payloadType) return "unknown";
+  return payloadType === "token_count" || payloadType === "task_started"
+    ? "financial"
+    : "nonfinancial";
+}
+
+function scanCodexEnvelopeTypes(prefix: string): {
+  topLevelType?: string;
+  payloadType?: string;
+} {
+  let objectDepth = 0;
+  let payloadDepth: number | undefined;
+  let topLevelType: string | undefined;
+  let payloadType: string | undefined;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const character = prefix[index];
+    if (character === "{") {
+      objectDepth += 1;
+      continue;
+    }
+    if (character === "}") {
+      if (payloadDepth === objectDepth) payloadDepth = undefined;
+      objectDepth = Math.max(0, objectDepth - 1);
+      continue;
+    }
+    if (character !== '"') continue;
+    const token = readJsonStringToken(prefix, index);
+    if (!token) break;
+    index = token.end;
+    let cursor = skipJsonWhitespace(prefix, token.end + 1);
+    if (prefix[cursor] !== ":") continue;
+    cursor = skipJsonWhitespace(prefix, cursor + 1);
+    if (token.value === "payload" && objectDepth === 1 && prefix[cursor] === "{") {
+      payloadDepth = objectDepth + 1;
+      continue;
+    }
+    if (token.value !== "type" || prefix[cursor] !== '"') continue;
+    const value = readJsonStringToken(prefix, cursor);
+    if (!value) break;
+    if (objectDepth === 1) topLevelType = value.value;
+    if (payloadDepth === objectDepth) payloadType = value.value;
+    index = value.end;
+  }
+  return { topLevelType, payloadType };
+}
+
+function readJsonStringToken(
+  input: string,
+  start: number
+): { value: string; end: number } | undefined {
+  if (input[start] !== '"') return undefined;
+  let escaped = false;
+  for (let index = start + 1; index < input.length; index += 1) {
+    const character = input[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character !== '"') continue;
+    try {
+      const value: unknown = JSON.parse(input.slice(start, index + 1));
+      return typeof value === "string" ? { value, end: index } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function skipJsonWhitespace(input: string, start: number): number {
+  let index = start;
+  while (index < input.length && /\s/.test(input[index]!)) index += 1;
+  return index;
+}
+
+type CodexReverseProof = {
+  isSubagent: boolean;
+  forceFullScan: boolean;
+  totalSeen: boolean;
+  turnSeen: boolean;
+  rateLimitsSeen: boolean;
+  modelSeen: boolean;
+};
+
+function createCodexReverseProof(
+  isSubagent: boolean,
+  forceFullScan: boolean
+): CodexReverseProof {
+  return {
+    isSubagent,
+    forceFullScan,
+    totalSeen: false,
+    turnSeen: false,
+    rateLimitsSeen: false,
+    modelSeen: false
+  };
+}
+
+function observeCodexReverseProof(
+  proof: CodexReverseProof,
+  entry: Record<string, unknown>
+): boolean {
+  if (proof.forceFullScan || proof.isSubagent) return false;
+  const payload = isRecord(entry.payload) ? entry.payload : undefined;
+  const info = payload?.type === "token_count" && isRecord(payload.info)
+    ? payload.info
+    : undefined;
+  const hasTotal = Boolean(info && isRecord(info.total_token_usage));
+  if (hasTotal) proof.totalSeen = true;
+  if (info && isRecord(info.last_token_usage)) proof.turnSeen = true;
+  if (parseCodexRateLimits(payload?.rate_limits, stringOf(entry.timestamp))) {
+    proof.rateLimitsSeen = true;
+  }
+  if (entry.type === "turn_context" && stringOf(payload?.model)) {
+    proof.modelSeen = true;
+  }
+  return !proof.isSubagent &&
+    proof.totalSeen &&
+    proof.turnSeen &&
+    proof.rateLimitsSeen &&
+    proof.modelSeen;
+}
+
+async function shouldStreamFile(
+  file: string,
+  sinceMs: number | undefined,
+  agent: LocalAgentCall["agent"],
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[]
+): Promise<boolean> {
+  let fileStat;
+  try {
+    fileStat = await lstat(file);
+  } catch (error) {
+    recordUnreadableFile(agent, scan, diagnostics, error);
+    return false;
+  }
+  // Refuse a path swapped to a symlink/non-file after directory discovery.
+  if (!fileStat.isFile()) {
+    recordUnreadableFile(agent, scan, diagnostics, newErrorWithCode("EINVAL"));
+    return false;
+  }
+  if (typeof sinceMs !== "number") return true;
+  // ctime catches a file whose mtime was restored after recent replacement;
+  // birthtime catches a newly copied file with a preserved old mtime. Skip
+  // only when all available metadata proves the file predates the window.
+  const newestFileEvidence = Math.max(
+    fileStat.mtimeMs,
+    fileStat.ctimeMs,
+    fileStat.birthtimeMs
+  );
+  if (!Number.isFinite(newestFileEvidence) || newestFileEvidence >= sinceMs) {
+    return true;
+  }
+  scan.filesSkippedBeforeWindow = (scan.filesSkippedBeforeWindow ?? 0) + 1;
+  return false;
+}
+
+function newErrorWithCode(code: string): NodeJS.ErrnoException {
+  const error = new Error(code) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
+}
+
+function parseClaudeFinancialEntry(
+  entry: Record<string, unknown>,
+  filePath: string,
+  sinceMs: number | undefined,
+  seen: Set<string>,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
+): LocalAgentCall | undefined {
+  if (entry.type !== "assistant") return undefined;
+  const message = isRecord(entry.message) ? entry.message : undefined;
+  const usage = message && isRecord(message.usage) ? message.usage : undefined;
+  if (!message || !usage || stringOf(message.model) === "<synthetic>") return undefined;
+  const dedupeKey = `${stringOf(message.id) ?? ""}:${stringOf(entry.requestId) ?? ""}`;
+  if (dedupeKey !== ":" && seen.has(dedupeKey)) return undefined;
+  seen.add(dedupeKey);
+  const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
+  if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) return undefined;
+  const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
+  const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
+  return {
+    agent: "claude-code",
+    model: stringOf(message.model) ?? "claude-code",
+    timestamp,
+    project: projectFromCwd(workingDirectory) ?? projectFromTranscriptPath(filePath),
+    workingDirectory,
+    sessionId: stringOf(entry.sessionId),
+    ...(parsedUsage.latestTurnUsage
+      ? { latestTurnUsage: parsedUsage.latestTurnUsage }
+      : {}),
+    usageScope: "turn",
+    ...(parsedUsage.usageSupport ? { usageSupport: parsedUsage.usageSupport } : {}),
+    ...(parsedUsage.reportedTotalTokens !== undefined
+      ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+      : {}),
+    usage: parsedUsage.usage
+  };
+}
+
+function createCodexFinancialStreamState(): CodexFinancialStreamState {
+  return {
+    rootSessionMetaSeen: false,
+    rootTaskStarted: false,
+    isSubagent: false
+  };
+}
+
+function consumeCodexFinancialEntry(
+  state: CodexFinancialStreamState,
+  entry: Record<string, unknown>
+): void {
+  const payload = isRecord(entry.payload) ? entry.payload : undefined;
+  if (entry.type === "session_meta" && payload && !state.rootSessionMetaSeen) {
+    state.rootSessionMetaSeen = true;
+    state.sessionId = stringOf(payload.id);
+    state.rootCwd = stringOf(payload.cwd);
+    state.startedAt = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp));
+    state.rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
+    state.isSubagent = stringOf(payload.thread_source) === "subagent" ||
+      isRecord(payload.source) && "subagent" in payload.source;
+  }
+  if (entry.type === "turn_context" && payload) {
+    state.model = stringOf(payload.model) ?? state.model;
+    state.rootCwd ??= stringOf(payload.cwd);
+  }
+  if (
+    state.isSubagent &&
+    !state.rootTaskStarted &&
+    payload?.type === "task_started" &&
+    isRootSpecificTaskStart(payload.started_at, state.rootStartedAtMs)
+  ) {
+    state.inheritedUsageBaseline = state.lastTotal;
+    state.lastTotal = undefined;
+    state.rootTaskStarted = true;
+    state.model = undefined;
+    state.lastTurn = undefined;
+    state.lastRateLimits = undefined;
+    state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
+  }
+  if (entry.type !== "event_msg" || payload?.type !== "token_count") return;
+  const eventTimestamp = toIso(stringOf(entry.timestamp)) ??
+    state.lastActivityAt ??
+    state.startedAt;
+  const info = isRecord(payload.info) ? payload.info : undefined;
+  const total = info && isRecord(info.total_token_usage)
+    ? info.total_token_usage
+    : undefined;
+  const turn = info && isRecord(info.last_token_usage)
+    ? info.last_token_usage
+    : undefined;
+  if (total) {
+    state.lastTotal = total;
+    state.lastActivityAt = eventTimestamp;
+  }
+  if (turn) {
+    state.lastTurn = turn;
+    state.lastActivityAt = eventTimestamp;
+  }
+  const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
+  if (rateLimits) state.lastRateLimits = rateLimits;
+}
+
+function finishCodexFinancialStream(
+  state: CodexFinancialStreamState,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
+): LocalAgentCall | undefined {
+  if (!state.lastTotal || state.isSubagent && !state.rootTaskStarted) return undefined;
+  const parsedUsage = parseCodexCumulativeUsage(
+    state.lastTotal,
+    state.inheritedUsageBaseline
+  );
+  const parsedTurn = state.lastTurn
+    ? parseCodexTurnUsage(state.lastTurn)
+    : { supported: true as const };
+  const usageSupport = parsedUsage.supported && parsedTurn.supported
+    ? "complete" as const
+    : "unsupported_token_shape" as const;
+  if (usageSupport === "unsupported_token_shape") {
+    onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
+  }
+  const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
+  return {
+    agent: "codex",
+    model: state.model ?? "codex",
+    timestamp: state.lastActivityAt ?? state.startedAt ?? new Date(0).toISOString(),
+    startedAt: state.startedAt,
+    project: projectFromCwd(workingDirectory),
+    workingDirectory,
+    sessionId: state.sessionId,
+    rateLimits: state.lastRateLimits,
+    ...(usageSupport === "complete" && parsedTurn.usage
+      ? { latestTurnUsage: parsedTurn.usage }
+      : {}),
+    usageScope: "session_cumulative",
+    usageSupport,
+    ...(parsedUsage.reportedTotalTokens !== undefined
+      ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+      : {}),
+    usage: parsedUsage.usage
   };
 }
 
@@ -1236,20 +2118,6 @@ function topicTokens(value: string): string[] {
   return promptTokens(sanitizeLocalActivityText(withoutAbsolutePaths));
 }
 
-function codexTurnUsage(value: Record<string, unknown>): LocalAgentTurnUsage {
-  const rawInput = numberOf(value.input_tokens) ?? 0;
-  const cached = Math.min(rawInput, numberOf(value.cached_input_tokens) ?? 0);
-  const output = numberOf(value.output_tokens) ?? 0;
-  return {
-    inputTokens: Math.max(0, rawInput - cached),
-    outputTokens: output,
-    cacheReadTokens: cached,
-    contextTokens: rawInput,
-    totalTokens: numberOf(value.total_tokens) ?? rawInput + output,
-    source: "transcript_last_token_usage"
-  };
-}
-
 function toTurnUsage(
   usage: TokenUsage,
   source: LocalAgentTurnUsage["source"]
@@ -1369,6 +2237,11 @@ function sum(calls: LocalAgentCall[], pick: (call: LocalAgentCall) => number): n
 
 function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function tokenComponentOf(value: unknown): number | undefined {
+  const parsed = numberOf(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
 function stringOf(value: unknown): string | undefined {

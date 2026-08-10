@@ -6,6 +6,7 @@ import {
   aggregateCalls,
   dedupeCumulativeSessionCalls,
   latestObservedWorkingDirectory,
+  loadLocalAgentFinancialUsage,
   loadLocalAgentUsage,
   parseClaudeCodeTranscript,
   parseCodexRollout
@@ -79,6 +80,65 @@ describe("parseClaudeCodeTranscript", () => {
       cacheReadTokens: 1000,
       cacheWrite5mTokens: 0,
       cacheWrite1hTokens: 500
+    });
+  });
+
+  it("keeps incomplete Claude usage as unpriced partial evidence instead of coercing it to zero", () => {
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const calls = parseClaudeCodeTranscript(
+      claudeLine({}, {
+        input_tokens: undefined,
+        output_tokens: 25,
+        total_tokens: 321
+      }),
+      "",
+      undefined,
+      (diagnostic) => diagnostics.push(diagnostic)
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 321,
+      usage: { inputTokens: 0, outputTokens: 25 }
+    });
+    expect(calls[0]?.latestTurnUsage).toBeUndefined();
+    expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
+    expect(aggregateCalls(calls)[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
+  it("accepts explicit numeric zero Claude components as complete usage", () => {
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const calls = parseClaudeCodeTranscript(
+      claudeLine({}, {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_creation: {
+          ephemeral_5m_input_tokens: 0,
+          ephemeral_1h_input_tokens: 0
+        }
+      }),
+      "",
+      undefined,
+      (diagnostic) => diagnostics.push(diagnostic)
+    );
+
+    expect(calls[0]?.usageSupport).toBeUndefined();
+    expect(calls[0]?.latestTurnUsage).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      contextTokens: 0,
+      totalTokens: 0
+    });
+    expect(diagnostics).toEqual([]);
+    expect(aggregateCalls(calls)[0]).toMatchObject({
+      amountUsd: 0,
+      costConfidence: "estimated"
     });
   });
 
@@ -813,6 +873,97 @@ describe("parseCodexRollout", () => {
     });
   });
 
+  it("marks a fork unsupported when cumulative non-cached input regresses", () => {
+    const rootStartedAt = "2026-08-03T15:00:00.000Z";
+    const forked = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: rootStartedAt,
+        payload: {
+          id: "child-regressed-uncached",
+          timestamp: rootStartedAt,
+          thread_source: "subagent"
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:00:00.100Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 0,
+              output_tokens: 10,
+              total_tokens: 110
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: {
+          type: "task_started",
+          started_at: Date.parse(rootStartedAt) / 1_000
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 150,
+              cached_input_tokens: 100,
+              output_tokens: 20,
+              total_tokens: 170
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(forked)[0]).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 60,
+      usage: { inputTokens: 0, cacheReadTokens: 100, outputTokens: 10 }
+    });
+  });
+
+  it("marks inconsistent cumulative total_tokens unsupported", () => {
+    const inconsistentCurrent = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: "inconsistent-current-total", timestamp: "2026-08-03T15:00:00.000Z" }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 20,
+              output_tokens: 10,
+              total_tokens: 109
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    const call = parseCodexRollout(inconsistentCurrent)[0];
+    expect(call).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 109,
+      usage: { inputTokens: 80, cacheReadTokens: 20, outputTokens: 10 }
+    });
+    expect(call?.latestTurnUsage).toBeUndefined();
+  });
+
   it("omits ambiguous forks without post-boundary root usage instead of charging parent history", () => {
     const rootStartedAt = "2026-08-03T15:00:00.000Z";
     const rootMeta = JSON.stringify({
@@ -1108,6 +1259,788 @@ describe("loadLocalAgentUsage diagnostics", () => {
       code: "directory_unreadable",
       severity: "error"
     }));
+  });
+});
+
+describe("loadLocalAgentFinancialUsage", () => {
+  it("matches the full loader's financial and transcript-limit evidence while omitting activity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-parity-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+
+    await writeFile(join(claudeDir, "session.jsonl"), [
+      JSON.stringify({
+        type: "user",
+        message: { content: "Audit the private customer billing prompt." }
+      }),
+      claudeLine({
+        requestId: "req-cache",
+        message: {
+          id: "msg-cache",
+          model: "claude-opus-4-8",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 1_000,
+            cache_creation_input_tokens: 500,
+            cache_creation: {
+              ephemeral_5m_input_tokens: 200,
+              ephemeral_1h_input_tokens: 300
+            }
+          },
+          content: [{
+            type: "tool_use",
+            input: { file_path: "/Users/testuser/private/customer-ledger.md" }
+          }]
+        }
+      }),
+      // Repeated streamed response must not count twice.
+      claudeLine({
+        requestId: "req-cache",
+        message: {
+          id: "msg-cache",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 100, output_tokens: 25 }
+        }
+      }),
+      "malformed sk-proj-value-must-not-enter-diagnostics",
+      claudeLine({
+        timestamp: "2026-06-08T10:05:00.000Z",
+        requestId: "req-unknown",
+        message: {
+          id: "msg-unknown",
+          model: "future-unknown-model",
+          usage: { input_tokens: 50, output_tokens: 10 }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    await writeFile(join(codexDir, "rollout-session.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-financial",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-06-08T09:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Do not retain this prompt." }]
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-08T09:10:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 5_000,
+              cached_input_tokens: 3_000,
+              output_tokens: 250
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-08T09:20:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 8_000,
+              cached_input_tokens: 5_000,
+              output_tokens: 400
+            },
+            last_token_usage: {
+              input_tokens: 2_000,
+              cached_input_tokens: 1_500,
+              output_tokens: 100,
+              total_tokens: 2_100
+            }
+          },
+          rate_limits: {
+            limit_id: "codex",
+            plan_type: "pro",
+            primary: {
+              used_percent: 25,
+              window_minutes: 300,
+              resets_at: Date.parse("2026-06-08T12:00:00.000Z") / 1_000
+            },
+            secondary: {
+              used_percent: 60,
+              window_minutes: 10_080,
+              resets_at: Date.parse("2026-06-15T00:00:00.000Z") / 1_000
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const options = {
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      sinceIso: "2026-06-01T00:00:00.000Z"
+    };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const withoutActivity = (calls: typeof full.calls) => calls
+      .map(({ activity: _activity, ...call }) => call)
+      .sort((left, right) => `${left.agent}:${left.timestamp}`.localeCompare(`${right.agent}:${right.timestamp}`));
+
+    expect(withoutActivity(financial.calls)).toEqual(withoutActivity(full.calls));
+    expect(financial.records).toEqual(full.records);
+    expect(financial.calls.every((call) => call.activity === undefined)).toBe(true);
+    expect(financial.calls.find((call) => call.agent === "codex")?.rateLimits?.windows)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "five-hour", usedPercent: 25 }),
+        expect.objectContaining({ kind: "weekly", usedPercent: 60 })
+      ]));
+    expect(financial.sourceScans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent: "claude-code", malformedLines: 1 }),
+      expect.objectContaining({ agent: "codex", malformedLines: 0 })
+    ]));
+    expect(JSON.stringify(financial)).not.toContain("customer billing prompt");
+    expect(JSON.stringify(financial)).not.toContain("customer-ledger.md");
+    expect(JSON.stringify(financial.diagnostics)).not.toContain("sk-proj-value");
+  });
+
+  it("matches the full loader when Codex payload appears before the top-level event type", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-property-order-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await writeFile(join(codexDir, "rollout-reordered.jsonl"), [
+      JSON.stringify({
+        payload: {
+          id: "reordered-session",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        },
+        timestamp: "2026-08-08T10:00:00.000Z",
+        type: "session_meta"
+      }),
+      JSON.stringify({ payload: { model: "gpt-5.6-sol" }, type: "turn_context" }),
+      JSON.stringify({
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 4_000,
+              cached_input_tokens: 3_000,
+              output_tokens: 500
+            },
+            last_token_usage: {
+              input_tokens: 1_000,
+              cached_input_tokens: 700,
+              output_tokens: 100,
+              total_tokens: 1_100
+            }
+          },
+          rate_limits: {
+            limit_id: "codex",
+            plan_type: "pro",
+            primary: {
+              used_percent: 35,
+              window_minutes: 300,
+              resets_at: Date.parse("2026-08-08T13:00:00.000Z") / 1_000
+            }
+          }
+        },
+        timestamp: "2026-08-08T10:30:00.000Z",
+        type: "event_msg"
+      })
+    ].join("\n"), "utf8");
+
+    const options = { claudeProjectsDir: claudeDir, codexSessionsDir: codexDir };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const financialFields = ({ activity: _activity, ...call }: typeof full.calls[number]) => call;
+
+    expect(financial.calls.map(financialFields)).toEqual(full.calls.map(financialFields));
+    expect(financial.records).toEqual(full.records);
+    expect(financial.calls).toHaveLength(1);
+    expect(financial.calls[0]?.rateLimits?.windows[0]).toMatchObject({
+      kind: "five-hour",
+      usedPercent: 35
+    });
+  });
+
+  it("dedupes cumulative Codex snapshots across files exactly like the full loader", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-dedupe-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    const rolloutFile = (
+      timestamp: string,
+      inputTokens: number,
+      cachedInputTokens: number,
+      outputTokens: number
+    ) => [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "repeated-session",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp,
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: inputTokens,
+              cached_input_tokens: cachedInputTokens,
+              output_tokens: outputTokens
+            }
+          }
+        }
+      })
+    ].join("\n");
+    await writeFile(
+      join(codexDir, "rollout-older.jsonl"),
+      rolloutFile("2026-08-08T10:30:00.000Z", 1_000, 700, 100),
+      "utf8"
+    );
+    await writeFile(
+      join(codexDir, "rollout-newer.jsonl"),
+      rolloutFile("2026-08-08T11:30:00.000Z", 2_000, 1_500, 250),
+      "utf8"
+    );
+    const options = { claudeProjectsDir: claudeDir, codexSessionsDir: codexDir };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+
+    expect(financial.calls).toHaveLength(1);
+    expect(financial.calls[0]).toMatchObject({
+      timestamp: "2026-08-08T11:30:00.000Z",
+      usage: { inputTokens: 500, cacheReadTokens: 1_500, outputTokens: 250 }
+    });
+    expect(financial.records).toEqual(full.records);
+  });
+
+  it("finds the root subagent boundary without mistaking a later task for its baseline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-subagent-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    const rootStartedAt = "2026-08-08T15:00:00.000Z";
+    const privateHistory = "private prompt text ".repeat(100_000);
+    await writeFile(join(codexDir, "rollout-subagent.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: rootStartedAt,
+        payload: {
+          id: "child-session",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: rootStartedAt,
+          thread_source: "subagent",
+          parent_thread_id: "parent-session",
+          source: { subagent: { other: "worker" } }
+        }
+      }),
+      // A large inherited qualitative event is intentionally outside the
+      // financial tail and must neither leak nor force a byte cap.
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "message", role: "user", content: privateHistory }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T14:50:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 10_000,
+              cached_input_tokens: 7_000,
+              output_tokens: 500
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: {
+          type: "task_started",
+          started_at: Date.parse(rootStartedAt) / 1_000
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T15:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 15_000,
+              cached_input_tokens: 10_000,
+              output_tokens: 800
+            }
+          }
+        }
+      }),
+      // The full parser has already selected the root boundary when this later
+      // task arrives. A reverse parser must not select this newer task.
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T15:00:02.000Z",
+        payload: {
+          type: "task_started",
+          // Deliberately inside the clock-tolerance band: reverse selection
+          // still has to find the first qualifying boundary, not this latest.
+          started_at: Date.parse("2026-08-08T15:00:02.000Z") / 1_000
+        }
+      }),
+      "malformed financial-tail line",
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T16:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 13_000,
+              output_tokens: 1_100
+            },
+            last_token_usage: {
+              input_tokens: 2_000,
+              cached_input_tokens: 1_500,
+              output_tokens: 100,
+              total_tokens: 2_100
+            }
+          },
+          rate_limits: {
+            limit_id: "codex",
+            plan_type: "pro",
+            secondary: {
+              used_percent: 40,
+              window_minutes: 10_080,
+              resets_at: Date.parse("2026-08-15T00:00:00.000Z") / 1_000
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const options = { claudeProjectsDir: claudeDir, codexSessionsDir: codexDir };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const financialFields = ({ activity: _activity, ...call }: typeof full.calls[number]) => call;
+
+    expect(financial.calls.map(financialFields)).toEqual(full.calls.map(financialFields));
+    expect(financial.calls[0]?.usage).toEqual({
+      inputTokens: 4_000,
+      cacheReadTokens: 6_000,
+      outputTokens: 600
+    });
+    expect(financial.sourceScans.find((scan) => scan.agent === "codex"))
+      .toMatchObject({
+        malformedLines: 1,
+        filesReadFinancially: 1,
+        bytesSkippedAsNonFinancialHistory: 0,
+        jsonlValidationCoverage: "financial_events_only"
+      });
+    expect(
+      financial.sourceScans.find((scan) => scan.agent === "codex")
+        ?.nonFinancialBytesPrefiltered
+    ).toBeGreaterThan(1_000_000);
+    expect(JSON.stringify(financial)).not.toContain("private prompt text");
+  });
+
+  it("falls back to complete replay when a preamble precedes the root session metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-preamble-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    const rootStartedAt = "2026-08-08T15:00:00.000Z";
+    await writeFile(join(codexDir, "rollout-preamble.jsonl"), [
+      "malformed preamble",
+      JSON.stringify({ type: "response_item", payload: { type: "message", content: "private" } }),
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "preamble-child",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: rootStartedAt,
+          thread_source: "subagent",
+          source: { subagent: { other: "worker" } }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T14:00:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1_000,
+              cached_input_tokens: 700,
+              output_tokens: 100
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: { type: "task_started", started_at: Date.parse(rootStartedAt) / 1_000 }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T15:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 2_000,
+              cached_input_tokens: 1_500,
+              output_tokens: 250
+            },
+            last_token_usage: {
+              input_tokens: 800,
+              cached_input_tokens: 600,
+              output_tokens: 100,
+              total_tokens: 900
+            }
+          },
+          rate_limits: {
+            limit_id: "codex",
+            plan_type: "pro",
+            secondary: {
+              used_percent: 50,
+              window_minutes: 10_080,
+              resets_at: Date.parse("2026-08-15T00:00:00.000Z") / 1_000
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const options = { claudeProjectsDir: claudeDir, codexSessionsDir: codexDir };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const financialFields = ({ activity: _activity, ...call }: typeof full.calls[number]) => call;
+
+    expect(financial.calls.map(financialFields)).toEqual(full.calls.map(financialFields));
+    expect(financial.sourceScans.find((scan) => scan.agent === "codex"))
+      .toMatchObject({
+        malformedLines: 1,
+        bytesSkippedAsNonFinancialHistory: 0,
+        jsonlValidationCoverage: "financial_events_only"
+      });
+  });
+
+  it("preserves unsupported token evidence and never manufactures Claude limits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-unsupported-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await writeFile(join(claudeDir, "session.jsonl"), [
+      claudeLine({
+        rate_limits: {
+          primary: { used_percent: 99, window_minutes: 300, resets_at: 1_800_000_000 }
+        }
+      }),
+      claudeLine({
+        timestamp: "2026-06-08T10:01:00.000Z",
+        requestId: "req-missing-input",
+        message: {
+          id: "msg-missing-input",
+          model: "claude-opus-4-8",
+          usage: { output_tokens: 25, total_tokens: 456 }
+        }
+      }),
+      claudeLine({
+        timestamp: "2026-06-08T10:02:00.000Z",
+        requestId: "req-invalid-output",
+        message: {
+          id: "msg-invalid-output",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 100, output_tokens: "25" }
+        }
+      })
+    ].join("\n"), "utf8");
+    await writeFile(join(codexDir, "rollout-total-only.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "total-only",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "future-codex" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T10:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: { total_tokens: 12_345 } }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const options = {
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir
+    };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const financialFields = ({ activity: _activity, ...call }: typeof full.calls[number]) => call;
+
+    expect(financial.calls.map(financialFields)).toEqual(full.calls.map(financialFields));
+    expect(financial.calls.find((call) => call.agent === "claude-code")?.rateLimits)
+      .toBeUndefined();
+    expect(financial.calls.filter((call) => (
+      call.agent === "claude-code" && call.usageSupport === "unsupported_token_shape"
+    ))).toHaveLength(2);
+    expect(financial.calls.find((call) => call.agent === "codex")).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 12_345
+    });
+    expect(financial.records.find((record) => record.agentId === "codex")).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+    expect(financial.records.find((record) => record.agentId === "claude-code")).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+    expect(
+      financial.sourceScans.find((scan) => scan.agent === "claude-code")
+        ?.unsupportedUsageSnapshots
+    ).toBe(2);
+    expect(financial.sourceScans.find((scan) => scan.agent === "codex")?.unsupportedUsageSnapshots)
+      .toBe(1);
+  });
+
+  it("rejects malformed cache components in Claude and Codex with exact full-fast parity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-cache-shapes-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await writeFile(join(claudeDir, "session.jsonl"), [
+      claudeLine({
+        requestId: "req-invalid-cache-read",
+        message: {
+          id: "msg-invalid-cache-read",
+          model: "claude-opus-4-8",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: "100"
+          }
+        }
+      }),
+      claudeLine({
+        timestamp: "2026-06-08T10:01:00.000Z",
+        requestId: "req-negative-cache-write",
+        message: {
+          id: "msg-negative-cache-write",
+          model: "claude-opus-4-8",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_creation_input_tokens: 10,
+            cache_creation: {
+              ephemeral_5m_input_tokens: -1,
+              ephemeral_1h_input_tokens: 5
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const codexRollout = (
+      id: string,
+      total: Record<string, unknown>,
+      last: Record<string, unknown>
+    ) => [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id,
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T10:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: total, last_token_usage: last },
+          rate_limits: {
+            limit_id: "codex",
+            plan_type: "pro",
+            primary: {
+              used_percent: 35,
+              window_minutes: 300,
+              resets_at: Date.parse("2026-08-08T13:00:00.000Z") / 1_000
+            }
+          }
+        }
+      })
+    ].join("\n");
+    await writeFile(
+      join(codexDir, "rollout-cache-over-input.jsonl"),
+      codexRollout(
+        "cache-over-input",
+        { input_tokens: 100, cached_input_tokens: 101, output_tokens: 10, total_tokens: 110 },
+        { input_tokens: 50, cached_input_tokens: 40, output_tokens: 5, total_tokens: 55 }
+      ),
+      "utf8"
+    );
+    await writeFile(
+      join(codexDir, "rollout-invalid-last-turn.jsonl"),
+      codexRollout(
+        "invalid-last-turn",
+        { input_tokens: 100, cached_input_tokens: 80, output_tokens: 10, total_tokens: 110 },
+        { input_tokens: 10, cached_input_tokens: 11, output_tokens: 2, total_tokens: 12 }
+      ),
+      "utf8"
+    );
+
+    const options = { claudeProjectsDir: claudeDir, codexSessionsDir: codexDir };
+    const [full, financial] = await Promise.all([
+      loadLocalAgentUsage(options),
+      loadLocalAgentFinancialUsage(options)
+    ]);
+    const financialFields = ({ activity: _activity, ...call }: typeof full.calls[number]) => call;
+
+    expect(financial.calls.map(financialFields)).toEqual(full.calls.map(financialFields));
+    expect(financial.records).toEqual(full.records);
+    expect(financial.calls).toHaveLength(4);
+    expect(financial.calls.every((call) => (
+      call.usageSupport === "unsupported_token_shape" && call.latestTurnUsage === undefined
+    ))).toBe(true);
+    expect(financial.records.every((record) => (
+      record.amountUsd === null && record.costConfidence === "missing"
+    ))).toBe(true);
+    expect(financial.sourceScans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent: "claude-code", unsupportedUsageSnapshots: 2 }),
+      expect.objectContaining({ agent: "codex", unsupportedUsageSnapshots: 2 })
+    ]));
+  });
+
+  it("falls back linearly across a huge single-line qualitative event when tail proof is absent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-huge-line-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    const largePrivateBody = "sensitive qualitative payload ".repeat(900_000);
+    await writeFile(join(codexDir, "rollout-large.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "large-line-session",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-08T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "message", role: "user", content: largePrivateBody }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      // No last-turn or rate-limit fields: the proof reader must fall back to
+      // byte zero rather than treating a bounded tail as complete.
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-08T10:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 2_000,
+              cached_input_tokens: 1_500,
+              output_tokens: 250
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const result = await loadLocalAgentFinancialUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir
+    });
+
+    expect(result.calls[0]?.usage).toEqual({
+      inputTokens: 500,
+      cacheReadTokens: 1_500,
+      outputTokens: 250
+    });
+    expect(result.sourceScans.find((scan) => scan.agent === "codex"))
+      .toMatchObject({
+        filesReadFinancially: 1,
+        bytesSkippedAsNonFinancialHistory: 0,
+        nonFinancialLinesPrefiltered: 1
+      });
+    expect(
+      result.sourceScans.find((scan) => scan.agent === "codex")
+        ?.nonFinancialBytesPrefiltered
+    ).toBeGreaterThan(20_000_000);
+    expect(JSON.stringify(result)).not.toContain("sensitive qualitative payload");
+  }, 10_000);
+
+  it("safely skips regular files whose metadata predates the selected window", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-financial-mtime-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await writeFile(join(claudeDir, "old-session.jsonl"), claudeLine(), "utf8");
+
+    const result = await loadLocalAgentFinancialUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      // A future boundary proves the newly-created file is outside the window
+      // using metadata without depending on mutable fixture timestamps.
+      sinceIso: "2100-01-01T00:00:00.000Z"
+    });
+
+    expect(result.calls).toEqual([]);
+    expect(result.filesParsed).toBe(0);
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code"))
+      .toMatchObject({ filesDiscovered: 1, filesParsed: 0, filesSkippedBeforeWindow: 1 });
   });
 });
 

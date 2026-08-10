@@ -22,6 +22,7 @@ jobs:
       - run: npx vitest run
       - run: npm run build
       - run: node scripts/benchmark-context-health.mjs
+      - run: node scripts/benchmark-init.mjs
       # Smoke test the built bin exactly as npm ships it — guards the
       # stale-dist / broken-bin class of bug that already shipped once.
       - run: node packages/cli/dist/index.js --help

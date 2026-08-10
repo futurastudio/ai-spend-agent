@@ -1,8 +1,12 @@
-import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, realpath, symlink, unlink, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeConnectedSpendTrustReceipt } from "@agent-finops/core";
+import {
+  activitySnapshotCacheFileName,
+  readActivitySnapshot,
+  writeConnectedSpendTrustReceipt
+} from "@agent-finops/core";
 import { runCli } from "./index.js";
 
 async function trustConnectedSpendFixture(root: string): Promise<void> {
@@ -32,6 +36,7 @@ describe("zero-key instant demo first run", () => {
     process.env.AI_SPEND_CODEX_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-home-"));
     process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
     process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
+    process.env.AIBILL_CACHE_DIR = await mkdtemp(join(tmpdir(), "aibill-cli-cache-"));
   });
   afterEach(() => {
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
@@ -40,6 +45,7 @@ describe("zero-key instant demo first run", () => {
     delete process.env.AI_SPEND_CODEX_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
     delete process.env.AI_SPEND_CODEX_AUTH;
+    delete process.env.AIBILL_CACHE_DIR;
   });
 
   it("renders the wow with no subcommand and no credentials", async () => {
@@ -163,7 +169,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.6\.0$/);
+    expect(result.stdout).toMatch(/^0\.6\.1$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -779,6 +785,7 @@ describe("minimal CLI vertical slice", () => {
     process.env.AI_SPEND_CODEX_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-codex-home-"));
     process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
     process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
+    process.env.AIBILL_CACHE_DIR = await mkdtemp(join(tmpdir(), "aibill-cli-cache-"));
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -789,6 +796,7 @@ describe("minimal CLI vertical slice", () => {
     delete process.env.AI_SPEND_CODEX_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
     delete process.env.AI_SPEND_CODEX_AUTH;
+    delete process.env.AIBILL_CACHE_DIR;
   });
 
   it("leads connect with OpenAI/Anthropic and warns cost is admin-gated", async () => {
@@ -1211,21 +1219,31 @@ describe("minimal CLI vertical slice", () => {
     expect(claudeBlock).toContain("absence of usage cannot be confirmed");
   });
 
-  it("initializes local state with a demo-safe manifest", async () => {
+  it("initializes local state with an honest empty receipt and private cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-"));
     const result = await runCli(["init", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill init");
-    expect(result.stdout).toContain("demo mode: local-first sample workflow");
-    expect(result.stdout).toContain("next: npx aibill scan --sample --path");
+    expect(result.stdout).toContain("FIRST RECEIPT · API-equivalent usage value · last 30 days");
+    expect(result.stdout).toContain("API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)");
+    expect(result.stdout).toContain("status cache: refreshed");
+    expect(result.stdout).not.toContain("$87.00");
+    expect(result.stdout).not.toContain("demo sample");
+    expect(result.stdout).not.toContain("aibill statusline");
 
     const manifest = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({
       product: "aibill",
-      mode: "local-first-demo",
+      mode: "local-first",
       cloudUpload: false,
-      cronJobsEnabled: false
+      cronJobsEnabled: false,
+      backfillWindowDays: 30,
+      statusSnapshot: {
+        schema: "aibill.activity_snapshot/v1",
+        storage: "private external cache",
+        networkUploaded: false
+      }
     });
     expect(manifest.redactionPolicy).toContain("secrets are never printed");
     expect(manifest.sourceRegistry).toBe("sources.json");
@@ -1241,7 +1259,7 @@ describe("minimal CLI vertical slice", () => {
     expect(sources.approvedSources[0]).toMatchObject({
       id: "local-root",
       type: "local_folder",
-      path: dir,
+      path: await realpath(dir),
       readOnly: true,
       boundaryApproval: "approved",
       validationCoverage: "untested",
@@ -1249,6 +1267,769 @@ describe("minimal CLI vertical slice", () => {
     });
     expect(sources.approvedSources[0]).not.toHaveProperty("verification");
     expect(auditLog.events.map((event: { action: string }) => event.action)).toContain("source_registered");
+
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("empty");
+      expect(cached.snapshot.coverage.networkUploaded).toBe(false);
+    }
+  });
+
+  it("prints a personal API-equivalent receipt from one financial scan", async () => {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "fixture-project"), { recursive: true });
+    await writeFile(join(logsDir, "fixture-project", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+      cwd: "/private/fixture/project-that-must-not-enter-the-cache",
+      sessionId: "private-session-id",
+      requestId: "private-request-id",
+      message: {
+        id: "private-message-id",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+      }
+    }), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-real-"));
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("local usage scope: all Claude Code + Codex activity on this machine (last 30 days)");
+    expect(result.stdout).toContain("billing unresolved: ~$7.50 1d · ~$7.50 7d · ~$7.50 30d (API-equivalent; not billed spend)");
+    expect(result.stdout).toContain("claude-code: readable; 1/1 files parsed; 1/1 rows priced");
+    expect(result.stdout).not.toContain("demo sample");
+    expect(result.stdout).not.toContain(dir);
+    expect(result.stdout).not.toContain("state directory:");
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("unresolved");
+      expect(cached.snapshot.unresolved?.apiEquivalent.thirtyDays.amountUsd).toBe(7.5);
+      const serialized = JSON.stringify(cached.snapshot);
+      expect(serialized).not.toContain("private-session-id");
+      expect(serialized).not.toContain("project-that-must-not-enter-the-cache");
+      expect(serialized).not.toContain("/private/");
+    }
+  });
+
+  it("labels the receipt as machine-wide when activity spans multiple projects", async () => {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    const timestamp = new Date(Date.now() - 60 * 60 * 1_000).toISOString();
+    for (const project of ["alpha", "beta"]) {
+      await mkdir(join(logsDir, project), { recursive: true });
+      await writeFile(join(logsDir, project, "session.jsonl"), JSON.stringify({
+        type: "assistant",
+        timestamp,
+        cwd: `/private/${project}`,
+        sessionId: `${project}-session`,
+        requestId: `${project}-request`,
+        message: {
+          id: `${project}-message`,
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+        }
+      }), "utf8");
+    }
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-state-project-"));
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`state project: ${basename(dir)}`);
+    expect(result.stdout).toContain(
+      "local usage scope: all Claude Code + Codex activity on this machine (last 30 days)"
+    );
+    expect(result.stdout).toContain(
+      "provider scope: trusted connected billing from this state project only (shown separately)"
+    );
+    expect(result.stdout).toContain("billing unresolved: ~$15.00 1d · ~$15.00 7d · ~$15.00 30d");
+  });
+
+  it("records an unreadable refresh error while retaining the last-good personal cache", async () => {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "fixture-project"), { recursive: true });
+    await writeFile(join(logsDir, "fixture-project", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+      cwd: "/private/fixture/project",
+      sessionId: "retained-session",
+      requestId: "retained-request",
+      message: {
+        id: "retained-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+      }
+    }), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-retain-"));
+    await runCli(["init", "--path", dir]);
+    const before = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(before.status).toBe("ok");
+
+    const unreadableRoot = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unreadable-"));
+    const claudeFile = join(unreadableRoot, "claude.jsonl");
+    const codexFile = join(unreadableRoot, "codex.jsonl");
+    await writeFile(claudeFile, "not a directory", "utf8");
+    await writeFile(codexFile, "not a directory", "utf8");
+    process.env.AI_SPEND_CLAUDE_LOGS_DIR = claudeFile;
+    process.env.AI_SPEND_CODEX_LOGS_DIR = codexFile;
+
+    const failed = await runCli(["init", "--path", dir]);
+    const after = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(failed.exitCode).toBe(0);
+    expect(failed.stdout).toContain("API-equivalent usage value: unavailable — the local scan could not prove an empty result");
+    expect(failed.stdout).toContain("status cache: refresh failed");
+    expect(after.status).toBe("ok");
+    if (before.status === "ok" && after.status === "ok") {
+      expect(after.snapshot.unresolved?.apiEquivalent.thirtyDays.amountUsd)
+        .toBe(before.snapshot.unresolved?.apiEquivalent.thirtyDays.amountUsd);
+      expect(after.snapshot.lastSuccessAt).toBe(before.snapshot.lastSuccessAt);
+      expect(after.snapshot.refresh).toEqual({ status: "error", errorCode: "source_unreadable" });
+    }
+  });
+
+  it("retains the last-good cache when trusted provider freshness is internally inconsistent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-invalid-provider-freshness-"));
+    await runCli(["init", "--path", dir]);
+    const before = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(before.status).toBe("ok");
+    const stateDir = join(dir, ".ai-spend-agent");
+    const spendPath = join(stateDir, "spend.json");
+    const staleCheckedAt = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: staleCheckedAt,
+      records: [{
+        id: "provider-after-check",
+        timestamp: new Date().toISOString(),
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI Costs API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "fixture"
+        },
+        model: "provider-billing",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: 1,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket"
+      }],
+      summary: { totalUsd: 1 },
+      accounting: {
+        coverageByProvider: { openai: "complete" },
+        checkedAtByProvider: { openai: staleCheckedAt }
+      }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+    const after = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("status cache: refresh failed");
+    expect(result.stdout).toContain("observed evidence could not produce a valid activity snapshot");
+    expect(after.status).toBe("ok");
+    if (before.status === "ok" && after.status === "ok") {
+      expect(after.snapshot.lastSuccessAt).toBe(before.snapshot.lastSuccessAt);
+      expect(after.snapshot.mode).toBe(before.snapshot.mode);
+      expect(after.snapshot.refresh).toEqual({ status: "error", errorCode: "invalid_evidence" });
+    }
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+  });
+
+  it("is idempotent and preserves existing project state and unknown manifest fields byte-for-byte", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-repeat-"));
+    const first = await runCli(["init", "--path", dir]);
+    expect(first.exitCode).toBe(0);
+    const stateDir = join(dir, ".ai-spend-agent");
+    const sourcePath = join(stateDir, "sources.json");
+    const auditPath = join(stateDir, "audit-log.json");
+    const spendPath = join(stateDir, "spend.json");
+    const sourcesWithFutureField = JSON.parse(await readFile(sourcePath, "utf8"));
+    sourcesWithFutureField.futureRegistryField = { mustSurvive: true };
+    await writeFile(sourcePath, `${JSON.stringify(sourcesWithFutureField, null, 2)}\n`, "utf8");
+    const auditWithFutureField = JSON.parse(await readFile(auditPath, "utf8"));
+    auditWithFutureField.futureAuditField = { mustSurvive: true };
+    await writeFile(auditPath, `${JSON.stringify(auditWithFutureField, null, 2)}\n`, "utf8");
+    const sourcesBefore = await readFile(sourcePath, "utf8");
+    const auditBefore = await readFile(auditPath, "utf8");
+    const spendBefore = `${JSON.stringify({
+      mode: "sample",
+      records: [],
+      summary: { totalUsd: 0 },
+      futureSpendField: { mustSurvive: true }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendBefore, "utf8");
+    const manifestPath = join(stateDir, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.futureManifestField = { mustSurvive: true };
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    const second = await runCli(["init", "--path", dir]);
+
+    expect(second.exitCode).toBe(0);
+    expect(await readFile(sourcePath, "utf8")).toBe(sourcesBefore);
+    expect(await readFile(auditPath, "utf8")).toBe(auditBefore);
+    expect(await readFile(spendPath, "utf8")).toBe(spendBefore);
+    const updatedManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    expect(updatedManifest.futureManifestField).toEqual({ mustSurvive: true });
+    expect(updatedManifest.initializedAt).toBe(manifest.initializedAt);
+  });
+
+  it("preserves trusted connected-provider bytes and includes only receipt-bound billed cost", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-connected-"));
+    await runCli(["init", "--path", dir]);
+    const stateDir = join(dir, ".ai-spend-agent");
+    const spendPath = join(stateDir, "spend.json");
+    const checkedAt = new Date().toISOString();
+    const coverageStart = new Date(Date.now() - 31 * 24 * 60 * 60 * 1_000).toISOString();
+    const coverageEnd = checkedAt;
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt,
+      records: [
+        {
+          id: "provider-billed-row",
+          timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+          source: {
+            id: "openai-provider-api",
+            name: "OpenAI Costs API",
+            provider: "openai",
+            confidence: "verified",
+            observedFrom: "fixture"
+          },
+          model: "provider-billing",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 12.34,
+          costConfidence: "verified",
+          providerCostType: "openai_cost",
+          usageGranularity: "billing_bucket"
+        },
+        {
+          id: "provider-estimated-row",
+          timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+          source: {
+            id: "anthropic-provider-api",
+            name: "Anthropic usage estimate",
+            provider: "anthropic",
+            confidence: "estimated",
+            observedFrom: "fixture"
+          },
+          model: "claude-sonnet-4-6",
+          inputTokens: 1_000,
+          outputTokens: 100,
+          amountUsd: 4.56,
+          costConfidence: "estimated",
+          providerCostType: "anthropic_claude_code_usage",
+          usageGranularity: "usage_bucket"
+        }
+      ],
+      summary: { totalUsd: 16.9 },
+      accounting: {
+        coverageByProvider: {
+          openai: "complete",
+          anthropic: "partial"
+        },
+        checkedAtByProvider: {
+          openai: checkedAt,
+          anthropic: checkedAt
+        },
+        coverageIntervalsByProvider: {
+          openai: { coverageStart, coverageEnd },
+          anthropic: { coverageStart, coverageEnd }
+        }
+      },
+      futureSpendField: { mustSurvive: true }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+    const sourcesBefore = await readFile(join(stateDir, "sources.json"), "utf8");
+    const auditBefore = await readFile(join(stateDir, "audit-log.json"), "utf8");
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("provider-billed cost: $12.34 verified (kept separate)");
+    expect(result.stdout).toContain("provider API-equivalent estimate: $4.56 estimated value; not verified billed spend (kept separate)");
+    expect(result.stdout).not.toContain("provider-billed cost: $16.90");
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+    expect(await readFile(join(stateDir, "sources.json"), "utf8")).toBe(sourcesBefore);
+    expect(await readFile(join(stateDir, "audit-log.json"), "utf8")).toBe(auditBefore);
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("metered");
+      expect(cached.snapshot.metered?.providerBilled.thirtyDays.amountUsd).toBe(12.34);
+      expect(cached.snapshot.metered?.providerBilled.thirtyDays.financialEvidence).toBe("verified");
+      expect(cached.snapshot.unresolved?.apiEquivalent.thirtyDays.amountUsd).toBe(4.56);
+      expect(cached.snapshot.coverage.providers).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai",
+          status: "complete",
+          validationCoverage: "live_verified",
+          checkedAt,
+          coverageStart,
+          coverageEnd
+        }),
+        expect.objectContaining({
+          provider: "anthropic",
+          status: "partial",
+          validationCoverage: "live_verified",
+          checkedAt,
+          coverageStart,
+          coverageEnd
+        })
+      ]));
+    }
+  });
+
+  it("keeps legacy multi-provider state cacheable without borrowing its aggregate check time", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-legacy-multi-provider-"));
+    await runCli(["init", "--path", dir]);
+    const stateDir = join(dir, ".ai-spend-agent");
+    const spendPath = join(stateDir, "spend.json");
+    const checkedAt = new Date(Date.now() - 1_000).toISOString();
+    const evidenceAt = new Date(Date.parse(checkedAt) - 60 * 60 * 1_000).toISOString();
+    const coverageStart = new Date(Date.parse(checkedAt) - 31 * 24 * 60 * 60 * 1_000).toISOString();
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt,
+      records: [
+        {
+          id: "legacy-openai-billed-row",
+          timestamp: evidenceAt,
+          source: {
+            id: "openai-provider-api",
+            name: "OpenAI Costs API",
+            provider: "openai",
+            confidence: "verified",
+            observedFrom: "fixture"
+          },
+          model: "provider-billing",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 12.34,
+          costConfidence: "verified",
+          providerCostType: "openai_cost",
+          usageGranularity: "billing_bucket"
+        },
+        {
+          id: "legacy-anthropic-billed-row",
+          timestamp: evidenceAt,
+          source: {
+            id: "anthropic-provider-api",
+            name: "Anthropic Costs API",
+            provider: "anthropic",
+            confidence: "verified",
+            observedFrom: "fixture"
+          },
+          model: "provider-billing",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 4.56,
+          costConfidence: "verified",
+          providerCostType: "anthropic_cost",
+          usageGranularity: "billing_bucket"
+        }
+      ],
+      summary: { totalUsd: 16.9 },
+      accounting: {
+        coverageByProvider: {
+          openai: "complete",
+          anthropic: "partial"
+        },
+        coverageIntervalsByProvider: {
+          openai: { coverageStart, coverageEnd: checkedAt },
+          anthropic: { coverageStart, coverageEnd: checkedAt }
+        }
+      }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("status cache: refreshed");
+    expect(result.stdout).not.toContain("observed evidence could not produce a valid activity snapshot");
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("metered");
+      expect(cached.snapshot.metered?.providerBilled.thirtyDays).toMatchObject({
+        amountUsd: null,
+        recordCount: 2,
+        financialEvidence: "missing"
+      });
+      expect(cached.snapshot.coverage.providers).toEqual([
+        {
+          provider: "anthropic",
+          status: "partial",
+          validationCoverage: "live_verified",
+          checkedAt: null,
+          latestEvidenceAt: null,
+          coverageStart: null,
+          coverageEnd: null
+        },
+        {
+          provider: "openai",
+          status: "complete",
+          validationCoverage: "live_verified",
+          checkedAt: null,
+          latestEvidenceAt: null,
+          coverageStart: null,
+          coverageEnd: null
+        }
+      ]);
+    }
+  });
+
+  it("reports trusted zero-row provider state as connected without claiming billed zero", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-connected-empty-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: new Date().toISOString(),
+      records: [],
+      summary: { totalUsd: 0 }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "provider-billed cost: unavailable — trusted connected provider evidence exists, but no receipt-bound 30-day amount was proven"
+    );
+    expect(result.stdout).not.toContain("provider-billed cost: not connected");
+    expect(result.stdout).not.toContain("provider-billed cost: $0.00");
+  });
+
+  it("keeps a complete empty local receipt separate from partial provider coverage", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-provider-partial-local-empty-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const checkedAt = new Date().toISOString();
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt,
+      records: [],
+      summary: { totalUsd: 0 },
+      accounting: {
+        coverageByProvider: { openai: "partial" },
+        checkedAtByProvider: { openai: checkedAt }
+      }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)"
+    );
+    expect(result.stdout).not.toContain("local source coverage is incomplete");
+    expect(result.stdout).toContain("provider coverage: partial");
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("empty");
+      expect(cached.snapshot.coverage.validationStatus).toBe("partial");
+      expect(cached.snapshot.coverage.agents).toHaveLength(2);
+      expect(cached.snapshot.coverage.agents.every((agent) =>
+        agent.directoryStatus === "readable" && agent.jsonlValidationCoverage === "complete"
+      )).toBe(true);
+    }
+  });
+
+  it("never turns trusted but unpriced provider evidence into a verified $0 receipt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unpriced-provider-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "provider-unpriced-row",
+        timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI usage source",
+          provider: "openai",
+          confidence: "missing",
+          observedFrom: "fixture"
+        },
+        model: "unknown-provider-line",
+        inputTokens: 10,
+        outputTokens: 5,
+        amountUsd: null,
+        costConfidence: "missing",
+        providerCostType: "openai_usage_evidence",
+        usageGranularity: "usage_bucket"
+      }],
+      summary: { totalUsd: 0 }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("provider cost: unavailable — 1 trusted row(s) lacked a supported cost amount");
+    expect(result.stdout).not.toContain("provider-billed cost: $0.00");
+    expect(result.stdout).not.toContain("$0.00 verified");
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.coverage.providers[0]?.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    }
+  });
+
+  it("excludes trusted provider rows older than the stated 30-day receipt window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-old-provider-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: new Date().toISOString(),
+      records: [{
+        id: "provider-old-billed-row",
+        timestamp: new Date(Date.now() - 45 * 24 * 60 * 60 * 1_000).toISOString(),
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI Costs API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "fixture"
+        },
+        model: "provider-billing",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: 987.65,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket"
+      }],
+      summary: { totalUsd: 987.65 },
+      accounting: { coverageByProvider: { openai: "complete" } }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "provider cost: unavailable — connected evidence had no supported row in the last 30 days"
+    );
+    expect(result.stdout).not.toContain("$987.65");
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("empty");
+      expect(cached.snapshot.metered).toBeNull();
+    }
+  });
+
+  it("keeps unresolved-agent value visible beside a detected subscription", async () => {
+    const timestamp = new Date(Date.now() - 60 * 60 * 1_000).toISOString();
+    const claudeDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(claudeDir, "fixture-project"), { recursive: true });
+    await writeFile(join(claudeDir, "fixture-project", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp,
+      cwd: "/private/fixture/project",
+      sessionId: "claude-session",
+      requestId: "claude-request",
+      message: {
+        id: "claude-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+      }
+    }), "utf8");
+    const codexDir = process.env.AI_SPEND_CODEX_LOGS_DIR!;
+    await writeFile(join(codexDir, "rollout-mixed.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: "codex-session", cwd: "/private/fixture/project", timestamp }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp,
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { input_tokens: 100_000, output_tokens: 10_000 },
+            total_token_usage: { input_tokens: 100_000, output_tokens: 10_000 }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-sub-unresolved-"));
+
+    const result = await runCli(["init", "--plan", "claude-max-5x", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("claude-code subscription value:");
+    expect(result.stdout).toContain("billing unresolved:");
+  });
+
+  it("rejects sample init before it can replace a personal cache", async () => {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "fixture-project"), { recursive: true });
+    await writeFile(join(logsDir, "fixture-project", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+      cwd: "/private/fixture/project",
+      sessionId: "real-session",
+      requestId: "real-request",
+      message: {
+        id: "real-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000_000, output_tokens: 100_000 }
+      }
+    }), "utf8");
+    const realDir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-real-cache-"));
+    await runCli(["init", "--path", realDir]);
+    const before = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    const sampleDir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-sample-"));
+
+    const rejected = await runCli(["init", "--sample", "--path", sampleDir]);
+    const after = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(rejected.exitCode).toBe(1);
+    expect(rejected.stderr).toContain("--sample was not used");
+    expect(after).toEqual(before);
+    await expect(readFile(join(sampleDir, ".ai-spend-agent", "manifest.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a symlinked init state directory before writing a manifest or cache", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-outside-"));
+    const sentinel = join(outside, "sentinel.json");
+    await writeFile(sentinel, '{"mustSurvive":true}\n', "utf8");
+    await symlink(outside, join(dir, ".ai-spend-agent"));
+    const before = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    await expect(runCli(["init", "--path", dir])).rejects.toThrow(/symbolic link/);
+
+    expect(await readFile(sentinel, "utf8")).toBe('{"mustSurvive":true}\n');
+    expect(await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR })).toEqual(before);
+  });
+
+  it("preflights existing state before creating any missing init files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-preflight-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir);
+    const invalidAudit = '{"version":99,"futureAuditFormat":true}\n';
+    await writeFile(join(stateDir, "audit-log.json"), invalidAudit, "utf8");
+
+    await expect(runCli(["init", "--path", dir])).rejects.toThrow(/Invalid local audit log/);
+
+    expect(await readFile(join(stateDir, "audit-log.json"), "utf8")).toBe(invalidAudit);
+    await expect(readFile(join(stateDir, "sources.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(stateDir, "manifest.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR })).toEqual({ status: "missing" });
+  });
+
+  it("preserves an unsupported future cache and creates no project state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-future-cache-"));
+    const cachePath = join(process.env.AIBILL_CACHE_DIR!, activitySnapshotCacheFileName);
+    const futureCache = '{"kind":"aibill.activity_snapshot","schemaVersion":2,"future":true}\n';
+    await writeFile(cachePath, futureCache, { mode: 0o600 });
+
+    await expect(runCli(["init", "--path", dir])).rejects.toThrow(/unsupported version/);
+
+    expect(await readFile(cachePath, "utf8")).toBe(futureCache);
+    await expect(readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(dir, ".ai-spend-agent", "sources.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves every existing byte when strict persisted spend preflight fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-invalid-spend-"));
+    await runCli(["init", "--path", dir]);
+    const stateDir = join(dir, ".ai-spend-agent");
+    const cachePath = join(process.env.AIBILL_CACHE_DIR!, activitySnapshotCacheFileName);
+    const sourcesBefore = await readFile(join(stateDir, "sources.json"), "utf8");
+    const auditBefore = await readFile(join(stateDir, "audit-log.json"), "utf8");
+    const manifestBefore = await readFile(join(stateDir, "manifest.json"), "utf8");
+    const cacheBefore = await readFile(cachePath, "utf8");
+    const malformedSpend = '{"mode":"connected_provider","records":[';
+    await writeFile(join(stateDir, "spend.json"), malformedSpend, "utf8");
+
+    await expect(runCli(["init", "--path", dir])).rejects.toThrow(
+      /spend\.json is invalid or unsafe; it was preserved and init stopped/
+    );
+
+    expect(await readFile(join(stateDir, "spend.json"), "utf8")).toBe(malformedSpend);
+    expect(await readFile(join(stateDir, "sources.json"), "utf8")).toBe(sourcesBefore);
+    expect(await readFile(join(stateDir, "audit-log.json"), "utf8")).toBe(auditBefore);
+    expect(await readFile(join(stateDir, "manifest.json"), "utf8")).toBe(manifestBefore);
+    expect(await readFile(cachePath, "utf8")).toBe(cacheBefore);
+  });
+
+  it("never proves an empty zero when one local agent source is missing", async () => {
+    const missingParent = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-missing-source-"));
+    process.env.AI_SPEND_CODEX_LOGS_DIR = join(missingParent, "missing-codex-logs");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-partial-empty-"));
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "API-equivalent usage value: unavailable — local source coverage is incomplete; no zero total was inferred"
+    );
+    expect(result.stdout).not.toContain("~$0.00");
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.coverage.validationStatus).toBe("partial");
+    }
+  });
+
+  it("surfaces financially bounded JSONL validation as partial coverage", async () => {
+    const timestamp = new Date(Date.now() - 60 * 1_000).toISOString();
+    await writeFile(join(process.env.AI_SPEND_CODEX_LOGS_DIR!, "rollout-financial-only.jsonl"), [
+      JSON.stringify({ type: "session_meta", payload: { id: "bounded", cwd: "/private/project", timestamp } }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", content: "non-financial" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp,
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { input_tokens: 10_000, output_tokens: 1_000 },
+            total_token_usage: { input_tokens: 10_000, output_tokens: 1_000 }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-financial-only-"));
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("financial-event JSONL validation only");
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.coverage.validationStatus).toBe("partial");
+    }
   });
 
   it("scans sample data and writes local state plus source registry/audit log", async () => {
@@ -1579,8 +2360,19 @@ describe("minimal CLI vertical slice", () => {
     expect(sourceStatusRaw).not.toContain(fakeToken);
     expect(spendRaw).not.toContain(fakeToken);
     expect(sourcesRaw).not.toContain(fakeToken);
-    expect(JSON.parse(providerRecordsRaw).records[0]).toMatchObject({ amountUsd: 9.75, costConfidence: "verified" });
+    const providerState = JSON.parse(providerRecordsRaw);
+    expect(providerState.records[0]).toMatchObject({ amountUsd: 9.75, costConfidence: "verified" });
     expect(JSON.parse(sourceStatusRaw).providers.openai).toMatchObject({ lastError: null });
+    const spendState = JSON.parse(spendRaw);
+    expect(spendState.accounting.checkedAtByProvider.openai).toBe(spendState.checkedAt);
+    expect(spendState.accounting.coverageIntervalsByProvider.openai).toEqual({
+      coverageStart: "2025-11-01T00:00:00.000Z",
+      coverageEnd: "2025-11-02T00:00:00.000Z"
+    });
+    expect(providerState.checkedAtByProvider).toEqual(spendState.accounting.checkedAtByProvider);
+    expect(providerState.coverageIntervalsByProvider).toEqual(
+      spendState.accounting.coverageIntervalsByProvider
+    );
     expect(JSON.parse(sourcesRaw).approvedSources).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "openai-provider-api",

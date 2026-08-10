@@ -3,10 +3,17 @@
 The full [aibill](https://github.com/futurastudio/ai-spend-agent) CLI.
 
 ```bash
+npx aibill init
 npx ai-spend-agent
 # short alias
 npx aibill
 ```
+
+Run `npx aibill init` from a project to detect machine-wide local Claude Code
+and Codex history, print the first evidence-labeled personal receipt, and seed a private
+aggregate cache under `~/.aibill/cache/`. Init never replaces missing personal
+evidence with the bundled sample and never overwrites existing connected
+source or audit state.
 
 It reads local Claude Code and Codex metadata, labels API-equivalent estimates,
 and can optionally add official OpenAI or Anthropic provider-reported cost

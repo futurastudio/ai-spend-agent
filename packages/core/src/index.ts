@@ -1,5 +1,7 @@
 export * from "./analyze.js";
 export * from "./agentInventory.js";
+export * from "./activitySnapshot.js";
+export * from "./activitySnapshotCache.js";
 export * from "./attribution.js";
 export * from "./credentialDetection.js";
 export * from "./contextHealth.js";
