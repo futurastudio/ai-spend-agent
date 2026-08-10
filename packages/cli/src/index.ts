@@ -32,6 +32,8 @@ import {
   isBundledSampleUsage,
   loadLocalAgentUsage,
   loadLocalAgentFinancialUsage,
+  localAgentFormatDescriptors,
+  localAgentFormatLabel,
   loadSampleUsageData,
   parseUsageRecord,
   scanLocalUsageSignals,
@@ -813,7 +815,7 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
   }
 
   const checkedAt = now.toISOString();
-  for (const id of ["claude-code", "codex"] as const) {
+  for (const { id } of localAgentFormatDescriptors) {
     const records = (localLogs?.records ?? []).filter((record) => record.agentId === id);
     const evidence = financialEvidenceForRecords(records);
     const scan = localLogs?.sourceScans.find((entry) => entry.agent === id);
@@ -973,12 +975,12 @@ function localAgentDiagnosticSummary(
   const unsupportedCount = unsupported
     .reduce((total, diagnostic) => total + diagnostic.count, 0);
   if (unsupportedCount > 0) {
-    messages.push(`${unsupportedCount} ${unsupported[0]!.agent === "codex" ? "Codex" : "Claude Code"} token snapshot(s) lacked the input/output components required for pricing.`);
+    messages.push(`${unsupportedCount} ${localAgentFormatLabel(unsupported[0]!.agent)} token snapshot(s) lacked the input/output components required for pricing.`);
   }
   const malformedCount = malformed
     .reduce((total, diagnostic) => total + diagnostic.count, 0);
   if (malformedCount > 0) {
-    messages.push(`${malformedCount} malformed JSONL line(s) were skipped in ${malformed[0]!.agent === "codex" ? "Codex" : "Claude Code"} transcripts.`);
+    messages.push(`${malformedCount} malformed JSONL line(s) were skipped in ${localAgentFormatLabel(malformed[0]!.agent)} transcripts.`);
   }
   return messages.length > 0 ? messages.join(" ") : undefined;
 }
@@ -1958,10 +1960,9 @@ function formatInitReceipt(input: InitReceiptInput): string {
       }).join("; ")
     : "none detected (billing mode remains unresolved)";
 
-  const sourceLines = (input.logs?.sourceScans ?? [
-    emptyInitSourceScan("claude-code"),
-    emptyInitSourceScan("codex")
-  ]).map((scan) => {
+  const sourceLines = (input.logs?.sourceScans ?? localAgentFormatDescriptors.map((descriptor) => (
+    emptyInitSourceScan(descriptor.id)
+  ))).map((scan) => {
     const agentRecords = records.filter((record) => record.agentId === scan.agent);
     const priced = agentRecords.filter((record) => typeof record.amountUsd === "number").length;
     const skipped = scan.filesSkippedBeforeWindow ?? 0;
@@ -2102,7 +2103,7 @@ function formatInitApiWindows(
   return `${label}: ${amount(windows.oneDay.amountUsd)} 1d · ${amount(windows.sevenDays.amountUsd)} 7d · ${amount(windows.thirtyDays.amountUsd)} 30d (API-equivalent; not billed spend)`;
 }
 
-function emptyInitSourceScan(agent: "claude-code" | "codex"): LocalAgentSourceScan {
+function emptyInitSourceScan(agent: LocalAgentSourceScan["agent"]): LocalAgentSourceScan {
   return {
     agent,
     directoryStatus: "unreadable",

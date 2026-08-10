@@ -1,0 +1,66 @@
+{
+  "calls": [
+    {
+      "agent": "codex",
+      "model": "gpt-5.1-codex",
+      "timestamp": "2026-08-10T12:20:00.000Z",
+      "startedAt": "2026-08-10T12:00:00.000Z",
+      "project": "sample-project",
+      "workingDirectory": "/workspace/sample-project",
+      "sessionId": "fixture-codex-session",
+      "rateLimits": {
+        "observedAt": "2026-08-10T12:20:00.000Z",
+        "limitId": "codex",
+        "planType": "pro",
+        "windows": [
+          {
+            "kind": "five-hour",
+            "name": "five-hour",
+            "usedPercent": 40,
+            "windowMinutes": 300,
+            "resetsAt": "2026-08-10T16:00:00.000Z"
+          },
+          {
+            "kind": "weekly",
+            "name": "weekly",
+            "usedPercent": 25,
+            "windowMinutes": 10080,
+            "resetsAt": "2026-08-17T12:00:00.000Z"
+          }
+        ]
+      },
+      "latestTurnUsage": {
+        "inputTokens": 200,
+        "outputTokens": 50,
+        "cacheReadTokens": 300,
+        "contextTokens": 500,
+        "totalTokens": 550,
+        "source": "transcript_last_token_usage"
+      },
+      "usageScope": "session_cumulative",
+      "usageSupport": "complete",
+      "reportedTotalTokens": 2750,
+      "usage": {
+        "inputTokens": 1500,
+        "outputTokens": 250,
+        "cacheReadTokens": 1000
+      }
+    }
+  ],
+  "scan": {
+    "agent": "codex",
+    "directoryStatus": "readable",
+    "filesDiscovered": 1,
+    "filesParsed": 1,
+    "malformedLines": 0,
+    "unreadableFiles": 0,
+    "unsupportedUsageSnapshots": 0,
+    "filesSkippedBeforeWindow": 0,
+    "filesReadFinancially": 1,
+    "bytesSkippedAsNonFinancialHistory": 176,
+    "nonFinancialLinesPrefiltered": 0,
+    "nonFinancialBytesPrefiltered": 0,
+    "jsonlValidationCoverage": "financial_events_only"
+  },
+  "diagnostics": []
+}

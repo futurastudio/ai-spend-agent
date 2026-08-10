@@ -169,7 +169,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.7\.1$/);
+    expect(result.stdout).toMatch(/^0\.7\.2$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });

@@ -1,4 +1,6 @@
 import type { CostConfidence, UsageRecord } from "./schema.js";
+import { localAgentFormatDescriptors } from "./localAgentFormats/registry.js";
+import type { LocalAgentFormatId } from "./localAgentFormats/types.js";
 
 /**
  * How thoroughly an ingestion path itself has been exercised.
@@ -22,8 +24,7 @@ export const sourceFreshnessStatusValues = ["fresh", "stale", "not_checked"] as 
 export type SourceFreshnessStatus = typeof sourceFreshnessStatusValues[number];
 
 export type SourceStatusId =
-  | "claude-code"
-  | "codex"
+  | LocalAgentFormatId
   | "openai"
   | "anthropic"
   | "cursor"
@@ -75,20 +76,13 @@ export type SourceStatus = {
  * reconciliation.
  */
 export const sourceStatusDefinitions: readonly SourceStatusDefinition[] = [
-  {
-    id: "claude-code",
-    label: "Claude Code local logs",
-    validationCoverage: "live_verified",
-    validationNote: "Local transcript parsing is exercised against live logs; dollar values remain API-rate estimates.",
+  ...localAgentFormatDescriptors.map((descriptor) => ({
+    id: descriptor.id,
+    label: `${descriptor.label} local logs`,
+    validationCoverage: descriptor.confidenceDefaults.validationCoverage,
+    validationNote: descriptor.validationNote,
     staleAfterHours: 72
-  },
-  {
-    id: "codex",
-    label: "Codex local logs",
-    validationCoverage: "live_verified",
-    validationNote: "Local parsing was replayed against live logs; total-only token shapes and unknown aliases remain missing rather than becoming estimated $0.",
-    staleAfterHours: 72
-  },
+  })),
   {
     id: "openai",
     label: "OpenAI Costs and Usage API",
