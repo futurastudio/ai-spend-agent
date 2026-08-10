@@ -10,6 +10,10 @@ import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { subscriptionPlans } from "./planMath.js";
 import { buildContextHealth, type ContextHealthResult } from "./contextHealth.js";
+import {
+  localAgentFormatDescriptors,
+  localAgentFormatSupports
+} from "./localAgentFormats/registry.js";
 
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -215,7 +219,11 @@ export function buildUsageGlance(
   // defense-in-depth to every string-bearing transcript/context field before
   // any calculation so secrets cannot survive in a nested session-health or
   // provenance field even if an upstream parser missed them.
-  const safeCalls = dedupeCumulativeSessionCalls(sanitizeStringMetadata(calls));
+  const supportedFormats = localAgentFormatDescriptors.filter((descriptor) => (
+    descriptor.capabilities.glance
+  ));
+  const safeCalls = dedupeCumulativeSessionCalls(sanitizeStringMetadata(calls))
+    .filter((call) => localAgentFormatSupports(call.agent, "glance"));
   const suppliedContextHealth = options.contextHealth
     ? sanitizeStringMetadata(options.contextHealth)
     : undefined;
@@ -239,7 +247,8 @@ export function buildUsageGlance(
   const plan = currentSession
     ? toGlancePlan(currentSession.agent, safeDetectedPlans)
     : null;
-  const limitCalls = sanitizeStringMetadata(options.limitCalls ?? safeCalls);
+  const limitCalls = sanitizeStringMetadata(options.limitCalls ?? safeCalls)
+    .filter((call) => localAgentFormatSupports(call.agent, "rateLimits"));
   const limits = latestLimits(limitCalls, now).map(({ agent, window, observedAt }) =>
     toGlanceLimit(agent, window, observedAt)
   );
@@ -263,7 +272,8 @@ export function buildUsageGlance(
     generatedAt: now.toISOString(),
     filesParsed: options.filesParsed ?? 0
   });
-  const detectedAgents = options.detectedAgents ?? uniqueAgents(safeCalls);
+  const detectedAgents = (options.detectedAgents ?? uniqueAgents(safeCalls))
+    .filter((agent) => localAgentFormatSupports(agent, "glance"));
   const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
   const limitAgents = uniqueAgents(limitCalls.filter((call) => call.rateLimits));
   const reportedWindows = (agent: LocalAgentCall["agent"]) => (
@@ -288,20 +298,15 @@ export function buildUsageGlance(
     generatedAt: now.toISOString(),
     coverage: {
       filesParsed: options.filesParsed ?? 0,
-      supportedTranscriptAgents: ["claude-code", "codex"],
+      supportedTranscriptAgents: supportedFormats.map((descriptor) => descriptor.id),
       detectedAgents,
-      rateLimitMetadata: [
-        {
-          agent: "claude-code",
-          status: "not_reported_by_transcript",
-          windowsReported: reportedWindows("claude-code")
-        },
-        {
-          agent: "codex",
-          status: agentsWithLimits.has("codex") ? "reported" : "not_seen",
-          windowsReported: reportedWindows("codex")
-        }
-      ],
+      rateLimitMetadata: supportedFormats.map((descriptor) => ({
+        agent: descriptor.id,
+        status: descriptor.capabilities.rateLimits
+          ? agentsWithLimits.has(descriptor.id) ? "reported" as const : "not_seen" as const
+          : "not_reported_by_transcript" as const,
+        windowsReported: reportedWindows(descriptor.id)
+      })),
       providerConnectionRequired: ["cursor", "github-copilot"]
     },
     provenance: {

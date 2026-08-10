@@ -19,6 +19,7 @@ import {
   latestObservedWorkingDirectory,
   loadContextHealth,
   loadLocalAgentUsage,
+  localAgentFormatDescriptors,
   loadSampleUsageData,
   normalizeSourceRegistry,
   downgradeUntrustedSourceRegistryClaims,
@@ -906,7 +907,7 @@ async function sourceStatusesForReport(
   }
 
   const observations: SourceStatusObservation[] = [];
-  for (const id of ["claude-code", "codex"] as const) {
+  for (const { id } of localAgentFormatDescriptors) {
     const sourceRecords = mode === "local_logs"
       ? records.filter((record) => record.agentId === id)
       : [];

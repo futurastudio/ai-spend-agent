@@ -5,6 +5,26 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.7.2 — 2026-08-10
+
+- Refactored the existing Claude Code and Codex local readers into an ordered,
+  data-driven format registry without adding a new parser. Each descriptor now
+  owns discovery, provider normalization, financial-reader strategy,
+  capabilities, evidence defaults, validation coverage, documentation, and
+  recorded-fixture references.
+- Added synthetic recorded JSONL fixtures and exact normalized-output goldens
+  for Claude deduplication, malformed and unsupported usage, plus Codex
+  cumulative usage, latest-turn context, and transcript-reported five-hour and
+  weekly limits. CI rejects fixture privacy leaks and parser-output drift.
+- Added deterministic generated source pages that state how each format is
+  read, what the parser validation proves, what financial values remain
+  estimated or missing, and the known privacy and coverage limits. The public
+  contribution guide now defines the registry-only path for future parsers.
+- Kept existing CLI, MCP, report, cache/statusline, Context Health, and Glance
+  behavior compatible. Source diagnostics and status enumeration now consume
+  the registry, while capability gates keep unsupported future formats out of
+  downstream surfaces until their descriptors explicitly opt in.
+
 ## 0.7.1 — 2026-08-10
 
 - Added the additive `AgentEconomicsReceiptV0` contract to

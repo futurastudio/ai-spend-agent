@@ -12,7 +12,7 @@ instructions.
 - `$aibill-help`: choose CLI, MCP/plugin, or macOS Glance.
 - Eight MCP tools, including `get_usage_glance` and `get_context_health`.
 
-The plugin launches `@agent-finops/mcp@0.7.1` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.7.2` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository

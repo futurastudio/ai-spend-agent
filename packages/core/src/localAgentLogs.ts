@@ -1,15 +1,25 @@
 import { createReadStream } from "node:fs";
 import { lstat, open, readdir, readFile, stat, type FileHandle } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { estimateTokenCostUsd, type TokenUsage } from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
 import { redactSecrets } from "./discovery.js";
+import type { ParsedInvocationFile } from "./toolInvocations.js";
 import {
-  createCodexInvocationCollector,
-  type ParsedInvocationFile
-} from "./toolInvocations.js";
+  localAgentFormatDescriptor,
+  localAgentFormatDescriptors,
+  localAgentFormatLabel,
+  matchesLocalAgentFormatFile,
+  validateLocalAgentFormatDescriptors
+} from "./localAgentFormats/registry.js";
+import type {
+  LocalAgentFormatDescriptor,
+  LocalAgentFormatFinancialFileContext,
+  LocalAgentFormatId,
+  LocalAgentFormatRuntime
+} from "./localAgentFormats/types.js";
 
 /**
  * Local agent-session log ingestion: turns the transcript files that coding
@@ -29,7 +39,7 @@ import {
  */
 
 export type LocalAgentCall = {
-  agent: "claude-code" | "codex";
+  agent: LocalAgentFormatId;
   model: string;
   /** ISO timestamp of this call, or the latest cumulative usage event. */
   timestamp: string;
@@ -138,6 +148,8 @@ export type LocalAgentLogOptions = {
   claudeProjectsDir?: string;
   /** Default: ~/.codex/sessions */
   codexSessionsDir?: string;
+  /** Registry-native source-root overrides, keyed by format id. */
+  sourceDirectories?: Readonly<Partial<Record<LocalAgentFormatId, string>>>;
   /** Only include calls at/after this ISO timestamp. */
   sinceIso?: string;
   /** Collect privacy-safe Codex invocation summaries during the same JSON pass. */
@@ -802,9 +814,20 @@ function parseCodexRateLimitWindow(value: unknown): LocalAgentRateLimitWindow | 
 
 /** Scan this machine's agent logs and return aggregated UsageRecords. */
 export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): Promise<LocalAgentLogResult> {
+  return loadLocalAgentUsageWithFormats(await localAgentFormatRuntimes(), options);
+}
+
+/**
+ * Registry-driven ingestion engine. Exported from this module for registry
+ * contract tests and format modules, but intentionally omitted from the
+ * package-root API.
+ */
+export async function loadLocalAgentUsageWithFormats(
+  registry: readonly LocalAgentFormatRuntime[],
+  options: LocalAgentLogOptions = {}
+): Promise<LocalAgentLogResult> {
+  validateLocalAgentFormatDescriptors(registry.map((entry) => entry.descriptor));
   const home = homedir();
-  const claudeDir = options.claudeProjectsDir ?? join(home, ".claude", "projects");
-  const codexDir = options.codexSessionsDir ?? join(home, ".codex", "sessions");
   const calls: LocalAgentCall[] = [];
   const codexInvocationFiles = options.collectCodexInvocationEvidence
     ? [] as ParsedInvocationFile[]
@@ -813,47 +836,43 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
   const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
   const diagnostics: LocalAgentLogDiagnostic[] = [];
-  const sourceScans: LocalAgentSourceScan[] = [
-    emptySourceScan("claude-code"),
-    emptySourceScan("codex")
-  ];
-  const claudeScan = sourceScans[0]!;
-  const codexScan = sourceScans[1]!;
+  const sourceScans: LocalAgentSourceScan[] = [];
 
-  for (const file of await listJsonlFiles(claudeDir, claudeScan, diagnostics)) {
-    let content: string;
-    try {
-      content = await readFile(file, "utf8");
-    } catch (error) {
-      recordUnreadableFile("claude-code", claudeScan, diagnostics, error);
-      continue;
+  for (const runtime of registry) {
+    const { descriptor } = runtime;
+    const scan = emptySourceScan(descriptor.id);
+    sourceScans.push(scan);
+    const root = localAgentFormatRoot(descriptor, options, home);
+    for (const file of await listFormatCandidateFiles(root, descriptor, scan, diagnostics)) {
+      if (!matchesLocalAgentFormatFile(descriptor, file)) continue;
+      let content: string;
+      try {
+        content = await readFile(file, "utf8");
+      } catch (error) {
+        recordUnreadableFile(descriptor.id, scan, diagnostics, error);
+        continue;
+      }
+      if (!content) continue;
+      filesParsed += 1;
+      scan.filesParsed += 1;
+      const collectInvocationEvidence = Boolean(codexInvocationFiles) &&
+        descriptor.id === "codex" && descriptor.capabilities.invocationEvidence;
+      const parsed = runtime.parseFull({
+        content,
+        filePath: file,
+        sinceMs,
+        collectInvocationEvidence,
+        onDiagnostic: (diagnostic) => {
+          recordParseDiagnostic(descriptor.id, scan, diagnostics, diagnostic);
+        }
+      });
+      assertFormatCallOwnership(descriptor, parsed.calls);
+      assertInvocationOwnership(descriptor, parsed.invocationFile, collectInvocationEvidence);
+      calls.push(...parsed.calls);
+      if (codexInvocationFiles && collectInvocationEvidence && parsed.invocationFile) {
+        codexInvocationFiles.push(parsed.invocationFile);
+      }
     }
-    if (!content) continue;
-    filesParsed += 1;
-    claudeScan.filesParsed += 1;
-    calls.push(...parseClaudeCodeTranscript(content, file, sinceMs, (diagnostic) => {
-      recordParseDiagnostic("claude-code", claudeScan, diagnostics, diagnostic);
-    }));
-  }
-  for (const file of await listJsonlFiles(codexDir, codexScan, diagnostics)) {
-    if (!basename(file).startsWith("rollout-")) continue;
-    let content: string;
-    try {
-      content = await readFile(file, "utf8");
-    } catch (error) {
-      recordUnreadableFile("codex", codexScan, diagnostics, error);
-      continue;
-    }
-    if (!content) continue;
-    filesParsed += 1;
-    codexScan.filesParsed += 1;
-    const collector = codexInvocationFiles
-      ? createCodexInvocationCollector(sinceMs)
-      : undefined;
-    calls.push(...parseCodexRollout(content, collector?.consume, (diagnostic) => {
-      recordParseDiagnostic("codex", codexScan, diagnostics, diagnostic);
-    }));
-    if (collector) codexInvocationFiles!.push(collector.finish());
   }
 
   const normalizedCalls = dedupeCumulativeSessionCalls(calls);
@@ -862,7 +881,7 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
     : normalizedCalls;
 
   return {
-    records: aggregateCalls(filtered),
+    records: aggregateCallsForFormats(filtered, registry.map((entry) => entry.descriptor)),
     calls: filtered,
     filesParsed,
     agentsDetected: [...new Set(filtered.map((call) => call.agent))],
@@ -913,133 +932,220 @@ type CodexFinancialStreamState = {
 export async function loadLocalAgentFinancialUsage(
   options: LocalAgentFinancialLogOptions = {}
 ): Promise<LocalAgentLogResult> {
+  return loadLocalAgentFinancialUsageWithFormats(await localAgentFormatRuntimes(), options);
+}
+
+/** Registry-driven financial-only engine; package-root exports stay unchanged. */
+export async function loadLocalAgentFinancialUsageWithFormats(
+  registry: readonly LocalAgentFormatRuntime[],
+  options: LocalAgentFinancialLogOptions = {}
+): Promise<LocalAgentLogResult> {
+  validateLocalAgentFormatDescriptors(registry.map((entry) => entry.descriptor));
   const home = homedir();
-  const claudeDir = options.claudeProjectsDir ?? join(home, ".claude", "projects");
-  const codexDir = options.codexSessionsDir ?? join(home, ".codex", "sessions");
-  const claudeCalls: LocalAgentCall[] = [];
-  const codexCalls: LocalAgentCall[] = [];
   const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
-  const claudeDiagnostics: LocalAgentLogDiagnostic[] = [];
-  const codexDiagnostics: LocalAgentLogDiagnostic[] = [];
-  const sourceScans: LocalAgentSourceScan[] = [
-    {
-      ...emptySourceScan("claude-code"),
-      filesSkippedBeforeWindow: 0,
-      jsonlValidationCoverage: "complete"
-    },
-    {
-      ...emptySourceScan("codex"),
-      filesSkippedBeforeWindow: 0,
-      filesReadFinancially: 0,
-      bytesSkippedAsNonFinancialHistory: 0,
-      nonFinancialLinesPrefiltered: 0,
-      nonFinancialBytesPrefiltered: 0,
-      jsonlValidationCoverage: "complete"
-    }
-  ];
-  const claudeScan = sourceScans[0]!;
-  const codexScan = sourceScans[1]!;
-
-  const scanClaude = async (): Promise<void> => {
-    for (const file of await listJsonlFiles(claudeDir, claudeScan, claudeDiagnostics)) {
-      if (!await shouldStreamFile(file, sinceMs, "claude-code", claudeScan, claudeDiagnostics)) {
-        continue;
-      }
-      const fileCalls: LocalAgentCall[] = [];
-      const fileDiagnostics: TranscriptParseDiagnostic[] = [];
-      const seen = new Set<string>();
-      let streamed: StreamedJsonlResult;
-      try {
-        streamed = await streamJsonlRecords(file, (entry) => {
-          const call = parseClaudeFinancialEntry(
-            entry,
-            file,
-            sinceMs,
-            seen,
-            (diagnostic) => fileDiagnostics.push(diagnostic)
-          );
-          if (call) fileCalls.push(call);
-        });
-      } catch (error) {
-        recordUnreadableFile("claude-code", claudeScan, claudeDiagnostics, error);
-        continue;
-      }
-      if (!streamed.hadContent) continue;
-      claudeScan.filesParsed += 1;
-      claudeCalls.push(...fileCalls);
-      for (const diagnostic of fileDiagnostics) {
-        recordParseDiagnostic("claude-code", claudeScan, claudeDiagnostics, diagnostic);
-      }
-      if (streamed.malformedLines > 0) {
-        recordParseDiagnostic("claude-code", claudeScan, claudeDiagnostics, {
-          code: "malformed_jsonl",
-          count: streamed.malformedLines
-        });
-      }
-    }
-  };
-
-  const scanCodex = async (): Promise<void> => {
-    for (const file of await listJsonlFiles(codexDir, codexScan, codexDiagnostics)) {
-      if (!basename(file).startsWith("rollout-")) continue;
-      if (!await shouldStreamFile(file, sinceMs, "codex", codexScan, codexDiagnostics)) {
-        continue;
-      }
-      let financialFile: CodexFinancialFileResult;
-      try {
-        financialFile = await readCodexFinancialFile(file);
-      } catch (error) {
-        recordUnreadableFile("codex", codexScan, codexDiagnostics, error);
-        continue;
-      }
-      if (!financialFile.hadContent) continue;
-      codexScan.filesParsed += 1;
-      codexScan.filesReadFinancially = (codexScan.filesReadFinancially ?? 0) + 1;
-      codexScan.bytesSkippedAsNonFinancialHistory =
-        (codexScan.bytesSkippedAsNonFinancialHistory ?? 0) + financialFile.bytesSkipped;
-      codexScan.nonFinancialLinesPrefiltered =
-        (codexScan.nonFinancialLinesPrefiltered ?? 0) + financialFile.prefilteredLines;
-      codexScan.nonFinancialBytesPrefiltered =
-        (codexScan.nonFinancialBytesPrefiltered ?? 0) + financialFile.prefilteredBytes;
-      if (financialFile.bytesSkipped > 0 || financialFile.prefilteredLines > 0) {
-        codexScan.jsonlValidationCoverage = "financial_events_only";
-      }
-      if (financialFile.malformedLines > 0) {
-        recordParseDiagnostic("codex", codexScan, codexDiagnostics, {
-          code: "malformed_jsonl",
-          count: financialFile.malformedLines
-        });
-      }
-      const state = createCodexFinancialStreamState();
-      for (const entry of financialFile.entries) {
-        consumeCodexFinancialEntry(state, entry);
-      }
-      const call = finishCodexFinancialStream(state, (diagnostic) => {
-        recordParseDiagnostic("codex", codexScan, codexDiagnostics, diagnostic);
+  const scanned = await Promise.all(registry.map(async (runtime) => {
+    const { descriptor } = runtime;
+    const diagnostics: LocalAgentLogDiagnostic[] = [];
+    const scan = financialSourceScan(descriptor);
+    const calls: LocalAgentCall[] = [];
+    const root = localAgentFormatRoot(descriptor, options, home);
+    for (const file of await listFormatCandidateFiles(root, descriptor, scan, diagnostics)) {
+      if (!matchesLocalAgentFormatFile(descriptor, file)) continue;
+      const parsedCalls = await runtime.parseFinancialFile({
+        filePath: file,
+        sinceMs,
+        scan,
+        diagnostics
       });
-      if (call) codexCalls.push(call);
+      assertFormatCallOwnership(descriptor, parsedCalls);
+      assertFinancialSourceOwnership(descriptor, scan, diagnostics);
+      calls.push(...parsedCalls);
     }
-  };
+    return { calls, scan, diagnostics };
+  }));
 
-  // The sources are independent and can be traversed concurrently without
-  // changing per-file ordering or cumulative-session deduplication.
-  await Promise.all([scanClaude(), scanCodex()]);
-
-  const calls = [...claudeCalls, ...codexCalls];
+  // Sources scan concurrently, but flatten in registry order to preserve the
+  // long-standing Claude-then-Codex output and diagnostic contract.
+  const calls = scanned.flatMap((entry) => entry.calls);
   const normalizedCalls = dedupeCumulativeSessionCalls(calls);
   const filtered = typeof sinceMs === "number"
     ? normalizedCalls.filter((call) => Date.parse(call.timestamp) >= sinceMs)
     : normalizedCalls;
 
   return {
-    records: aggregateCalls(filtered),
+    records: aggregateCallsForFormats(filtered, registry.map((entry) => entry.descriptor)),
     calls: filtered,
-    filesParsed: claudeScan.filesParsed + codexScan.filesParsed,
+    filesParsed: scanned.reduce((total, entry) => total + entry.scan.filesParsed, 0),
     agentsDetected: [...new Set(filtered.map((call) => call.agent))],
-    sourceScans,
-    diagnostics: [...claudeDiagnostics, ...codexDiagnostics]
+    sourceScans: scanned.map((entry) => entry.scan),
+    diagnostics: scanned.flatMap((entry) => entry.diagnostics)
   };
+}
+
+/** @internal Runtime hook owned by the Claude Code registry entry. */
+export async function readClaudeCodeFinancialFileForRegistry(
+  context: LocalAgentFormatFinancialFileContext
+): Promise<LocalAgentCall[]> {
+  const { filePath, sinceMs, scan, diagnostics } = context;
+  if (!await shouldStreamFile(filePath, sinceMs, "claude-code", scan, diagnostics)) {
+    return [];
+  }
+  const calls: LocalAgentCall[] = [];
+  const fileDiagnostics: TranscriptParseDiagnostic[] = [];
+  const seen = new Set<string>();
+  let streamed: StreamedJsonlResult;
+  try {
+    streamed = await streamJsonlRecords(filePath, (entry) => {
+      const call = parseClaudeFinancialEntry(
+        entry,
+        filePath,
+        sinceMs,
+        seen,
+        (diagnostic) => fileDiagnostics.push(diagnostic)
+      );
+      if (call) calls.push(call);
+    });
+  } catch (error) {
+    recordUnreadableFile("claude-code", scan, diagnostics, error);
+    return [];
+  }
+  if (!streamed.hadContent) return [];
+  scan.filesParsed += 1;
+  for (const diagnostic of fileDiagnostics) {
+    recordParseDiagnostic("claude-code", scan, diagnostics, diagnostic);
+  }
+  if (streamed.malformedLines > 0) {
+    recordParseDiagnostic("claude-code", scan, diagnostics, {
+      code: "malformed_jsonl",
+      count: streamed.malformedLines
+    });
+  }
+  return calls;
+}
+
+/** @internal Runtime hook owned by the Codex registry entry. */
+export async function readCodexFinancialFileForRegistry(
+  context: LocalAgentFormatFinancialFileContext
+): Promise<LocalAgentCall[]> {
+  const { filePath, sinceMs, scan, diagnostics } = context;
+  if (!await shouldStreamFile(filePath, sinceMs, "codex", scan, diagnostics)) {
+    return [];
+  }
+  let financialFile: CodexFinancialFileResult;
+  try {
+    financialFile = await readCodexFinancialFile(filePath);
+  } catch (error) {
+    recordUnreadableFile("codex", scan, diagnostics, error);
+    return [];
+  }
+  if (!financialFile.hadContent) return [];
+  scan.filesParsed += 1;
+  scan.filesReadFinancially = (scan.filesReadFinancially ?? 0) + 1;
+  scan.bytesSkippedAsNonFinancialHistory =
+    (scan.bytesSkippedAsNonFinancialHistory ?? 0) + financialFile.bytesSkipped;
+  scan.nonFinancialLinesPrefiltered =
+    (scan.nonFinancialLinesPrefiltered ?? 0) + financialFile.prefilteredLines;
+  scan.nonFinancialBytesPrefiltered =
+    (scan.nonFinancialBytesPrefiltered ?? 0) + financialFile.prefilteredBytes;
+  if (financialFile.bytesSkipped > 0 || financialFile.prefilteredLines > 0) {
+    scan.jsonlValidationCoverage = "financial_events_only";
+  }
+  if (financialFile.malformedLines > 0) {
+    recordParseDiagnostic("codex", scan, diagnostics, {
+      code: "malformed_jsonl",
+      count: financialFile.malformedLines
+    });
+  }
+  const state = createCodexFinancialStreamState();
+  for (const entry of financialFile.entries) {
+    consumeCodexFinancialEntry(state, entry);
+  }
+  const call = finishCodexFinancialStream(state, (diagnostic) => {
+    recordParseDiagnostic("codex", scan, diagnostics, diagnostic);
+  });
+  return call ? [call] : [];
+}
+
+async function localAgentFormatRuntimes(): Promise<readonly LocalAgentFormatRuntime[]> {
+  const module = await import("./localAgentFormats/runtimeRegistry.js");
+  return module.localAgentFormatRuntimeRegistry;
+}
+
+function localAgentFormatRoot(
+  descriptor: LocalAgentFormatDescriptor,
+  options: LocalAgentLogOptions,
+  home: string
+): string {
+  const registryOverride = options.sourceDirectories?.[descriptor.id];
+  if (registryOverride) return registryOverride;
+  if (descriptor.legacyDirectoryOption === "claudeProjectsDir" && options.claudeProjectsDir) {
+    return options.claudeProjectsDir;
+  }
+  if (descriptor.legacyDirectoryOption === "codexSessionsDir" && options.codexSessionsDir) {
+    return options.codexSessionsDir;
+  }
+  const canonicalHome = resolve(home);
+  const root = resolve(canonicalHome, ...descriptor.defaultHomeRelative);
+  const fromHome = relative(canonicalHome, root);
+  if (fromHome === ".." || fromHome.startsWith(`..${sep}`) || isAbsolute(fromHome)) {
+    throw new Error(`Local-agent format ${descriptor.id} resolved outside the home boundary.`);
+  }
+  return root;
+}
+
+function assertFormatCallOwnership(
+  descriptor: LocalAgentFormatDescriptor,
+  calls: readonly LocalAgentCall[]
+): void {
+  if (calls.some((call) => call.agent !== descriptor.id)) {
+    throw new Error(
+      `Local-agent format ${descriptor.id} emitted a call for a different source.`
+    );
+  }
+}
+
+function assertFinancialSourceOwnership(
+  descriptor: LocalAgentFormatDescriptor,
+  scan: LocalAgentSourceScan,
+  diagnostics: readonly LocalAgentLogDiagnostic[]
+): void {
+  if (scan.agent !== descriptor.id || diagnostics.some((entry) => entry.agent !== descriptor.id)) {
+    throw new Error(
+      `Local-agent format ${descriptor.id} emitted financial metadata for a different source.`
+    );
+  }
+}
+
+function assertInvocationOwnership(
+  descriptor: LocalAgentFormatDescriptor,
+  invocationFile: ParsedInvocationFile | undefined,
+  collectionAllowed: boolean
+): void {
+  if (!invocationFile) return;
+  if (!collectionAllowed || descriptor.id !== "codex" ||
+      invocationFile.contextSignal.agent !== descriptor.id) {
+    throw new Error(
+      `Local-agent format ${descriptor.id} emitted invocation evidence for a different source.`
+    );
+  }
+}
+
+function financialSourceScan(descriptor: LocalAgentFormatDescriptor): LocalAgentSourceScan {
+  const scan: LocalAgentSourceScan = {
+    ...emptySourceScan(descriptor.id),
+    filesSkippedBeforeWindow: 0
+  };
+  if (descriptor.financialRead === "bounded_event_jsonl") {
+    scan.filesReadFinancially = 0;
+    scan.bytesSkippedAsNonFinancialHistory = 0;
+    scan.nonFinancialLinesPrefiltered = 0;
+    scan.nonFinancialBytesPrefiltered = 0;
+  }
+  // Keep this after format-specific metrics: persisted/debug JSON has used
+  // this exact insertion order since the optimized financial reader shipped.
+  scan.jsonlValidationCoverage = "complete";
+  return scan;
 }
 
 async function streamJsonlRecords(
@@ -1593,6 +1699,15 @@ function finishCodexFinancialStream(
 
 /** Aggregate per-call usage into one UsageRecord per day+agent+model+project. */
 export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
+  return aggregateCallsForFormats(calls, localAgentFormatDescriptors);
+}
+
+/** @internal Registry-aware aggregation used by the extensible ingestion engine. */
+export function aggregateCallsForFormats(
+  calls: LocalAgentCall[],
+  descriptors: readonly LocalAgentFormatDescriptor[]
+): UsageRecord[] {
+  const formats = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor]));
   const groups = new Map<string, LocalAgentCall[]>();
   for (const call of dedupeCumulativeSessionCalls(calls)) {
     const day = call.timestamp.slice(0, 10);
@@ -1602,7 +1717,8 @@ export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
 
   const records: UsageRecord[] = [];
   for (const [key, groupCalls] of groups) {
-    const [day, agent, model, project] = key.split("|") as [string, LocalAgentCall["agent"], string, string];
+    const [day, agent, model, project] = key.split("|") as [string, LocalAgentFormatId, string, string];
+    const format = formats.get(agent);
     const usage: TokenUsage = {
       inputTokens: sum(groupCalls, (c) => c.usage.inputTokens),
       outputTokens: sum(groupCalls, (c) => c.usage.outputTokens),
@@ -1611,39 +1727,42 @@ export function aggregateCalls(calls: LocalAgentCall[]): UsageRecord[] {
       cacheWrite1hTokens: sum(groupCalls, (c) => c.usage.cacheWrite1hTokens ?? 0)
     };
     const usageSupported = groupCalls.every((call) => call.usageSupport !== "unsupported_token_shape");
-    const amountUsd = usageSupported ? estimateTokenCostUsd(model, usage) : undefined;
+    const amountUsd = usageSupported && format ? estimateTokenCostUsd(model, usage) : undefined;
     const priced = usageSupported && typeof amountUsd === "number";
     records.push({
       id: slug(["local", agent, day, model, project].join("-")),
       timestamp: new Date(`${day}T00:00:00Z`).toISOString(),
       source: {
-        id: "local-agent-logs",
-        name: "Local agent session logs",
-        provider: agent === "claude-code" ? "anthropic" : "openai",
-        confidence: "estimated",
-        observedFrom: `${agent} transcript JSONL (this machine)`
+        id: format?.sourceRecord.id ?? "local-agent-logs",
+        name: format?.sourceRecord.name ?? "Local agent session logs",
+        provider: format?.provider ?? "unknown",
+        confidence: format?.confidenceDefaults.sourceConfidence ?? "estimated",
+        observedFrom: format?.sourceRecord.observedFrom ?? "unregistered local transcript (this machine)"
       },
       model,
       inputTokens: usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWrite5mTokens ?? 0) + (usage.cacheWrite1hTokens ?? 0),
       outputTokens: usage.outputTokens,
       amountUsd: priced ? amountUsd : null,
-      costConfidence: priced ? "estimated" : "missing",
+      costConfidence: priced
+        ? format?.confidenceDefaults.pricedFinancialEvidence ?? "estimated"
+        : format?.confidenceDefaults.unpricedFinancialEvidence ?? "missing",
       // `(home)` is an attribution fallback, not a real project. Keep it on
       // LocalAgentCall for Glance/session context, but do not promote it to a
       // high-confidence project id in receipts or the attribution engine.
       projectId: project === "unattributed" || project === "(home)" ? undefined : project,
       agentId: agent,
-      providerCostType: "local_agent_logs",
-      usageGranularity: "daily_aggregate",
+      providerCostType: format?.sourceRecord.providerCostType ?? "local_agent_logs",
+      usageGranularity: format?.sourceRecord.usageGranularity ?? "daily_aggregate",
       quantity: groupCalls.length,
-      operation: `${agent} sessions`
+      operation: format?.sourceRecord.operation ?? `${agent} sessions`
     });
   }
   return records.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-async function listJsonlFiles(
+async function listFormatCandidateFiles(
   root: string,
+  descriptor: LocalAgentFormatDescriptor,
   scan: LocalAgentSourceScan,
   diagnostics: LocalAgentLogDiagnostic[]
 ): Promise<string[]> {
@@ -1705,7 +1824,9 @@ async function listJsonlFiles(
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) queue.push(path);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      else if (entry.isFile() && (
+        !descriptor.discovery.extension || entry.name.endsWith(descriptor.discovery.extension)
+      )) {
         out.push(path);
         scan.filesDiscovered += 1;
       }
@@ -1714,7 +1835,7 @@ async function listJsonlFiles(
   return out;
 }
 
-function emptySourceScan(agent: LocalAgentCall["agent"]): LocalAgentSourceScan {
+function emptySourceScan(agent: LocalAgentFormatId): LocalAgentSourceScan {
   return {
     agent,
     directoryStatus: "readable",
@@ -1727,7 +1848,7 @@ function emptySourceScan(agent: LocalAgentCall["agent"]): LocalAgentSourceScan {
 }
 
 function recordUnreadableFile(
-  agent: LocalAgentCall["agent"],
+  agent: LocalAgentFormatId,
   scan: LocalAgentSourceScan,
   diagnostics: LocalAgentLogDiagnostic[],
   error: unknown
@@ -1743,7 +1864,7 @@ function recordUnreadableFile(
 }
 
 function recordParseDiagnostic(
-  agent: LocalAgentCall["agent"],
+  agent: LocalAgentFormatId,
   scan: LocalAgentSourceScan,
   diagnostics: LocalAgentLogDiagnostic[],
   diagnostic: TranscriptParseDiagnostic
@@ -1769,8 +1890,8 @@ function recordParseDiagnostic(
   });
 }
 
-function agentLabel(agent: LocalAgentCall["agent"]): string {
-  return agent === "claude-code" ? "Claude Code" : "Codex";
+function agentLabel(agent: LocalAgentFormatId): string {
+  return localAgentFormatLabel(agent);
 }
 
 function errorCodeSuffix(error: unknown): string {

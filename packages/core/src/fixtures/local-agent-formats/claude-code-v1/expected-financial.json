@@ -1,0 +1,75 @@
+{
+  "calls": [
+    {
+      "agent": "claude-code",
+      "model": "claude-opus-4-8",
+      "timestamp": "2026-08-10T12:00:00.000Z",
+      "project": "sample-project",
+      "workingDirectory": "/workspace/sample-project",
+      "sessionId": "fixture-claude-session",
+      "latestTurnUsage": {
+        "inputTokens": 120,
+        "outputTokens": 30,
+        "cacheReadTokens": 80,
+        "cacheWrite5mTokens": 5,
+        "cacheWrite1hTokens": 15,
+        "contextTokens": 220,
+        "totalTokens": 250,
+        "source": "assistant_message_usage"
+      },
+      "usageScope": "turn",
+      "usage": {
+        "inputTokens": 120,
+        "outputTokens": 30,
+        "cacheReadTokens": 80,
+        "cacheWrite5mTokens": 5,
+        "cacheWrite1hTokens": 15
+      }
+    },
+    {
+      "agent": "claude-code",
+      "model": "claude-opus-4-8",
+      "timestamp": "2026-08-10T12:05:00.000Z",
+      "project": "sample-project",
+      "workingDirectory": "/workspace/sample-project",
+      "sessionId": "fixture-claude-session",
+      "usageScope": "turn",
+      "usageSupport": "unsupported_token_shape",
+      "reportedTotalTokens": 411,
+      "usage": {
+        "inputTokens": 0,
+        "outputTokens": 11,
+        "cacheReadTokens": 0,
+        "cacheWrite5mTokens": 0,
+        "cacheWrite1hTokens": 0
+      }
+    }
+  ],
+  "scan": {
+    "agent": "claude-code",
+    "directoryStatus": "readable",
+    "filesDiscovered": 1,
+    "filesParsed": 1,
+    "malformedLines": 1,
+    "unreadableFiles": 0,
+    "unsupportedUsageSnapshots": 1,
+    "filesSkippedBeforeWindow": 0,
+    "jsonlValidationCoverage": "complete"
+  },
+  "diagnostics": [
+    {
+      "agent": "claude-code",
+      "code": "unsupported_token_shape",
+      "severity": "warning",
+      "message": "1 Claude Code token snapshot(s) lacked the input/output components required for pricing.",
+      "count": 1
+    },
+    {
+      "agent": "claude-code",
+      "code": "malformed_jsonl",
+      "severity": "warning",
+      "message": "1 malformed JSONL line(s) were skipped in Claude Code transcripts.",
+      "count": 1
+    }
+  ]
+}

@@ -12,7 +12,31 @@ export * from "./discovery.js";
 export * from "./glance.js";
 export * from "./toolInvocations.js";
 export * from "./insights.js";
-export * from "./localAgentLogs.js";
+export {
+  aggregateCalls,
+  dedupeCumulativeSessionCalls,
+  latestObservedWorkingDirectory,
+  loadLocalAgentFinancialUsage,
+  loadLocalAgentUsage,
+  parseClaudeCodeTranscript,
+  parseCodexRollout,
+  sanitizeLocalActivityText
+} from "./localAgentLogs.js";
+export type {
+  LocalAgentActivity,
+  LocalAgentCall,
+  LocalAgentFinancialLogOptions,
+  LocalAgentLogDiagnostic,
+  LocalAgentLogDiagnosticCode,
+  LocalAgentLogOptions,
+  LocalAgentLogResult,
+  LocalAgentRateLimitSnapshot,
+  LocalAgentRateLimitWindow,
+  LocalAgentSourceScan,
+  LocalAgentTurnUsage
+} from "./localAgentLogs.js";
+export * from "./localAgentFormats/registry.js";
+export type * from "./localAgentFormats/types.js";
 export * from "./modelPricing.js";
 export * from "./planDetection.js";
 export * from "./planMath.js";

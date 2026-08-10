@@ -6,6 +6,8 @@ import {
   type LocalAgentRateLimitWindow,
   type LocalAgentSourceScan
 } from "./localAgentLogs.js";
+import { localAgentFormatDescriptors } from "./localAgentFormats/registry.js";
+import type { LocalAgentFormatId } from "./localAgentFormats/types.js";
 import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { isBundledSampleUsage, type UsageRecord } from "./schema.js";
@@ -16,8 +18,12 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-export const activitySnapshotAgentValues = ["claude-code", "codex"] as const;
-export type ActivitySnapshotAgent = typeof activitySnapshotAgentValues[number];
+export const activitySnapshotAgentValues: readonly LocalAgentFormatId[] = Object.freeze(
+  localAgentFormatDescriptors.map((descriptor) => descriptor.id)
+);
+export type ActivitySnapshotAgent = LocalAgentFormatId;
+const activitySnapshotAgentValueSet = new Set(activitySnapshotAgentValues);
+const activitySnapshotAgentLimit = activitySnapshotAgentValues.length;
 
 export const activitySnapshotPlanIdValues = [
   "claude-pro",
@@ -102,7 +108,9 @@ const isoTimestampSchema = z.string().datetime({ offset: true });
 const usdSchema = z.number().finite().nonnegative();
 const countSchema = z.number().int().nonnegative();
 const windowCoverageSchema = z.enum(["complete", "partial", "missing"]);
-const agentSchema = z.enum(activitySnapshotAgentValues);
+const agentSchema = z.string().refine(isSnapshotAgent, {
+  message: "Agent must be registered as a local-agent format."
+});
 const planIdSchema = z.enum(activitySnapshotPlanIdValues).nullable();
 
 export const activitySnapshotApiEquivalentWindowSchema = z.object({
@@ -259,7 +267,7 @@ export type ActivitySnapshotSubscriptionAgent = z.infer<
 >;
 
 const activitySnapshotSubscriptionSchema = z.object({
-  agents: z.array(activitySnapshotSubscriptionAgentSchema).min(1).max(2)
+  agents: z.array(activitySnapshotSubscriptionAgentSchema).min(1).max(activitySnapshotAgentLimit)
 }).strict().superRefine(uniqueAgentEntries);
 
 const activitySnapshotMeteredSchema = z.object({
@@ -267,7 +275,7 @@ const activitySnapshotMeteredSchema = z.object({
     agent: agentSchema,
     billing: z.literal("api_key"),
     planId: planIdSchema
-  }).strict()).max(2),
+  }).strict()).max(activitySnapshotAgentLimit),
   apiEquivalent: activitySnapshotApiEquivalentWindowsSchema,
   providerBilled: activitySnapshotBilledWindowsSchema
 }).strict().superRefine((value, context) => {
@@ -288,7 +296,7 @@ const activitySnapshotUnresolvedSchema = z.object({
     agent: agentSchema,
     billing: z.literal("unknown"),
     planId: planIdSchema
-  }).strict()).max(2),
+  }).strict()).max(activitySnapshotAgentLimit),
   apiEquivalent: activitySnapshotApiEquivalentWindowsSchema
 }).strict().superRefine((value, context) => {
   uniqueAgentEntries(value, context);
@@ -387,7 +395,7 @@ const activitySnapshotProviderCoverageSchema = z.object({
 });
 
 export const activitySnapshotCoverageSchema = z.object({
-  agents: z.array(activitySnapshotAgentCoverageSchema).max(2),
+  agents: z.array(activitySnapshotAgentCoverageSchema).max(activitySnapshotAgentLimit),
   providers: z.array(activitySnapshotProviderCoverageSchema).max(5),
   recordsParsed: countSchema,
   recordsPriced: countSchema,
@@ -606,7 +614,9 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
   for (const entry of classified) {
     if (isSnapshotAgent(entry.record.agentId)) activeAgents.add(entry.record.agentId);
   }
-  for (const call of calls) activeAgents.add(call.agent);
+  for (const call of calls) {
+    if (isSnapshotAgent(call.agent)) activeAgents.add(call.agent);
+  }
   const meteredAgents = [...activeAgents]
     .filter((agent) => plans.get(agent)?.billing === "api_key")
     .sort()
@@ -655,7 +665,9 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
     agents: meteredAgents,
     apiEquivalent: buildApiWindows(
       meteredApiRecords,
-      allCalls.filter((call) => plans.get(call.agent)?.billing === "api_key"),
+      allCalls.filter((call) => (
+        isSnapshotAgent(call.agent) && plans.get(call.agent)?.billing === "api_key"
+      )),
       trustedIds,
       asOfMs,
       localCoverageForRecords(
@@ -677,6 +689,7 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
     apiEquivalent: buildApiWindows(
       unresolvedRecords,
       allCalls.filter((call) => {
+        if (!isSnapshotAgent(call.agent)) return false;
         const billing = plans.get(call.agent)?.billing;
         return billing !== "subscription" && billing !== "api_key";
       }),
@@ -1464,7 +1477,9 @@ function inRollingWindow(timestamp: string, asOfMs: number, days: number): boole
 }
 
 function isSnapshotAgent(value: unknown): value is ActivitySnapshotAgent {
-  return typeof value === "string" && activitySnapshotAgentValues.includes(value as ActivitySnapshotAgent);
+  return typeof value === "string" && activitySnapshotAgentValueSet.has(
+    value as ActivitySnapshotAgent
+  );
 }
 
 function isKnownPlanId(value: string | undefined): value is ActivitySnapshotPlanId {
