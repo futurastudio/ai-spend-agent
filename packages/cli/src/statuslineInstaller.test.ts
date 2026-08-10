@@ -80,6 +80,34 @@ describe("Claude statusline installer", () => {
     }
   });
 
+  it.each([
+    [
+      "without a prior statusLine",
+      '{\r\n\t"theme":"dark",\r\n\t"futureSetting": {"enabled":true}\r\n}',
+      false
+    ],
+    [
+      "with a replaced prior statusLine",
+      '{"statusLine":{"command":"~/.claude/custom.sh","type":"command","padding":4},"theme":"light"}  \n\n',
+      true
+    ]
+  ])("restores untouched settings byte-for-byte %s", async (_case, original, replace) => {
+    const test = await fixture();
+    await writeFile(test.settingsPath, original, "utf8");
+
+    await installClaudeStatusline({
+      homeDir: test.homeDir,
+      cwd: test.cwd,
+      runnerSourcePath: test.runnerSourcePath,
+      replace
+    });
+    expect(await readFile(test.settingsPath, "utf8")).not.toBe(original);
+
+    await uninstallClaudeStatusline({ homeDir: test.homeDir, cwd: test.cwd });
+
+    expect(await readFile(test.settingsPath)).toEqual(Buffer.from(original));
+  });
+
   it("backs up the absent settings state and creates strict JSON", async () => {
     const test = await fixture();
     const result = await installClaudeStatusline({

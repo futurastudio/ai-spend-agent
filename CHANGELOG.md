@@ -5,6 +5,29 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.7.1 — 2026-08-10
+
+- Added the additive `AgentEconomicsReceiptV0` contract to
+  `@agent-finops/core`: a strict, content-addressed envelope for agent usage
+  and cost evidence with deterministic canonical IDs, opaque source-record
+  references, explicit source freshness and validation coverage, and a hard
+  demo-data boundary.
+- Kept token usage separate from financial cost and grouped USD totals by
+  accounting basis and financial evidence, so provider-billed money,
+  API-equivalent estimates, and user-declared cost cannot become one blended
+  number. Invalid totals, unsupported versions, broken references, unsafe
+  metadata, and contradictory evidence fail closed.
+- Added version-pinned projections for ratified FOCUS 1.4, the FOCUS 1.5
+  working draft, and OpenTelemetry GenAI Development conventions. Requested
+  model data is projected only when explicitly present; API-equivalent value
+  never becomes FOCUS `BilledCost`. The Tokenomics Foundation adapter remains
+  an explicit no-row tracking stub until a technical specification is
+  published.
+- Kept Receipt v0 additive to the core API with no changes to CLI output, MCP,
+  report, Glance, or persisted-state behavior. Also made statusline uninstall
+  restore the verified settings backup byte-for-byte when no post-install
+  edits occurred, while preserving the surgical merge path for changed files.
+
 ## 0.7.0 — 2026-08-10
 
 - Added an optional, plan-aware Claude Code status line over the private

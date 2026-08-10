@@ -1,6 +1,6 @@
 {
   "name": "aibill",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Short command for ai-spend-agent: local financial accountability for Claude Code and Codex work, cost evidence, attribution, and next action. Run: npx aibill",
   "type": "module",
   "bin": {
@@ -34,6 +34,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "ai-spend-agent": "0.7.0"
+    "ai-spend-agent": "0.7.1"
   }
 }
