@@ -356,6 +356,7 @@ function parseCodexCumulativeUsage(
     (!currentCachedField.present || currentCachedField.value !== undefined) &&
     (!currentTotalField.present || currentTotalField.value !== undefined) &&
     rawCached <= rawInput &&
+    (rawReportedTotal === undefined || rawReportedTotal >= rawInput + rawOutput) &&
     !((rawReportedTotal ?? 0) > 0 && rawInput === 0 && rawOutput === 0);
   const baselineSupported = !baseline || (
     baselineInput !== undefined &&
@@ -363,12 +364,15 @@ function parseCodexCumulativeUsage(
     (!baselineCachedField.present || baselineCachedField.value !== undefined) &&
     (!baselineTotalField.present || baselineTotalField.value !== undefined) &&
     baselineCached <= baselineInput &&
+    (baselineReportedTotal === undefined ||
+      baselineReportedTotal >= baselineInput + baselineOutput) &&
     !((baselineReportedTotal ?? 0) > 0 && baselineInput === 0 && baselineOutput === 0)
   );
   const monotonic = !baseline || (
     rawInput !== undefined && baselineInput !== undefined && rawInput >= baselineInput &&
     rawOutput !== undefined && baselineOutput !== undefined && rawOutput >= baselineOutput &&
     rawCached >= baselineCached &&
+    rawInput - rawCached >= baselineInput - baselineCached &&
     (rawReportedTotal === undefined ||
       baselineReportedTotal === undefined ||
       rawReportedTotal >= baselineReportedTotal)

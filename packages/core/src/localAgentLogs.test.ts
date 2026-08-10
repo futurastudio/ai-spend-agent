@@ -873,6 +873,97 @@ describe("parseCodexRollout", () => {
     });
   });
 
+  it("marks a fork unsupported when cumulative non-cached input regresses", () => {
+    const rootStartedAt = "2026-08-03T15:00:00.000Z";
+    const forked = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: rootStartedAt,
+        payload: {
+          id: "child-regressed-uncached",
+          timestamp: rootStartedAt,
+          thread_source: "subagent"
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:00:00.100Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 0,
+              output_tokens: 10,
+              total_tokens: 110
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: rootStartedAt,
+        payload: {
+          type: "task_started",
+          started_at: Date.parse(rootStartedAt) / 1_000
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 150,
+              cached_input_tokens: 100,
+              output_tokens: 20,
+              total_tokens: 170
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(forked)[0]).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 60,
+      usage: { inputTokens: 0, cacheReadTokens: 100, outputTokens: 10 }
+    });
+  });
+
+  it("marks inconsistent cumulative total_tokens unsupported", () => {
+    const inconsistentCurrent = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: "inconsistent-current-total", timestamp: "2026-08-03T15:00:00.000Z" }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-03T15:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 20,
+              output_tokens: 10,
+              total_tokens: 109
+            }
+          }
+        }
+      })
+    ].join("\n");
+
+    const call = parseCodexRollout(inconsistentCurrent)[0];
+    expect(call).toMatchObject({
+      usageSupport: "unsupported_token_shape",
+      reportedTotalTokens: 109,
+      usage: { inputTokens: 80, cacheReadTokens: 20, outputTokens: 10 }
+    });
+    expect(call?.latestTurnUsage).toBeUndefined();
+  });
+
   it("omits ambiguous forks without post-boundary root usage instead of charging parent history", () => {
     const rootStartedAt = "2026-08-03T15:00:00.000Z";
     const rootMeta = JSON.stringify({

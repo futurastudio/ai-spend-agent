@@ -1590,6 +1590,169 @@ describe("minimal CLI vertical slice", () => {
     }
   });
 
+  it("keeps legacy multi-provider state cacheable without borrowing its aggregate check time", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-legacy-multi-provider-"));
+    await runCli(["init", "--path", dir]);
+    const stateDir = join(dir, ".ai-spend-agent");
+    const spendPath = join(stateDir, "spend.json");
+    const checkedAt = new Date(Date.now() - 1_000).toISOString();
+    const evidenceAt = new Date(Date.parse(checkedAt) - 60 * 60 * 1_000).toISOString();
+    const coverageStart = new Date(Date.parse(checkedAt) - 31 * 24 * 60 * 60 * 1_000).toISOString();
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt,
+      records: [
+        {
+          id: "legacy-openai-billed-row",
+          timestamp: evidenceAt,
+          source: {
+            id: "openai-provider-api",
+            name: "OpenAI Costs API",
+            provider: "openai",
+            confidence: "verified",
+            observedFrom: "fixture"
+          },
+          model: "provider-billing",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 12.34,
+          costConfidence: "verified",
+          providerCostType: "openai_cost",
+          usageGranularity: "billing_bucket"
+        },
+        {
+          id: "legacy-anthropic-billed-row",
+          timestamp: evidenceAt,
+          source: {
+            id: "anthropic-provider-api",
+            name: "Anthropic Costs API",
+            provider: "anthropic",
+            confidence: "verified",
+            observedFrom: "fixture"
+          },
+          model: "provider-billing",
+          inputTokens: 0,
+          outputTokens: 0,
+          amountUsd: 4.56,
+          costConfidence: "verified",
+          providerCostType: "anthropic_cost",
+          usageGranularity: "billing_bucket"
+        }
+      ],
+      summary: { totalUsd: 16.9 },
+      accounting: {
+        coverageByProvider: {
+          openai: "complete",
+          anthropic: "partial"
+        },
+        coverageIntervalsByProvider: {
+          openai: { coverageStart, coverageEnd: checkedAt },
+          anthropic: { coverageStart, coverageEnd: checkedAt }
+        }
+      }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("status cache: refreshed");
+    expect(result.stdout).not.toContain("observed evidence could not produce a valid activity snapshot");
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("metered");
+      expect(cached.snapshot.metered?.providerBilled.thirtyDays).toMatchObject({
+        amountUsd: null,
+        recordCount: 2,
+        financialEvidence: "missing"
+      });
+      expect(cached.snapshot.coverage.providers).toEqual([
+        {
+          provider: "anthropic",
+          status: "partial",
+          validationCoverage: "live_verified",
+          checkedAt: null,
+          latestEvidenceAt: null,
+          coverageStart: null,
+          coverageEnd: null
+        },
+        {
+          provider: "openai",
+          status: "complete",
+          validationCoverage: "live_verified",
+          checkedAt: null,
+          latestEvidenceAt: null,
+          coverageStart: null,
+          coverageEnd: null
+        }
+      ]);
+    }
+  });
+
+  it("reports trusted zero-row provider state as connected without claiming billed zero", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-connected-empty-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: new Date().toISOString(),
+      records: [],
+      summary: { totalUsd: 0 }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "provider-billed cost: unavailable — trusted connected provider evidence exists, but no receipt-bound 30-day amount was proven"
+    );
+    expect(result.stdout).not.toContain("provider-billed cost: not connected");
+    expect(result.stdout).not.toContain("provider-billed cost: $0.00");
+  });
+
+  it("keeps a complete empty local receipt separate from partial provider coverage", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-provider-partial-local-empty-"));
+    await runCli(["init", "--path", dir]);
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const checkedAt = new Date().toISOString();
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt,
+      records: [],
+      summary: { totalUsd: 0 },
+      accounting: {
+        coverageByProvider: { openai: "partial" },
+        checkedAtByProvider: { openai: checkedAt }
+      }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const result = await runCli(["init", "--path", dir]);
+    const cached = await readActivitySnapshot({ cacheDirectory: process.env.AIBILL_CACHE_DIR });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)"
+    );
+    expect(result.stdout).not.toContain("local source coverage is incomplete");
+    expect(result.stdout).toContain("provider coverage: partial");
+    expect(cached.status).toBe("ok");
+    if (cached.status === "ok") {
+      expect(cached.snapshot.mode).toBe("empty");
+      expect(cached.snapshot.coverage.validationStatus).toBe("partial");
+      expect(cached.snapshot.coverage.agents).toHaveLength(2);
+      expect(cached.snapshot.coverage.agents.every((agent) =>
+        agent.directoryStatus === "readable" && agent.jsonlValidationCoverage === "complete"
+      )).toBe(true);
+    }
+  });
+
   it("never turns trusted but unpriced provider evidence into a verified $0 receipt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unpriced-provider-"));
     await runCli(["init", "--path", dir]);

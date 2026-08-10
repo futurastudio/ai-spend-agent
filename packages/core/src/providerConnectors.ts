@@ -1566,15 +1566,25 @@ function providerResult(
 function requestedCoverageInterval(
   input: Pick<ProviderConnectorInput, "startTime" | "endTime">
 ): ProviderCoverageInterval | undefined {
-  if (input.endTime === undefined) return undefined;
-  if (!Number.isFinite(input.startTime) || !Number.isFinite(input.endTime) ||
-      !Number.isInteger(input.startTime) || !Number.isInteger(input.endTime) ||
-      input.startTime < 0 || input.endTime < input.startTime) {
-    throw new Error("Provider coverage interval requires non-negative whole-second bounds with endTime at or after startTime.");
+  if (!Number.isFinite(input.startTime) || !Number.isInteger(input.startTime) || input.startTime < 0) {
+    throw new Error("Provider coverage startTime requires a non-negative whole-second timestamp.");
   }
   const coverageStart = new Date(input.startTime * 1_000);
+  if (Number.isNaN(coverageStart.getTime())) {
+    throw new Error("Provider coverage interval falls outside the supported timestamp range.");
+  }
+  if (input.endTime === undefined) {
+    if (coverageStart.getTime() > Date.now()) {
+      throw new Error("Provider coverage startTime cannot be in the future.");
+    }
+    return undefined;
+  }
+  if (!Number.isFinite(input.endTime) || !Number.isInteger(input.endTime) ||
+      input.endTime < input.startTime) {
+    throw new Error("Provider coverage interval requires non-negative whole-second bounds with endTime at or after startTime.");
+  }
   const coverageEnd = new Date(input.endTime * 1_000);
-  if (Number.isNaN(coverageStart.getTime()) || Number.isNaN(coverageEnd.getTime())) {
+  if (Number.isNaN(coverageEnd.getTime())) {
     throw new Error("Provider coverage interval falls outside the supported timestamp range.");
   }
   if (coverageEnd.getTime() > Date.now()) {
@@ -1636,7 +1646,7 @@ function buildOpenAiCostsUrl(startTime: number, endTime?: number): string {
   url.searchParams.append("group_by", "project_id");
   url.searchParams.append("group_by", "line_item");
   url.searchParams.append("group_by", "api_key_id");
-  if (endTime) url.searchParams.set("end_time", String(endTime));
+  if (endTime !== undefined) url.searchParams.set("end_time", String(endTime));
   return url.toString();
 }
 
@@ -1649,14 +1659,14 @@ function buildOpenAiUsageUrl(startTime: number, endTime?: number): string {
   url.searchParams.append("group_by", "user_id");
   url.searchParams.append("group_by", "api_key_id");
   url.searchParams.append("group_by", "model");
-  if (endTime) url.searchParams.set("end_time", String(endTime));
+  if (endTime !== undefined) url.searchParams.set("end_time", String(endTime));
   return url.toString();
 }
 
 function buildAnthropicCostUrl(startTime: number, endTime?: number): string {
   const url = new URL("https://api.anthropic.com/v1/organizations/cost_report");
   url.searchParams.set("starting_at", new Date(startTime * 1000).toISOString());
-  if (endTime) url.searchParams.set("ending_at", new Date(endTime * 1000).toISOString());
+  if (endTime !== undefined) url.searchParams.set("ending_at", new Date(endTime * 1000).toISOString());
   url.searchParams.set("bucket_width", "1d");
   url.searchParams.append("group_by[]", "workspace_id");
   url.searchParams.append("group_by[]", "description");

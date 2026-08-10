@@ -1446,6 +1446,7 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
     detectedPlans,
     trustedProviderRecords,
     providerCoverage: persisted?.providerCoverage,
+    trustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true,
     untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
     scanError,
     cacheStatus
@@ -1569,6 +1570,7 @@ type InitReceiptInput = {
   detectedPlans: DetectedPlan[];
   trustedProviderRecords: UsageRecord[];
   providerCoverage?: ProviderCoverageStatus;
+  trustedProviderState: boolean;
   untrustedProviderState: boolean;
   scanError?: string;
   cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
@@ -1622,7 +1624,7 @@ function initProviderCoverage(
     const checkedValues = [...group.rawProviders]
       .map((rawProvider) => checkedAtByProvider[rawProvider] ?? checkedAtByProvider[provider])
       .filter((value): value is string => validIsoString(value));
-    const checkedAt = checkedValues.length === group.rawProviders.size
+    const receiptBoundCheckedAt = checkedValues.length === group.rawProviders.size
       ? checkedValues.sort()[0]
       : providerGroups.size === 1 && validIsoString(fallbackCheckedAt)
         ? fallbackCheckedAt
@@ -1646,9 +1648,9 @@ function initProviderCoverage(
       status,
       validationCoverage: sourceStatusDefinitions.find((definition) => definition.id === provider)?.validationCoverage
         ?? "untested",
-      ...(checkedAt ? { checkedAt } : {}),
-      ...(latestEvidenceAt ? { latestEvidenceAt } : {}),
-      ...(coverageStart && coverageEnd && Date.parse(coverageStart) <= Date.parse(coverageEnd)
+      ...(receiptBoundCheckedAt ? { checkedAt: receiptBoundCheckedAt } : {}),
+      ...(receiptBoundCheckedAt && latestEvidenceAt ? { latestEvidenceAt } : {}),
+      ...(receiptBoundCheckedAt && coverageStart && coverageEnd && Date.parse(coverageStart) <= Date.parse(coverageEnd)
         ? { coverageStart, coverageEnd }
         : {})
     };
@@ -1777,7 +1779,9 @@ function formatInitProviderEvidence(input: InitReceiptInput): string[] {
         ? "provider-billed cost: unavailable — untrusted repository state was ignored"
         : input.trustedProviderRecords.length > 0
           ? "provider cost: unavailable — connected evidence had no supported row in the last 30 days"
-          : "provider-billed cost: not connected"
+          : input.trustedProviderState
+            ? "provider-billed cost: unavailable — trusted connected provider evidence exists, but no receipt-bound 30-day amount was proven"
+            : "provider-billed cost: not connected"
     );
   }
   if (input.providerCoverage) lines.push(`provider coverage: ${input.providerCoverage}`);
@@ -1789,10 +1793,15 @@ function initApiEquivalentWindowLines(snapshot: ActivitySnapshot): string[] {
     return ["API-equivalent usage value: unavailable — refresh failed"];
   }
   if (snapshot.mode === "empty") {
-    const completeZero = snapshot.coverage.validationStatus === "complete" &&
-      snapshot.coverage.recordsParsed === 0 &&
+    const completeZero = snapshot.coverage.recordsParsed === 0 &&
       snapshot.coverage.agents.length > 0 &&
-      snapshot.coverage.agents.every((agent) => agent.directoryStatus === "readable");
+      snapshot.coverage.agents.every((agent) =>
+        agent.directoryStatus === "readable" &&
+        agent.malformedLines === 0 &&
+        agent.unreadableFiles === 0 &&
+        agent.unsupportedUsageSnapshots === 0 &&
+        agent.jsonlValidationCoverage === "complete"
+      );
     return [completeZero
       ? "API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)"
       : "API-equivalent usage value: unavailable — local source coverage is incomplete; no zero total was inferred"];

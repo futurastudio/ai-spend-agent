@@ -10,8 +10,8 @@ historical untagged exception.
 - Rebuilt `aibill init` as an idempotent first-value transaction: it detects
   Claude Code and Codex, performs one machine-wide financial-only 30-day
   backfill, explicitly distinguishes the state project from the usage scope,
-  prints an evidence-labeled personal receipt, reports source coverage, and preserves
-  existing source, audit, connected-provider, and spend state.
+  prints an evidence-labeled personal receipt, reports source coverage, and
+  preserves existing source, audit, connected-provider, and spend state.
 - Added a strict plan-aware activity snapshot with separate metered,
   subscription, and mixed cohorts. API-equivalent estimates, subscription
   runway, trusted provider-billed cost, and missing evidence remain separate;
@@ -31,6 +31,10 @@ historical untagged exception.
   financially bounded JSONL scans report partial validation, and provider
   billed zero requires a trusted sync interval that spans the displayed
   window.
+- Hardened legacy connected-provider migration without borrowing freshness
+  across providers, kept provider and local-source coverage independent, and
+  rejected contradictory cumulative token counters or invalid provider time
+  bounds before they can enter financial output.
 
 ## 0.6.0 — 2026-08-08
 
