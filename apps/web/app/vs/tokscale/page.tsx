@@ -67,7 +67,7 @@ export default function Page() {
         </Reveal>
 
         <Reveal>
-          <div className="glass mt-10 overflow-x-auto rounded-2xl">
+          <div className="mt-10 overflow-x-auto rounded-sm border border-hairline bg-panel">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-white/10 font-mono text-xs uppercase tracking-wider text-faint">

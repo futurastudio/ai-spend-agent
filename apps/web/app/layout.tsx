@@ -65,7 +65,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable}`}
     >
-      <body className="min-h-screen bg-bg font-sans antialiased">
+      <body className="min-h-screen bg-ground font-sans antialiased">
         <JsonLd
           data={{
             "@context": "https://schema.org",

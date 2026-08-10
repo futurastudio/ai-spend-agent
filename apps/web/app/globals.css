@@ -13,20 +13,214 @@ html {
 
 body {
   overflow-x: clip;
-  background-color: theme("colors.bg");
-  background-image:
-    radial-gradient(circle at 16% -8%, rgba(108, 99, 255, 0.11), transparent 31rem),
-    radial-gradient(circle at 86% 8%, rgba(87, 193, 255, 0.08), transparent 30rem);
+  background-color: theme("colors.ground");
   color: theme("colors.ink");
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background-color: rgba(89, 212, 153, 0.26);
+  background-color: rgba(76, 201, 138, 0.25);
   color: #ffffff;
 }
 
+/* ---- Frame ------------------------------------------------------------
+   One centered column carries the whole page. Side hairlines only at
+   desktop widths — on phones the horizontal section rules carry the
+   structure and the frame must never cause 1px overflow. */
+.frame {
+  margin-inline: auto;
+  max-width: 1080px;
+}
+
+@media (min-width: 1024px) {
+  .frame {
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* ---- Wordmark ---------------------------------------------------------
+   The CLI cursor promoted to logo. Static everywhere — blinking cursors
+   belong only to live terminal contexts. */
+.wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  color: #ededed;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.wordmark-sm {
+  font-size: 15px;
+}
+
+.wordmark-cursor {
+  display: inline-block;
+  width: 0.44em;
+  height: 0.78em;
+  margin-left: 0.16em;
+  transform: translateY(0.06em);
+  background: #4cc98a;
+}
+
+/* ---- Grid field -------------------------------------------------------
+   Radially-masked vignette behind the receipt panel only — it frames the
+   artwork instead of wallpapering the section. */
+.grid-field {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 85% 90% at 50% 45%,
+    #000 55%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 85% 90% at 50% 45%,
+    #000 55%,
+    transparent 100%
+  );
+}
+
+/* ---- Scroll reveal ----------------------------------------------------
+   Opacity + 12px rise only. Reveal.tsx flips .is-visible. */
+.reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- Terminal receipt (.receipt scope) --------------------------------
+   Real DOM text, one line per div, revealed instantly (terminal output
+   appears, it does not fade). SSR markup is the settled final state; the
+   storyboard hides lines client-side before playing. Amber marks
+   estimated money and is legal only inside this scope. */
+.receipt {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
+.tl-playing .tl-line {
+  opacity: 0;
+}
+
+.tl-playing .tl-line.is-on {
+  opacity: 1;
+}
+
+.tl-bar-row {
+  display: grid;
+  grid-template-columns: 18ch minmax(0, 1fr) 8ch 4ch;
+  gap: 0 1ch;
+  align-items: center;
+}
+
+.tl-bar-amount {
+  text-align: right;
+}
+
+.tl-bar-track {
+  height: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tl-bar-fill {
+  display: block;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.tl-playing .tl-bar-fill {
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tl-playing .tl-bar-fill.is-on {
+  transform: scaleX(1);
+}
+
+.tl-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  background: #4cc98a;
+}
+
+.receipt .tl-green {
+  color: #4cc98a;
+}
+
+.receipt .tl-amber {
+  color: #c9a24b;
+}
+
+.receipt .tl-strong {
+  color: #ededed;
+  font-weight: 500;
+}
+
+.receipt .tl-muted {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.receipt .tl-faint {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+/* ---- Dotted leader ----------------------------------------------------
+   Receipt-style line items: label ····· STATUS. */
+.dotted-leader {
+  flex: 1 1 auto;
+  min-width: 2ch;
+  margin: 0 0.75ch;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.25);
+  transform: translateY(-0.35em);
+}
+
+/* ---- Statusline last-resort truncation mask --------------------------- */
+.statusline-mask {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+}
+
+/* ==== LEGACY COMPAT ====================================================
+   Glass/aurora chrome + product-surface CSS retained verbatim so the
+   pre-rebuild pages keep rendering between commits. Glass/aurora dies
+   with the page/PageShell rebuild; the product-tour, tour, and glance
+   blocks are retokened to the hairline system in the surfaces commit. */
 @layer utilities {
   /* ---- Liquid glass material ladder ----------------------------------
      Translucency + backdrop blur convey hierarchy (heavier material =
@@ -147,22 +341,6 @@ body {
     to {
       transform: translate3d(-8%, -6%, 0) scale(0.95);
     }
-  }
-
-  /* ---- Scroll reveal ---------------------------------------------------
-     Sections rise into place as they enter the viewport. The .reveal
-     element starts hidden and Reveal.tsx flips .is-visible. */
-  .reveal {
-    opacity: 0;
-    transform: translateY(18px) scale(0.995);
-    transition:
-      opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
-      transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
-    transition-delay: var(--reveal-delay, 0ms);
-  }
-  .reveal.is-visible {
-    opacity: 1;
-    transform: none;
   }
 
   /* Faint grid that fades out below the hero. */
@@ -1117,50 +1295,6 @@ body {
     font-size: 12px;
     font-weight: 620;
   }
-
-  .text-balance {
-    text-wrap: balance;
-  }
-
-  .text-pretty {
-    text-wrap: pretty;
-  }
-
-  /* Hairline-bordered card depth comes from the ladder, never shadows. */
-  .card {
-    background-color: theme("colors.surface");
-    border: 1px solid theme("colors.border");
-  }
-}
-
-/* Reduced motion: cross-fade instead of slide/drift, no elasticity —
-   feedback stays, physics goes. */
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  .aurora-green,
-  .aurora-cyan,
-  .aurora-violet {
-    animation: none;
-  }
-  .reveal {
-    transform: none;
-    transition: opacity 0.25s ease;
-  }
-  .glass-interactive,
-  .glass-interactive:hover,
-  .glass-interactive:active {
-    transform: none;
-  }
-  .animate-fade-up {
-    animation: none;
-    opacity: 1;
-  }
-  .glance-trigger,
-  .glance-panel {
-    transition-duration: 0.01ms;
-  }
 }
 
 /* Hover is the native Mac interaction. Touch and other non-hover devices keep
@@ -1273,5 +1407,46 @@ body {
   .glance-desktop-copy {
     right: 18px;
     bottom: 18px;
+  }
+}
+
+/* Reduced motion: full content, zero motion. The receipt renders settled,
+   fills full, cursors static. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .reveal,
+  .tl-playing .tl-line,
+  .tl-playing .tl-bar-row {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
+  .tl-playing .tl-bar-fill {
+    transform: none !important;
+    transition: none !important;
+  }
+  .animate-blink {
+    animation: none;
+  }
+  .aurora-green,
+  .aurora-cyan,
+  .aurora-violet {
+    animation: none;
+  }
+  .glass-interactive,
+  .glass-interactive:hover,
+  .glass-interactive:active {
+    transform: none;
+  }
+  .animate-fade-up {
+    animation: none;
+    opacity: 1;
+  }
+  .glance-trigger,
+  .glance-panel {
+    transition-duration: 0.01ms;
   }
 }
