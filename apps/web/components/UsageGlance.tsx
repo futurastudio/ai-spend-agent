@@ -13,7 +13,7 @@ export function UsageGlance() {
   const { session, limits, focus, action, evidence } = PRODUCT_DEMO;
 
   return (
-    <div className="glance-stage" aria-label="Preview of aibill Glance">
+    <div className="glance-stage receipt" aria-label="Preview of aibill Glance">
       <div className="glance-wallpaper" aria-hidden="true" />
       <div className="glance-menu-bar" aria-hidden="true">
         <span className="glance-camera" />

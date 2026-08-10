@@ -9,23 +9,23 @@ const surfaces = [
   {
     id: "glance",
     label: "Glance",
-    eyebrow: "Stay in flow",
-    title: "See risk before it interrupts you.",
-    body: "Hover at the menu bar for session value, reported runway, focus, freshness, and one next action.",
+    eyebrow: "Menu bar · macOS",
+    title: "The receipt at a glance.",
+    body: "A native menu bar companion reads the same local state as the CLI — session value, limit runway, focus, freshness. Built from source today; no signed download yet.",
   },
   {
     id: "terminal",
     label: "Terminal",
-    eyebrow: "Inspect the receipt",
-    title: "Keep the complete private view.",
-    body: "Inspect the full private receipt, then use Apply for one approval-gated, reversible action.",
+    eyebrow: "Terminal · recorded",
+    title: "The full run, recorded.",
+    body: "The receipt above is the excerpt. This is the complete session — the real CLI over deterministic sample data, recorded once, uncut.",
   },
   {
     id: "mcp",
-    label: "Ask aibill",
-    eyebrow: "Understand why",
-    title: "Question compatible evidence.",
-    body: "Invoke MCP only when you want a sourced explanation inside your AI client; connected provider evidence may also be available there.",
+    label: "MCP",
+    eyebrow: "MCP · your AI client",
+    title: "Ask why, get sources.",
+    body: "Invoke aibill from your AI client when you want an explanation — every claim in the answer cites the local log or report it came from. Runs only when you call it.",
   },
 ] as const;
 
@@ -95,7 +95,7 @@ export function ProductTour() {
         )}
 
         {active === "mcp" && (
-          <div className="tour-mcp" aria-label="Illustrative sourced MCP answer">
+          <div className="tour-mcp receipt" aria-label="Illustrative sourced MCP answer">
             <div className="tour-mcp-question">
               What needs my attention before I keep coding?
             </div>
@@ -105,7 +105,7 @@ export function ProductTour() {
                 <p>
                   Your 5-hour window has <strong>{limits[0].value}</strong> and is
                   projected to exhaust in about one hour. This session represents
-                  <strong> {session.value}</strong> at API-equivalent rates; because
+                  <strong className="tour-mcp-money"> {session.value}</strong> at API-equivalent rates; because
                   {` ${session.plan}`} was detected locally, that is usage value—not
                   an added charge.
                 </p>
@@ -127,7 +127,7 @@ export function ProductTour() {
       </div>
 
       <p className="product-tour-note">
-        Glance and Ask aibill share overlapping fields in this illustrative
+        Glance and MCP share overlapping fields in this illustrative
         receipt. Terminal replays the real CLI with deterministic sample data;
         in sample mode, Apply is a non-executable demonstration. On real local
         evidence, npx aibill apply adds read-only checks, explicit approval,
