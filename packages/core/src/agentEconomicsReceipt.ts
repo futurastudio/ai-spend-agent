@@ -69,7 +69,7 @@ function containsKnownSecret(value: string): boolean {
 }
 
 function looksLikeAuthReferenceIdentifier(value: string): boolean {
-  return /^(?:env|keychain|credential|secret)[._-]/i.test(value);
+  return /(?:^|[._-])(?:env|keychain|credential|secret)[._-]/i.test(value);
 }
 
 function looksLikeUnsafeIdentifier(value: string): boolean {
@@ -120,6 +120,16 @@ const receiptIdentifierSchema = safeIdentifierSchema.superRefine((value, context
     context.addIssue({
       code: "custom",
       message: "Credential references and prompt-like instructions are not receipt identifiers."
+    });
+  }
+});
+const receiptErrorCodeSchema = safeIdentifierSchema.superRefine((value, context) => {
+  const knownCredentialStatus = /^(?:token|password|passwd|credential|authorization|auth|api_key|access_key|private_key)_(?:expired|invalid|missing|revoked|unavailable|failed|required|denied)$/i
+    .test(value);
+  if (looksLikeUnsafeIdentifier(value) && !knownCredentialStatus) {
+    context.addIssue({
+      code: "custom",
+      message: "Credential references and prompt-like instructions are not receipt error codes."
     });
   }
 });
@@ -194,7 +204,7 @@ export const receiptFreshnessSchema = z.object({
   status: z.enum(["fresh", "stale", "not_checked", "error"]),
   checkedAt: utcTimestampSchema.optional(),
   latestEvidenceAt: utcTimestampSchema.optional(),
-  errorCode: safeIdentifierSchema.optional()
+  errorCode: receiptErrorCodeSchema.optional()
 }).strict().superRefine((freshness, context) => {
   if ((freshness.status === "fresh" || freshness.status === "stale") && !freshness.checkedAt) {
     context.addIssue({

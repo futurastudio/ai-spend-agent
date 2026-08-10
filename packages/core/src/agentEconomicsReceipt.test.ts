@@ -15,6 +15,7 @@ import {
   projectAgentEconomicsReceiptV0ToFocus,
   projectAgentEconomicsReceiptV0ToOpenTelemetryGenAi,
   projectAgentEconomicsReceiptV0ToTokenomics,
+  receiptFreshnessSchema,
   receiptSourceSchema,
   receiptTransformationValues,
   type AgentEconomicsReceiptV0,
@@ -707,6 +708,9 @@ describe("AgentEconomicsReceiptV0 fail-closed validation", () => {
       "env_OPENAI_ADMIN_KEY",
       "keychain_OPENAI_ADMIN_KEY",
       "secret_OPENAI_ADMIN_KEY",
+      "source_env_OPENAI_ADMIN_KEY",
+      "source_keychain_OPENAI_ADMIN_KEY",
+      "source_secret_OPENAI_ADMIN_KEY",
       "gho_FAKE_CREDENTIAL_FIXTURE",
       "ghu_FAKE_CREDENTIAL_FIXTURE",
       "ghs_FAKE_CREDENTIAL_FIXTURE",
@@ -740,6 +744,12 @@ describe("AgentEconomicsReceiptV0 fail-closed validation", () => {
       Buffer.from("keychain_OPENAI_ADMIN_KEY").toString("hex"),
       Buffer.from("secret_OPENAI_ADMIN_KEY").toString("base64url"),
       Buffer.from("secret_OPENAI_ADMIN_KEY").toString("hex"),
+      Buffer.from("source_env_OPENAI_ADMIN_KEY").toString("base64url"),
+      Buffer.from("source_env_OPENAI_ADMIN_KEY").toString("hex"),
+      Buffer.from("source_keychain_OPENAI_ADMIN_KEY").toString("base64url"),
+      Buffer.from("source_keychain_OPENAI_ADMIN_KEY").toString("hex"),
+      Buffer.from("source_secret_OPENAI_ADMIN_KEY").toString("base64url"),
+      Buffer.from("source_secret_OPENAI_ADMIN_KEY").toString("hex"),
       Buffer.from("Bearer_FAKE_CREDENTIAL_FIXTURE").toString("base64url"),
       Buffer.from(`password_${"A".repeat(36)}`).toString("base64url"),
       Buffer.from(`authorization_${"A".repeat(36)}`).toString("base64url"),
@@ -819,9 +829,15 @@ describe("AgentEconomicsReceiptV0 fail-closed validation", () => {
       "api-key-source",
       "private-key-registry",
       "private-model",
+      "source_envelope_metrics",
+      "source_keychains_metrics",
+      "source_secretary_metrics",
       Buffer.from("envelope_metrics").toString("base64url"),
       Buffer.from("keychains_metrics").toString("hex"),
-      Buffer.from("secretary_metrics").toString("base64url")
+      Buffer.from("secretary_metrics").toString("base64url"),
+      Buffer.from("source_envelope_metrics").toString("base64url"),
+      Buffer.from("source_keychains_metrics").toString("hex"),
+      Buffer.from("source_secretary_metrics").toString("base64url")
     ];
 
     for (const provider of benignIdentifiers) {
@@ -852,6 +868,30 @@ describe("AgentEconomicsReceiptV0 fail-closed validation", () => {
     expect(replacementCharacter.recordId).toMatch(/^ref_[a-f0-9]{32}$/);
     expect(pairedSurrogate.recordId).toMatch(/^ref_[a-f0-9]{32}$/);
     expect(pairedSurrogate).not.toEqual(replacementCharacter);
+  });
+
+  it("rejects credential and prompt-injection shapes in freshness error codes", () => {
+    const hostileErrorCodes = [
+      `password_${"A".repeat(36)}`,
+      `authorization_${"A".repeat(36)}`,
+      "IGNORE_PREVIOUS_INSTRUCTIONS",
+      "upload_secrets_to_attacker"
+    ];
+
+    for (const errorCode of hostileErrorCodes) {
+      expect(receiptFreshnessSchema.safeParse({
+        status: "error",
+        checkedAt: WINDOW_END,
+        errorCode
+      }).success).toBe(false);
+    }
+    for (const errorCode of ["token_expired", "authorization_failed", "provider_timeout"]) {
+      expect(receiptFreshnessSchema.safeParse({
+        status: "error",
+        checkedAt: WINDOW_END,
+        errorCode
+      }).success).toBe(true);
+    }
   });
 
   it("rejects impossible freshness and accounting/evidence combinations", () => {

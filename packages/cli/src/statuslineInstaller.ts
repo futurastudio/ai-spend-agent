@@ -449,9 +449,35 @@ export async function uninstallClaudeStatusline(options: UninstallStatuslineOpti
       delete nextSettings.statusLine;
     }
     const removeSettingsFile = !receipt.priorFileExisted && Object.keys(nextSettings).length === 0;
+    let exactSettingsBackup: Uint8Array | undefined;
+    if (receipt.priorFileExisted) {
+      const priorRaw = decodeUtf8Strict(
+        backups.settings.bytes,
+        "invalid-receipt",
+        "The exact settings backup is not valid UTF-8."
+      );
+      const priorSettings = parseJson(
+        priorRaw,
+        "invalid-receipt",
+        "The exact settings backup is not strict finite JSON."
+      );
+      if (!isJsonObject(priorSettings)) throw invalidReceiptShape();
+      const expectedInstalledSettings = cloneJson(priorSettings);
+      expectedInstalledSettings.statusLine = cloneJson(receipt.installedStatusLine);
+      const expectedInstalledBytes = serializeBoundedJson(
+        expectedInstalledSettings,
+        MAX_SETTINGS_BYTES,
+        "invalid-receipt",
+        "installed Claude settings"
+      );
+      if (bytesEqual(existing.bytes, expectedInstalledBytes)) {
+        exactSettingsBackup = backups.settings.bytes;
+      }
+    }
     const nextSettingsBytes = removeSettingsFile
       ? undefined
-      : serializeBoundedJson(nextSettings, MAX_SETTINGS_BYTES, "unsafe-settings-file", "Claude settings");
+      : exactSettingsBackup ??
+        serializeBoundedJson(nextSettings, MAX_SETTINGS_BYTES, "unsafe-settings-file", "Claude settings");
 
     const settingsMutation = mutation(
       paths.settingsPath,
