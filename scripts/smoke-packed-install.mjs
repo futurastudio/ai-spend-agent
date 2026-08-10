@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -69,6 +69,13 @@ try {
   const cliPath = join(installDir, "node_modules", "ai-spend-agent", "dist", "index.js");
   const aliasPath = join(installDir, "node_modules", "aibill", "run.js");
   const mcpPath = join(installDir, "node_modules", "@agent-finops", "mcp", "dist", "server.js");
+  const packedRuntimePath = join(
+    installDir,
+    "node_modules",
+    "ai-spend-agent",
+    "dist",
+    "statuslineRuntime.js"
+  );
   const help = execFileSync(process.execPath, [cliPath, "--help"], {
     cwd: installDir,
     encoding: "utf8"
@@ -79,6 +86,91 @@ try {
   });
   if (!help.includes("aibill") || !sample.includes("DATA MODE: demo sample")) {
     throw new Error("Packed CLI or alias did not produce the expected clean-install output.");
+  }
+
+  // Exercise the exact standalone runtime copied out of the installed npm
+  // tarball. This catches missing dist assets and repository-path assumptions
+  // that source-level installer tests cannot see.
+  const statuslineHome = join(scratch, "statusline-home");
+  await mkdir(statuslineHome);
+  const statuslineEnvironment = {
+    ...process.env,
+    HOME: statuslineHome,
+    USERPROFILE: statuslineHome,
+    AIBILL_CACHE_DIR: join(statuslineHome, ".aibill", "cache"),
+    COLUMNS: "100"
+  };
+  const statuslineInstall = execFileSync(
+    process.execPath,
+    [aliasPath, "statusline", "install", "--path", installDir],
+    {
+      cwd: installDir,
+      encoding: "utf8",
+      env: statuslineEnvironment
+    }
+  );
+  if (!statuslineInstall.includes("installed in Claude user settings")) {
+    throw new Error("Packed statusline installer did not report an explicit installation.");
+  }
+  const installedRuntimePath = join(statuslineHome, ".aibill", "bin", "statusline.mjs");
+  const [packedRuntime, installedRuntime] = await Promise.all([
+    readFile(packedRuntimePath),
+    readFile(installedRuntimePath)
+  ]);
+  if (!packedRuntime.equals(installedRuntime)) {
+    throw new Error("Packed statusline installer did not copy the published runtime verbatim.");
+  }
+  const statuslineRender = spawnSync(process.execPath, [installedRuntimePath], {
+    cwd: installDir,
+    encoding: "utf8",
+    env: statuslineEnvironment,
+    input: '{"model":{"display_name":"hostile session input"},"rate_limits":{"weekly":99}}'
+  });
+  if (
+    statuslineRender.status !== 0 ||
+    statuslineRender.stderr !== "" ||
+    statuslineRender.stdout !== "aibill · run aibill init\n"
+  ) {
+    throw new Error(
+      "Packed statusline runner did not fail closed with one clean cache-only line: " +
+      JSON.stringify({
+        status: statuslineRender.status,
+        signal: statuslineRender.signal,
+        stdout: statuslineRender.stdout,
+        stderr: statuslineRender.stderr
+      })
+    );
+  }
+  const statuslineUninstall = execFileSync(
+    process.execPath,
+    [aliasPath, "statusline", "uninstall"],
+    {
+      cwd: installDir,
+      encoding: "utf8",
+      env: statuslineEnvironment
+    }
+  );
+  if (!statuslineUninstall.includes("removed from Claude user settings")) {
+    throw new Error("Packed statusline installer did not complete its reversible uninstall.");
+  }
+  for (const removedPath of [
+    join(statuslineHome, ".claude", "settings.json"),
+    installedRuntimePath,
+    join(statuslineHome, ".aibill", "statusline-install-receipt.json")
+  ]) {
+    try {
+      await readFile(removedPath);
+      throw new Error(`Packed statusline uninstall left an owned file behind: ${removedPath}`);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Packed statusline uninstall")) throw error;
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+  }
+  const backupEntries = await readdir(join(statuslineHome, ".aibill", "backups"));
+  if (backupEntries.length !== 0) {
+    throw new Error("Packed statusline uninstall left owned recovery backups behind.");
   }
   execFileSync(process.execPath, [resolve(root, "scripts/smoke-mcp.mjs"), mcpPath], {
     cwd: root,
@@ -92,6 +184,7 @@ try {
     installed,
     cliHelp: "pass",
     aliasSample: "pass",
+    statuslineInstallRenderUninstall: "pass",
     mcpProtocol: "pass"
   }));
 } finally {

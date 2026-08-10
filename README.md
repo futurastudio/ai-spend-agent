@@ -31,7 +31,8 @@ on this default local run. Connect a
 provider's admin cost report only when you need official provider-reported
 cost alongside the local evidence.
 
-> **Public beta boundary:** CLI and the explicit MCP/plugin ship publicly.
+> **Public beta boundary:** CLI, the optional cache-only Claude Code status
+> line, and the explicit MCP/plugin ship publicly.
 > Glance remains a source-built macOS preview until its signed standalone
 > download passes. Workspace, automatic enforcement, and ROI measurement are not
 > shipped.
@@ -54,17 +55,20 @@ terminal copy.*
    from the last 30 days, prints the first evidence-labeled receipt, and stores only a small aggregate
    snapshot under `~/.aibill/cache/`. Empty or unavailable evidence stays
    explicit; init never substitutes sample dollars for your own.
-2. **Open the complete private view:** `npx aibill`
-3. **Get the current session decision:** `npx aibill context`
-4. **Draft one evidence-constrained action from real local evidence:**
+2. **Optional—add the Claude Code status line:** `npx aibill statusline
+   install`. Bare init only prints this opt-in; it never changes Claude
+   settings. Use `npx aibill statusline uninstall` to restore the prior value.
+3. **Open the complete private view:** `npx aibill`
+4. **Get the current session decision:** `npx aibill context`
+5. **Draft one evidence-constrained action from real local evidence:**
    `npx aibill apply`. Inspect the candidate evidence, approve at most one
    bounded change, then verify matched future sessions before calling the
    result savings. In sample mode, Apply is an explicitly non-executable demo.
-5. **Optional—add official provider-reported cost:** `npx aibill connect
+6. **Optional—add official provider-reported cost:** `npx aibill connect
    openai` or `npx aibill connect anthropic`. The provider report remains
    separate from local API-equivalent estimates.
-6. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
-7. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
+7. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
+8. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
    caption without client, project, or user names.
 
 ## Who this is for
@@ -122,6 +126,13 @@ investigate and how to verify it.
   lightweight local surfaces. The cache contains no prompts, responses,
   project names, transcript paths, session IDs, or credential references and
   is never trusted as authorization for Report or Apply.
+- **Plan-aware Claude Code status line**: an explicitly installed standalone
+  runner rereads only that aggregate cache. Metered evidence leads with dollars;
+  detected subscriptions lead with transcript-reported five-hour/weekly runway;
+  mixed mode keeps cohorts separate. `~` always means API-equivalent value,
+  while untilded `billed` money requires verified provider evidence. It shows
+  fresh, stale, failed-refresh, missing, and malformed-cache states and ignores
+  Claude's session JSON and host-reported limits as financial evidence.
 - **Evidence ledger**: provider-reported cost, local API-equivalent value,
   detected subscription context, missing cost, source, freshness, and coverage
   stay visibly separate.
@@ -248,7 +259,11 @@ env:NAME`). aibill never sits in the inference path and never stores, prints, or
 | Command | What it does |
 | --- | --- |
 | _(no command)_ | Zero-key instant readout: your local agent logs if present, sample demo otherwise |
-| `init [--path <dir>]` | Detect Claude Code/Codex, backfill 30 days of machine-wide activity, print the first private receipt, and atomically seed the aggregate cache; never substitutes sample data |
+| `init [--path <dir>] [--statusline]` | Detect Claude Code/Codex, backfill 30 days of machine-wide activity, print the first private receipt, and atomically seed the aggregate cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
+| `statusline` | Render one plan-aware line from the private cache; no scan, provider call, or network |
+| `statusline refresh` | Explicitly run the foreground local refresh, then render the cache |
+| `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
+| `statusline uninstall` | Remove only the owned setting and restore the preserved predecessor without rolling back unrelated settings |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Connect a provider's cost data (admin-gated) |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
@@ -263,17 +278,38 @@ env:NAME`). aibill never sits in the inference path and never stores, prints, or
 
 Run `npx aibill --help` for the full list.
 
+## Claude Code status line
+
+Installation is explicit and reversible:
+
+```bash
+npx aibill init                       # seeds the private cache; changes no Claude setting
+npx aibill statusline install         # installs at Claude user scope
+npx aibill statusline refresh         # foreground evidence refresh when you want one
+npx aibill statusline uninstall       # restores the preserved predecessor
+```
+
+Claude rereads the standalone runner on normal status events and at the
+configured 30-second interval. That rereads the cache—it does not rescan
+transcripts or contact a provider—so the line says `updated`, `stale`, or
+`update error` rather than claiming to be live. Run `/status` inside Claude
+Code after installation to verify the effective user/project/local/managed
+setting sources on that host.
+
 ## Choose your interface
 
-All three interfaces share parsers, evidence semantics, and Context Health
-fields where their sources overlap. Their available sources and actions differ
-deliberately: CLI Apply is a full inspection, approval, and verification plan;
-Glance is local-only and Copy creates a current-session handoff; MCP may also
-read an explicitly connected provider report.
+All four interfaces share evidence semantics. Terminal, MCP, and Glance also
+share parsers and Context Health fields where their sources overlap; the
+status line deliberately reads only the aggregate cache those data-producing
+paths publish. Their available sources and actions differ: CLI Apply is a full
+inspection, approval, and verification plan; Glance is local-only and Copy
+creates a current-session handoff; MCP may also read an explicitly connected
+provider report.
 
 | Interface | Best for | Command / install |
 | --- | --- | --- |
 | Terminal | Complete private inspection plus an evidence-constrained AI-client action plan | `npx aibill`, `npx aibill context`, and `npx aibill apply` |
+| Claude status line | One cache-only view of runway, metered value/cost, evidence basis, and freshness while coding | `npx aibill statusline install` |
 | MCP/plugin | Asking an AI client to explain compatible structured evidence on demand | Install the optional aibill plugin or configure `@agent-finops/mcp` |
 | macOS Glance | A hover-only monitor with one focus-aware, copy-to-agent next move | Build the current prototype from `apps/glance-macos` |
 
@@ -285,20 +321,23 @@ adding another transcript parser.
 
 The interfaces work best as one local loop:
 
-1. Run `npx aibill` once to establish local Claude Code/Codex usage,
+1. Run `npx aibill init` once to establish the private cross-agent cache, then
+   use `npx aibill` for the complete local Claude Code/Codex usage,
    attribution, plan context, and API-equivalent value.
-2. Run `npx aibill context` when deciding whether to continue the current
+2. Optionally install `npx aibill statusline install` for cache-only runway,
+   financial evidence, and freshness inside Claude Code.
+3. Run `npx aibill context` when deciding whether to continue the current
    session or start fresh before a new task.
-3. Run `npx aibill apply` when you want the coding agent to inspect the ranked
+4. Run `npx aibill apply` when you want the coding agent to inspect the ranked
    evidence, draft one reversible change, wait for approval, and verify it
    against matched future sessions.
-4. Keep the optional macOS Glance companion running for current work, reported
+5. Keep the optional macOS Glance companion running for current work, reported
    five-hour/weekly runway, reset or projected exhaustion, freshness, and one
    action. Click its compact action only when you want to copy a project-aware
    handoff into your coding agent.
-5. Invoke the optional MCP/plugin only when you want an AI client to explain
+6. Invoke the optional MCP/plugin only when you want an AI client to explain
    the compatible evidence available to that tool conversationally.
-6. Connect OpenAI or Anthropic only when official provider-reported cost is
+7. Connect OpenAI or Anthropic only when official provider-reported cost is
    needed; local estimates, subscription context, and provider reports remain
    separate.
 

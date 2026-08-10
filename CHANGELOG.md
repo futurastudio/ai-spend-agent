@@ -5,6 +5,27 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.7.0 — 2026-08-10
+
+- Added an optional, plan-aware Claude Code status line over the private
+  aggregate cache. Metered use leads with dollars, subscriptions lead with
+  transcript-reported runway, and mixed mode keeps subscribed and metered
+  cohorts separate. `~` always means API-equivalent value; untilded `billed`
+  money requires verified provider evidence.
+- Added deterministic fresh, stale, failed-refresh, empty, missing, malformed,
+  narrow-terminal, and verified-overage states. The standalone
+  Node-builtins-only renderer ignores bounded Claude session input, emits one
+  sanitized line, exits zero on every hook path, and never scans transcripts,
+  starts a subprocess, contacts a provider, or uses the network.
+- Added explicit `statusline install`, `refresh`, and `uninstall` commands plus
+  `init --statusline`. Bare init only prints the opt-in. Installation is
+  user-scoped, conflict-aware, reversible, and backed by private exact-byte
+  backups and a strict ownership receipt; users verify all effective Claude
+  setting sources with `/status`.
+- Added status-line performance coverage and a clean five-tarball smoke that
+  installs, executes, and uninstalls the exact runner shipped in the npm
+  artifact.
+
 ## 0.6.1 — 2026-08-10
 
 - Rebuilt `aibill init` as an idempotent first-value transaction: it detects

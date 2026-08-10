@@ -76,6 +76,15 @@ import {
   type ParsedInvocationFile
 } from "@agent-finops/core";
 import {
+  StatuslineInstallerError,
+  installClaudeStatusline,
+  uninstallClaudeStatusline
+} from "./statuslineInstaller.js";
+import {
+  readStatuslineCache,
+  renderStatusline
+} from "./statuslineRuntime.js";
+import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
   generateDemoPackageMarkdown,
@@ -133,9 +142,25 @@ type ParsedArgs = {
   sinceDays?: number;
   json?: boolean;
   sources?: boolean;
+  statusline?: boolean;
+  statuslineAction?: string;
+  replaceStatusline?: boolean;
 };
 
-export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
+export type CliRuntimeOptions = {
+  /** Test/embedding override. Production always defaults to the OS home. */
+  homeDirectory?: string;
+  /** Test/embedding override. Packed production reads the built runtime asset. */
+  statuslineRunnerContents?: string | Uint8Array;
+  statuslineNow?: Date;
+  statuslineColumns?: number;
+  statuslineTimeZone?: string;
+};
+
+export async function runCli(
+  argv = process.argv.slice(2),
+  runtime: CliRuntimeOptions = {}
+): Promise<CliResult> {
   if (argv.includes("--version") || argv.includes("-v")) {
     return ok(await cliVersion());
   }
@@ -170,7 +195,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<CliResult> {
   }
 
   if (args.command === "init") {
-    return initCommand(args);
+    return initCommand(args, runtime);
+  }
+
+  if (args.command === "statusline") {
+    return statuslineCommand(args, runtime);
   }
 
   if (args.command === "scan") {
@@ -1280,7 +1309,122 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
   ].join("\n"));
 }
 
-async function initCommand(args: ParsedArgs): Promise<CliResult> {
+async function statuslineCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  const action = args.statuslineAction;
+  if (action === undefined) {
+    const cache = await readStatuslineCache({
+      cacheDirectory: process.env.AIBILL_CACHE_DIR,
+      homeDirectory: runtime.homeDirectory
+    });
+    return ok(renderStatusline(cache, {
+      now: runtime.statuslineNow,
+      columns: runtime.statuslineColumns,
+      timeZone: runtime.statuslineTimeZone
+    }));
+  }
+  if (action === "install") return installStatuslineCommand(args, runtime);
+  if (action === "uninstall") return uninstallStatuslineCommand(runtime);
+  if (action === "refresh") return refreshStatuslineCommand(args, runtime);
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: `Unknown statusline action: ${sanitizeSecretishError(action)}\n` +
+      "Use: aibill statusline [refresh|install|uninstall]"
+  };
+}
+
+async function packagedStatuslineRunner(
+  runtime: CliRuntimeOptions
+): Promise<string | Uint8Array> {
+  if (runtime.statuslineRunnerContents !== undefined) {
+    return runtime.statuslineRunnerContents;
+  }
+  return readFile(fileURLToPath(new URL("./statuslineRuntime.js", import.meta.url)));
+}
+
+async function installStatuslineCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  try {
+    const result = await installClaudeStatusline({
+      homeDir: runtime.homeDirectory ?? homedir(),
+      cwd: resolve(args.path),
+      runnerContents: await packagedStatuslineRunner(runtime),
+      replace: args.replaceStatusline
+    });
+    return ok([
+      result.action === "unchanged"
+        ? "aibill statusline is already installed in Claude user settings."
+        : "aibill statusline installed in Claude user settings.",
+      "Claude Code: run /status to verify the active setting and every managed source.",
+      "The renderer reads only the private aibill cache; it never reads Claude's session stdin as financial evidence."
+    ].join("\n"));
+  } catch (error) {
+    return statuslineInstallerFailure("install", error);
+  }
+}
+
+async function uninstallStatuslineCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+  try {
+    const result = await uninstallClaudeStatusline({
+      homeDir: runtime.homeDirectory ?? homedir(),
+      cwd: process.cwd()
+    });
+    return ok([
+      result.statusLineAction === "restored-prior"
+        ? "aibill statusline was removed and the prior Claude user statusLine was restored."
+        : "aibill statusline was removed from Claude user settings.",
+      {
+        removed: "The owned standalone runner was removed.",
+        restored: "The exact pre-installation runner was restored.",
+        "preserved-modified": "The modified runner was preserved because it was no longer owned.",
+        "already-missing": "The owned runner was already missing; no runner file was removed."
+      }[result.runnerAction],
+      ...result.warnings
+    ].join("\n"));
+  } catch (error) {
+    return statuslineInstallerFailure("uninstall", error);
+  }
+}
+
+function statuslineInstallerFailure(
+  action: "install" | "uninstall",
+  error: unknown
+): CliResult {
+  const installerError = error instanceof StatuslineInstallerError
+    ? error
+    : new StatuslineInstallerError(
+        "unsafe-settings-file",
+        `The local filesystem operation failed safely${safeFileSystemErrorCode(error)}; no successful settings change was claimed.`
+      );
+  const replacement = installerError.code === "statusline-conflict"
+    ? "\nTo replace an existing status line explicitly: aibill statusline install --replace"
+    : "";
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: [
+      `aibill statusline ${action} stopped safely: ${sanitizeSecretishError(installerError.message)}`,
+      "No successful settings change was claimed. Resolve the conflict, then verify active sources with /status in Claude Code.",
+      replacement.trim()
+    ].filter(Boolean).join("\n")
+  };
+}
+
+function safeFileSystemErrorCode(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("code" in error)) return "";
+  const code = String((error as { code?: unknown }).code ?? "");
+  return /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? ` (${code})` : "";
+}
+
+async function initCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions = {}
+): Promise<CliResult> {
   if (args.sample) {
     return {
       exitCode: 1,
@@ -1334,20 +1478,83 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
   if (existingRegistry) normalizeSourceRegistry(existingRegistry);
   validateInitAuditLog(existingAuditLog);
 
-  // Capture one attempt anchor immediately before the concurrent detection /
-  // backfill reads. Snapshot windows, refresh ordering, and the manifest all
-  // refer to this same moment.
+  const refresh = await collectAndPublishActivitySnapshot({
+    rootPath,
+    cacheDirectory,
+    detectedPlanOverride
+  });
+  const {
+    asOf,
+    activitySnapshot,
+    logs,
+    detectedPlans,
+    trustedProviderRecords,
+    persisted,
+    scanError,
+    cacheStatus
+  } = refresh;
+
+  if (!stateDirectoryExists) {
+    stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+  }
+  await preserveOrCreateInitRegistry(stateDir, rootPath, statePreparedAt, existingRegistry);
+  await preserveOrCreateInitAuditLog(stateDir, rootPath, statePreparedAt, existingAuditLog);
+  const manifest = buildInitManifest(existingManifest, asOf);
+  await writeSafeStateText(stateDir, "manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const receipt = formatInitReceipt({
+    rootPath,
+    asOf,
+    activitySnapshot,
+    logs,
+    detectedPlans,
+    trustedProviderRecords,
+    providerCoverage: persisted?.providerCoverage,
+    trustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true,
+    untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
+    scanError,
+    cacheStatus
+  });
+  if (!args.statusline) {
+    return ok(`${receipt}\noptional Claude Code status line: npx aibill statusline install`);
+  }
+  const installation = await installStatuslineCommand(args, runtime);
+  return installation.exitCode === 0
+    ? ok(`${receipt}\n${installation.stdout}`)
+    : {
+        exitCode: installation.exitCode,
+        stdout: receipt,
+        stderr: installation.stderr
+      };
+}
+
+type ActivityCacheRefreshResult = {
+  asOf: Date;
+  activitySnapshot?: ActivitySnapshot;
+  logs?: Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>;
+  detectedPlans: DetectedPlan[];
+  trustedProviderRecords: UsageRecord[];
+  persisted?: PersistedSpend;
+  scanError?: string;
+  cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+};
+
+async function collectAndPublishActivitySnapshot(input: {
+  rootPath: string;
+  cacheDirectory?: string;
+  detectedPlanOverride?: DetectedPlan[];
+}): Promise<ActivityCacheRefreshResult> {
+  // One attempt anchor binds every rolling window and cache ordering decision.
   const asOf = new Date();
-  const planPromise = detectedPlanOverride
-    ? Promise.resolve(detectedPlanOverride)
+  const planPromise = input.detectedPlanOverride
+    ? Promise.resolve(input.detectedPlanOverride)
     : detectLocalPlans({
         claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
         codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
       }).catch(() => [] as DetectedPlan[]);
-  // Attach the rejection handler now. A malformed spend file can fail before
-  // the bounded transcript scan completes; leaving that promise unattended
-  // during the scan would create an unhandled rejection.
-  const persistedPromise = readPersistedSpend(rootPath, { strict: true }).then(
+  // Attach the rejection handler immediately so a failed transcript scan can
+  // never leave an unhandled persisted-state rejection behind.
+  const persistedPromise = readPersistedSpend(input.rootPath, { strict: true }).then(
     (persisted) => ({ persisted }),
     (error: unknown) => ({ error })
   );
@@ -1366,22 +1573,22 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
   const [detectedPlans, persistedResult] = await Promise.all([planPromise, persistedPromise]);
   if ("error" in persistedResult) throw persistedResult.error;
   const persisted = persistedResult.persisted;
-
-  const trustedProviderRecords = persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true
+  const trustedProviderRecords = persisted?.mode === "connected_provider" &&
+    persisted.connectedTrust?.trusted === true
     ? selectProviderFinancialHeadlineRecords(persisted.records)
     : [];
+
   let activitySnapshot: ActivitySnapshot | undefined;
-  let cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+  let cacheStatus: ActivityCacheRefreshResult["cacheStatus"];
   const structuredSourceFailure = logs !== undefined &&
     logs.sourceScans.some((scan) => scan.directoryStatus === "unreadable") &&
     !logs.sourceScans.some((scan) => scan.directoryStatus === "readable");
   if (logs && !structuredSourceFailure) {
     let refreshErrorCode: ActivitySnapshotRefreshErrorCode = "invalid_evidence";
     try {
-      const generatedAt = new Date().toISOString();
       activitySnapshot = buildActivitySnapshot({
         asOf: asOf.toISOString(),
-        generatedAt,
+        generatedAt: new Date().toISOString(),
         records: [...logs.records, ...trustedProviderRecords],
         calls: logs.calls,
         detectedPlans,
@@ -1406,7 +1613,9 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
         sampleData: false
       });
       refreshErrorCode = "cache_write_failed";
-      const written = await writeActivitySnapshot(activitySnapshot, { cacheDirectory });
+      const written = await writeActivitySnapshot(activitySnapshot, {
+        cacheDirectory: input.cacheDirectory
+      });
       cacheStatus = written.status === "written" ? "refreshed" : "kept newer snapshot";
     } catch {
       scanError = refreshErrorCode === "invalid_evidence"
@@ -1415,7 +1624,7 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
       const failed = await recordActivitySnapshotRefreshFailure(
         asOf.toISOString(),
         refreshErrorCode,
-        { cacheDirectory }
+        { cacheDirectory: input.cacheDirectory }
       );
       activitySnapshot = failed.snapshot;
       cacheStatus = "refresh failed";
@@ -1424,33 +1633,93 @@ async function initCommand(args: ParsedArgs): Promise<CliResult> {
     const failed = await recordActivitySnapshotRefreshFailure(
       asOf.toISOString(),
       structuredSourceFailure ? "source_unreadable" : "scan_failed",
-      { cacheDirectory }
+      { cacheDirectory: input.cacheDirectory }
     );
     activitySnapshot = failed.snapshot;
     cacheStatus = "refresh failed";
   }
 
-  if (!stateDirectoryExists) {
-    stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
-  }
-  await preserveOrCreateInitRegistry(stateDir, rootPath, statePreparedAt, existingRegistry);
-  await preserveOrCreateInitAuditLog(stateDir, rootPath, statePreparedAt, existingAuditLog);
-  const manifest = buildInitManifest(existingManifest, asOf);
-  await writeSafeStateText(stateDir, "manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
-
-  return ok(formatInitReceipt({
-    rootPath,
+  return {
     asOf,
     activitySnapshot,
     logs,
     detectedPlans,
     trustedProviderRecords,
-    providerCoverage: persisted?.providerCoverage,
-    trustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true,
-    untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
+    persisted,
     scanError,
     cacheStatus
-  }));
+  };
+}
+
+async function refreshStatuslineCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  if (args.sample) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "aibill statusline refresh only uses real local evidence; --sample was rejected and the cache was not changed."
+    };
+  }
+  let detectedPlanOverride: DetectedPlan[] | undefined;
+  if (args.plan) {
+    const override = planOverrideFromFlag(args.plan);
+    if (!override) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+      };
+    }
+    detectedPlanOverride = [override];
+  }
+
+  const rootPath = await resolveSafeScanRoot(args.path);
+  const cacheDirectory = process.env.AIBILL_CACHE_DIR;
+  await preflightInitCache(cacheDirectory);
+  let refresh: ActivityCacheRefreshResult;
+  try {
+    refresh = await collectAndPublishActivitySnapshot({
+      rootPath,
+      cacheDirectory,
+      detectedPlanOverride
+    });
+  } catch (error) {
+    const attemptedAt = new Date().toISOString();
+    await recordActivitySnapshotRefreshFailure(attemptedAt, "invalid_evidence", {
+      cacheDirectory
+    }).catch(() => undefined);
+    const cache = await readStatuslineCache({
+      cacheDirectory,
+      homeDirectory: runtime.homeDirectory
+    });
+    return {
+      exitCode: 1,
+      stdout: renderStatusline(cache, {
+        now: runtime.statuslineNow,
+        columns: runtime.statuslineColumns,
+        timeZone: runtime.statuslineTimeZone
+      }),
+      stderr: `aibill statusline refresh failed safely: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
+    };
+  }
+  const cache = await readStatuslineCache({
+    cacheDirectory,
+    homeDirectory: runtime.homeDirectory
+  });
+  const line = renderStatusline(cache, {
+    now: runtime.statuslineNow,
+    columns: runtime.statuslineColumns,
+    timeZone: runtime.statuslineTimeZone
+  });
+  return refresh.cacheStatus === "refresh failed"
+    ? {
+        exitCode: 1,
+        stdout: line,
+        stderr: `aibill statusline refresh failed safely: ${refresh.scanError ?? "local evidence was unavailable"}`
+      }
+    : ok(line);
 }
 
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
@@ -3049,6 +3318,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     sample: false,
     path: process.cwd()
   };
+  if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
+    parsed.statuslineAction = rest.shift();
+  }
   if (command === "connect" && rest[0] && !rest[0].startsWith("--")) {
     parsed.provider = rest[0];
     rest.shift();
@@ -3070,6 +3342,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--sources") {
       parsed.sources = true;
+      continue;
+    }
+    if (arg === "--statusline") {
+      parsed.statusline = true;
+      continue;
+    }
+    if (arg === "--replace") {
+      parsed.replaceStatusline = true;
       continue;
     }
     if (arg === "--ignore-state") {
@@ -3472,6 +3752,12 @@ function helpText(): string {
     "Other commands:",
     "  --version, -v           Print the package version without reading local data",
     "  init [--path <dir>]     Backfill 30 days machine-wide, print the first evidence-labeled receipt, and cache a private snapshot",
+    "    [--statusline]        Explicitly install the Claude Code status line after a successful init",
+    "  statusline              Render one plan-aware line from the private cache (no scan or network)",
+    "  statusline refresh      Foreground refresh from real local evidence, then render the cache",
+    "  statusline install      Reversibly add the standalone runner to Claude user settings",
+    "    [--replace]           Explicitly replace an existing statusLine while preserving it for uninstall",
+    "  statusline uninstall    Remove only the owned setting and restore its preserved predecessor",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",

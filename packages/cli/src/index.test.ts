@@ -169,7 +169,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.6\.1$/);
+    expect(result.stdout).toMatch(/^0\.7\.0$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -1221,7 +1221,8 @@ describe("minimal CLI vertical slice", () => {
 
   it("initializes local state with an honest empty receipt and private cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-"));
-    const result = await runCli(["init", "--path", dir]);
+    const statuslineHome = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-home-"));
+    const result = await runCli(["init", "--path", dir], { homeDirectory: statuslineHome });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill init");
@@ -1230,7 +1231,9 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).toContain("status cache: refreshed");
     expect(result.stdout).not.toContain("$87.00");
     expect(result.stdout).not.toContain("demo sample");
-    expect(result.stdout).not.toContain("aibill statusline");
+    expect(result.stdout).toContain("optional Claude Code status line: npx aibill statusline install");
+    await expect(readFile(join(statuslineHome, ".claude", "settings.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
 
     const manifest = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({
@@ -1274,6 +1277,135 @@ describe("minimal CLI vertical slice", () => {
       expect(cached.snapshot.mode).toBe("empty");
       expect(cached.snapshot.coverage.networkUploaded).toBe(false);
     }
+  });
+
+  it("renders, explicitly installs, and reversibly uninstalls the packaged statusline", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-project-"));
+    const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-user-"));
+    const runtime = {
+      homeDirectory,
+      statuslineRunnerContents: "#!/usr/bin/env node\nprocess.stdout.write('fixture runner\\n');\n"
+    };
+    await runCli(["init", "--path", dir], runtime);
+
+    const rendered = await runCli(["statusline"], runtime);
+    expect(rendered).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(rendered.stdout).toContain("aibill · no usage yet");
+
+    const installed = await runCli(["statusline", "install", "--path", dir], runtime);
+    expect(installed.exitCode).toBe(0);
+    expect(installed.stdout).toContain("installed in Claude user settings");
+    expect(installed.stdout).toContain("run /status");
+    const settingsPath = join(homeDirectory, ".claude", "settings.json");
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).statusLine).toEqual({
+      type: "command",
+      command: "node ~/.aibill/bin/statusline.mjs",
+      refreshInterval: 30
+    });
+    expect(await readFile(join(homeDirectory, ".aibill", "bin", "statusline.mjs"), "utf8"))
+      .toContain("fixture runner");
+
+    const removed = await runCli(["statusline", "uninstall"], runtime);
+    expect(removed.exitCode).toBe(0);
+    expect(removed.stdout).toContain("removed from Claude user settings");
+    await expect(readFile(settingsPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("supports explicit init installation without changing bare-init consent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-project-"));
+    const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-user-"));
+    const result = await runCli(["init", "--statusline", "--path", dir], {
+      homeDirectory,
+      statuslineRunnerContents: "#!/usr/bin/env node\nconsole.log('fixture');\n"
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("FIRST RECEIPT");
+    expect(result.stdout).toContain("statusline installed in Claude user settings");
+    expect(JSON.parse(await readFile(join(homeDirectory, ".claude", "settings.json"), "utf8")))
+      .toHaveProperty("statusLine.command", "node ~/.aibill/bin/statusline.mjs");
+  });
+
+  it("refreshes the cross-source cache without creating project state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-refresh-"));
+    const result = await runCli(["statusline", "refresh", "--path", dir]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("aibill · no usage yet");
+    await expect(readFile(join(dir, ".ai-spend-agent", "manifest.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails an unsafe install honestly without advertising an unusable config-only fallback", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-conflict-project-"));
+    const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-conflict-user-"));
+    await mkdir(join(homeDirectory, ".claude"), { recursive: true });
+    await writeFile(join(homeDirectory, ".claude", "settings.json"), JSON.stringify({
+      statusLine: { type: "command", command: "node ~/.claude/custom.mjs" }
+    }));
+    const result = await runCli(["statusline", "install", "--path", dir], {
+      homeDirectory,
+      statuslineRunnerContents: "console.log('fixture');\n"
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("stopped safely");
+    expect(result.stderr).toContain("aibill statusline install --replace");
+    expect(result.stderr).not.toContain('"command": "node ~/.aibill/bin/statusline.mjs"');
+    expect(result.stderr).not.toContain("statusline installed in Claude user settings");
+  });
+
+  it("reports restored and missing runners honestly during uninstall", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-restore-project-"));
+    const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-restore-user-"));
+    const settingsDirectory = join(homeDirectory, ".claude");
+    const runnerDirectory = join(homeDirectory, ".aibill", "bin");
+    const settingsPath = join(settingsDirectory, "settings.json");
+    const runnerPath = join(runnerDirectory, "statusline.mjs");
+    const priorStatusLine = { type: "command", command: "node ~/.claude/prior.mjs" };
+    await mkdir(settingsDirectory, { recursive: true });
+    await mkdir(runnerDirectory, { recursive: true });
+    await writeFile(settingsPath, JSON.stringify({ statusLine: priorStatusLine, theme: "dark" }));
+    await writeFile(runnerPath, "console.log('prior runner');\n", { mode: 0o640 });
+    const runtime = {
+      homeDirectory,
+      statuslineRunnerContents: "console.log('aibill runner');\n"
+    };
+
+    const installed = await runCli(["statusline", "install", "--replace", "--path", dir], runtime);
+    expect(installed.exitCode).toBe(0);
+    const restored = await runCli(["statusline", "uninstall"], runtime);
+    expect(restored.exitCode).toBe(0);
+    expect(restored.stdout).toContain("prior Claude user statusLine was restored");
+    expect(restored.stdout).toContain("exact pre-installation runner was restored");
+    expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
+      statusLine: priorStatusLine,
+      theme: "dark"
+    });
+    expect(await readFile(runnerPath, "utf8")).toBe("console.log('prior runner');\n");
+
+    const cleanHome = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-missing-user-"));
+    const cleanRuntime = { ...runtime, homeDirectory: cleanHome };
+    await runCli(["statusline", "install", "--path", dir], cleanRuntime);
+    await unlink(join(cleanHome, ".aibill", "bin", "statusline.mjs"));
+    const missing = await runCli(["statusline", "uninstall"], cleanRuntime);
+    expect(missing.exitCode).toBe(0);
+    expect(missing.stdout).toContain("owned runner was already missing");
+    expect(missing.stdout).not.toContain("preserved because it was not the owned version");
+  });
+
+  it("converts raw filesystem failures into an honest installer-safe response", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-statusline-filesystem-project-"));
+    const notDirectory = join(dir, "not-a-home");
+    await writeFile(notDirectory, "regular file");
+    const result = await runCli(["statusline", "install", "--path", dir], {
+      homeDirectory: notDirectory,
+      statuslineRunnerContents: "console.log('fixture');\n"
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("stopped safely");
+    expect(result.stderr).toContain("(ENOTDIR)");
+    expect(result.stderr).toContain("No successful settings change was claimed");
+    expect(result.stderr).not.toContain("unexpected error");
   });
 
   it("prints a personal API-equivalent receipt from one financial scan", async () => {
