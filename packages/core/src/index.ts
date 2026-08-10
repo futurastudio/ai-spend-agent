@@ -1,5 +1,6 @@
 export * from "./analyze.js";
 export * from "./agentInventory.js";
+export * from "./agentEconomicsReceipt.js";
 export * from "./activitySnapshot.js";
 export * from "./activitySnapshotCache.js";
 export * from "./attribution.js";
