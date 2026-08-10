@@ -123,7 +123,7 @@ export default function Home() {
       <main id="top" className="scroll-mt-24">
         {/* Hero — renders at first paint, never inside a reveal. */}
         <section className="border-b border-hairline px-5 pb-16 pt-16 sm:px-8 sm:pb-20 sm:pt-28">
-          <h1 className="max-w-[720px] text-[34px] font-medium leading-[1.08] tracking-[-0.03em] text-ink sm:text-[56px]">
+          <h1 className="max-w-[840px] text-[34px] font-medium leading-[1.08] tracking-[-0.03em] text-ink sm:text-[56px]">
             Know what your AI agents cost.
             <br className="hidden sm:block" /> Prove what they&apos;re worth.
           </h1>
