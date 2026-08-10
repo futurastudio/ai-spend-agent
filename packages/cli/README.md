@@ -4,6 +4,7 @@ The full [aibill](https://github.com/futurastudio/ai-spend-agent) CLI.
 
 ```bash
 npx aibill init
+npx aibill statusline install # optional Claude Code cache-only status line
 npx ai-spend-agent
 # short alias
 npx aibill
@@ -14,6 +15,13 @@ and Codex history, print the first evidence-labeled personal receipt, and seed a
 aggregate cache under `~/.aibill/cache/`. Init never replaces missing personal
 evidence with the bundled sample and never overwrites existing connected
 source or audit state.
+
+The optional status line is explicit and reversible. It installs a standalone
+Node-builtins-only runner at Claude user scope, rereads only the private
+aggregate cache, and never scans transcripts or contacts a provider from the
+hook. Subscription runway appears only when it was transcript-reported; `~`
+means API-equivalent value, and untilded `billed` money requires verified
+provider evidence. Remove it with `npx aibill statusline uninstall`.
 
 It reads local Claude Code and Codex metadata, labels API-equivalent estimates,
 and can optionally add official OpenAI or Anthropic provider-reported cost

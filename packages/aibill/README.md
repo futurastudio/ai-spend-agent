@@ -5,6 +5,8 @@ The short npm command for
 
 ```bash
 npx aibill
+npx aibill init
+npx aibill statusline install # optional Claude Code cache-only status line
 ```
 
 It runs the exact same local-first financial-accountability CLI as
@@ -12,6 +14,10 @@ It runs the exact same local-first financial-accountability CLI as
 attribution, runway, and one next action. See the repository
 [README](https://github.com/futurastudio/ai-spend-agent#readme) for data
 semantics, supported providers, privacy boundaries, and limitations.
+
+The optional status line uses the same plan-aware evidence vocabulary while
+reading only a private aggregate cache. Bare init does not change Claude
+settings, and `npx aibill statusline uninstall` restores the prior user value.
 
 Connector validation (`live_verified`, `fixture_verified`, `untested`, or
 `failed`) and each number's financial evidence (`verified`, `estimated`,
