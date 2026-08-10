@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "aibill — financial accountability for AI agents";
+const title = "Tilden — financial accountability for AI agents";
 const description =
-  "Connect Claude Code and Codex work to cost evidence, attribution, runway, and one next action. Run the private local beta with npx aibill, query it through MCP, or build Glance from source.";
+  "Know what your AI agents cost and prove what they're worth. Tilden reads your coding agents' own activity and your real bills — local-first, verified, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
 
 export const metadata: Metadata = {
   title,
@@ -24,6 +24,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   alternates: { canonical: "/" },
   keywords: [
+    "Tilden",
     "AI cost tracker",
     "AI bill",
     "Claude Code cost",
@@ -71,7 +72,7 @@ export default function RootLayout({
             "@context": "https://schema.org",
             "@type": "SoftwareApplication",
             name: "aibill",
-            alternateName: "AI Spend Agent",
+            alternateName: ["Tilden", "AI Spend Agent"],
             description,
             applicationCategory: "DeveloperApplication",
             operatingSystem: "macOS, Linux, Windows",
