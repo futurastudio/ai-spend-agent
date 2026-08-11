@@ -1,6 +1,6 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "aibill MCP server for sourced answers about Claude Code/Codex work, cost evidence, attribution, runway, and Context Health.",
   "keywords": [
     "mcp",
@@ -48,7 +48,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.7.2",
+    "@agent-finops/core": "0.7.3",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },

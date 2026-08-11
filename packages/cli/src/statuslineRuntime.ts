@@ -274,9 +274,22 @@ export function renderStatusline(
   if (overage) {
     // Billed overage is the sole compact paid-alert bridge and must survive
     // narrow layouts. It never derives from plan pressure.
+    if (hasMultipleSubscribedAgents(snapshot)) {
+      return assembleMultiSubscriptionOverageLine(
+        snapshot, segments, overage, freshness, tier, columns, now
+      );
+    }
     return assembleOverageLine(segments, overage, freshness, columns);
   }
+  if (snapshot.mode === "subscription" && hasMultipleSubscribedAgents(snapshot)) {
+    return assembleMultiSubscriptionLine(snapshot, freshness, tier, columns, now, options.timeZone);
+  }
   if (snapshot.mode === "mixed") {
+    if (hasMultipleSubscribedAgents(snapshot)) {
+      return assembleMultiSubscriptionMixedLine(
+        snapshot, segments, freshness, tier, columns, now, options.timeZone
+      );
+    }
     return assembleMixedLine(snapshot, segments, freshness, tier, columns, now, options.timeZone);
   }
   return assembleLine(segments, freshness, columns, overage);
@@ -386,6 +399,9 @@ function renderSubscription(
   now: Date,
   timeZone?: string
 ): string[] {
+  if (hasMultipleSubscribedAgents(snapshot)) {
+    return renderMultiSubscriptionSegments(snapshot, tier, now, timeZone);
+  }
   const agent = selectSubscriptionAgent(snapshot, now);
   if (!agent) return ["subscription detected", "runway not reported"];
   const limits = activeLimits(agent, now);
@@ -410,6 +426,11 @@ function renderMixed(
   now: Date,
   timeZone?: string
 ): string[] {
+  if (hasMultipleSubscribedAgents(snapshot)) {
+    const segments = renderMultiSubscriptionSegments(snapshot, tier, now, timeZone);
+    appendMeteredSevenDaySegment(snapshot, segments);
+    return segments.length > 0 ? segments : ["mixed billing", "amounts unavailable"];
+  }
   const agent = selectSubscriptionAgent(snapshot, now);
   const limits = agent ? activeLimits(agent, now) : [];
   const selectedLimits = tier === "full"
@@ -418,15 +439,7 @@ function renderMixed(
   const segments = selectedLimits.map((limit) => formatLimit(limit, now, timeZone));
   if (limits.length === 0 && tier !== "minimal") segments.push("runway not reported");
 
-  const billed = snapshot.metered?.providerBilled.sevenDays;
-  const estimated = snapshot.metered?.apiEquivalent.sevenDays;
-  if (billed?.amountUsd !== null && billed?.amountUsd !== undefined &&
-      billed.financialEvidence === "verified") {
-    segments.push(`metered ${formatBilledUsd(billed.amountUsd)} 7d billed`);
-  } else if (estimated?.amountUsd !== null && estimated?.amountUsd !== undefined &&
-             estimated.financialEvidence === "estimated") {
-    segments.push(`metered ~${formatUsd(estimated.amountUsd)} 7d`);
-  }
+  appendMeteredSevenDaySegment(snapshot, segments);
   const value = agent?.apiEquivalent.sevenDays;
   if (value?.amountUsd !== null && value?.amountUsd !== undefined &&
       value.financialEvidence === "estimated") {
@@ -436,6 +449,49 @@ function renderMixed(
     segments.push("plan pressure");
   }
   return segments.length > 0 ? segments : ["mixed billing", "amounts unavailable"];
+}
+
+function renderMultiSubscriptionSegments(
+  snapshot: StatuslineSnapshot,
+  tier: string,
+  now: Date,
+  timeZone?: string
+): string[] {
+  const entries = orderedSubscriptionLimits(snapshot, now);
+  const selected = tier === "full" ? entries : entries.slice(0, 1);
+  const segments = selected.map(({ agent, limit }) => tier === "full"
+    ? formatAttributedLimit(agent, limit, now, timeZone)
+    : formatAttributedLimitCompact(agent, limit));
+  if (entries.length === 0 && tier !== "minimal") {
+    segments.push("subscription detected", "runway not reported");
+  }
+
+  const agents = orderedSubscriptionAgents(snapshot, now);
+  const valueAgents = tier === "full" ? agents : agents.slice(0, 1);
+  for (const agent of valueAgents) {
+    const value = agent.apiEquivalent.sevenDays;
+    if (value.amountUsd !== null && value.financialEvidence === "estimated") {
+      segments.push(`${subscriptionAgentLabel(agent)} ~${formatUsd(value.amountUsd)} 7d value`);
+    }
+  }
+  if (tier !== "minimal") {
+    for (const agent of agents.filter(({ pressure }) => pressure === "extra_usage_credits_exhausted")) {
+      segments.push(`${subscriptionAgentLabel(agent)} plan pressure`);
+    }
+  }
+  return segments.length > 0 ? segments : ["subscription detected"];
+}
+
+function appendMeteredSevenDaySegment(snapshot: StatuslineSnapshot, segments: string[]): void {
+  const billed = snapshot.metered?.providerBilled.sevenDays;
+  const estimated = snapshot.metered?.apiEquivalent.sevenDays;
+  if (billed?.amountUsd !== null && billed?.amountUsd !== undefined &&
+      billed.financialEvidence === "verified") {
+    segments.push(`metered ${formatBilledUsd(billed.amountUsd)} 7d billed`);
+  } else if (estimated?.amountUsd !== null && estimated?.amountUsd !== undefined &&
+             estimated.financialEvidence === "estimated") {
+    segments.push(`metered ~${formatUsd(estimated.amountUsd)} 7d`);
+  }
 }
 
 function renderUnresolved(snapshot: StatuslineSnapshot, tier: string): string[] {
@@ -459,6 +515,71 @@ function selectSubscriptionAgent(
     if (recordsDifference !== 0) return recordsDifference;
     return left.agent.localeCompare(right.agent);
   })[0];
+}
+
+type SubscriptionLimitEntry = {
+  agent: SubscriptionAgent;
+  limit: ReportedLimit;
+};
+
+function hasMultipleSubscribedAgents(snapshot: StatuslineSnapshot): boolean {
+  return (snapshot.subscription?.agents.length ?? 0) > 1;
+}
+
+function orderedSubscriptionLimits(
+  snapshot: StatuslineSnapshot,
+  now: Date
+): SubscriptionLimitEntry[] {
+  return (snapshot.subscription?.agents ?? [])
+    .flatMap((agent) => activeLimits(agent, now).map((limit) => ({ agent, limit })))
+    .sort(compareSubscriptionLimitEntries);
+}
+
+function primarySubscriptionLimits(
+  snapshot: StatuslineSnapshot,
+  now: Date
+): SubscriptionLimitEntry[] {
+  return (snapshot.subscription?.agents ?? [])
+    .flatMap((agent) => {
+      const limit = [...activeLimits(agent, now)].sort(compareUrgency)[0];
+      return limit ? [{ agent, limit }] : [];
+    })
+    .sort(compareSubscriptionLimitEntries);
+}
+
+function compareSubscriptionLimitEntries(
+  left: SubscriptionLimitEntry,
+  right: SubscriptionLimitEntry
+): number {
+  const urgency = compareUrgency(left.limit, right.limit);
+  if (urgency !== 0) return urgency;
+  const observationDifference = Date.parse(right.limit.observedAt) - Date.parse(left.limit.observedAt);
+  if (observationDifference !== 0) return observationDifference;
+  return left.agent.agent.localeCompare(right.agent.agent);
+}
+
+function orderedSubscriptionAgents(
+  snapshot: StatuslineSnapshot,
+  now: Date
+): SubscriptionAgent[] {
+  return [...(snapshot.subscription?.agents ?? [])].sort((left, right) => {
+    const leftUrgent = [...activeLimits(left, now)].sort(compareUrgency)[0];
+    const rightUrgent = [...activeLimits(right, now)].sort(compareUrgency)[0];
+    if (leftUrgent && rightUrgent) {
+      const urgency = compareUrgency(leftUrgent, rightUrgent);
+      if (urgency !== 0) return urgency;
+    } else if (leftUrgent) {
+      return -1;
+    } else if (rightUrgent) {
+      return 1;
+    }
+    const latestDifference = latestLimitObservation(right, now) - latestLimitObservation(left, now);
+    if (latestDifference !== 0) return latestDifference;
+    const recordsDifference = right.apiEquivalent.sevenDays.recordCount -
+      left.apiEquivalent.sevenDays.recordCount;
+    if (recordsDifference !== 0) return recordsDifference;
+    return left.agent.localeCompare(right.agent);
+  });
 }
 
 function latestLimitObservation(agent: SubscriptionAgent, now: Date): number {
@@ -485,6 +606,40 @@ function formatLimit(limit: ReportedLimit, now: Date, timeZone?: string): string
   const label = limit.kind === "five-hour" ? "5h" : "week";
   const reset = formatReset(limit, now, timeZone);
   return `${label} ${formatPercent(limit.remainingPercent)}% left ↻${reset}`;
+}
+
+function subscriptionAgentLabel(agent: SubscriptionAgent): "claude" | "codex" {
+  return agent.agent === "claude-code" ? "claude" : "codex";
+}
+
+function formatAttributedLimit(
+  agent: SubscriptionAgent,
+  limit: ReportedLimit,
+  now: Date,
+  timeZone?: string
+): string {
+  const label = limit.kind === "five-hour" ? "5h" : "week";
+  return `${subscriptionAgentLabel(agent)} ${label} ${formatPercent(limit.remainingPercent)}% ↻${
+    formatReset(limit, now, timeZone)
+  }`;
+}
+
+function formatAttributedLimitCompact(
+  agent: SubscriptionAgent,
+  limit: ReportedLimit
+): string {
+  const label = limit.kind === "five-hour" ? "5h" : "wk";
+  return `${subscriptionAgentLabel(agent)} ${label} ${formatPercent(limit.remainingPercent)}%`;
+}
+
+function formatAttributedValue(
+  agent: SubscriptionAgent,
+  compact = false
+): string | undefined {
+  const value = agent.apiEquivalent.sevenDays;
+  if (value.amountUsd === null || value.financialEvidence !== "estimated") return undefined;
+  const window = compact ? "/7d" : " 7d";
+  return `${subscriptionAgentLabel(agent)} ~${formatUsd(value.amountUsd)}${window} value`;
 }
 
 function formatReset(limit: ReportedLimit, now: Date, timeZone?: string): string {
@@ -587,6 +742,35 @@ function assembleOverageLine(
   ], columns);
 }
 
+function assembleMultiSubscriptionOverageLine(
+  snapshot: StatuslineSnapshot,
+  fullSegments: string[],
+  overage: string,
+  freshness: string,
+  tier: string,
+  columns: number,
+  now: Date
+): string {
+  const primary = primarySubscriptionLimits(snapshot, now);
+  const compactPrimary = primary.map(({ agent, limit }) =>
+    formatAttributedLimitCompact(agent, limit));
+  const urgent = compactPrimary[0];
+  const candidates: string[][] = [];
+  if (tier === "full") candidates.push(["aibill", ...fullSegments, overage, freshness]);
+  if (tier !== "minimal") {
+    candidates.push(["aibill", ...compactPrimary, overage, freshness]);
+  }
+  if (urgent) candidates.push(["aibill", urgent, overage, freshness]);
+  candidates.push(
+    ["aibill", overage, freshness],
+    ["aibill", overage],
+    [overage],
+    ["OVERAGE billed"],
+    ["billed"]
+  );
+  return firstFittingLine(candidates, columns);
+}
+
 function assembleMixedLine(
   snapshot: StatuslineSnapshot,
   fullSegments: string[],
@@ -645,6 +829,125 @@ function assembleMixedLine(
     ["mix", metered],
     ["mix"]
   );
+  return firstFittingLine(candidates, columns);
+}
+
+function assembleMultiSubscriptionLine(
+  snapshot: StatuslineSnapshot,
+  freshness: string,
+  tier: string,
+  columns: number,
+  now: Date,
+  timeZone?: string
+): string {
+  const entries = orderedSubscriptionLimits(snapshot, now);
+  const primary = primarySubscriptionLimits(snapshot, now);
+  const agents = orderedSubscriptionAgents(snapshot, now);
+  const fullLimits = entries.map(({ agent, limit }) =>
+    formatAttributedLimit(agent, limit, now, timeZone));
+  const compactLimits = entries.map(({ agent, limit }) =>
+    formatAttributedLimitCompact(agent, limit));
+  const compactPrimary = primary.map(({ agent, limit }) =>
+    formatAttributedLimitCompact(agent, limit));
+  const fullValues = agents.flatMap((agent) => formatAttributedValue(agent) ?? []);
+  const compactValues = agents.flatMap((agent) => formatAttributedValue(agent, true) ?? []);
+  const pressure = agents
+    .filter((agent) => agent.pressure === "extra_usage_credits_exhausted")
+    .map((agent) => `${subscriptionAgentLabel(agent)} plan pressure`);
+  const noRunway = entries.length === 0 ? ["subscription detected", "runway not reported"] : [];
+  const urgent = compactPrimary[0];
+  const urgentValue = agents[0] ? formatAttributedValue(agents[0], true) : undefined;
+  const candidates: string[][] = [];
+
+  if (tier === "full") {
+    candidates.push(["aibill", ...noRunway, ...fullLimits, ...fullValues, ...pressure, freshness]);
+  }
+  if (tier !== "minimal") {
+    candidates.push(
+      ["aibill", ...noRunway, ...compactLimits, ...compactValues, ...pressure, freshness],
+      ["aibill", ...noRunway, ...compactLimits, freshness],
+      ["aibill", ...noRunway, ...compactPrimary, ...compactValues, freshness],
+      ["aibill", ...noRunway, ...compactPrimary, freshness]
+    );
+  }
+  if (urgent) {
+    if (urgentValue) candidates.push(["aibill", urgent, urgentValue, freshness]);
+    candidates.push(
+      ["aibill", urgent, freshness],
+      ["aibill", urgent],
+      [urgent]
+    );
+  } else {
+    candidates.push(
+      ["aibill", "runway n/r", freshness],
+      ["runway n/r", freshness],
+      ["aibill", ...noRunway, ...compactValues, freshness],
+      ["aibill", ...compactValues, freshness],
+      ["aibill", "subscription detected", freshness],
+      ["subscription detected"]
+    );
+  }
+  return firstFittingLine(candidates, columns);
+}
+
+function assembleMultiSubscriptionMixedLine(
+  snapshot: StatuslineSnapshot,
+  fullSegments: string[],
+  freshness: string,
+  tier: string,
+  columns: number,
+  now: Date,
+  timeZone?: string
+): string {
+  const entries = orderedSubscriptionLimits(snapshot, now);
+  const primary = primarySubscriptionLimits(snapshot, now);
+  const agents = orderedSubscriptionAgents(snapshot, now);
+  const compactLimits = entries.map(({ agent, limit }) =>
+    formatAttributedLimitCompact(agent, limit));
+  const compactPrimary = primary.map(({ agent, limit }) =>
+    formatAttributedLimitCompact(agent, limit));
+  const compactValues = agents.flatMap((agent) => formatAttributedValue(agent, true) ?? []);
+  const noRunway = entries.length === 0 ? ["subscription detected", "runway not reported"] : [];
+  const urgent = compactPrimary[0];
+  const urgentValue = agents[0] ? formatAttributedValue(agents[0], true) : undefined;
+  const meteredBilled = snapshot.metered?.providerBilled.sevenDays;
+  const meteredEstimated = snapshot.metered?.apiEquivalent.sevenDays;
+  const metered = meteredBilled?.amountUsd !== null && meteredBilled?.amountUsd !== undefined &&
+    meteredBilled.financialEvidence === "verified"
+    ? `metered ${formatBilledUsd(meteredBilled.amountUsd)}/7d billed`
+    : meteredEstimated?.amountUsd !== null && meteredEstimated?.amountUsd !== undefined &&
+        meteredEstimated.financialEvidence === "estimated"
+      ? `metered ~${formatUsd(meteredEstimated.amountUsd)}/7d`
+      : "metered n/r";
+  const shortFreshness = compactFreshness(freshness);
+  const candidates: string[][] = [];
+
+  if (tier === "full") candidates.push(["aibill", ...fullSegments, freshness]);
+  if (tier !== "minimal") {
+    candidates.push(
+      ["aibill", "mix", ...noRunway, ...compactLimits, metered, ...compactValues, freshness],
+      ["aibill", "mix", ...noRunway, ...compactPrimary, metered, freshness]
+    );
+  }
+  if (urgent) {
+    if (urgentValue) candidates.push(["aibill", "mix", urgent, metered, urgentValue, shortFreshness]);
+    candidates.push(
+      ["aibill", "mix", urgent, metered, shortFreshness],
+      ["mix", urgent, metered],
+      ["aibill", urgent, shortFreshness],
+      ["aibill", urgent],
+      [urgent]
+    );
+  } else {
+    candidates.push(
+      ["aibill", "mix", ...noRunway, metered, freshness],
+      ["aibill", ...noRunway, freshness],
+      ["aibill", "mix", "runway n/r", metered, shortFreshness],
+      ["mix", "runway n/r", metered, shortFreshness],
+      ["mix", "runway n/r", shortFreshness]
+    );
+  }
+  candidates.push(["mix", metered, shortFreshness], ["mix", metered], ["mix"]);
   return firstFittingLine(candidates, columns);
 }
 
