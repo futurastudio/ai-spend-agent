@@ -11,6 +11,7 @@
 | Format | `JSON Lines under ~/.claude/projects/**/*.jsonl` |
 | Default local root | `~/.claude/projects` |
 | Discovered files | `*.jsonl` |
+| Presence-only signal | `none` |
 | Financial reader | `full_jsonl` |
 | Reader validation | `live_verified` |
 | Priced financial evidence | `estimated` |
@@ -55,6 +56,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 
 | Capability | Supported |
 | --- | --- |
+| Recommendation / Apply evidence | yes |
 | Privacy-reduced activity summaries | yes |
 | Context Health | yes |
 | Optimized financial scan | yes |
@@ -62,6 +64,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 | Invocation evidence | no |
 | Plan context | yes |
 | Transcript-reported rate limits | no |
+| Statusline / Glance snapshot | yes |
 
 ## Privacy
 

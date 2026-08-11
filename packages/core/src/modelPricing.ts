@@ -16,6 +16,10 @@ export type TokenUsage = {
   cacheReadTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  /** Explicit reasoning/thought tokens, priced on the output side when supported. */
+  thoughtTokens?: number;
+  /** Explicit tool prompt tokens, priced on the input side when supported. */
+  toolTokens?: number;
 };
 
 type PricingRule = {
@@ -27,6 +31,15 @@ type PricingRule = {
   cacheReadPerM?: number;
   cacheWrite5mPerM?: number;
   cacheWrite1hPerM?: number;
+  /** Some providers select one rate for the whole request from prompt size. */
+  abovePromptTokens?: {
+    threshold: number;
+    inputPerM: number;
+    outputPerM: number;
+    cacheReadPerM?: number;
+    cacheWrite5mPerM?: number;
+    cacheWrite1hPerM?: number;
+  };
 };
 
 const pricingRules: PricingRule[] = [
@@ -59,9 +72,22 @@ const pricingRules: PricingRule[] = [
   { match: /^o3$/i, inputPerM: 2, outputPerM: 8 },
   { match: /^o4-mini/i, inputPerM: 1.1, outputPerM: 4.4 },
   // Google (Gemini API list prices)
-  { match: /^gemini-2\.5-pro/i, inputPerM: 1.25, outputPerM: 10 },
-  { match: /^gemini-2\.5-flash-lite/i, inputPerM: 0.1, outputPerM: 0.4 },
-  { match: /^gemini-2\.5-flash/i, inputPerM: 0.3, outputPerM: 2.5 },
+  {
+    match: /^gemini-2\.5-pro$/i,
+    inputPerM: 1.25,
+    outputPerM: 10,
+    cacheReadPerM: 0.125,
+    abovePromptTokens: {
+      threshold: 200_000,
+      inputPerM: 2.5,
+      outputPerM: 15,
+      cacheReadPerM: 0.25
+    }
+  },
+  // Gemini CLI's persisted Flash/Flash-Lite summary does not retain token
+  // modality, while published audio and non-audio input/cache rates differ.
+  // Until modality is explicit, returning undefined is safer than silently
+  // applying the text/image/video rate to a potentially multimodal request.
   // DeepSeek (official API list prices)
   { match: /^deepseek-chat|^deepseek-v3/i, inputPerM: 0.27, outputPerM: 1.1 },
   { match: /^deepseek-reasoner|^deepseek-r1/i, inputPerM: 0.55, outputPerM: 2.19 },
@@ -84,19 +110,69 @@ export function findPricingRule(model: string): PricingRule | undefined {
  * published price we recognize.
  */
 export function estimateTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
+  const usd = rawTokenCostUsd(model, usage);
+  return usd === undefined ? undefined : roundUsd(usd);
+}
+
+/**
+ * Price request-scoped usage before aggregating it. This is required for
+ * models whose entire request moves to a higher rate above a prompt-size
+ * threshold; pricing a daily token sum would incorrectly treat many small
+ * requests as one large request.
+ */
+export function estimateTokenCostsUsd(
+  model: string,
+  usages: readonly TokenUsage[]
+): number | undefined {
+  let total = 0;
+  for (const usage of usages) {
+    const usd = rawTokenCostUsd(model, usage);
+    if (usd === undefined) return undefined;
+    total += usd;
+  }
+  return roundUsd(total);
+}
+
+/** Whether this model's rate selection depends on each request's prompt size. */
+export function usesPromptTieredPricing(model: string): boolean {
+  return promptTierThreshold(model) !== undefined;
+}
+
+/** Prompt-size threshold for tiered request pricing, when one is published. */
+export function promptTierThreshold(model: string): number | undefined {
+  return findPricingRule(model)?.abovePromptTokens?.threshold;
+}
+
+function rawTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
   const rule = findPricingRule(model);
   if (!rule) {
     return undefined;
   }
-  const cacheRead = rule.cacheReadPerM ?? rule.inputPerM * 0.1;
-  const write5m = rule.cacheWrite5mPerM ?? rule.inputPerM * 1.25;
-  const write1h = rule.cacheWrite1hPerM ?? rule.inputPerM * 2;
+  const effectivePromptTokens =
+    usage.inputTokens +
+    (usage.cacheReadTokens ?? 0) +
+    (usage.cacheWrite5mTokens ?? 0) +
+    (usage.cacheWrite1hTokens ?? 0) +
+    (usage.toolTokens ?? 0);
+  const rates = rule.abovePromptTokens &&
+      effectivePromptTokens > rule.abovePromptTokens.threshold
+    ? rule.abovePromptTokens
+    : rule;
+  const cacheRead = rates.cacheReadPerM ?? rates.inputPerM * 0.1;
+  const write5m = rates.cacheWrite5mPerM ?? rates.inputPerM * 1.25;
+  const write1h = rates.cacheWrite1hPerM ?? rates.inputPerM * 2;
   const usd =
-    (usage.inputTokens * rule.inputPerM +
-      usage.outputTokens * rule.outputPerM +
+    (usage.inputTokens * rates.inputPerM +
+      usage.outputTokens * rates.outputPerM +
       (usage.cacheReadTokens ?? 0) * cacheRead +
       (usage.cacheWrite5mTokens ?? 0) * write5m +
-      (usage.cacheWrite1hTokens ?? 0) * write1h) /
+      (usage.cacheWrite1hTokens ?? 0) * write1h +
+      (usage.thoughtTokens ?? 0) * rates.outputPerM +
+      (usage.toolTokens ?? 0) * rates.inputPerM) /
     1_000_000;
+  return usd;
+}
+
+function roundUsd(usd: number): number {
   return Math.round(usd * 10_000) / 10_000;
 }

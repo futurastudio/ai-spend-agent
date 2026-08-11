@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { ActivitySnapshotAgent } from "../activitySnapshot.js";
+import { buildActivitySnapshot, type ActivitySnapshotAgent } from "../activitySnapshot.js";
 import {
   aggregateCallsForFormats,
   loadLocalAgentFinancialUsageWithFormats,
@@ -14,6 +14,7 @@ import {
 import type { SourceStatusId } from "../sourceStatus.js";
 import {
   localAgentFormatDescriptors,
+  matchesLocalAgentDetectionFile,
   matchesLocalAgentFormatFile,
   validateLocalAgentFormatDescriptors
 } from "./registry.js";
@@ -29,15 +30,16 @@ import type {
 describe("localAgentFormatDescriptors", () => {
   it("keeps the released source order and separates validation from financial evidence", () => {
     expectTypeOf<LocalAgentCall["agent"]>()
-      .toEqualTypeOf<"claude-code" | "codex">();
+      .toEqualTypeOf<"claude-code" | "codex" | "gemini-cli">();
     expectTypeOf<ActivitySnapshotAgent>()
       .toEqualTypeOf<"claude-code" | "codex">();
     expectTypeOf<SourceStatusId>().toEqualTypeOf<
-      "claude-code" | "codex" | "openai" | "anthropic" | "cursor" | "github-copilot"
+      "claude-code" | "codex" | "gemini-cli" | "openai" | "anthropic" | "cursor" | "github-copilot"
     >();
     expect(localAgentFormatDescriptors.map((descriptor) => descriptor.id)).toEqual([
       "claude-code",
-      "codex"
+      "codex",
+      "gemini-cli"
     ]);
     expect(() => validateLocalAgentFormatDescriptors()).not.toThrow();
     expect(() => validateLocalAgentFormatRuntimeRegistry()).not.toThrow();
@@ -51,16 +53,23 @@ describe("localAgentFormatDescriptors", () => {
       unpriced: descriptor.confidenceDefaults.unpricedFinancialEvidence
     }))).toEqual([
       { id: "claude-code", validation: "live_verified", priced: "estimated", unpriced: "missing" },
-      { id: "codex", validation: "live_verified", priced: "estimated", unpriced: "missing" }
+      { id: "codex", validation: "live_verified", priced: "estimated", unpriced: "missing" },
+      { id: "gemini-cli", validation: "fixture_verified", priced: "estimated", unpriced: "missing" }
     ]);
   });
 
   it("keeps discovery rules in descriptors", () => {
     const claude = localAgentFormatDescriptors[0]!;
     const codex = localAgentFormatDescriptors[1]!;
+    const gemini = localAgentFormatDescriptors[2]!;
     expect(matchesLocalAgentFormatFile(claude, "/safe/session.jsonl")).toBe(true);
     expect(matchesLocalAgentFormatFile(codex, "/safe/rollout-synthetic.jsonl")).toBe(true);
     expect(matchesLocalAgentFormatFile(codex, "/safe/other.jsonl")).toBe(false);
+    expect(matchesLocalAgentFormatFile(gemini, "/safe/opaque/chats/session.json")).toBe(true);
+    expect(matchesLocalAgentFormatFile(gemini, "/safe/opaque/chats/nested/session.jsonl")).toBe(true);
+    expect(matchesLocalAgentFormatFile(gemini, "/safe/opaque/session.json")).toBe(false);
+    expect(matchesLocalAgentFormatFile(gemini, "/safe/opaque/logs.json")).toBe(false);
+    expect(matchesLocalAgentDetectionFile(gemini, "/safe/opaque/logs.json")).toBe(true);
   });
 
   it("rejects duplicate or financially unsafe descriptor defaults", () => {
@@ -132,6 +141,7 @@ describe("registry-driven ingestion extension", () => {
         operation: "fixture-agent sessions"
       },
       capabilities: {
+        actionPlanning: false,
         activity: false,
         contextHealth: false,
         financialFastPath: true,
@@ -297,7 +307,8 @@ describe("built-in runtime registry", () => {
   it("is descriptor-complete and ordered", () => {
     expect(localAgentFormatRuntimeRegistry.map((entry) => entry.descriptor.id)).toEqual([
       "claude-code",
-      "codex"
+      "codex",
+      "gemini-cli"
     ]);
     expect(Object.isFrozen(localAgentFormatRuntimeRegistry)).toBe(true);
     expect(() => validateLocalAgentFormatRuntimeRegistry(
@@ -323,6 +334,7 @@ describe("built-in runtime registry", () => {
     const fixtureRoot = resolve(import.meta.dirname, "../fixtures/local-agent-formats");
     for (const runtime of localAgentFormatRuntimeRegistry) {
       for (const fixtureId of runtime.descriptor.fixtures) {
+        if (runtime.descriptor.id === "gemini-cli") continue;
         const fixtureDirectory = join(fixtureRoot, fixtureId);
         const rawFiles = (await readdir(fixtureDirectory))
           .filter((name) => matchesLocalAgentFormatFile(runtime.descriptor, name))
@@ -338,7 +350,7 @@ describe("built-in runtime registry", () => {
             .then((raw) => JSON.parse(raw) as unknown)
         ]);
         const fullDiagnostics: Array<{
-          code: "malformed_jsonl" | "unsupported_token_shape";
+          code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
           count: number;
         }> = [];
         const full = runtime.parseFull({
@@ -369,6 +381,101 @@ describe("built-in runtime registry", () => {
         );
       }
     }
+  });
+
+  it("parses the bounded Gemini JSON/JSONL corpus and keeps logs.json detection-only", async () => {
+    const fixtureRoot = resolve(
+      import.meta.dirname,
+      "../fixtures/local-agent-formats/gemini-cli-v1"
+    );
+    const runtime = localAgentFormatRuntimeRegistry.find((entry) => (
+      entry.descriptor.id === "gemini-cli"
+    ));
+    expect(runtime).toBeDefined();
+    const options = { sourceDirectories: { "gemini-cli": fixtureRoot } };
+    const full = await loadLocalAgentUsageWithFormats([runtime!], options);
+    const financial = await loadLocalAgentFinancialUsageWithFormats([runtime!], options);
+
+    expect(financial.records).toEqual(full.records);
+    expect(full.filesParsed).toBe(7);
+    expect(full.calls).toHaveLength(7);
+    expect(full.sourceScans).toEqual([expect.objectContaining({
+      agent: "gemini-cli",
+      filesDiscovered: 7,
+      filesParsed: 7,
+      detectionSignals: 1,
+      malformedLines: 1,
+      unsupportedUsageSnapshots: 2
+    })]);
+    expect(full.records.filter((record) => record.costConfidence === "estimated"))
+      .toHaveLength(3);
+    expect(full.records.filter((record) => record.costConfidence === "missing"))
+      .toHaveLength(4);
+    expect(full.records.some((record) => record.model === "gemini-2.5-flash" &&
+      record.amountUsd === null && record.costConfidence === "missing")).toBe(true);
+    expect(full.records.some((record) => record.model === "gemini-future-synthetic-unknown" &&
+      record.amountUsd === null)).toBe(true);
+    expect(full.records.filter((record) => record.agentId === "gemini-cli").every((record) => (
+      record.inputTokens >= (record.cacheReadTokens ?? 0) + (record.toolTokens ?? 0) &&
+      record.outputTokens >= (record.thoughtTokens ?? 0)
+    ))).toBe(true);
+    expect(full.records.every((record) => record.agentId === "gemini-cli")).toBe(true);
+    expect(JSON.stringify(full)).not.toContain("8888888888888888");
+    expect(JSON.stringify(full.records)).not.toContain("logs.json");
+
+    const statuslineSnapshot = buildActivitySnapshot({
+      asOf: "2026-08-11T00:00:00.000Z",
+      generatedAt: "2026-08-11T00:00:00.000Z",
+      records: full.records,
+      calls: full.calls,
+      sourceScans: full.sourceScans,
+      sampleData: false
+    });
+    expect(statuslineSnapshot.mode).toBe("empty");
+    expect(statuslineSnapshot.coverage.agents).toEqual([]);
+    expect(statuslineSnapshot.coverage.recordsParsed).toBe(0);
+    expect(JSON.stringify(statuslineSnapshot)).not.toContain("gemini-cli");
+  });
+
+  it("deduplicates the same stable Gemini session message across copied chat files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-gemini-copy-dedupe-"));
+    const chats = join(root, "opaque-project", "chats");
+    await mkdir(chats, { recursive: true });
+    const content = [
+      JSON.stringify({
+        sessionId: "stable-session",
+        projectHash: "opaque-project",
+        geminiCliVersion: "0.56.0-nightly"
+      }),
+      JSON.stringify({
+        id: "stable-message",
+        timestamp: "2026-08-10T12:00:00.000Z",
+        type: "gemini",
+        model: "gemini-2.5-flash",
+        tokens: { input: 100, output: 10, cached: 0, thoughts: 0, tool: 0, total: 110 }
+      })
+    ].join("\n");
+    await Promise.all([
+      writeFile(join(chats, "first.jsonl"), content, "utf8"),
+      writeFile(join(chats, "copied.jsonl"), content, "utf8")
+    ]);
+    const runtime = localAgentFormatRuntimeRegistry.find((entry) => (
+      entry.descriptor.id === "gemini-cli"
+    ));
+
+    const result = await loadLocalAgentUsageWithFormats([runtime!], {
+      sourceDirectories: { "gemini-cli": root }
+    });
+
+    expect(result.sourceScans[0]?.filesParsed).toBe(2);
+    expect(result.calls).toHaveLength(1);
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        agentId: "gemini-cli",
+        quantity: 1,
+        sourceVersions: ["0.56.0-nightly"]
+      })
+    ]);
   });
 });
 

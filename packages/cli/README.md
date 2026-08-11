@@ -10,9 +10,12 @@ npx ai-spend-agent
 npx aibill
 ```
 
-Run `npx aibill init` from a project to detect machine-wide local Claude Code
-and Codex history, print the first evidence-labeled personal receipt, and seed a private
-aggregate cache under `~/.aibill/cache/`. Init never replaces missing personal
+Run `npx aibill init` from a project to detect machine-wide Claude Code, Codex,
+and experimental Gemini CLI financial evidence, print the first
+evidence-labeled personal receipt, and seed a private Claude/Codex aggregate
+cache under `~/.aibill/cache/`. Gemini financial rows come only from
+`~/.gemini/tmp/<opaque-project-id>/chats/**/*.{json,jsonl}`; `logs.json` is a
+presence signal and never a financial source. Init never replaces missing personal
 evidence with the bundled sample and never overwrites existing connected
 source or audit state.
 
@@ -23,8 +26,9 @@ hook. Subscription runway appears only when it was transcript-reported; `~`
 means API-equivalent value, and untilded `billed` money requires verified
 provider evidence. Remove it with `npx aibill statusline uninstall`.
 
-It reads local Claude Code and Codex metadata, labels API-equivalent estimates,
-and can optionally add official OpenAI or Anthropic provider-reported cost
+It reads supported local Claude Code, Codex, and Gemini CLI financial metadata,
+labels API-equivalent estimates, and can optionally add official OpenAI or
+Anthropic provider-reported cost
 through an environment-variable reference. No product telemetry is sent.
 aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 

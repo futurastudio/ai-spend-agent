@@ -61,7 +61,7 @@
       "agent": "claude-code",
       "code": "unsupported_token_shape",
       "severity": "warning",
-      "message": "1 Claude Code token snapshot(s) lacked the input/output components required for pricing.",
+      "message": "1 Claude Code token snapshot(s) lacked the complete, internally consistent fields required for safe normalization and pricing.",
       "count": 1
     },
     {

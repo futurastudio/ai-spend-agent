@@ -2,16 +2,19 @@ import {
   parseClaudeCodeTranscript,
   parseCodexRollout,
   readClaudeCodeFinancialFileForRegistry,
-  readCodexFinancialFileForRegistry
+  readCodexFinancialFileForRegistry,
+  readGeminiFinancialFileForRegistry
 } from "../localAgentLogs.js";
 import { createCodexInvocationCollector } from "../toolInvocations.js";
 import { localAgentFormatDescriptors, validateLocalAgentFormatDescriptors } from "./registry.js";
 import type { LocalAgentFormatRuntime } from "./types.js";
+import { parseGeminiSession } from "./gemini.js";
 
 const byId = new Map(localAgentFormatDescriptors.map((descriptor) => [descriptor.id, descriptor]));
 const claudeCode = byId.get("claude-code");
 const codex = byId.get("codex");
-if (!claudeCode || !codex) {
+const geminiCli = byId.get("gemini-cli");
+if (!claudeCode || !codex || !geminiCli) {
   throw new Error("Built-in local-agent format descriptors are incomplete.");
 }
 
@@ -42,6 +45,27 @@ const runtimes: LocalAgentFormatRuntime[] = [
       };
     },
     parseFinancialFile: readCodexFinancialFileForRegistry
+  },
+  {
+    descriptor: geminiCli,
+    parseFull: ({ content, filePath, sinceMs, onDiagnostic }) => {
+      const parsed = parseGeminiSession(content, {
+        filePath,
+        ...(sinceMs !== undefined ? { sinceMs } : {})
+      });
+      for (const diagnostic of parsed.diagnostics) {
+        onDiagnostic({
+          code: diagnostic.code === "malformed_jsonl"
+            ? "malformed_jsonl"
+            : diagnostic.code === "unsupported_token_shape"
+              ? "unsupported_token_shape"
+              : "malformed_session_file",
+          count: diagnostic.count
+        });
+      }
+      return { calls: parsed.calls };
+    },
+    parseFinancialFile: readGeminiFinancialFileForRegistry
   }
 ];
 

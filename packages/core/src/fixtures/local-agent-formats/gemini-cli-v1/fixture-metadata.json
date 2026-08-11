@@ -1,0 +1,127 @@
+{
+  "fixtureSetVersion": 1,
+  "synthetic": true,
+  "observedAt": "2026-08-11",
+  "geminiCli": {
+    "packageVersion": "0.56.0-nightly.20260806.g761f604c1",
+    "sourceCommit": "659c7aacd96f6632f19e2fac0796db83a2f97e6b",
+    "sessionDocs": "https://geminicli.com/docs/cli/session-management/",
+    "recordingTypes": "https://github.com/google-gemini/gemini-cli/blob/659c7aacd96f6632f19e2fac0796db83a2f97e6b/packages/core/src/services/chatRecordingTypes.ts"
+  },
+  "referenceParser": {
+    "name": "ccusage",
+    "sourceCommit": "4d71b5e72fc042d1a9b2e755227fd66130f30338",
+    "parser": "https://github.com/ccusage/ccusage/blob/4d71b5e72fc042d1a9b2e755227fd66130f30338/rust/adapters/gemini/src/parser.rs"
+  },
+  "sourceShapeNotes": [
+    "Financial evidence lives below an opaque project identifier in chats/**/*.json or chats/**/*.jsonl.",
+    "Legacy JSON stores one conversation object with a messages array; current JSONL appends metadata and message records.",
+    "A current JSONL message is first written with tokens null, followed by $set lastUpdated records and a repeated message id after token metadata arrives; the final token-bearing record is authoritative for that message id.",
+    "Stored input is promptTokenCount and includes cached tokens. Fresh input is input minus cached; cached must not be counted twice.",
+    "A complete total is input plus output plus thoughts plus tool. Cached is already included in input.",
+    "Thought tokens are output-priced when a supported model price is available; tool tokens remain a separate input-side component.",
+    "The session schema has no canonical cwd, project root, CLI version, schema version, or provider modelVersion field.",
+    "logs.json is prompt-history presence evidence only and must never produce a financial row."
+  ],
+  "cases": [
+    {
+      "id": "legacy-json-full-split",
+      "path": "legacy-json/1111111111111111111111111111111111111111111111111111111111111111/chats/session-legacy.json",
+      "expected": {
+        "usageEvidence": "detected",
+        "costEvidence": "estimated_when_pricing_available",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 1,
+        "freshInputTokens": 800,
+        "cachedTokens": 400,
+        "outputTokens": 120,
+        "thoughtTokens": 30,
+        "toolTokens": 50,
+        "totalTokens": 1400
+      }
+    },
+    {
+      "id": "current-jsonl-duplicate-id",
+      "path": "current-jsonl/2222222222222222222222222222222222222222222222222222222222222222/chats/session-current.jsonl",
+      "expected": {
+        "usageEvidence": "detected",
+        "costEvidence": "missing_without_modality",
+        "observedGeminiMessageRecords": 2,
+        "normalizedTokenRows": 1,
+        "duplicateMessageIdsCollapsed": 1,
+        "freshInputTokens": 600,
+        "cachedTokens": 300,
+        "outputTokens": 90,
+        "thoughtTokens": 20,
+        "toolTokens": 10,
+        "totalTokens": 1020,
+        "mustNotEmitZeroCost": true
+      }
+    },
+    {
+      "id": "incomplete-components",
+      "path": "incomplete-components/3333333333333333333333333333333333333333333333333333333333333333/chats/session-incomplete.jsonl",
+      "expected": {
+        "usageEvidence": "missing_components",
+        "costEvidence": "missing",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 0,
+        "mustNotInferFromTotal": true
+      }
+    },
+    {
+      "id": "inconsistent-total",
+      "path": "inconsistent-total/4444444444444444444444444444444444444444444444444444444444444444/chats/session-inconsistent.jsonl",
+      "expected": {
+        "usageEvidence": "inconsistent_total",
+        "costEvidence": "missing",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 0,
+        "mustNotRepairTotal": true
+      }
+    },
+    {
+      "id": "unknown-model",
+      "path": "unknown-model/5555555555555555555555555555555555555555555555555555555555555555/chats/session-unknown-model.jsonl",
+      "expected": {
+        "usageEvidence": "detected",
+        "costEvidence": "missing",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 1,
+        "mustNotEmitZeroCost": true
+      }
+    },
+    {
+      "id": "malformed-jsonl",
+      "path": "malformed-jsonl/6666666666666666666666666666666666666666666666666666666666666666/chats/session-malformed.jsonl",
+      "expected": {
+        "usageEvidence": "detected",
+        "costEvidence": "estimated_when_pricing_available",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 1,
+        "malformedLines": 1
+      }
+    },
+    {
+      "id": "nested-subagent",
+      "path": "nested-subagent/7777777777777777777777777777777777777777777777777777777777777777/chats/fixture-parent-session/fixture-subagent-session.jsonl",
+      "expected": {
+        "usageEvidence": "detected",
+        "costEvidence": "estimated_when_pricing_available",
+        "observedGeminiMessageRecords": 1,
+        "normalizedTokenRows": 1,
+        "projectAttribution": "opaque_or_unattributed"
+      }
+    },
+    {
+      "id": "logs-only-presence",
+      "path": "logs-only/8888888888888888888888888888888888888888888888888888888888888888/logs.json",
+      "expected": {
+        "geminiPresent": true,
+        "observedGeminiMessageRecords": 0,
+        "normalizedTokenRows": 0,
+        "financialRows": 0
+      }
+    }
+  ]
+}

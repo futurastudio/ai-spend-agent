@@ -10,5 +10,6 @@ Validation coverage and financial evidence are separate axes. A reader can be `l
 | --- | --- | --- | --- | --- |
 | [Claude Code](./claude-code.md) | `anthropic` | `live_verified` | `estimated` | `missing` |
 | [Codex](./codex.md) | `openai` | `live_verified` | `estimated` | `missing` |
+| [Gemini CLI](./gemini-cli.md) | `google` | `fixture_verified` | `estimated` | `missing` |
 
 To propose another local format, follow the [parser submission guide](../../CONTRIBUTING.md#contributing-a-local-agent-parser). Regenerate these pages with `npm run generate:source-docs`; CI uses `npm run check:source-docs` to reject registry/documentation drift.

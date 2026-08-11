@@ -50,7 +50,7 @@ export type PlainEnglishSummaryOptions = {
   width?: number;
   /**
    * Demo banner (sample data), real connected/synced data, or real usage
-   * estimated from local agent logs (Claude Code / Codex transcripts).
+   * estimated from supported local coding-agent session evidence.
    */
   mode?: "demo" | "connected" | "local-logs";
   /** Optional next-step CTA lines printed in the footer. */
@@ -114,7 +114,8 @@ function renderPlainEnglishSummary(
   );
   const presentationBasis = financialPresentationBasis(options.mode, options.records);
   const rawTotalUsd = options.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
-  const hasHeadlineAmount = presentationBasis !== "connected_missing";
+  const hasHeadlineAmount = presentationBasis !== "connected_missing" &&
+    presentationBasis !== "local_missing";
   const rawSourceAmounts = rawBreakdownAmounts(options.records, "source");
   const rawGroupAmounts = rawBreakdownAmounts(options.records, groupBy);
 
@@ -582,7 +583,7 @@ function renderBreakdownTable(
 
   const table = new Table({
     head: [c.bold(""), c.bold(amountLabel), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
-    colWidths: [18, amountsAvailable ? 9 : 11, 14, 3, amountsAvailable ? 20 : 18],
+    colWidths: [18, 11, 14, 3, 18],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
       ? { head: [], border: ["dim"], "padding-left": 0, "padding-right": 1 }
@@ -594,12 +595,15 @@ function renderBreakdownTable(
     const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
+    const entryAmountAvailable = amountsAvailable && !(
+      entry.confidence === "missing" && rawAmount === 0
+    );
     table.push([
       labelUnattributedProject && isUnattributedProjectKey(entry.key)
         ? "Unattributed"
         : labelOf(entry.key),
-      amountsAvailable ? formatUsd(displayAmount) : "Not priced",
-      `${bar(share, c)} ${formatPercent(share)}`,
+      entryAmountAvailable ? formatUsd(displayAmount) : "Unavailable",
+      entryAmountAvailable ? `${bar(share, c)} ${formatPercent(share)}` : "Unavailable",
       String(entry.recordCount),
       confidenceWord(entry.confidence)
     ]);
@@ -741,6 +745,7 @@ function rawBreakdownKey(record: UsageRecord, dimension: GroupByDimension): stri
 type FinancialPresentationBasis =
   | "demo"
   | "local_estimate"
+  | "local_missing"
   | "provider_reported"
   | "connected_estimated"
   | "connected_unverified"
@@ -756,7 +761,11 @@ function financialPresentationBasis(
   mode: PlainEnglishSummaryOptions["mode"],
   records: readonly UsageRecord[]
 ): FinancialPresentationBasis {
-  if (mode === "local-logs") return "local_estimate";
+  if (mode === "local-logs") {
+    return records.some((record) => typeof record.amountUsd === "number")
+      ? "local_estimate"
+      : "local_missing";
+  }
   if (mode !== "connected") return "demo";
 
   const priced = records.filter((record) => typeof record.amountUsd === "number");
@@ -781,6 +790,7 @@ function headlineMetricLabel(basis: FinancialPresentationBasis): string {
     case "connected_unverified": return "CONNECTED UNVERIFIED COST / VALUE";
     case "connected_mixed": return "MIXED CONNECTED COST / VALUE EVIDENCE";
     case "connected_missing": return "CONNECTED COST / VALUE UNAVAILABLE";
+    case "local_missing": return "OBSERVED VALUE UNAVAILABLE";
     case "local_estimate": return "OBSERVED API-EQUIVALENT VALUE";
     default: return "ILLUSTRATIVE COST / VALUE EVIDENCE";
   }
@@ -793,6 +803,7 @@ function evidenceBreakdownLabel(basis: FinancialPresentationBasis): string {
     case "connected_unverified": return "Connected unverified cost/value";
     case "connected_mixed": return "Mixed connected cost/value evidence";
     case "connected_missing": return "Connected cost/value coverage";
+    case "local_missing": return "Local usage evidence";
     case "local_estimate": return "API-equivalent value";
     default: return "Cost/value evidence";
   }
@@ -801,6 +812,7 @@ function evidenceBreakdownLabel(basis: FinancialPresentationBasis): string {
 function evidenceAmountColumnLabel(basis: FinancialPresentationBasis): string {
   if (basis === "provider_reported") return "Cost";
   if (basis === "local_estimate") return "Value";
+  if (basis === "local_missing") return "Evidence";
   return "Evidence";
 }
 
@@ -811,6 +823,7 @@ function sourceBreakdownLabel(basis: FinancialPresentationBasis): string {
     case "connected_unverified": return "Where connected unverified cost/value appears";
     case "connected_mixed": return "Where mixed connected cost/value evidence appears";
     case "connected_missing": return "Connected source coverage";
+    case "local_missing": return "Local usage evidence by source";
     case "local_estimate": return "Where observed API-equivalent value goes";
     default: return "Cost/value evidence by source";
   }

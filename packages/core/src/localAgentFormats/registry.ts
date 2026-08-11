@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import type { LocalAgentFormatDescriptor, LocalAgentFormatId } from "./types.js";
 
 const descriptors = [
@@ -26,13 +26,15 @@ const descriptors = [
       operation: "claude-code sessions"
     },
     capabilities: {
+      actionPlanning: true,
       activity: true,
       contextHealth: true,
       financialFastPath: true,
       glance: true,
       invocationEvidence: false,
       planContext: true,
-      rateLimits: false
+      rateLimits: false,
+      statuslineSnapshot: true
     },
     financialRead: "full_jsonl",
     validationNote: "Local transcript parsing is exercised against live logs; dollar values remain API-rate estimates.",
@@ -94,13 +96,15 @@ const descriptors = [
       operation: "codex sessions"
     },
     capabilities: {
+      actionPlanning: true,
       activity: true,
       contextHealth: true,
       financialFastPath: true,
       glance: true,
       invocationEvidence: true,
       planContext: true,
-      rateLimits: true
+      rateLimits: true,
+      statuslineSnapshot: true
     },
     financialRead: "bounded_event_jsonl",
     validationNote: "Local parsing was replayed against live logs; total-only token shapes and unknown aliases remain missing rather than becoming estimated $0.",
@@ -137,6 +141,87 @@ const descriptors = [
       ]
     },
     fixtures: ["codex-v1"]
+  },
+  {
+    schemaVersion: 1,
+    id: "gemini-cli",
+    order: 30,
+    label: "Gemini CLI",
+    provider: "google",
+    defaultHomeRelative: [".gemini", "tmp"],
+    legacyDirectoryOption: "geminiSessionsDir",
+    discovery: {
+      extensions: [".json", ".jsonl"],
+      ancestorBasename: "chats",
+      detectionBasename: "logs.json"
+    },
+    confidenceDefaults: {
+      validationCoverage: "fixture_verified",
+      pricedFinancialEvidence: "estimated",
+      unpricedFinancialEvidence: "missing",
+      sourceConfidence: "estimated"
+    },
+    sourceRecord: {
+      id: "local-agent-logs",
+      name: "Local agent session logs",
+      providerCostType: "local_agent_logs",
+      observedFrom: "gemini-cli chats session JSON/JSONL (this machine)",
+      usageGranularity: "daily_aggregate",
+      operation: "gemini-cli sessions"
+    },
+    capabilities: {
+      actionPlanning: false,
+      activity: false,
+      contextHealth: false,
+      financialFastPath: true,
+      glance: false,
+      invocationEvidence: false,
+      planContext: false,
+      rateLimits: false,
+      statuslineSnapshot: false
+    },
+    financialRead: "full_session_files",
+    validationNote: "Gemini CLI session support is experimental and fixture-verified; evolving, incomplete, or modality-ambiguous token shapes remain missing rather than becoming estimated $0.",
+    docs: {
+      format: "JSON and JSON Lines under ~/.gemini/tmp/<opaque-project-id>/chats/**/*.{json,jsonl}",
+      howRead: [
+        "Read supported Gemini response records from chats session JSON or JSONL files, including nested subagent sessions.",
+        "For repeated JSONL message ids, retain the last token-bearing version so streaming updates are not double-counted.",
+        "Use logs.json only to detect that Gemini CLI is present; it never enters the financial parser or creates a financial row."
+      ],
+      fieldsRead: [
+        "timestamp, model, and explicit input, output, cached, thought, tool, and total token components",
+        "session identity and usable session-carried project metadata when present",
+        "Gemini CLI version metadata when the session format reports it"
+      ],
+      verified: [
+        "Synthetic recorded fixtures lock supported legacy JSON and current JSONL shapes, including cache-overlap and duplicate-message handling."
+      ],
+      estimated: [
+        "Complete, internally consistent Gemini 2.5 Pro token components are priced at published API rates as API-equivalent value only when the request's pricing tier is unambiguous.",
+        "Thought tokens are output-priced and tool tokens input-priced only when the explicit split is supported."
+      ],
+      notVerified: [
+        "Gemini CLI chat files are evolving and this reader is experimental, not live-verified.",
+        "API-equivalent value is not billed spend, subscription cost, savings, or ROI.",
+        "Session token counters do not establish authentication billing mode, free-tier coverage, subscription coverage, grounding/search fees, tool-specific fees, or context-cache storage duration charges.",
+        "Unknown models, missing components, and inconsistent totals remain missing financial evidence rather than estimated $0.",
+        "Gemini 2.5 Flash and Flash-Lite rows remain missing because chats summaries omit token modality while published audio and non-audio rates differ."
+      ],
+      privacy: [
+        "Parsing and aggregation run locally; raw prompts and responses are not returned by the parser registry.",
+        "Opaque project hashes are never reversed, guessed, or exposed; an opaque local alias is used when no usable project field exists.",
+        "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
+      ],
+      limitations: [
+        "The <opaque-project-id> directory is not treated as a readable project path.",
+        "logs.json contains prompt-history/resume metadata, not financial token evidence.",
+        "Normalized inputTokens/outputTokens are inclusive headline totals; cached/tool/thought fields are component subsets and must not be added again.",
+        "A Gemini 2.5 Pro request remains unpriced when separate prompt and tool-token counts straddle the published 200k pricing threshold.",
+        "Rewound JSONL turns still represent incurred usage; this reader does not reconstruct a cost-free final conversation."
+      ]
+    },
+    fixtures: ["gemini-cli-v1"]
   }
 ] as const satisfies readonly LocalAgentFormatDescriptor[];
 
@@ -158,10 +243,12 @@ export function localAgentFormatLabel(id: LocalAgentFormatId): string {
 }
 
 export function localAgentFormatSupports(
-  id: LocalAgentFormatId,
+  id: string | undefined,
   capability: keyof LocalAgentFormatDescriptor["capabilities"]
 ): boolean {
-  return localAgentFormatDescriptor(id)?.capabilities[capability] === true;
+  return localAgentFormatDescriptors.some((descriptor) => (
+    descriptor.id === id && descriptor.capabilities[capability] === true
+  ));
 }
 
 export function matchesLocalAgentFormatFile(
@@ -169,10 +256,27 @@ export function matchesLocalAgentFormatFile(
   filePath: string
 ): boolean {
   const name = basename(filePath);
-  if (descriptor.discovery.extension && !name.endsWith(descriptor.discovery.extension)) return false;
+  const extensions = descriptor.discovery.extensions ?? (
+    descriptor.discovery.extension ? [descriptor.discovery.extension] : []
+  );
+  if (extensions.length > 0 && !extensions.some((extension) => name.endsWith(extension))) return false;
   if (descriptor.discovery.basename && name !== descriptor.discovery.basename) return false;
   if (descriptor.discovery.basenamePrefix && !name.startsWith(descriptor.discovery.basenamePrefix)) return false;
+  if (descriptor.discovery.ancestorBasename && !hasAncestorBasename(
+    filePath,
+    descriptor.discovery.ancestorBasename
+  )) return false;
   return true;
+}
+
+export function matchesLocalAgentDetectionFile(
+  descriptor: LocalAgentFormatDescriptor,
+  filePath: string
+): boolean {
+  return Boolean(
+    descriptor.discovery.detectionBasename &&
+    basename(filePath) === descriptor.discovery.detectionBasename
+  );
 }
 
 export function validateLocalAgentFormatDescriptors(
@@ -195,13 +299,24 @@ export function validateLocalAgentFormatDescriptors(
       throw new Error(`Unsafe default local-agent root for ${descriptor.id}.`);
     }
     const discovery = descriptor.discovery;
-    if (!discovery.extension && !discovery.basename && !discovery.basenamePrefix) {
+    if (!discovery.extension && !discovery.extensions?.length &&
+        !discovery.basename && !discovery.basenamePrefix) {
       throw new Error(`Local-agent format ${descriptor.id} must declare a bounded file rule.`);
     }
-    if (discovery.extension && !/^\.[A-Za-z0-9]+$/.test(discovery.extension)) {
-      throw new Error(`Unsafe discovery extension for ${descriptor.id}.`);
+    for (const extension of [
+      ...(discovery.extension ? [discovery.extension] : []),
+      ...(discovery.extensions ?? [])
+    ]) {
+      if (!/^\.[A-Za-z0-9]+$/.test(extension)) {
+        throw new Error(`Unsafe discovery extension for ${descriptor.id}.`);
+      }
     }
-    for (const value of [discovery.basename, discovery.basenamePrefix]) {
+    for (const value of [
+      discovery.basename,
+      discovery.basenamePrefix,
+      discovery.ancestorBasename,
+      discovery.detectionBasename
+    ]) {
       if (value && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) || /[\\/\u0000]/.test(value))) {
         throw new Error(`Unsafe discovery filename rule for ${descriptor.id}.`);
       }
@@ -225,6 +340,7 @@ function freezeDescriptor(
   descriptor: LocalAgentFormatDescriptor
 ): LocalAgentFormatDescriptor {
   Object.freeze(descriptor.defaultHomeRelative);
+  if (descriptor.discovery.extensions) Object.freeze(descriptor.discovery.extensions);
   Object.freeze(descriptor.discovery);
   Object.freeze(descriptor.confidenceDefaults);
   Object.freeze(descriptor.sourceRecord);
@@ -235,4 +351,14 @@ function freezeDescriptor(
   Object.freeze(descriptor.docs);
   Object.freeze(descriptor.fixtures);
   return Object.freeze(descriptor);
+}
+
+function hasAncestorBasename(filePath: string, expected: string): boolean {
+  let current = dirname(filePath);
+  while (true) {
+    if (basename(current) === expected) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }

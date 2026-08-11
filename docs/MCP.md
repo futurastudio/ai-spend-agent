@@ -11,7 +11,9 @@ The MCP client and the spend provider are separate concerns:
 
 - **MCP clients:** any stdio-compatible agent can call the tools.
 - **Local usage:** Claude Code and Codex transcript metadata; both readers are
-  `live_verified` against an adversarial local corpus.
+  `live_verified` against an adversarial local corpus. Experimental Gemini CLI
+  financial evidence is read only from `chats/**/*.{json,jsonl}` and remains
+  `fixture_verified`; `logs.json` is detection-only.
 - **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
 - **Validation coverage:** OpenAI and Anthropic have non-empty live-API
   verification. OpenAI QA reconciled the tested Costs total to invoiced API
@@ -223,9 +225,12 @@ folder for provider files or configuration signals.
 
 ### `sync_local_agent_spend`
 
-Reads local Claude Code and Codex transcript metadata, calculates
-API-equivalent usage value, and writes a local report. The optional project
-filter matches the aggregated project name exactly.
+Reads supported local Claude Code, Codex, and experimental Gemini CLI financial
+metadata, calculates API-equivalent usage value where evidence is complete, and
+writes a local report. The optional project filter matches the aggregated
+project name exactly. Gemini's parent directory is an opaque project hash; it
+is never reversed or guessed, so attribution uses a local opaque alias unless
+the session itself reports a usable project/cwd.
 
 ```json
 {
@@ -242,6 +247,13 @@ day-over-day anomaly is unavailable because daily transcript aggregates are not
 comparable call-level records. The response reports
 `anomalyBasis: unavailable_no_comparable_call_level_records` instead of
 manufacturing a billing or usage spike.
+
+Gemini chat formats are evolving. Unknown models, missing token components,
+inconsistent totals, and unfamiliar shapes remain `missing`, never estimated
+`$0`. Thought tokens are output-priced and tool tokens input-priced only when
+the complete reported split can be reconciled without double-counting cached
+input. A machine with only Gemini `logs.json` is detected but produces zero
+financial rows and no substituted sample data.
 
 ### `get_usage_glance`
 
@@ -413,7 +425,7 @@ response keeps the evidence window, confidence, modeled/not-verified status,
 approval boundary, rollback, and matched-verification requirement. Provider
 cost buckets, usage aggregates, seats, and user totals remain useful for
 reconciliation and attribution but do not support call-level cuts. Bundled
-sample state returns demo-only guidance; local Claude Code/Codex day aggregates
+sample state returns demo-only guidance; local coding-agent day aggregates
 return observed API-equivalent exposure candidates—or a collect-more-evidence
 result—because they do not prove an individual call, a safe change, or a
 savings counterfactual. Discovery-only state never invents downgrade, cache,

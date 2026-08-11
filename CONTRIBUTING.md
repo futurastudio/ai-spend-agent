@@ -77,17 +77,28 @@ Each descriptor must declare:
 - documentation for how the format is read, fields used, evidence boundaries,
   privacy, limitations, and recorded fixture IDs.
 
+When a format has both financial files and a presence-only signal, declare
+them separately. A detection file may support an honest empty-state funnel but
+must never enter the financial parser or create a zero-dollar row. Bound
+multi-format readers by both extension and a required ancestor directory; do
+not treat a broad product-state directory as financial evidence.
+
 Fixtures must be minimal synthetic reproductions of observed format shapes.
 Remove prompts, responses, credentials, account identifiers, session IDs, user
 names, and concrete home paths. A fixture proves reader behavior; it cannot
 promote validation coverage or financial evidence. Malformed, unsupported,
 partial, retry/duplicate, and empty cases should fail honestly, and incomplete
 token shapes must remain `missing` instead of becoming an estimated `$0`.
+Opaque hash directories must stay opaque: never reverse, guess, or expose them
+as project names. Attribute only from usable session-carried project/cwd
+evidence, otherwise use a privacy-safe alias or leave the record unattributed.
 
 Keep full and optimized financial readers behavior-compatible and preserve all
 existing CLI/JSON, MCP, report, statusline, cache, and Glance output. Adding a
-future parser must stay inside the parser-registry boundary plus fixtures; do
-not modify shared consumer logic. Regenerate the public source pages from the
+future parser must stay inside the parser-registry boundary plus fixtures. Any
+new shared engine capability must be source-neutral and descriptor-gated; do
+not add parser-specific logic to Glance, statusline, Context Health, or Apply.
+Regenerate the public source pages from the
 registry and verify that nothing drifted:
 
 ```bash

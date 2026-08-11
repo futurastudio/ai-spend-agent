@@ -69,6 +69,30 @@ describe("generateCutList", () => {
     });
   });
 
+  it("never turns unpriced or non-action-capable local evidence into a $0 recommendation", () => {
+    const unpricedClaude: UsageRecord = {
+      ...record({
+        id: "unpriced-claude",
+        inputTokens: 180_000,
+        agentId: "claude-code",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate"
+      }),
+      amountUsd: null,
+      costConfidence: "missing"
+    };
+    const pricedGemini = record({
+      id: "priced-gemini",
+      inputTokens: 180_000,
+      agentId: "gemini-cli",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate",
+      amountUsd: 12
+    });
+
+    expect(generateCutList([unpricedClaude, pricedGemini])).toEqual([]);
+  });
+
   it("sorts actions by descending monthly savings and sums them", () => {
     const records = [
       record({ id: "a", model: "gpt-4.1", operation: "ticket_triage", amountUsd: 50, workloadSemantics: { downgradeSafe: true } }),

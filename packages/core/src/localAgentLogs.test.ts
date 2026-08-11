@@ -1097,6 +1097,98 @@ describe("aggregateCalls", () => {
     expect(dedupeCumulativeSessionCalls([first, second])).toHaveLength(2);
   });
 
+  it("fails conflicting stable-turn duplicates closed independent of file order", () => {
+    const base = {
+      agent: "gemini-cli" as const,
+      callId: "same-message",
+      sessionId: "same-session",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      usageScope: "turn" as const,
+      usageSupport: "complete" as const,
+      usage: { inputTokens: 100, outputTokens: 10 }
+    };
+    const pro = { ...base, model: "gemini-2.5-pro", project: "project-a" };
+    const flash = { ...base, model: "gemini-2.5-flash", project: "project-b" };
+    const conflicts: string[] = [];
+
+    const forward = dedupeCumulativeSessionCalls([pro, flash], (agent) => conflicts.push(agent));
+    const reverse = dedupeCumulativeSessionCalls([flash, pro]);
+
+    expect(forward).toEqual(reverse);
+    expect(forward).toEqual([expect.objectContaining({
+      agent: "gemini-cli",
+      model: "conflicting-local-evidence",
+      usageSupport: "unsupported_token_shape",
+      usage: { inputTokens: 0, outputTokens: 0 }
+    })]);
+    expect(forward[0]?.project).toBeUndefined();
+    expect(conflicts).toEqual(["gemini-cli"]);
+    expect(aggregateCalls(forward)[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
+  it("fails later or larger conflicting stable-turn copies closed in both orders", () => {
+    const base = {
+      agent: "gemini-cli" as const,
+      callId: "same-message",
+      sessionId: "same-session",
+      usageScope: "turn" as const,
+      usageSupport: "complete" as const
+    };
+    const earlier = {
+      ...base,
+      model: "gemini-2.5-pro",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      project: "project-a",
+      usage: { inputTokens: 100, outputTokens: 10 }
+    };
+    const laterLarger = {
+      ...base,
+      model: "gemini-2.5-flash",
+      timestamp: "2026-08-11T10:00:00.000Z",
+      project: "project-b",
+      usage: { inputTokens: 1_000, outputTokens: 100 }
+    };
+
+    const forward = dedupeCumulativeSessionCalls([earlier, laterLarger]);
+    const reverse = dedupeCumulativeSessionCalls([laterLarger, earlier]);
+
+    expect(forward).toEqual(reverse);
+    expect(forward).toEqual([expect.objectContaining({
+      model: "conflicting-local-evidence",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      usageSupport: "unsupported_token_shape",
+      usage: { inputTokens: 0, outputTokens: 0 }
+    })]);
+    expect(aggregateCalls(forward)[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
+  it("allows a complete stable-turn copy to supersede an unsupported early snapshot", () => {
+    const unsupported = {
+      agent: "gemini-cli" as const,
+      callId: "same-message",
+      sessionId: "same-session",
+      model: "gemini-2.5-pro",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      usageScope: "turn" as const,
+      usageSupport: "unsupported_token_shape" as const,
+      usage: { inputTokens: 0, outputTokens: 0 }
+    };
+    const complete = {
+      ...unsupported,
+      usageSupport: "complete" as const,
+      usage: { inputTokens: 100, outputTokens: 10 }
+    };
+
+    expect(dedupeCumulativeSessionCalls([unsupported, complete])).toEqual([complete]);
+    expect(dedupeCumulativeSessionCalls([complete, unsupported])).toEqual([complete]);
+  });
+
   it("groups by day+agent+model+project, prices via the rule table, and passes schema", () => {
     const calls = [
       ...parseClaudeCodeTranscript(claudeLine()),
@@ -1163,6 +1255,107 @@ describe("aggregateCalls", () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
       quantity: 2,
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
+  it("prices Gemini 2.5 Pro per turn before daily aggregation", () => {
+    const geminiCall = (timestamp: string, inputTokens = 150_000) => ({
+      agent: "gemini-cli" as const,
+      model: "gemini-2.5-pro",
+      timestamp,
+      project: "gemini-project-test",
+      usageScope: "turn" as const,
+      usageSupport: "complete" as const,
+      reportedTotalTokens: inputTokens + 10_000,
+      usage: {
+        inputTokens,
+        outputTokens: 10_000,
+        cacheReadTokens: 0,
+        thoughtTokens: 0,
+        toolTokens: 0
+      },
+      geminiTokenEvidence: {
+        input: inputTokens,
+        output: 10_000,
+        cached: 0,
+        thoughts: 0,
+        tool: 0,
+        total: inputTokens + 10_000,
+        cacheAccounting: "none" as const
+      }
+    });
+
+    const records = aggregateCalls([
+      geminiCall("2026-08-10T10:00:00.000Z"),
+      geminiCall("2026-08-10T11:00:00.000Z")
+    ]);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      quantity: 2,
+      amountUsd: 0.575,
+      costConfidence: "estimated"
+    });
+
+    const mixedTiers = aggregateCalls([
+      geminiCall("2026-08-10T12:00:00.000Z"),
+      geminiCall("2026-08-10T13:00:00.000Z", 250_000)
+    ]);
+    expect(mixedTiers[0]?.amountUsd).toBe(1.0625);
+  });
+
+  it("fails Gemini 2.5 Pro pricing closed when request-level prompt evidence is ambiguous", () => {
+    const records = aggregateCalls([{
+      agent: "gemini-cli",
+      model: "gemini-2.5-pro",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      project: "gemini-project-test",
+      usageScope: "turn",
+      usageSupport: "complete",
+      usage: {
+        inputTokens: 250_000,
+        outputTokens: 10_000
+      }
+    }]);
+
+    expect(records[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
+  it("fails Gemini Pro pricing closed when tool tokens straddle the published prompt tier", () => {
+    const input = 199_000;
+    const tool = 2_000;
+    const records = aggregateCalls([{
+      agent: "gemini-cli",
+      model: "gemini-2.5-pro",
+      timestamp: "2026-08-10T10:00:00.000Z",
+      project: "gemini-project-test",
+      usageScope: "turn",
+      usageSupport: "complete",
+      reportedTotalTokens: input + tool + 100,
+      usage: {
+        inputTokens: input,
+        outputTokens: 100,
+        cacheReadTokens: 0,
+        thoughtTokens: 0,
+        toolTokens: tool
+      },
+      geminiTokenEvidence: {
+        input,
+        output: 100,
+        cached: 0,
+        thoughts: 0,
+        tool,
+        total: input + tool + 100,
+        cacheAccounting: "none"
+      }
+    }]);
+
+    expect(records[0]).toMatchObject({
       amountUsd: null,
       costConfidence: "missing"
     });

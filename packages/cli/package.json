@@ -1,7 +1,7 @@
 {
   "name": "ai-spend-agent",
-  "version": "0.7.3",
-  "description": "Local-first financial accountability CLI for Claude Code and Codex work, cost evidence, attribution, runway, provenance, and Context Health.",
+  "version": "0.8.0",
+  "description": "Local-first financial accountability CLI: Claude Code/Codex attribution, provenance, and next actions, plus experimental Gemini CLI cost evidence.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -54,8 +54,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.7.3",
-    "@agent-finops/report": "0.7.3",
+    "@agent-finops/core": "0.8.0",
+    "@agent-finops/report": "0.8.0",
     "yocto-spinner": "^1.2.0"
   }
 }
