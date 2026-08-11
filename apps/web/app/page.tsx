@@ -1,54 +1,54 @@
 import { CopyCommand } from "@/components/CopyCommand";
+import { JsonLd } from "@/components/JsonLd";
 import { ProductTour } from "@/components/ProductTour";
+import { Reveal } from "@/components/Reveal";
+import { Statusline } from "@/components/Statusline";
+import { TerminalReceipt } from "@/components/TerminalReceipt";
 import { WaitlistForm } from "@/components/WaitlistForm";
 
-const integrations = [
-  "Claude Code",
-  "Codex",
-  "Anthropic billing · connector live_verified",
-  "OpenAI billing · connector live_verified",
-];
+const REPO = "https://github.com/futurastudio/ai-spend-agent";
 
-const accountabilityPath = [
-  ["Agent work", "Observed", "available"],
-  ["Cost", "Source-labeled", "available"],
-  ["Owner", "Where exposed", "attention"],
-  ["Accepted outcome", "Workspace next", "attention"],
-  ["Controlled action", "Approval-gated next", "attention"],
-] as const;
-
-const accountabilityQuestions = [
+const sources = [
+  { name: "Claude Code", role: "transcript parser", chip: "LIVE", tone: "live" },
+  { name: "Codex CLI", role: "transcript parser", chip: "LIVE", tone: "live" },
   {
-    status: "Available now",
-    tone: "available",
-    title: "What work is driving the available usage and cost evidence?",
-    body: "Attribute observed activity and cost evidence by project, model, agent, workspace, user, or client—only where the source exposes it.",
+    name: "OpenAI",
+    role: "billing API",
+    chip: "LIVE · VERIFIED",
+    tone: "verified",
   },
   {
-    status: "Partial",
-    tone: "attention",
-    title: "Who owns it—and did it produce an accepted outcome?",
-    body: "Observed ownership is available where supported. Accepted-task and pull-request receipts are the next open contract.",
+    name: "Anthropic",
+    role: "billing API",
+    chip: "LIVE · VERIFIED",
+    tone: "verified",
   },
   {
-    status: "Partial",
-    tone: "attention",
-    title: "Which subscriptions and provider charges never reach finance?",
-    body: "Local plan context and optional provider reports are available now. A centralized seat and invoice ledger is Workspace next.",
+    name: "Cursor",
+    role: "billing connector",
+    chip: "BETA · FIXTURE-VERIFIED",
+    tone: "beta",
   },
   {
-    status: "Local action available",
-    tone: "available",
-    title: "What changed, what needs approval, and did the action work?",
-    body: "Apply turns local evidence into read-only checks, one approval-gated reversible change, rollback, and a matched future-session comparison. The user decides whether it worked. Shared approvals and company history are planned for Workspace.",
+    name: "GitHub Copilot",
+    role: "billing connector",
+    chip: "BETA · FIXTURE-VERIFIED",
+    tone: "beta",
   },
 ] as const;
 
-function evidenceToneClass(tone: "verified" | "available" | "attention") {
-  if (tone === "verified") return "text-green";
-  if (tone === "available") return "text-muted";
-  return "text-yellow";
+function chipClass(tone: "live" | "verified" | "beta") {
+  if (tone === "verified") return "border-green-line text-green";
+  if (tone === "live") return "border-hairline-bright text-muted";
+  return "border-hairline text-faint";
 }
+
+const workspaceItems = [
+  "continuous monitoring",
+  "spend alerts",
+  "shared team workspace",
+  "white-label client reports",
+];
 
 const faqs = [
   {
@@ -67,355 +67,478 @@ const faqs = [
       "The local CLI and explicit MCP integration are in public beta. Glance can be built from source for testing; a signed Mac download and the shared Workspace are not launched yet.",
   },
   {
+    question: "Can it warn me before I hit a usage limit?",
+    answer:
+      "Locally, yes. aibill reads the limit windows your agents already report and shows runway — how much of the window is left and when it resets — in the CLI, in Glance, and in the Claude Code statusline. Detection is read-only from local state; where a source doesn't expose a limit, the gap stays visible instead of being guessed.",
+  },
+  {
     question: "Can finance use aibill to prove ROI?",
     answer:
       "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; those outcome and company-accountability layers are next.",
   },
 ];
 
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-faint">
+      {children}
+    </p>
+  );
+}
+
 export default function Home() {
   return (
-    <main className="relative overflow-x-clip">
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[960px]"
-        aria-hidden="true"
-      >
-        <div className="grid-fade absolute inset-0" />
-      </div>
-
-      <header className="sticky top-4 z-40 mx-auto max-w-content px-4 sm:px-6">
-        <div className="glass-heavy flex items-center justify-between rounded-full px-4 py-3">
-          <a href="#top" className="flex min-h-11 items-center gap-2.5 px-1">
-            <span
-              aria-hidden="true"
-              className="glass-well flex h-7 w-7 items-center justify-center rounded-md font-mono text-sm text-green"
-            >
-              $
-            </span>
-            <span className="whitespace-nowrap font-mono text-sm font-semibold tracking-tight text-ink">
-              aibill
-            </span>
+    <div className="frame">
+      <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
+        <div className="flex h-14 items-center justify-between px-5 sm:px-8">
+          <a href="#top" className="wordmark" aria-label="Tilden — home">
+            Tilden
+            <span className="wordmark-cursor" aria-hidden="true" />
           </a>
-          <nav className="flex items-center gap-1 sm:gap-2" aria-label="Primary navigation">
+          <nav className="flex items-center gap-6" aria-label="Primary navigation">
             <a
               href="#product"
-              className="hidden min-h-11 items-center rounded-xl px-3.5 text-sm font-medium text-muted transition-colors hover:text-ink md:inline-flex"
+              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
             >
               Product
             </a>
             <a
-              href="https://github.com/futurastudio/ai-spend-agent"
+              href="#teams"
+              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
+            >
+              Teams
+            </a>
+            <a
+              href={REPO}
               target="_blank"
               rel="noreferrer"
-              className="hidden min-h-11 items-center rounded-xl px-3.5 text-sm font-medium text-muted transition-colors hover:text-ink sm:inline-flex"
+              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
             >
-              GitHub
+              GitHub ↗
             </a>
             <a
               href="/?ref=teams#beta"
-              className="glass glass-interactive inline-flex min-h-11 items-center whitespace-nowrap rounded-xl px-3.5 text-xs font-medium text-ink sm:text-sm"
+              className="rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
-              <span className="sm:hidden">Team beta</span>
-              <span className="hidden sm:inline">Join the team beta</span>
+              Design partners
             </a>
           </nav>
         </div>
       </header>
 
-      <section
-        id="top"
-        className="relative z-10 mx-auto max-w-content animate-fade-up scroll-mt-24 px-6 pb-12 pt-16 text-left sm:pt-24"
-      >
-        <div className="grid w-full gap-12 lg:grid-cols-[minmax(0,1fr)_15rem] lg:items-end">
-          <div className="min-w-0">
+      <main id="top" className="scroll-mt-24">
+        {/* Hero — renders at first paint, never inside a reveal. */}
+        <section className="border-b border-hairline px-5 pb-16 pt-16 sm:px-8 sm:pb-20 sm:pt-28">
+          <h1 className="max-w-[840px] text-[34px] font-medium leading-[1.08] tracking-[-0.03em] text-ink sm:text-[56px]">
+            Know what your AI agents cost.
+            <br className="hidden sm:block" /> Prove what they&apos;re worth.
+          </h1>
+          <p className="mt-5 max-w-[560px] text-base leading-relaxed text-muted sm:text-lg">
+            Reads your coding agents&apos; own activity and your real bills.
+            Local-first, every dollar labeled, in 90 seconds.
+          </p>
+          <div className="mt-8 max-w-[380px]">
+            <CopyCommand />
+          </div>
+          <p className="mt-3 font-mono text-xs text-faint">
+            Free · open source · no signup · nothing leaves your machine.
+          </p>
+          <p className="mt-6 text-[13px] text-faint">
+            Tilden is built on the open-source{" "}
             <a
-              href="https://github.com/futurastudio/ai-spend-agent"
+              href={REPO}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex min-h-11 items-center gap-2 border-l border-green/60 pl-3 font-mono text-xs text-muted transition-colors hover:text-ink"
+              className="text-muted underline-offset-4 transition-colors hover:text-ink hover:underline"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
-              Open source · local first ↗
-            </a>
+              aibill
+            </a>{" "}
+            engine. Requires Node 22+.
+          </p>
+        </section>
 
-            <h1 className="mt-7 max-w-5xl min-w-0 text-balance text-[2.85rem] font-semibold leading-[0.96] tracking-[-0.065em] text-ink [overflow-wrap:anywhere] sm:text-[4.25rem] lg:text-[4.65rem]">
-              Know the cost evidence behind your AI agents.
-              <br className="hidden sm:block" />{" "}
-              Know what to do next.
-            </h1>
-
-            <p className="mt-6 max-w-2xl text-pretty text-base leading-relaxed text-muted sm:text-xl">
-              aibill connects coding-agent work to cost evidence, attribution, and
-              one next action. Today&apos;s beta runs privately on your machine; the
-              shared company accountability layer comes next.
+        {/* 01 · The receipt */}
+        <section
+          id="product"
+          className="scroll-mt-24 border-b border-hairline px-5 py-16 sm:px-8 sm:py-24"
+        >
+          <Reveal>
+            <Eyebrow>01 · The receipt</Eyebrow>
+            <h2 className="mt-3 text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              The receipt, not a dashboard.
+            </h2>
+            <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
+              Real output. Sanitized sample data. Every number labeled.
             </p>
-
-            <div className="mt-9 flex w-full flex-col items-start gap-3">
-              <CopyCommand />
-              <div className="flex flex-wrap items-center justify-start gap-x-4 gap-y-2 font-mono text-xs">
-                <span className="text-faint">Node 22+ · no signup</span>
-                <a
-                  href="/?ref=teams#beta"
-                  className="text-green transition-colors hover:text-green-bright"
-                >
-                  Need a company view? Join the beta →
-                </a>
+            <div className="relative mt-10">
+              <div
+                className="grid-field pointer-events-none absolute -inset-x-5 -inset-y-8 sm:-inset-x-16 sm:-inset-y-16"
+                aria-hidden="true"
+              />
+              <div className="relative">
+                <TerminalReceipt />
               </div>
             </div>
-          </div>
-
-          <aside
-            aria-label="aibill financial accountability chain"
-            className="hidden border-y border-white/[0.09] py-4 lg:block"
-          >
-            <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-faint">
-              Accountability chain
+            <p className="mt-3 font-mono text-[11px] text-faint">
+              # sample data · 9 records · labels: provider-reported / estimated
+              / detected-unverified / missing
             </p>
-            <ol className="mt-3">
-              {accountabilityPath.map(([label, state, tone], index) => (
-                <li
-                  key={label}
-                  className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2 border-t border-white/[0.07] py-3 first:border-t-0"
-                >
-                  <span className="font-mono text-[0.65rem] text-green">0{index + 1}</span>
-                  <span className="text-sm font-medium text-ink">{label}</span>
-                  <span
-                    className={`col-start-2 mt-0.5 font-mono text-[0.65rem] ${evidenceToneClass(tone)}`}
-                  >
-                    {state}
-                  </span>
-                </li>
-              ))}
-            </ol>
-            <p className="mt-2 font-mono text-[0.65rem] text-faint">
-              Evidence first · gaps stay explicit
-            </p>
-          </aside>
-        </div>
+          </Reveal>
+        </section>
 
-        <div className="mt-12 w-full border-y border-white/[0.07] py-5">
-          <p className="font-mono text-[0.65rem] uppercase tracking-[0.2em] text-faint">
-            Reads the tools you already use
-          </p>
-          <div className="mt-4 flex flex-wrap items-center justify-start gap-x-8 gap-y-3">
-            {integrations.map((integration) => (
-              <span key={integration} className="text-sm font-medium text-muted">
-                {integration}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-7 grid w-full gap-y-5 text-left sm:grid-cols-4 sm:divide-x sm:divide-white/[0.07]">
-          {[
-            ["Local by default", "Raw transcripts stay on-device."],
-            ["Source linked", "Every number names its origin."],
-            ["Honest gaps", "Missing data stays missing."],
-            ["Shared semantics", "Overlapping evidence agrees."],
-          ].map(([title, body]) => (
-            <div key={title} className="px-0 sm:px-5">
-              <p className="text-sm font-semibold text-ink">{title}</p>
-              <p className="mt-1 text-sm text-faint">{body}</p>
+        {/* 02 · Evidence */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <Eyebrow>02 · Evidence</Eyebrow>
+            <div className="mt-6 grid gap-8 md:grid-cols-2 md:items-end">
+              <p className="font-mono text-[clamp(64px,12vw,136px)] leading-none tracking-[-0.04em] text-green [font-variant-numeric:tabular-nums]">
+                $0.00
+              </p>
+              <div>
+                <p className="max-w-[420px] text-lg leading-relaxed text-muted">
+                  Variance when we reconciled OpenAI&apos;s reported costs
+                  against the actual invoice.
+                </p>
+                <p className="mt-3 max-w-[420px] text-[13px] leading-relaxed text-faint">
+                  v0.6.0 release QA — the Costs total reconciled to invoiced
+                  API credits, net of the provider-UI balance. Each user&apos;s
+                  final invoice remains separate.
+                </p>
+              </div>
             </div>
-          ))}
-        </div>
-      </section>
+          </Reveal>
+        </section>
 
-      <section
-        id="product"
-        className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-20"
-      >
-        <div className="grid gap-5 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] md:items-end">
-          <h2 className="text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            One evidence layer. Three ways to use it.
-          </h2>
-          <p className="max-w-xl text-pretty text-base leading-relaxed text-muted md:justify-self-end">
-            Each surface keeps the same evidence rules. Connector validation
-            never upgrades a number&apos;s financial-evidence label; source,
-            freshness, billing class, and missing data stay explicit.
-          </p>
-        </div>
-
-        <div className="mt-10">
-          <ProductTour />
-        </div>
-
-        <div className="mt-6 flex flex-wrap items-center justify-start gap-x-6 gap-y-3 font-mono text-xs">
-          <a
-            href="https://github.com/futurastudio/ai-spend-agent"
-            target="_blank"
-            rel="noreferrer"
-            className="text-muted transition-colors hover:text-ink"
-          >
-            View the source ↗
-          </a>
-          <a
-            href="https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md"
-            target="_blank"
-            rel="noreferrer"
-            className="text-muted transition-colors hover:text-ink"
-          >
-            Configure MCP ↗
-          </a>
-          <a
-            href="https://github.com/futurastudio/ai-spend-agent/tree/main/apps/glance-macos"
-            target="_blank"
-            rel="noreferrer"
-            className="text-muted transition-colors hover:text-ink"
-          >
-            Build Glance ↗
-          </a>
-        </div>
-      </section>
-
-      <section className="relative z-10 mx-auto max-w-content px-6 py-20">
-        <div className="max-w-3xl">
-          <p className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
-            The accountability gap
-          </p>
-          <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-            Financial accountability starts with four questions.
-          </h2>
-          <p className="mt-4 max-w-2xl text-pretty text-base leading-relaxed text-muted">
-            Today&apos;s beta answers only what local and provider evidence can
-            support. Company-wide reconciliation, accepted outcomes, approvals,
-            and ROI stay explicitly next.
-          </p>
-        </div>
-
-        <div className="mt-10 grid overflow-hidden rounded-3xl border border-white/[0.08] bg-surface/80 sm:grid-cols-2">
-          {accountabilityQuestions.map((step, index) => (
-            <div
-              key={step.title}
-              className="relative border-b border-white/[0.07] p-6 last:border-b-0 sm:p-8 sm:[&:nth-child(even)]:border-l sm:[&:nth-child(3)]:border-b-0 sm:[&:nth-child(4)]:border-b-0"
-            >
-              <span
-                className={`font-mono text-[0.65rem] uppercase tracking-[0.14em] ${evidenceToneClass(step.tone)}`}
-              >
-                {step.status}
-              </span>
-              <div className="mt-7 flex items-start justify-between gap-5">
-                <h3 className="max-w-lg text-balance text-xl font-semibold leading-tight tracking-[-0.03em] text-ink sm:text-2xl">
-                  {step.title}
+        {/* 03 · How it works */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <Eyebrow>03 · How it works</Eyebrow>
+          </Reveal>
+          <div className="mt-4 divide-y divide-hairline">
+            <Reveal className="grid gap-8 py-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:items-center">
+              <div>
+                <h3 className="text-[19px] font-medium tracking-[-0.015em] text-ink sm:text-[22px]">
+                  Every number carries its label
                 </h3>
-                <span className="font-mono text-xs text-faint">0{index + 1}</span>
+                <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
+                  Verified, estimated, detected, or missing — every dollar on
+                  the receipt states its evidence. Green is reserved for
+                  provider-reported numbers: proven, never modeled.
+                </p>
               </div>
-              <p className="mt-3 text-pretty text-sm leading-relaxed text-muted">
-                {step.body}
-              </p>
+              <div>
+                <div className="receipt rounded-sm border border-hairline bg-well font-mono text-[12px] sm:text-[13px]">
+                  <div className="flex items-baseline justify-between gap-4 border-b border-hairline px-4 py-3">
+                    <span>
+                      <span className="tl-green">●</span>{" "}
+                      <span className="tl-muted">provider-reported</span>
+                    </span>
+                    <span className="tl-green">$12.00 billed</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4 border-b border-hairline px-4 py-3">
+                    <span>
+                      <span className="tl-faint">~</span>{" "}
+                      <span className="tl-muted">estimated</span>
+                    </span>
+                    <span className="tl-amber">$56.60</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4 border-b border-hairline px-4 py-3">
+                    <span>
+                      <span className="tl-faint">◌</span>{" "}
+                      <span className="tl-faint">detected/unverified</span>
+                    </span>
+                    <span className="text-ink">$30.40</span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4 px-4 py-3">
+                    <span>
+                      <span className="tl-faint">—</span>{" "}
+                      <span className="tl-faint">missing</span>
+                    </span>
+                    <span className="tl-faint">connect a provider</span>
+                  </div>
+                </div>
+                <p className="mt-3 font-mono text-[11px] text-faint">
+                  # the four labels, illustrated — only a provider-reported
+                  dollar is ever green
+                </p>
+              </div>
+            </Reveal>
+            <Reveal className="grid gap-8 py-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:items-center">
+              <div>
+                <h3 className="text-[19px] font-medium tracking-[-0.015em] text-ink sm:text-[22px]">
+                  Knows the plan you already pay for
+                </h3>
+                <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
+                  Detects Claude Max, ChatGPT Pro, and GitHub Copilot plans from
+                  your agents&apos; local config — read-only, nothing connected.
+                  Shows limit runway and how API-equivalent usage compares with
+                  the plan&apos;s listed price: a value difference to
+                  investigate, not proof of coverage.
+                </p>
+              </div>
+              <div>
+                <div className="receipt rounded-sm border border-hairline bg-well p-4 font-mono text-[12px] leading-[1.7] sm:text-[13px]">
+                  <div className="tl-line">
+                    <span className="tl-strong">DETECTED PLAN  </span>
+                    <span className="tl-muted">
+                      Claude Max 5x — from local config (read-only)
+                    </span>
+                  </div>
+                  <div className="tl-line">
+                    <span className="tl-strong">COMPARED WITH  </span>
+                    <span className="tl-muted">
+                      Claude Max 5x ($100/mo) — API-equivalent
+                    </span>
+                  </div>
+                  <div className="tl-line">
+                    <span className="tl-muted">  usage is </span>
+                    <span className="tl-amber">~4.3×</span>
+                    <span className="tl-muted"> the listed price</span>
+                  </div>
+                </div>
+                <p className="mt-3 font-mono text-[11px] text-faint">
+                  # illustration of plan detection — sample mode can&apos;t
+                  detect a plan; run npx aibill to see yours
+                </p>
+              </div>
+            </Reveal>
+            <Reveal className="grid gap-8 py-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:items-center">
+              <div>
+                <h3 className="text-[19px] font-medium tracking-[-0.015em] text-ink sm:text-[22px]">
+                  Ambient in your statusline
+                </h3>
+                <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
+                  The receipt follows you into Claude Code. One line, always
+                  current: limits left, reset time, seven-day value.
+                </p>
+              </div>
+              <div>
+                <Statusline />
+                <p className="mt-3 font-mono text-[11px] text-faint">
+                  # the real statusline template — the ~ marks API-equivalent
+                  estimates; billed dollars only ever appear verified
+                </p>
+              </div>
+            </Reveal>
+          </div>
+        </section>
+
+        {/* 04 · Surfaces */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <Eyebrow>04 · Surfaces</Eyebrow>
+            <h2 className="mt-3 text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              One receipt. Three places to read it.
+            </h2>
+            <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
+              Menu bar, terminal, AI client — same local evidence, same
+              labels, same numbers, nothing recomputed per surface.
+            </p>
+            <div className="mt-8">
+              <ProductTour />
             </div>
-          ))}
-        </div>
-      </section>
+            <p className="mt-3 font-mono text-[11px] text-faint">
+              # terminal: the same sample receipt as above, recorded uncut ·
+              glance &amp; mcp: a second illustrative session · sample data
+              throughout
+            </p>
+          </Reveal>
+        </section>
 
-      <section
-        id="teams"
-        className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-12 sm:py-16"
-      >
-        <div className="grid border-y border-white/[0.09] py-10 md:grid-cols-[minmax(0,1.15fr)_minmax(17rem,0.85fr)] md:items-end md:gap-16 sm:py-12">
-          <div className="min-w-0">
-            <h2 className="text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-              Teams &amp; Agencies
-            </h2>
-            <p className="mt-5 max-w-2xl text-pretty text-base leading-relaxed text-muted sm:text-lg">
-              The planned workspace will add continuous monitoring, spend alerts,
-              a shared workspace, and white-label client reports to the same
-              evidence layer—without putting a proxy in your AI traffic.
-            </p>
-          </div>
-
-          <div className="mt-8 flex min-w-0 flex-col items-start md:mt-0">
-            <p className="max-w-md text-pretty text-sm leading-relaxed text-muted">
-              Founding design partners will help shape reconciliation, budgets,
-              approvals, and reporting before the workspace launches broadly.
-            </p>
-            <a
-              href="/?ref=teams#beta"
-              className="glass glass-interactive mt-6 inline-flex min-h-11 items-center whitespace-nowrap rounded-xl px-3 py-2.5 text-xs font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:px-4 sm:text-sm"
-            >
-              Become a founding design partner
-              <span className="ml-2 text-green" aria-hidden="true">→</span>
-            </a>
-            <p className="mt-3 text-xs leading-relaxed text-faint">
-              Planned product—not yet launched. Local mode stays free and private.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section id="beta" className="relative z-10 mx-auto max-w-content scroll-mt-24 px-6 py-20">
-        <div className="relative mx-auto grid max-w-5xl overflow-hidden rounded-[2rem] border border-white/[0.08] bg-elevated/80 px-6 py-10 text-left shadow-2xl sm:px-10 sm:py-12 md:grid-cols-[minmax(0,1fr)_minmax(20rem,0.85fr)] md:items-center md:gap-12">
-          <div>
-            <span className="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-green">
-              Design partners
-            </span>
-            <h2 className="mt-4 max-w-2xl text-balance text-3xl font-semibold tracking-[-0.045em] text-ink sm:text-5xl">
-              Build the financial accountability system with us.
-            </h2>
-            <p className="mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">
-              The planned Workspace will connect agent work to costs, owners,
-              accepted outcomes, budgets, approvals, and verified results—so
-              engineering and finance can act from the same evidence.
-            </p>
-          </div>
-          <div className="mt-8 min-w-0 max-w-xl md:mt-0">
-            <WaitlistForm />
-            <p className="mt-5 text-xs leading-relaxed text-faint">
-              Workspace is not launched. Local mode stays free and private.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="relative z-10 mx-auto max-w-3xl px-6 pb-24 pt-8">
-        <h2 className="text-left text-xs font-semibold uppercase tracking-[0.2em] text-faint">
-          The short answers
-        </h2>
-        <div className="mt-7 divide-y divide-white/[0.07] border-y border-white/[0.07]">
-          {faqs.map((faq) => (
-            <details key={faq.question} className="group">
-              <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-6 py-4 text-left text-base font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/40 [&::-webkit-details-marker]:hidden">
-                {faq.question}
-                <span
-                  aria-hidden="true"
-                  className="text-xl font-light text-faint transition-transform duration-200 group-open:rotate-45"
-                >
-                  +
-                </span>
-              </summary>
-              <p className="max-w-2xl pb-5 text-pretty text-sm leading-relaxed text-muted">
-                {faq.answer}
+        {/* 05 · Privacy */}
+        <section
+          id="privacy"
+          className="scroll-mt-24 border-b border-hairline px-5 py-16 sm:px-8 sm:py-24"
+        >
+          <Reveal>
+            <Eyebrow>05 · Privacy</Eyebrow>
+            <div className="mt-6 grid gap-8 md:grid-cols-2 md:items-end">
+              <p className="font-mono text-[clamp(64px,12vw,136px)] leading-none tracking-[-0.04em] text-ink [font-variant-numeric:tabular-nums]">
+                0
               </p>
-            </details>
-          ))}
-        </div>
-      </section>
+              <div className="text-lg leading-relaxed text-muted">
+                <p>0 bytes uploaded.</p>
+                <p>Analysis runs on your machine.</p>
+                <p>No telemetry, ever.</p>
+              </div>
+            </div>
+            <p className="mt-10 max-w-[640px] border-t border-hairline pt-6 text-base font-medium text-ink">
+              Never in the inference path; never stores, prints, or proxies
+              provider credentials.
+            </p>
+          </Reveal>
+        </section>
 
-      <footer className="relative z-10 border-t border-white/[0.07]">
-        <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-4 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>aibill — financial intelligence for the AI-agent economy.</span>
-          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-3">
-            <a
-              href="/blog/ai-coding-context-health"
-              className="transition-colors hover:text-ink"
-            >
-              Learn
+        {/* 06 · Sources */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <Eyebrow>06 · Sources</Eyebrow>
+            <h2 className="mt-3 text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              Reads what your agents already write.
+            </h2>
+            <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
+              Transcripts locally; billing APIs only when you connect them.
+            </p>
+            <div className="mt-8 grid border-l border-t border-hairline sm:grid-cols-2 lg:grid-cols-3">
+              {sources.map((source) => (
+                <div
+                  key={source.name}
+                  className="min-h-[128px] border-b border-r border-hairline p-6 transition-colors duration-150 hover:bg-panel"
+                >
+                  <p className="text-base font-medium text-ink">{source.name}</p>
+                  <p className="mt-1 font-mono text-xs text-faint">
+                    {source.role}
+                  </p>
+                  <span
+                    className={`mt-4 inline-block rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] ${chipClass(source.tone)}`}
+                  >
+                    {source.chip}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 font-mono text-[11px] text-faint">
+              # statuses are literal — beta means fixture-verified, not yet
+              verified against live billing
+            </p>
+          </Reveal>
+        </section>
+
+        {/* 07 · Teams */}
+        <section
+          id="teams"
+          className="scroll-mt-24 border-b border-hairline px-5 py-16 sm:px-8 sm:py-24"
+        >
+          <Reveal>
+            <Eyebrow>07 · Teams</Eyebrow>
+            <div className="mt-6 grid gap-12 md:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
+              <div>
+                <h2 className="text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+                  For teams and agencies accountable for agent spend.
+                </h2>
+                <p className="mt-4 max-w-[520px] text-base leading-relaxed text-muted">
+                  The engine stays open source. Tilden Workspace adds the same
+                  evidence labels at team scale.
+                </p>
+                <ul className="mt-8 max-w-[520px]">
+                  {workspaceItems.map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-baseline py-2 font-mono text-[13px] text-ink"
+                    >
+                      <span>{item}</span>
+                      <span className="dotted-leader" aria-hidden="true" />
+                      <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-muted">
+                        Workspace
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div id="beta" className="scroll-mt-24">
+                <h3 className="text-[19px] font-medium tracking-[-0.015em] text-ink sm:text-[22px]">
+                  Become a founding design partner
+                </h3>
+                <p className="mt-3 text-[15px] leading-relaxed text-muted">
+                  Founding design partners will help shape reconciliation,
+                  budgets, approvals, and reporting before the workspace
+                  launches broadly.
+                </p>
+                <div className="mt-6">
+                  <WaitlistForm />
+                </div>
+                <p className="mt-4 text-xs leading-relaxed text-faint">
+                  Workspace is not launched. Local mode stays free and private.
+                </p>
+              </div>
+            </div>
+          </Reveal>
+        </section>
+
+        {/* 08 · FAQ */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <JsonLd
+            data={{
+              "@context": "https://schema.org",
+              "@type": "FAQPage",
+              mainEntity: faqs.map((faq) => ({
+                "@type": "Question",
+                name: faq.question,
+                acceptedAnswer: { "@type": "Answer", text: faq.answer },
+              })),
+            }}
+          />
+          <Reveal>
+            <Eyebrow>08 · FAQ</Eyebrow>
+            <h2 className="mt-3 text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              The short answers.
+            </h2>
+            <div className="mt-8 max-w-[640px] divide-y divide-hairline border-y border-hairline">
+              {faqs.map((faq) => (
+                <details key={faq.question} className="group">
+                  <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-6 py-4 text-left text-base font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-line [&::-webkit-details-marker]:hidden">
+                    {faq.question}
+                    <span
+                      aria-hidden="true"
+                      className="font-mono text-base font-normal text-faint transition-transform duration-200 group-open:rotate-45 motion-reduce:transition-none"
+                    >
+                      +
+                    </span>
+                  </summary>
+                  <p className="max-w-[640px] pb-5 text-pretty text-sm leading-relaxed text-muted">
+                    {faq.answer}
+                  </p>
+                </details>
+              ))}
+            </div>
+          </Reveal>
+        </section>
+
+        {/* Closing CTA */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <h2 className="max-w-[640px] text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              Run the receipt on your own agents.
+            </h2>
+            <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
+              Ninety seconds from install to evidence. Nothing leaves your
+              machine.
+            </p>
+            <div className="mt-6 max-w-[380px]">
+              <CopyCommand />
+            </div>
+            <p className="mt-4 text-sm text-muted">
+              Running agents for a team?{" "}
+              <a
+                href="/?ref=teams#beta"
+                className="text-ink underline-offset-4 hover:underline"
+              >
+                Become a founding design partner →
+              </a>
+            </p>
+          </Reveal>
+        </section>
+      </main>
+
+      <footer className="px-5 py-10 sm:px-8">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <p className="flex items-baseline gap-3">
+            <a href="#top" className="wordmark wordmark-sm" aria-label="Tilden — top">
+              Tilden
+              <span className="wordmark-cursor" aria-hidden="true" />
             </a>
+            <span className="text-[13px] text-faint">
+              financial accountability for AI agents.
+            </span>
+          </p>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-xs text-faint">
             <a
-              href="https://github.com/futurastudio/ai-spend-agent"
+              href={REPO}
               target="_blank"
               rel="noreferrer"
               className="transition-colors hover:text-ink"
             >
-              GitHub
-            </a>
-            <a
-              href="https://github.com/futurastudio/ai-spend-agent/issues/new/choose"
-              target="_blank"
-              rel="noreferrer"
-              className="transition-colors hover:text-ink"
-            >
-              Report an issue
+              GitHub ↗
             </a>
             <a
               href="https://www.npmjs.com/package/aibill"
@@ -423,12 +546,59 @@ export default function Home() {
               rel="noreferrer"
               className="transition-colors hover:text-ink"
             >
-              npm
+              npm ↗
             </a>
-            <span className="text-green">npx aibill</span>
+            <a
+              href={`${REPO}/blob/main/docs/MCP.md`}
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-ink"
+            >
+              MCP docs ↗
+            </a>
+            <a href="#privacy" className="transition-colors hover:text-ink">
+              Privacy
+            </a>
           </div>
         </div>
+        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[11px] text-faint">
+          <a
+            href="/blog/claude-code-cost-usage-credits"
+            className="transition-colors hover:text-ink"
+          >
+            Cost guide
+          </a>
+          <a
+            href="/blog/ai-coding-context-health"
+            className="transition-colors hover:text-ink"
+          >
+            Context health
+          </a>
+          <a href="/vs/ccusage" className="transition-colors hover:text-ink">
+            vs ccusage
+          </a>
+          <a href="/vs/tokscale" className="transition-colors hover:text-ink">
+            vs tokscale
+          </a>
+          <a
+            href={`${REPO}/tree/main/apps/glance-macos`}
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-ink"
+          >
+            Build Glance ↗
+          </a>
+          <a
+            href={`${REPO}/issues/new/choose`}
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-ink"
+          >
+            Report an issue ↗
+          </a>
+          <span className="ml-auto text-green">$ npx aibill</span>
+        </div>
       </footer>
-    </main>
+    </div>
   );
 }

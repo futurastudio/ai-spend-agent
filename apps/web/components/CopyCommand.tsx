@@ -22,7 +22,7 @@ export function CopyCommand() {
       type="button"
       onClick={copy}
       aria-label={copied ? "Copied command" : "Copy command"}
-      className="glass glass-interactive group flex w-full max-w-md items-center justify-between gap-4 rounded-xl px-5 py-4 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/50"
+      className="group flex h-11 w-full max-w-md items-center justify-between gap-4 rounded-sm border border-green-line bg-green-wash px-4 font-mono text-sm transition-colors hover:border-[rgba(76,201,138,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/50"
     >
       <code className="flex min-w-0 items-center gap-2.5 truncate">
         <span className="select-none text-green" aria-hidden="true">
@@ -35,13 +35,11 @@ export function CopyCommand() {
         />
       </code>
       <span
-        className={`shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-          copied
-            ? "border-green/40 text-green"
-            : "border-border text-muted group-hover:border-border-bright group-hover:text-ink"
+        className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
+          copied ? "text-green" : "text-faint group-hover:text-ink"
         }`}
       >
-        {copied ? "Copied ✓" : "Copy"}
+        {copied ? "COPIED" : "COPY"}
       </span>
     </button>
   );

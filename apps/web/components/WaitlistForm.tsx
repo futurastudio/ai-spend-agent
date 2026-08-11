@@ -43,6 +43,11 @@ export function WaitlistForm() {
       }
 
       setStatus("success");
+      // Dedicated thank-you page; the inline card below renders during the
+      // brief navigation and remains the no-navigation fallback.
+      window.location.assign(
+        ref ? `/thanks?ref=${encodeURIComponent(ref)}` : "/thanks",
+      );
     } catch {
       setStatus("error");
       setMessage("Network error. Please try again.");
@@ -53,11 +58,11 @@ export function WaitlistForm() {
     return (
       <div
         role="status"
-        className="flex items-center gap-3 rounded-xl border border-green/40 bg-green/10 px-5 py-4 text-sm text-ink animate-fade-up"
+        className="flex items-center gap-3 rounded-sm border border-green-line bg-green-wash px-5 py-4 text-sm text-ink"
       >
         <span
           aria-hidden="true"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green/20 text-green"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-wash text-green"
         >
           <svg
             width="14"
@@ -76,14 +81,14 @@ export function WaitlistForm() {
           {isGlanceStudy ? (
             <>
               Thanks—we&apos;ll email{" "}
-              <span className="font-medium text-green-bright">{email}</span>{" "}
+              <span className="font-medium text-green">{email}</span>{" "}
               with study timing and the exact preview build/setup. Expect one
               short session and a day-seven check-in.
             </>
           ) : (
             <>
               Thanks—we&apos;ll follow up at{" "}
-              <span className="font-medium text-green-bright">{email}</span>{" "}
+              <span className="font-medium text-green">{email}</span>{" "}
               about fit and onboarding for the two-week design-partner beta.
             </>
           )}
@@ -113,12 +118,12 @@ export function WaitlistForm() {
           }}
           aria-invalid={status === "error"}
           aria-describedby={status === "error" ? "email-error" : undefined}
-          className="glass-well h-12 min-w-0 flex-1 rounded-xl px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green/50 focus:outline-none focus:ring-2 focus:ring-green/25"
+          className="h-11 min-w-0 flex-1 rounded-sm border border-hairline bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green-line focus:outline-none focus:ring-2 focus:ring-[rgba(76,201,138,0.25)]"
         />
         <button
           type="submit"
           disabled={status === "loading"}
-          className="inline-flex h-12 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-green px-6 text-sm font-semibold text-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_24px_-8px_rgba(89,212,153,0.5)] transition-[background-color,transform,box-shadow] duration-200 ease-out hover:bg-green-bright hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_12px_28px_-8px_rgba(94,242,168,0.55)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-sm bg-green px-6 text-sm font-medium text-ground transition-colors hover:bg-green-hi disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ground"
         >
           {status === "loading"
             ? "Submitting..."
@@ -128,7 +133,7 @@ export function WaitlistForm() {
         </button>
       </div>
       {status === "error" && (
-        <p id="email-error" className="mt-2 text-sm text-red">
+        <p id="email-error" className="mt-2 text-sm text-danger">
           {message}
         </p>
       )}

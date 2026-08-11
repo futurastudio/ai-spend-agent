@@ -113,17 +113,17 @@ export default function Page() {
             provider connection, or upload—and shows:
           </P>
           <ul className="mt-4 space-y-3 text-base leading-relaxed text-muted">
-            <li className="glass rounded-xl px-5 py-4">
+            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Observed API-equivalent value</span> —
               supported local usage priced at published rates, broken down by
               project and model where the transcript exposes them.
             </li>
-            <li className="glass rounded-xl px-5 py-4">
+            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Plan context and comparison</span> —
               API-rate value beside a detected or user-declared plan label. It
               is comparison math, not proof of plan coverage or the cheapest option.
             </li>
-            <li className="glass rounded-xl px-5 py-4">
+            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Evidence-ranked action candidates</span>
               {" "}— local transcript aggregates are treated as observed exposure,
               not invented monthly savings. Apply asks the coding agent to inspect
@@ -131,7 +131,7 @@ export default function Page() {
               and compare matched future sessions. A dollar result requires a
               source-supported counterfactual and, for a cash claim, provider cost.
             </li>
-            <li className="glass rounded-xl px-5 py-4">
+            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Context inventory and invocation evidence</span>
               {" "}— items that are discoverable, invoked, MCP-configured,
               explicitly requested as always-loaded, hook-injected, unmeasured,

@@ -13,1111 +13,203 @@ html {
 
 body {
   overflow-x: clip;
-  background-color: theme("colors.bg");
-  background-image:
-    radial-gradient(circle at 16% -8%, rgba(108, 99, 255, 0.11), transparent 31rem),
-    radial-gradient(circle at 86% 8%, rgba(87, 193, 255, 0.08), transparent 30rem);
+  background-color: theme("colors.ground");
   color: theme("colors.ink");
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background-color: rgba(89, 212, 153, 0.26);
+  background-color: rgba(76, 201, 138, 0.25);
   color: #ffffff;
 }
 
+/* ---- Frame ------------------------------------------------------------
+   One centered column carries the whole page. Side hairlines only at
+   desktop widths — on phones the horizontal section rules carry the
+   structure and the frame must never cause 1px overflow. */
+.frame {
+  margin-inline: auto;
+  max-width: 1080px;
+}
+
+@media (min-width: 1024px) {
+  .frame {
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* ---- Wordmark ---------------------------------------------------------
+   The CLI cursor promoted to logo. Static everywhere — blinking cursors
+   belong only to live terminal contexts. */
+.wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  color: #ededed;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.wordmark-sm {
+  font-size: 15px;
+}
+
+.wordmark-cursor {
+  display: inline-block;
+  width: 0.44em;
+  height: 0.78em;
+  margin-left: 0.16em;
+  transform: translateY(0.06em);
+  background: #4cc98a;
+}
+
+/* ---- Grid field -------------------------------------------------------
+   Radially-masked vignette behind the receipt panel only — it frames the
+   artwork instead of wallpapering the section. */
+.grid-field {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 85% 90% at 50% 45%,
+    #000 55%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 85% 90% at 50% 45%,
+    #000 55%,
+    transparent 100%
+  );
+}
+
+/* ---- Scroll reveal ----------------------------------------------------
+   Opacity + 12px rise only. Reveal.tsx flips .is-visible. */
+.reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---- Terminal receipt (.receipt scope) --------------------------------
+   Real DOM text, one line per div, revealed instantly (terminal output
+   appears, it does not fade). SSR markup is the settled final state; the
+   storyboard hides lines client-side before playing. Amber marks
+   estimated money and is legal only inside this scope. */
+.receipt {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
+/* Reveal gate: only a .tl-playing container (class added by JS right
+   before the storyboard starts) hides timed elements — no-JS and
+   reduced-motion visitors always see the settled receipt. */
+.tl-playing [data-at] {
+  opacity: 0;
+}
+
+.tl-playing [data-at].is-on {
+  opacity: 1;
+}
+
+.tl-bar-row {
+  display: grid;
+  grid-template-columns: 18ch minmax(0, 1fr) 8ch 4ch;
+  gap: 0 1ch;
+  align-items: center;
+}
+
+.tl-bar-amount {
+  text-align: right;
+}
+
+.tl-bar-track {
+  height: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tl-bar-fill {
+  display: block;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.tl-playing .tl-bar-fill {
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tl-playing .tl-bar-fill.is-on {
+  transform: scaleX(1);
+}
+
+.tl-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  background: #4cc98a;
+}
+
+.receipt .tl-green {
+  color: #4cc98a;
+}
+
+.receipt .tl-amber {
+  color: #c9a24b;
+}
+
+.receipt .tl-strong {
+  color: #ededed;
+  font-weight: 500;
+}
+
+.receipt .tl-muted {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.receipt .tl-faint {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+/* ---- Dotted leader ----------------------------------------------------
+   Receipt-style line items: label ····· STATUS. */
+.dotted-leader {
+  flex: 1 1 auto;
+  min-width: 2ch;
+  margin: 0 0.75ch;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.25);
+  transform: translateY(-0.35em);
+}
+
+/* ---- Statusline last-resort truncation mask --------------------------- */
+.statusline-mask {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+}
+
 @layer utilities {
-  /* ---- Liquid glass material ladder ----------------------------------
-     Translucency + backdrop blur convey hierarchy (heavier material =
-     more structural). Every glass surface gets a 1px specular top edge
-     so light appears to catch it. */
-  .glass {
-    background:
-      radial-gradient(
-        120% 100% at 4% 0%,
-        rgba(255, 255, 255, 0.09),
-        transparent 38%
-      ),
-      linear-gradient(
-        180deg,
-        rgba(255, 255, 255, 0.065),
-        rgba(255, 255, 255, 0.024) 42%,
-        rgba(255, 255, 255, 0.034)
-      );
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.105);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.16),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.18),
-      0 20px 60px -28px rgba(0, 0, 0, 0.72);
-  }
-
-  /* Nav bar / overlays — heaviest material, most blur. */
-  .glass-heavy {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 60%),
-      rgba(13, 14, 18, 0.64);
-    -webkit-backdrop-filter: blur(30px) saturate(190%);
-    backdrop-filter: blur(30px) saturate(190%);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.18),
-      0 20px 56px -26px rgba(0, 0, 0, 0.76);
-  }
-
-  /* Inset wells (inputs, terminal body) — recessed glass. */
-  .glass-well {
-    background: rgba(4, 5, 7, 0.55);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
-    backdrop-filter: blur(14px) saturate(140%);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
-  }
-
-  /* Interactive glass: lift on hover, sink on press (feedback on
-     pointer-down, not release). Compositor-only properties. */
-  .glass-interactive {
-    transition:
-      transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-      border-color 0.35s ease,
-      box-shadow 0.35s ease;
-  }
-  .glass-interactive:hover {
-    transform: translateY(-2px);
-    border-color: rgba(255, 255, 255, 0.16);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.18),
-      0 20px 44px -18px rgba(0, 0, 0, 0.65);
-  }
-  .glass-interactive:active {
-    transform: translateY(0) scale(0.985);
-    transition-duration: 0.12s;
-  }
-
-  /* ---- Ambient aurora -------------------------------------------------
-     Slow-drifting color fields behind the glass give the blur something
-     to refract. transform-only animation, GPU-composited. */
-  .aurora {
-    position: absolute;
-    border-radius: 9999px;
-    filter: blur(110px);
-    pointer-events: none;
-    will-change: transform;
-  }
-  .aurora-green {
-    background: radial-gradient(
-      circle at 50% 50%,
-      rgba(89, 212, 153, 0.26),
-      transparent 65%
-    );
-    animation: aurora-drift-1 26s ease-in-out infinite alternate;
-  }
-  .aurora-cyan {
-    background: radial-gradient(
-      circle at 50% 50%,
-      rgba(87, 193, 255, 0.18),
-      transparent 65%
-    );
-    animation: aurora-drift-2 32s ease-in-out infinite alternate;
-  }
-  .aurora-violet {
-    background: radial-gradient(
-      circle at 50% 50%,
-      rgba(125, 112, 255, 0.2),
-      transparent 66%
-    );
-    animation: aurora-drift-2 29s ease-in-out infinite alternate-reverse;
-  }
-
-  @keyframes aurora-drift-1 {
-    from {
-      transform: translate3d(-6%, -4%, 0) scale(1);
-    }
-    to {
-      transform: translate3d(8%, 7%, 0) scale(1.15);
-    }
-  }
-  @keyframes aurora-drift-2 {
-    from {
-      transform: translate3d(7%, 5%, 0) scale(1.1);
-    }
-    to {
-      transform: translate3d(-8%, -6%, 0) scale(0.95);
-    }
-  }
-
-  /* ---- Scroll reveal ---------------------------------------------------
-     Sections rise into place as they enter the viewport. The .reveal
-     element starts hidden and Reveal.tsx flips .is-visible. */
-  .reveal {
-    opacity: 0;
-    transform: translateY(18px) scale(0.995);
-    transition:
-      opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
-      transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
-    transition-delay: var(--reveal-delay, 0ms);
-  }
-  .reveal.is-visible {
-    opacity: 1;
-    transform: none;
-  }
-
-  /* Faint grid that fades out below the hero. */
-  .grid-fade {
-    background-image:
-      linear-gradient(to right, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
-    background-size: 60px 60px;
-    -webkit-mask-image: radial-gradient(
-      ellipse 75% 55% at 50% 0%,
-      #000 35%,
-      transparent 78%
-    );
-    mask-image: radial-gradient(
-      ellipse 75% 55% at 50% 0%,
-      #000 35%,
-      transparent 78%
-    );
-  }
-
-  /* Single restrained green glow behind the terminal. */
-  .accent-glow {
-    background: radial-gradient(
-      ellipse 50% 50% at 50% 50%,
-      rgba(89, 212, 153, 0.16),
-      transparent 70%
-    );
-    filter: blur(90px);
-  }
-
-  /* ---- Product tour --------------------------------------------------
-     One receipt is rendered as Glance, Terminal, or a sourced MCP answer.
-     Tabs are the only moving controls; the surrounding surface stays quiet. */
-  .product-tour {
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 36px;
-    background:
-      radial-gradient(90% 55% at 50% 0%, rgba(89, 212, 153, 0.09), transparent 68%),
-      rgba(10, 11, 15, 0.76);
-    padding: 8px;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 40px 100px -56px rgba(0, 0, 0, 0.86);
-  }
-
-  .product-tour-tabs {
-    display: flex;
-    width: fit-content;
-    max-width: 100%;
-    margin: 18px auto 0;
-    gap: 3px;
-    overflow-x: auto;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
-    background: rgba(2, 3, 5, 0.46);
-    padding: 3px;
-  }
-
-  .product-tour-tab {
-    min-height: 44px;
-    flex: 0 0 auto;
-    border-radius: 999px;
-    padding: 0 18px;
-    color: rgba(255, 255, 255, 0.52);
-    font-size: 13px;
-    font-weight: 620;
-    transition:
-      background-color 180ms ease,
-      color 180ms ease,
-      box-shadow 180ms ease;
-  }
-
-  .product-tour-tab:hover {
-    color: rgba(255, 255, 255, 0.88);
-  }
-
-  .product-tour-tab[aria-selected="true"] {
-    background: rgba(255, 255, 255, 0.095);
-    color: rgba(255, 255, 255, 0.96);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 6px 20px rgba(0, 0, 0, 0.22);
-  }
-
-  .product-tour-tab:focus-visible {
-    outline: 2px solid rgba(94, 242, 168, 0.6);
-    outline-offset: 2px;
-  }
-
-  .product-tour-copy {
-    padding: 24px 20px 22px;
-    text-align: center;
-  }
-
-  .product-tour-copy > p {
-    color: #59d499;
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-
-  .product-tour-copy h3 {
-    margin-top: 7px;
-    color: rgba(255, 255, 255, 0.96);
-    font-size: clamp(1.25rem, 2.5vw, 1.75rem);
-    font-weight: 650;
-    letter-spacing: -0.035em;
-  }
-
-  .product-tour-copy > span {
-    display: block;
-    max-width: 560px;
-    margin: 7px auto 0;
-    color: rgba(255, 255, 255, 0.52);
-    font-size: 14px;
-    line-height: 1.6;
-    text-wrap: pretty;
-  }
-
-  .product-tour-panel {
-    overflow: hidden;
-    border-radius: 29px;
-  }
-
-  .product-tour .glance-stage {
-    border-radius: 29px;
-  }
-
-  .product-tour-note {
-    max-width: 720px;
-    margin: 15px auto 12px;
-    padding: 0 16px;
-    color: rgba(255, 255, 255, 0.36);
-    font-size: 11px;
-    line-height: 1.55;
-    text-align: center;
-    text-wrap: pretty;
-  }
-
-  .tour-terminal,
-  .tour-mcp {
-    min-height: 500px;
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 29px;
-    background: #07090d;
-  }
-
-  .tour-terminal-recording {
-    min-height: 0;
-  }
-
-  .tour-window-bar {
-    display: flex;
-    height: 48px;
-    align-items: center;
-    gap: 12px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.065);
-    padding: 0 18px;
-  }
-
-  .tour-window-bar strong {
-    color: rgba(255, 255, 255, 0.36);
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-    font-size: 10px;
-    font-weight: 550;
-  }
-
-  .tour-video-control {
-    display: inline-flex;
-    min-width: 44px;
-    min-height: 44px;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    margin-left: auto;
-    border-radius: 999px;
-    padding: 0 12px;
-    color: rgba(255, 255, 255, 0.58);
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-    font-size: 10px;
-    font-weight: 600;
-    transition:
-      background-color 160ms ease,
-      color 160ms ease;
-  }
-
-  .tour-video-control:hover {
-    background: rgba(255, 255, 255, 0.07);
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .tour-video-control:focus-visible {
-    outline: 2px solid rgba(94, 242, 168, 0.62);
-    outline-offset: -2px;
-  }
-
-  .tour-video-control svg {
-    width: 14px;
-    height: 14px;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.5;
-  }
-
-  .tour-terminal-media {
-    overflow: hidden;
-    aspect-ratio: 10 / 7;
-    background: #060609;
-  }
-
-  .tour-terminal-video {
-    display: block;
-    width: 100%;
-    height: 100%;
-    background: #060609;
-    object-fit: contain;
-  }
-
-  .tour-terminal-body {
-    padding: 24px;
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-  }
-
-  .tour-prompt {
-    color: rgba(255, 255, 255, 0.82);
-    font-size: 12px;
-  }
-
-  .tour-prompt span,
-  .tour-terminal-row > span {
-    color: #59d499;
-  }
-
-  .tour-terminal-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-    gap: 12px;
-    margin-top: 20px;
-  }
-
-  .tour-terminal-primary,
-  .tour-terminal-runway,
-  .tour-terminal-row {
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 17px;
-    background: rgba(255, 255, 255, 0.025);
-  }
-
-  .tour-terminal-primary {
-    padding: 17px;
-  }
-
-  .tour-terminal-primary p,
-  .tour-terminal-primary small,
-  .tour-terminal-runway small,
-  .tour-terminal-row small {
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 9px;
-    line-height: 1.55;
-  }
-
-  .tour-terminal-primary > strong {
-    display: block;
-    margin-top: 7px;
-    color: rgba(255, 255, 255, 0.96);
-    font-size: 34px;
-    font-weight: 670;
-    letter-spacing: -0.055em;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tour-terminal-primary > span {
-    display: block;
-    margin-top: 5px;
-    color: rgba(255, 255, 255, 0.68);
-    font-size: 10px;
-  }
-
-  .tour-terminal-primary small {
-    display: block;
-    margin-top: 7px;
-  }
-
-  .tour-terminal-runway {
-    display: grid;
-    grid-template-rows: repeat(2, 1fr);
-    overflow: hidden;
-  }
-
-  .tour-terminal-runway > div {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-content: center;
-    gap: 6px 12px;
-    padding: 13px 15px;
-  }
-
-  .tour-terminal-runway > div + div {
-    border-top: 1px solid rgba(255, 255, 255, 0.065);
-  }
-
-  .tour-terminal-runway span {
-    color: rgba(255, 255, 255, 0.56);
-    font-size: 10px;
-  }
-
-  .tour-terminal-runway strong {
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tour-terminal-runway-attention strong {
-    color: #ffbd66;
-  }
-
-  .tour-terminal-runway-healthy strong {
-    color: #7cf4b7;
-  }
-
-  .tour-terminal-runway small {
-    grid-column: 1 / -1;
-  }
-
-  .tour-terminal-row {
-    display: grid;
-    grid-template-columns: 110px minmax(0, 1fr);
-    gap: 4px 14px;
-    margin-top: 10px;
-    padding: 13px 15px;
-  }
-
-  .tour-terminal-row > span {
-    grid-row: 1 / 3;
-    align-self: center;
-    font-size: 9px;
-    font-weight: 650;
-    letter-spacing: 0.08em;
-  }
-
-  .tour-terminal-row > strong {
-    color: rgba(255, 255, 255, 0.88);
-    font-size: 11px;
-    font-weight: 620;
-  }
-
-  .tour-terminal-action {
-    border-color: rgba(255, 189, 102, 0.12);
-    background: rgba(255, 189, 102, 0.035);
-  }
-
-  .tour-terminal-action > span {
-    color: #ffbd66;
-  }
-
-  .tour-terminal-source {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 16px;
-    color: rgba(255, 255, 255, 0.32);
-    font-size: 9px;
-  }
-
-  .tour-terminal-source strong {
-    margin-left: auto;
-    color: rgba(255, 255, 255, 0.45);
-    font-weight: 560;
-  }
-
-  .tour-mcp {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 14px;
-    padding: clamp(20px, 5vw, 64px);
-    background:
-      radial-gradient(circle at 82% 12%, rgba(87, 193, 255, 0.11), transparent 32%),
-      #080a0f;
-  }
-
-  .tour-mcp-question {
-    max-width: 620px;
-    margin-left: auto;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 22px 22px 6px 22px;
-    background: rgba(255, 255, 255, 0.065);
-    padding: 15px 18px;
-    color: rgba(255, 255, 255, 0.86);
-    font-size: 14px;
-  }
-
-  .tour-mcp-answer {
-    display: flex;
-    max-width: 760px;
-    gap: 13px;
-    border: 1px solid rgba(89, 212, 153, 0.13);
-    border-radius: 22px 22px 22px 6px;
-    background: rgba(89, 212, 153, 0.045);
-    padding: 18px;
-  }
-
-  .tour-mcp-mark {
-    display: grid;
-    width: 32px;
-    height: 32px;
-    flex: 0 0 32px;
-    place-items: center;
-    border: 1px solid rgba(89, 212, 153, 0.2);
-    border-radius: 10px;
-    background: rgba(89, 212, 153, 0.08);
-    color: #7cf4b7;
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-    font-size: 13px;
-  }
-
-  .tour-mcp-answer p {
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 13px;
-    line-height: 1.7;
-    text-wrap: pretty;
-  }
-
-  .tour-mcp-answer p + p {
-    margin-top: 9px;
-  }
-
-  .tour-mcp-answer strong {
-    color: rgba(255, 255, 255, 0.92);
-    font-weight: 620;
-  }
-
-  .tour-mcp-sources {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 15px;
-  }
-
-  .tour-mcp-sources span {
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.035);
-    padding: 5px 8px;
-    color: rgba(255, 255, 255, 0.42);
-    font-family: var(--font-geist-mono), ui-monospace, monospace;
-    font-size: 8px;
-  }
-
-  /* ---- aibill Glance --------------------------------------------------
-     Browser preview of the native macOS rendering surface. One stationary
-     glass wordmark sits left of the camera; its card slides down on hover. */
-  .glance-stage {
-    position: relative;
-    min-height: 500px;
-    overflow: hidden;
-    border-radius: 42px;
-    background: #0a0c12;
-    isolation: isolate;
-  }
-
-  .glance-wallpaper {
-    position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(circle at 16% 20%, rgba(86, 204, 242, 0.7), transparent 31%),
-      radial-gradient(circle at 72% 15%, rgba(137, 104, 255, 0.78), transparent 34%),
-      radial-gradient(circle at 67% 86%, rgba(77, 214, 173, 0.58), transparent 33%),
-      radial-gradient(circle at 22% 82%, rgba(255, 139, 113, 0.3), transparent 28%),
-      linear-gradient(145deg, #151b2c 0%, #0a0b12 56%, #10162a 100%);
-    filter: saturate(112%);
-  }
-
-  .glance-wallpaper::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background:
-      linear-gradient(115deg, rgba(255, 255, 255, 0.07), transparent 30%),
-      radial-gradient(ellipse at 50% 42%, transparent 28%, rgba(3, 4, 8, 0.38) 100%);
-  }
-
-  .glance-menu-bar {
-    position: absolute;
-    inset: 0 0 auto;
-    z-index: 2;
-    display: flex;
-    height: 31px;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 0 17px;
-    background: rgba(5, 6, 10, 0.3);
-    color: rgba(255, 255, 255, 0.72);
-    -webkit-backdrop-filter: blur(22px) saturate(180%);
-    backdrop-filter: blur(22px) saturate(180%);
-  }
-
-  .glance-menu-copy {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  .glance-camera {
-    position: absolute;
-    left: 50%;
-    top: 0;
-    width: 138px;
-    height: 24px;
-    transform: translateX(-50%);
-    border-radius: 0 0 14px 14px;
-    background: #030304;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
-  }
-
-  .usage-glance {
-    position: absolute;
-    inset: 0;
-    z-index: 4;
-    outline: none;
-    color: rgba(255, 255, 255, 0.96);
-    pointer-events: none;
-  }
-
-  .glance-trigger {
-    position: absolute;
-    top: 3px;
-    right: calc(50% + 77px);
-    display: grid;
-    width: 58px;
-    height: 20px;
-    place-items: center;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 999px;
-    outline: none;
-    background:
-      linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.045)),
-      rgba(13, 16, 22, 0.22);
-    color: rgba(255, 255, 255, 0.8);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 4px 14px rgba(0, 0, 0, 0.14);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    backdrop-filter: blur(20px) saturate(180%);
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: -0.025em;
-    list-style: none;
-    opacity: 0;
-    visibility: visible;
-    pointer-events: none;
-    cursor: default;
-    transform: translateY(-3px);
-    transition:
-      opacity 0.16s ease,
-      visibility 0s linear 0.18s,
-      transform 0.2s ease,
-      border-color 0.18s ease,
-      background 0.18s ease,
-      color 0.18s ease;
-  }
-
-  .glance-trigger::before {
-    content: "";
-    position: absolute;
-    inset: -12px -8px;
-  }
-
-  .glance-stage:has(.glance-menu-bar:hover) .glance-trigger,
-  .glance-stage:has(.glance-trigger:hover) .glance-trigger,
-  .glance-stage:has(.glance-trigger:focus-visible) .glance-trigger,
-  .glance-stage:has(.glance-panel:hover) .glance-trigger,
-  .usage-glance[data-open="true"] .glance-trigger,
-  .glance-stage:focus-within .glance-trigger {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-    transform: translateY(0);
-    transition-delay: 0s;
-  }
-
-  .glance-trigger:hover,
-  .glance-trigger:focus-visible {
-    border-color: rgba(255, 255, 255, 0.32);
-    background:
-      linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(94, 242, 168, 0.07)),
-      rgba(13, 16, 22, 0.28);
-    color: rgba(255, 255, 255, 0.96);
-  }
-
-  .glance-trigger:focus-visible {
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      0 0 0 2px rgba(94, 242, 168, 0.42);
-  }
-
-  .glance-panel {
-    position: absolute;
-    top: 25px;
-    left: 50%;
-    width: 452px;
-    height: 382px;
-    max-width: calc(100% - 28px);
-    overflow: hidden;
-    border-color: rgba(255, 255, 255, 0.16);
-    border-style: solid;
-    border-width: 1px;
-    border-radius: 30px;
-    background:
-      radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 30%),
-      rgba(11, 13, 18, 0.62);
-    -webkit-backdrop-filter: blur(34px) saturate(190%);
-    backdrop-filter: blur(34px) saturate(190%);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 30px 85px rgba(0, 0, 0, 0.48);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transform: translate(-50%, -12px) scale(0.985);
-    transform-origin: top center;
-    transition:
-      opacity 0.2s ease,
-      visibility 0s linear 0.32s,
-      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .usage-glance:has(.glance-trigger:hover) .glance-panel,
-  .usage-glance:has(.glance-panel:hover) .glance-panel,
-  .usage-glance[data-open="true"] .glance-panel {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-    transform: translate(-50%, 0) scale(1);
-    transition-delay: 0s;
-  }
-
-  .glance-detail {
-    padding: 14px 18px 18px;
-  }
-
-  .glance-headline {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    padding: 5px 2px 6px;
-  }
-
-  .glance-kicker {
-    color: rgba(255, 255, 255, 0.52);
-    font-size: 11px;
-    font-weight: 550;
-  }
-
-  .glance-total {
-    margin-top: 3px;
-    font-size: 32px;
-    font-weight: 660;
-    line-height: 1;
-    letter-spacing: -0.055em;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-current-line {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-  }
-
-  .glance-current-line > span {
-    color: rgba(255, 255, 255, 0.48);
-    font-size: 10px;
-    font-weight: 550;
-  }
-
-  .glance-current-project {
-    margin-top: 1px;
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 10px;
-    font-weight: 620;
-  }
-
-  .glance-current-plan {
-    margin-top: 2px;
-    color: rgba(255, 255, 255, 0.44);
-    font-size: 9px;
-    font-weight: 540;
-  }
-
-  .glance-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid rgba(94, 242, 168, 0.2);
-    border-radius: 999px;
-    background: rgba(94, 242, 168, 0.08);
-    padding: 5px 9px;
-    color: #7cf4b7;
-    font-size: 10px;
-    font-weight: 650;
-  }
-
-  .glance-status > span {
-    width: 5px;
-    height: 5px;
-    border-radius: 999px;
-    background: #5ef2a8;
-    box-shadow: 0 0 10px rgba(94, 242, 168, 0.72);
-  }
-
-  .glance-limit-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .glance-limit-card {
-    border: 1px solid rgba(255, 255, 255, 0.085);
-    border-radius: 16px;
-    background:
-      linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025));
-    padding: 11px 12px 10px;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  }
-
-  .glance-limit-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    color: rgba(255, 255, 255, 0.64);
-    font-size: 10px;
-    font-weight: 550;
-  }
-
-  .glance-limit-top strong {
-    color: rgba(255, 255, 255, 0.92);
-    font-size: 11px;
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-meter-track {
-    height: 4px;
-    margin-top: 9px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.09);
-  }
-
-  .glance-meter-fill {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-  }
-
-  .glance-meter-attention {
-    background: linear-gradient(90deg, #ffbd66, #ffd891);
-    box-shadow: 0 0 16px rgba(255, 189, 102, 0.34);
-  }
-
-  .glance-meter-healthy {
-    background: linear-gradient(90deg, #5ef2a8, #64c8ff);
-    box-shadow: 0 0 16px rgba(94, 242, 168, 0.34);
-  }
-
-  .glance-limit-card > p {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-top: 7px;
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 9px;
-    font-weight: 540;
-  }
-
-  .glance-limit-card > p strong {
-    color: rgba(255, 255, 255, 0.62);
-    font-weight: 620;
-  }
-
-  .glance-session {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.045);
-    padding: 11px 12px;
-  }
-
-  .glance-session-mark {
-    display: grid;
-    width: 28px;
-    height: 28px;
-    flex: 0 0 28px;
-    place-items: center;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 9px;
-    background: linear-gradient(145deg, rgba(100, 200, 255, 0.2), rgba(137, 104, 255, 0.16));
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 11px;
-    font-weight: 720;
-  }
-
-  .glance-session > div:nth-child(2) {
-    min-width: 0;
-  }
-
-  .glance-session p {
-    color: rgba(255, 255, 255, 0.46);
-    font-size: 9px;
-  }
-
-  .glance-session strong {
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 11px;
-    font-weight: 620;
-  }
-
-  .glance-session > div:nth-child(2) strong {
-    display: block;
-    margin-top: 2px;
-  }
-
-  .glance-session > div:nth-child(2) > span {
-    display: block;
-    margin-top: 2px;
-    overflow: hidden;
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 9px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .glance-session-value {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    align-items: flex-end;
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .glance-session-value span {
-    margin-top: 1px;
-    color: rgba(255, 255, 255, 0.42);
-    font-size: 9px;
-  }
-
-  .glance-insight {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 9px;
-    border: 1px solid rgba(255, 189, 102, 0.12);
-    border-radius: 16px;
-    background: rgba(255, 189, 102, 0.055);
-    padding: 10px 11px;
-  }
-
-  .glance-insight-dot {
-    width: 7px;
-    height: 7px;
-    flex: 0 0 7px;
-    border-radius: 999px;
-    background: #ffbd66;
-    box-shadow: 0 0 12px rgba(255, 189, 102, 0.52);
-  }
-
-  .glance-insight > div {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-  }
-
-  .glance-insight strong {
-    overflow: hidden;
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 10px;
-    font-weight: 630;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .glance-insight > div span {
-    margin-top: 2px;
-    overflow: hidden;
-    color: rgba(255, 255, 255, 0.43);
-    font-size: 9px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .glance-action-copy {
-    flex: 0 0 auto;
-    border: 1px solid rgba(255, 255, 255, 0.075);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.045);
-    padding: 5px 7px;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 8px;
-    font-weight: 630;
-  }
-
-  .glance-source-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 9px;
-    padding: 0 3px;
-    color: rgba(255, 255, 255, 0.38);
-    font-size: 9px;
-    font-weight: 540;
-  }
-
-  .glance-source-row p {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .glance-source-row strong {
-    flex: 0 0 auto;
-    margin-left: auto;
-    color: rgba(255, 255, 255, 0.34);
-    font-weight: 560;
-  }
-
-  .glance-desktop-copy {
-    position: absolute;
-    right: 28px;
-    bottom: 26px;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    color: rgba(255, 255, 255, 0.58);
-    font-size: 11px;
-  }
-
-  .glance-desktop-copy strong {
-    margin-top: 2px;
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 12px;
-    font-weight: 620;
-  }
-
   .text-balance {
     text-wrap: balance;
   }
@@ -1125,42 +217,756 @@ body {
   .text-pretty {
     text-wrap: pretty;
   }
+}
 
-  /* Hairline-bordered card depth comes from the ladder, never shadows. */
-  .card {
-    background-color: theme("colors.surface");
-    border: 1px solid theme("colors.border");
+/* ==== Product surfaces =================================================
+   Glance / Terminal / MCP — one illustrative session, three rooms.
+   Interaction logic lives in the components; this is the hairline re-skin. The
+   class names are unchanged so the components carry only string-level
+   diffs. */
+
+.product-tour-tabs {
+  display: flex;
+  width: 100%;
+  gap: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.product-tour-tab {
+  min-height: 44px;
+  flex: 0 0 auto;
+  margin-right: 28px;
+  margin-bottom: -1px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 14px;
+  font-weight: 400;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.product-tour-tab:hover {
+  color: #ededed;
+}
+
+.product-tour-tab[aria-selected="true"] {
+  border-bottom-color: #ededed;
+  color: #ededed;
+}
+
+.product-tour-tab:focus-visible {
+  outline: 2px solid rgba(76, 201, 138, 0.45);
+  outline-offset: 2px;
+}
+
+.product-tour-copy {
+  padding: 24px 0 20px;
+  text-align: left;
+}
+
+.product-tour-copy > p {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.product-tour-copy h3 {
+  margin-top: 8px;
+  color: #ededed;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+@media (min-width: 640px) {
+  .product-tour-copy h3 {
+    font-size: 22px;
   }
 }
 
-/* Reduced motion: cross-fade instead of slide/drift, no elasticity —
-   feedback stays, physics goes. */
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  .aurora-green,
-  .aurora-cyan,
-  .aurora-violet {
-    animation: none;
-  }
-  .reveal {
-    transform: none;
-    transition: opacity 0.25s ease;
-  }
-  .glass-interactive,
-  .glass-interactive:hover,
-  .glass-interactive:active {
-    transform: none;
-  }
-  .animate-fade-up {
-    animation: none;
-    opacity: 1;
-  }
-  .glance-trigger,
-  .glance-panel {
-    transition-duration: 0.01ms;
-  }
+.product-tour-copy > span {
+  display: block;
+  max-width: 640px;
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 15px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.product-tour-panel {
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+.product-tour-note {
+  max-width: 640px;
+  margin: 16px 0 0;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: left;
+  text-wrap: pretty;
+}
+
+/* ---- Terminal recording panel ---------------------------------------- */
+.tour-terminal,
+.tour-mcp {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  background: #0a0b07;
+}
+
+.tour-window-bar {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: #12140e;
+  padding: 0 16px;
+}
+
+.tour-window-bar strong {
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tour-video-control {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-left: auto;
+  border-radius: 2px;
+  padding: 0 10px;
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.tour-video-control:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ededed;
+}
+
+.tour-video-control:focus-visible {
+  outline: 2px solid rgba(76, 201, 138, 0.45);
+  outline-offset: -2px;
+}
+
+.tour-video-control svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.tour-terminal-media {
+  overflow: hidden;
+  aspect-ratio: 10 / 7;
+  background: #0a0b07;
+}
+
+.tour-terminal-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #0a0b07;
+  object-fit: contain;
+}
+
+.tour-terminal-poster {
+  display: block;
+  width: 100%;
+  aspect-ratio: 10 / 7;
+  background: #0a0b07;
+  object-fit: contain;
+}
+
+.tour-terminal-fallback-note {
+  padding: 8px 16px 12px;
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 11px;
+}
+
+/* ---- MCP chat --------------------------------------------------------- */
+.tour-mcp {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px;
+}
+
+.tour-mcp-question {
+  max-width: 620px;
+  margin-left: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 15px 18px;
+  color: #ededed;
+  font-size: 14px;
+}
+
+.tour-mcp-answer {
+  display: flex;
+  max-width: 760px;
+  gap: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 18px;
+}
+
+/* The $ avatar is a prompt mark — the section's one green element. */
+.tour-mcp-mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 1px solid rgba(76, 201, 138, 0.3);
+  border-radius: 4px;
+  background: rgba(76, 201, 138, 0.08);
+  color: #4cc98a;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.tour-mcp-answer p {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+.tour-mcp-answer p + p {
+  margin-top: 9px;
+}
+
+.tour-mcp-answer strong {
+  color: #ededed;
+  font-weight: 500;
+}
+
+/* Estimated money — amber, .receipt-scoped in the markup. */
+.tour-mcp-answer .tour-mcp-money {
+  color: #c9a24b;
+}
+
+.tour-mcp-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 15px;
+}
+
+.tour-mcp-sources span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  background: transparent;
+  padding: 4px 8px;
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ---- aibill Glance ----------------------------------------------------
+   Browser preview of the native macOS surface. The outer stage is page
+   chrome (2px, hairline); everything inside is product depiction and
+   keeps modest radii. Interaction (`:has()` hover chains, tap toggle) is
+   unchanged — only declarations moved to the token system. */
+.glance-stage {
+  position: relative;
+  min-height: 500px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  background: #0a0b07;
+  isolation: isolate;
+}
+
+/* The desktop wallpaper is the page's own gridline field — one motif,
+   zero new hues. */
+.glance-wallpaper {
+  position: absolute;
+  inset: 0;
+  background-color: #12140e;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.glance-menu-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  display: flex;
+  height: 31px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 17px;
+  background: rgba(10, 11, 7, 0.75);
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.glance-menu-copy {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.glance-camera {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 138px;
+  height: 24px;
+  transform: translateX(-50%);
+  border-radius: 0 0 14px 14px;
+  background: #030304;
+}
+
+.usage-glance {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  outline: none;
+  color: rgba(255, 255, 255, 0.96);
+  pointer-events: none;
+}
+
+.glance-trigger {
+  position: absolute;
+  top: 3px;
+  right: calc(50% + 77px);
+  display: grid;
+  width: 58px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  list-style: none;
+  opacity: 0;
+  visibility: visible;
+  pointer-events: none;
+  cursor: default;
+  transform: translateY(-3px);
+  transition:
+    opacity 0.16s ease,
+    visibility 0s linear 0.18s,
+    transform 0.2s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.glance-trigger::before {
+  content: "";
+  position: absolute;
+  inset: -12px -8px;
+}
+
+.glance-stage:has(.glance-menu-bar:hover) .glance-trigger,
+.glance-stage:has(.glance-trigger:hover) .glance-trigger,
+.glance-stage:has(.glance-trigger:focus-visible) .glance-trigger,
+.glance-stage:has(.glance-panel:hover) .glance-trigger,
+.usage-glance[data-open="true"] .glance-trigger,
+.glance-stage:focus-within .glance-trigger {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.glance-trigger:hover,
+.glance-trigger:focus-visible {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.glance-trigger:focus-visible {
+  outline: 2px solid rgba(76, 201, 138, 0.45);
+  outline-offset: 2px;
+}
+
+.glance-panel {
+  position: absolute;
+  top: 25px;
+  left: 50%;
+  width: 452px;
+  height: 382px;
+  max-width: calc(100% - 28px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(10, 11, 7, 0.96);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, -12px);
+  transform-origin: top center;
+  transition:
+    opacity 0.2s ease,
+    visibility 0s linear 0.2s,
+    transform 0.2s ease;
+}
+
+.usage-glance:has(.glance-trigger:hover) .glance-panel,
+.usage-glance:has(.glance-panel:hover) .glance-panel,
+.usage-glance[data-open="true"] .glance-panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+}
+
+.glance-detail {
+  padding: 14px 18px 18px;
+}
+
+.glance-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 5px 2px 6px;
+}
+
+.glance-kicker {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* Estimated API-equivalent money — amber (the kicker labels it). */
+.glance-total {
+  margin-top: 3px;
+  color: #c9a24b;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.glance-current-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.glance-current-line > span {
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.glance-current-project {
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.glance-current-plan {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.44);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+/* De-greened: status is a fact chip, not an alarm or a proof. */
+.glance-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 5px 9px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.glance-status > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.glance-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.glance-limit-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 11px 12px 10px;
+}
+
+.glance-limit-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.glance-limit-top strong {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.glance-meter-track {
+  height: 4px;
+  margin-top: 9px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* One neutral fill; attention semantics live in the projection text.
+   The -attention/-healthy class names remain in the TSX as no-ops. */
+.glance-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.glance-limit-card > p {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 7px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.glance-limit-card > p strong {
+  color: rgba(255, 255, 255, 0.62);
+  font-weight: 600;
+}
+
+.glance-session {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 11px 12px;
+}
+
+.glance-session-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.glance-session > div:nth-child(2) {
+  min-width: 0;
+}
+
+.glance-session p {
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 9px;
+}
+
+.glance-session strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.glance-session > div:nth-child(2) strong {
+  display: block;
+  margin-top: 2px;
+}
+
+.glance-session > div:nth-child(2) > span {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glance-session-value {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.glance-session-value span {
+  margin-top: 1px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 9px;
+}
+
+.glance-insight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px 11px;
+}
+
+.glance-insight-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.glance-insight > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.glance-insight strong {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glance-insight > div span {
+  margin-top: 2px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.43);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glance-action-copy {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  background: transparent;
+  padding: 4px 7px;
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.glance-source-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  padding: 0 3px;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.glance-source-row p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glance-source-row strong {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.34);
+  font-weight: 500;
+}
+
+.glance-desktop-copy {
+  position: absolute;
+  right: 28px;
+  bottom: 26px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.glance-desktop-copy strong {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.62);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* Hover is the native Mac interaction. Touch and other non-hover devices keep
@@ -1179,32 +985,12 @@ body {
 }
 
 @media (max-width: 640px) {
-  .product-tour {
-    border-radius: 28px;
-    padding: 6px;
-  }
-  .product-tour-tabs {
-    margin-top: 12px;
-  }
   .product-tour-tab {
-    padding: 0 14px;
-    font-size: 12px;
+    margin-right: 20px;
+    font-size: 13px;
   }
   .product-tour-copy {
-    padding: 19px 14px 18px;
-  }
-  .product-tour-panel,
-  .product-tour .glance-stage,
-  .tour-terminal,
-  .tour-mcp {
-    border-radius: 22px;
-  }
-  .tour-terminal,
-  .tour-mcp {
-    min-height: 550px;
-  }
-  .tour-terminal-recording {
-    min-height: 0;
+    padding: 19px 0 16px;
   }
   .tour-window-bar {
     padding: 0 12px;
@@ -1228,28 +1014,6 @@ body {
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .tour-terminal-body {
-    padding: 17px;
-  }
-  .tour-terminal-grid {
-    grid-template-columns: 1fr;
-  }
-  .tour-terminal-primary > strong {
-    font-size: 30px;
-  }
-  .tour-terminal-row {
-    grid-template-columns: 1fr;
-  }
-  .tour-terminal-row > span {
-    grid-row: auto;
-  }
-  .tour-terminal-source {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .tour-terminal-source strong {
-    margin-left: 0;
-  }
   .tour-mcp {
     padding: 20px 14px;
   }
@@ -1263,15 +1027,40 @@ body {
     font-size: 12px;
   }
   .glance-stage {
-    min-height: 550px;
-    border-radius: 30px;
+    min-height: 480px;
   }
   .glance-panel {
-    width: calc(100% - 28px);
+    width: calc(100% - 24px);
     height: 446px;
   }
   .glance-desktop-copy {
     right: 18px;
     bottom: 18px;
+  }
+}
+
+/* Reduced motion: full content, zero motion. The receipt renders settled,
+   fills full, cursors static. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .reveal,
+  .tl-playing [data-at] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
+  .tl-playing .tl-bar-fill {
+    transform: none !important;
+    transition: none !important;
+  }
+  .animate-blink {
+    animation: none;
+  }
+  .glance-trigger,
+  .glance-panel {
+    transition-duration: 0.01ms;
   }
 }

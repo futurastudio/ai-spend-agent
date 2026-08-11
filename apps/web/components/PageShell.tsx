@@ -4,7 +4,7 @@ import { Reveal } from "@/components/Reveal";
 
 /**
  * Shared chrome for content pages (blog / comparison) so they stay visually
- * native to the liquid-glass landing page. Server component.
+ * native to the hairline-framed landing page. Server component.
  */
 export function PageShell({
   children,
@@ -14,86 +14,77 @@ export function PageShell({
   ctaRef: string;
 }) {
   return (
-    <main className="relative overflow-x-clip">
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[700px]"
-        aria-hidden="true"
-      >
-        <div className="grid-fade absolute inset-0" />
-        <div className="aurora aurora-green left-[8%] top-[-120px] h-[420px] w-[520px]" />
-        <div className="aurora aurora-cyan right-[4%] top-[140px] h-[360px] w-[460px]" />
-      </div>
-
-      <header className="sticky top-4 z-40 mx-auto max-w-content px-4 sm:px-6">
-        <div className="glass-heavy flex items-center justify-between rounded-full px-4 py-3">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span
-              aria-hidden="true"
-              className="glass-well flex h-7 w-7 items-center justify-center rounded-md font-mono text-sm text-green"
-            >
-              $
-            </span>
-            <span className="font-mono text-sm font-semibold tracking-tight text-ink">
-              aibill
-            </span>
+    <div className="frame">
+      <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
+        <div className="flex h-14 items-center justify-between px-5 sm:px-8">
+          <Link href="/" className="wordmark" aria-label="Tilden — home">
+            Tilden
+            <span className="wordmark-cursor" aria-hidden="true" />
           </Link>
-          <nav className="flex items-center gap-2">
+          <nav className="flex items-center gap-6">
             <a
               href="https://github.com/futurastudio/ai-spend-agent"
               target="_blank"
               rel="noreferrer"
-              className="glass glass-interactive hidden rounded-xl px-3.5 py-2 text-sm font-medium text-muted hover:text-ink sm:inline-flex"
+              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
             >
-              GitHub
+              GitHub ↗
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="glass glass-interactive whitespace-nowrap rounded-xl px-2.5 py-2 text-xs font-medium text-muted hover:text-ink sm:px-3.5 sm:text-sm"
+              className="rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
-              Become a design partner
+              Design partners
             </Link>
           </nav>
         </div>
       </header>
 
-      {children}
+      <main className="border-b border-hairline">{children}</main>
 
       {/* CTA */}
-      <section className="relative z-10 mx-auto max-w-content px-6 py-16">
+      <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-20">
         <Reveal>
-          <div className="glass mx-auto max-w-3xl rounded-3xl px-6 py-10 text-center sm:px-12">
-            <h2 className="text-balance text-2xl font-semibold tracking-[-0.035em] text-ink sm:text-3xl">
-              See your own evidence locally
-            </h2>
-            <p className="mx-auto mt-3 max-w-xl text-balance text-sm leading-relaxed text-muted">
-              Free and open source. The default CLI runs locally with no account
-              or telemetry; provider connections and MCP sharing are always explicit.
-            </p>
-            <div className="mx-auto mt-6 flex max-w-md flex-col items-center gap-3">
-              <CopyCommand />
-              <p className="font-mono text-xs text-faint">
-                Requires Node 22+. Also on npm as{" "}
-                <span className="text-muted">ai-spend-agent</span>.
-              </p>
-            </div>
-            <p className="mt-5 text-sm text-muted">
-              Need continuous monitoring, spend alerts, a shared team workspace,
-              or white-label client reports?{" "}
-              <Link
-                href={`/?ref=${ctaRef}#beta`}
-                className="text-green underline-offset-4 hover:underline"
-              >
-                Request Workspace design-partner access →
-              </Link>
-            </p>
+          <h2 className="text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+            See your own evidence locally
+          </h2>
+          <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
+            Free and open source. The default CLI runs locally with no account
+            or telemetry; provider connections and MCP sharing are always
+            explicit.
+          </p>
+          <div className="mt-6 max-w-[380px]">
+            <CopyCommand />
           </div>
+          <p className="mt-3 font-mono text-xs text-faint">
+            Requires Node 22+. Also on npm as{" "}
+            <span className="text-muted">ai-spend-agent</span>.
+          </p>
+          <p className="mt-6 max-w-[560px] text-sm leading-relaxed text-muted">
+            Need continuous monitoring, spend alerts, a shared team workspace,
+            or white-label client reports?{" "}
+            <Link
+              href={`/?ref=${ctaRef}#beta`}
+              className="text-ink underline-offset-4 hover:underline"
+            >
+              Request Workspace design-partner access →
+            </Link>
+          </p>
         </Reveal>
       </section>
 
-      <footer className="relative z-10 border-t border-white/5">
-        <div className="mx-auto flex max-w-content flex-col items-center justify-between gap-3 px-6 py-8 font-mono text-xs text-faint sm:flex-row">
-          <span>aibill — open-source financial accountability for AI-agent work.</span>
-          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+      <footer className="px-5 py-10 sm:px-8">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <p className="flex items-baseline gap-3">
+            <Link href="/" className="wordmark wordmark-sm" aria-label="Tilden — home">
+              Tilden
+              <span className="wordmark-cursor" aria-hidden="true" />
+            </Link>
+            <span className="text-[13px] text-faint">
+              financial accountability for AI agents.
+            </span>
+          </p>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-xs text-faint">
             <Link
               href="/blog/claude-code-cost-usage-credits"
               className="transition-colors hover:text-ink"
@@ -112,7 +103,7 @@ export function PageShell({
               rel="noreferrer"
               className="transition-colors hover:text-ink"
             >
-              GitHub
+              GitHub ↗
             </a>
             <a
               href="https://www.npmjs.com/package/aibill"
@@ -120,12 +111,15 @@ export function PageShell({
               rel="noreferrer"
               className="transition-colors hover:text-ink"
             >
-              npm
+              npm ↗
             </a>
-            <span className="text-green">npx aibill</span>
+            <Link href="/#privacy" className="transition-colors hover:text-ink">
+              Privacy
+            </Link>
+            <span className="text-green">$ npx aibill</span>
           </div>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }

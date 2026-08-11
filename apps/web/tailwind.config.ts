@@ -5,22 +5,27 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Cool near-black surface ladder (Raycast/Linear idiom).
-        bg: "#07080a",
-        surface: "#0d0d0e",
-        elevated: "#101113",
-        well: "#060609",
-        border: "#1e2127",
-        "border-bright": "#2b2f37",
-        ink: "#f4f4f6",
-        muted: "#a9afbb",
-        faint: "#7f8591",
-        // Terminal syntax accents — saturated colors live only in terminals.
-        green: "#59d499",
-        "green-bright": "#5ef2a8",
-        red: "#ff6161",
-        cyan: "#57c1ff",
-        yellow: "#ffc533",
+        // Warm green-black ground ladder. Depth = ground → panel → well +
+        // hairlines; never shadows.
+        ground: "#0C0D09",
+        panel: "#12140E",
+        well: "#0A0B07",
+        hairline: "rgba(255, 255, 255, 0.08)",
+        "hairline-bright": "rgba(255, 255, 255, 0.14)",
+        gridline: "rgba(255, 255, 255, 0.03)",
+        ink: "#EDEDED",
+        muted: "rgba(255, 255, 255, 0.62)",
+        faint: "rgba(255, 255, 255, 0.42)",
+        // THE accent. Green marks provider-proven money and command
+        // affordances only — the color system is the evidence-label system.
+        green: "#4CC98A",
+        "green-hi": "#5FDF9E",
+        "green-line": "rgba(76, 201, 138, 0.30)",
+        "green-wash": "rgba(76, 201, 138, 0.08)",
+        // Estimated-money amber (#C9A24B) intentionally has no Tailwind
+        // token: it exists only as .receipt-scoped classes in globals.css
+        // so it can never be used outside product art.
+        danger: "#E5484D",
       },
       fontFamily: {
         sans: [
@@ -39,20 +44,14 @@ const config: Config = {
       },
       maxWidth: {
         content: "1080px",
-        terminal: "920px",
       },
       keyframes: {
-        "fade-up": {
-          "0%": { opacity: "0", transform: "translateY(10px)" },
-          "100%": { opacity: "1", transform: "translateY(0)" },
-        },
         blink: {
           "0%, 50%": { opacity: "1" },
           "50.01%, 100%": { opacity: "0" },
         },
       },
       animation: {
-        "fade-up": "fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both",
         blink: "blink 1.1s step-end infinite",
       },
     },

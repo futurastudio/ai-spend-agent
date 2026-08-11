@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { PRODUCT_DEMO } from "@/lib/product-demo";
 
 type PlaybackState = "paused" | "playing" | "ended" | "error";
 
@@ -30,50 +29,6 @@ function PlaybackIcon({ state }: { state: PlaybackState }) {
   );
 }
 
-export function TerminalReceipt() {
-  const { session, limits, focus, action, evidence } = PRODUCT_DEMO;
-
-  return (
-    <div className="tour-terminal-body" aria-label="Illustrative aibill terminal receipt">
-      <p className="tour-prompt"><span>$</span> npx aibill</p>
-      <div className="tour-terminal-grid">
-        <div className="tour-terminal-primary">
-          <p>Current session · {session.basis}</p>
-          <strong>{session.value}</strong>
-          <span>{session.agent} · {session.model} · {session.project}</span>
-          <small>{session.plan} detected locally · usage value ≠ billed spend</small>
-        </div>
-        <div className="tour-terminal-runway">
-          {limits.map((limit) => (
-            <div
-              className={`tour-terminal-runway-row tour-terminal-runway-${limit.tone}`}
-              key={limit.label}
-            >
-              <span>{limit.label}</span>
-              <strong>{limit.value}</strong>
-              <small>{limit.projection} · {limit.reset}</small>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="tour-terminal-row">
-        <span>MAIN FOCUS</span>
-        <strong>{focus.label}</strong>
-        <small>{focus.activity} of observed 7d activity · {focus.file}</small>
-      </div>
-      <div className="tour-terminal-row tour-terminal-action">
-        <span>NEXT ACTION</span>
-        <strong>{action.label}</strong>
-        <small>{action.detail}</small>
-      </div>
-      <div className="tour-terminal-source">
-        Local: {evidence.sources} · {evidence.files} · nothing uploaded
-        <strong>{evidence.freshness}</strong>
-      </div>
-    </div>
-  );
-}
-
 export function TerminalDemo() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -82,6 +37,13 @@ export function TerminalDemo() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
+    // Source exhaustion can fire before hydration attaches the source-level
+    // onError listener; the network state still records it.
+    if (video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+      setPlayback("error");
+      return;
+    }
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!reducedMotion) {
@@ -134,7 +96,7 @@ export function TerminalDemo() {
       aria-label="Current aibill terminal demonstration"
     >
       <div className="tour-window-bar">
-        <strong>Terminal recording · npx aibill</strong>
+        <strong>aibill — recorded session · sample data</strong>
         {playback !== "error" && (
           <button
             type="button"
@@ -149,7 +111,17 @@ export function TerminalDemo() {
       </div>
 
       {playback === "error" ? (
-        <TerminalReceipt />
+        <div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/demo-poster.png"
+            alt="Poster frame of the recorded aibill session"
+            className="tour-terminal-poster"
+          />
+          <p className="tour-terminal-fallback-note">
+            # recording unavailable — poster frame shown
+          </p>
+        </div>
       ) : (
         <div className="tour-terminal-media">
           <video
@@ -167,7 +139,14 @@ export function TerminalDemo() {
             onError={() => setPlayback("error")}
           >
             <source src="/demo.webm" type="video/webm" />
-            <source src="/demo.mp4" type="video/mp4" />
+            {/* Per spec, when every <source> fails the error event fires at
+                the LAST source element, not the <video> — the source-level
+                handler is what makes the poster fallback reachable. */}
+            <source
+              src="/demo.mp4"
+              type="video/mp4"
+              onError={() => setPlayback("error")}
+            />
           </video>
         </div>
       )}

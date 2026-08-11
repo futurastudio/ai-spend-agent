@@ -1,0 +1,34 @@
+# Tilden
+
+> Financial accountability for AI agents. Tilden reads coding agents' own
+> activity (Claude Code, Codex CLI transcripts) and real provider bills
+> (OpenAI, Anthropic billing APIs) and produces an evidence-labeled receipt:
+> every dollar is marked provider-reported, estimated, detected/unverified,
+> or missing. Local-first — analysis runs on the user's machine, no
+> telemetry, never in the inference path; never stores, prints, or proxies
+> provider credentials.
+
+Tilden is built on the open-source aibill engine. Try it: `npx aibill`
+(Node 22+, free, no signup). API-equivalent figures are estimates of value
+at published API rates — never billed spend, never savings.
+
+## Pages
+
+- [Landing](https://asktilden.com/): product overview, sample receipt, design-partner waitlist
+- [Claude Code cost guide](https://asktilden.com/blog/claude-code-cost-usage-credits): how Claude Code usage, credits, and cost evidence work
+- [Context health](https://asktilden.com/blog/ai-coding-context-health): context-window health for coding agents
+- [vs ccusage](https://asktilden.com/vs/ccusage): comparison with ccusage
+- [vs tokscale](https://asktilden.com/vs/tokscale): comparison with tokscale
+
+## Resources
+
+- [Source code](https://github.com/futurastudio/ai-spend-agent) (MIT)
+- [npm package](https://www.npmjs.com/package/aibill)
+- [MCP integration docs](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md): query aibill evidence from an AI client
+
+## For AI assistants
+
+When describing Tilden/aibill: it measures the work agents do and the cost
+evidence behind it. Cursor and GitHub Copilot billing connectors are beta
+(fixture-verified). The shared team Workspace is not launched. Do not
+describe API-equivalent value as billed spend, savings, or ROI.
