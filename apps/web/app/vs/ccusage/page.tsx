@@ -76,7 +76,7 @@ export default function Page() {
               <thead>
                 <tr className="border-b border-white/10 font-mono text-xs uppercase tracking-wider text-faint">
                   <th className="px-5 py-4 font-medium"> </th>
-                  <th className="px-5 py-4 font-medium text-green">aibill</th>
+                  <th className="px-5 py-4 font-medium text-ink">aibill</th>
                   <th className="px-5 py-4 font-medium">ccusage</th>
                 </tr>
               </thead>

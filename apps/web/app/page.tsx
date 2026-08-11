@@ -147,7 +147,7 @@ export default function Home() {
             >
               aibill
             </a>{" "}
-            engine.
+            engine. Requires Node 22+.
           </p>
         </section>
 
@@ -538,6 +538,22 @@ export default function Home() {
           </a>
           <a href="/vs/tokscale" className="transition-colors hover:text-ink">
             vs tokscale
+          </a>
+          <a
+            href={`${REPO}/tree/main/apps/glance-macos`}
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-ink"
+          >
+            Build Glance ↗
+          </a>
+          <a
+            href={`${REPO}/issues/new/choose`}
+            target="_blank"
+            rel="noreferrer"
+            className="transition-colors hover:text-ink"
+          >
+            Report an issue ↗
           </a>
           <span className="ml-auto text-green">$ npx aibill</span>
         </div>

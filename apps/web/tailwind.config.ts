@@ -22,8 +22,9 @@ const config: Config = {
         "green-hi": "#5FDF9E",
         "green-line": "rgba(76, 201, 138, 0.30)",
         "green-wash": "rgba(76, 201, 138, 0.08)",
-        // Estimated money inside product art (.receipt scope) only.
-        "receipt-amber": "#C9A24B",
+        // Estimated-money amber (#C9A24B) intentionally has no Tailwind
+        // token: it exists only as .receipt-scoped classes in globals.css
+        // so it can never be used outside product art.
         danger: "#E5484D",
       },
       fontFamily: {

@@ -7,7 +7,8 @@
  */
 export function Statusline() {
   return (
-    <div className="receipt statusline-mask overflow-hidden whitespace-nowrap rounded-sm border border-hairline bg-well px-4 py-3 font-mono text-[11px] sm:text-[13px]">
+    <div className="receipt rounded-sm border border-hairline bg-well px-4 py-3 font-mono text-[11px] sm:text-[13px]">
+      <div className="statusline-mask overflow-hidden whitespace-nowrap">
       <span className="tl-strong">aibill</span>
       <span className="tl-faint"> · </span>
       <span className="text-ink">
@@ -24,6 +25,7 @@ export function Statusline() {
           <span className="sm:hidden">upd 12s</span>
         </span>
       </span>
+      </div>
     </div>
   );
 }

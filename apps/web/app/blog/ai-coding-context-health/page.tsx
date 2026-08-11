@@ -119,7 +119,7 @@ export default function Page() {
             ].map(([label, command]) => (
               <div className="rounded-sm border border-hairline bg-panel px-5 py-4" key={label}>
                 <span className="text-ink">{label}</span>
-                <span className="ml-3 font-mono text-sm text-green">{command}</span>
+                <span className="ml-3 font-mono text-sm text-muted">{command}</span>
               </div>
             ))}
           </div>

@@ -73,6 +73,7 @@ export function TerminalReceipt() {
         observer.disconnect();
 
         root.classList.add("tl-playing");
+        for (const el of timed) el.classList.remove("is-on");
         if (cmd) cmd.textContent = "";
         if (cmdCursor) cmdCursor.classList.remove("hidden");
         if (tick) tick.textContent = "$0.00";

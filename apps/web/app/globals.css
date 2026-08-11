@@ -221,7 +221,7 @@ body {
 
 /* ==== Product surfaces =================================================
    Glance / Terminal / MCP — one illustrative session, three rooms.
-   Behavior lives in the components; this is the hairline re-skin. The
+   Interaction logic lives in the components; this is the hairline re-skin. The
    class names are unchanged so the components carry only string-level
    diffs. */
 

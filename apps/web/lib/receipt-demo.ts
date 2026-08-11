@@ -1,5 +1,6 @@
 /**
- * Hero receipt content — a contiguous excerpt of real renderer output.
+ * Hero receipt content — an excerpt of real renderer output (two runs of
+ * lines: the header/value/bars block, then the VERIFY guidance).
  *
  * Transcribed verbatim from `node packages/cli/dist/index.js --sample
  * --no-color` (fixture: 9 records, $56.60 openai-sample + $30.40

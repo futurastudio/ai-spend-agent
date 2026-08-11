@@ -38,6 +38,13 @@ export function TerminalDemo() {
     const video = videoRef.current;
     if (!video) return;
 
+    // Source exhaustion can fire before hydration attaches the source-level
+    // onError listener; the network state still records it.
+    if (video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+      setPlayback("error");
+      return;
+    }
+
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!reducedMotion) {
       void video.play().catch(() => setPlayback("paused"));
