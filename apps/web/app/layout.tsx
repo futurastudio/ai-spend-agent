@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 const title = "Tilden — financial accountability for AI agents";
 const description =
-  "Know what your AI agents cost and prove what they're worth. Tilden reads your coding agents' own activity and your real bills — local-first, verified, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
+  "Know what your AI agents cost and prove what they're worth. Tilden reads your coding agents' own activity and your real bills — local-first, every dollar labeled, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
 
 export const metadata: Metadata = {
   title,

@@ -43,6 +43,11 @@ export function WaitlistForm() {
       }
 
       setStatus("success");
+      // Dedicated thank-you page; the inline card below renders during the
+      // brief navigation and remains the no-navigation fallback.
+      window.location.assign(
+        ref ? `/thanks?ref=${encodeURIComponent(ref)}` : "/thanks",
+      );
     } catch {
       setStatus("error");
       setMessage("Network error. Please try again.");

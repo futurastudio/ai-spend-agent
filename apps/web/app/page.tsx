@@ -1,4 +1,5 @@
 import { CopyCommand } from "@/components/CopyCommand";
+import { JsonLd } from "@/components/JsonLd";
 import { ProductTour } from "@/components/ProductTour";
 import { Reveal } from "@/components/Reveal";
 import { Statusline } from "@/components/Statusline";
@@ -66,6 +67,11 @@ const faqs = [
       "The local CLI and explicit MCP integration are in public beta. Glance can be built from source for testing; a signed Mac download and the shared Workspace are not launched yet.",
   },
   {
+    question: "Can it warn me before I hit a usage limit?",
+    answer:
+      "Locally, yes. aibill reads the limit windows your agents already report and shows runway — how much of the window is left and when it resets — in the CLI, in Glance, and in the Claude Code statusline. Detection is read-only from local state; where a source doesn't expose a limit, the gap stays visible instead of being guessed.",
+  },
+  {
     question: "Can finance use aibill to prove ROI?",
     answer:
       "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; those outcome and company-accountability layers are next.",
@@ -129,7 +135,7 @@ export default function Home() {
           </h1>
           <p className="mt-5 max-w-[560px] text-base leading-relaxed text-muted sm:text-lg">
             Reads your coding agents&apos; own activity and your real bills.
-            Local-first, verified, in 90 seconds.
+            Local-first, every dollar labeled, in 90 seconds.
           </p>
           <div className="mt-8 max-w-[380px]">
             <CopyCommand />
@@ -194,8 +200,8 @@ export default function Home() {
                   against the actual invoice.
                 </p>
                 <p className="mt-3 max-w-[420px] text-[13px] leading-relaxed text-faint">
-                  v0.6.0 release QA — tested Costs total reconciled to invoiced
-                  API credits, less the provider-UI balance. Each user&apos;s
+                  v0.6.0 release QA — the Costs total reconciled to invoiced
+                  API credits, net of the provider-UI balance. Each user&apos;s
                   final invoice remains separate.
                 </p>
               </div>
@@ -260,7 +266,7 @@ export default function Home() {
             <Reveal className="grid gap-8 py-12 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:items-center">
               <div>
                 <h3 className="text-[19px] font-medium tracking-[-0.015em] text-ink sm:text-[22px]">
-                  Plan-aware
+                  Knows the plan you already pay for
                 </h3>
                 <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
                   Detects Claude Max, ChatGPT Pro, and GitHub Copilot plans from
@@ -325,9 +331,8 @@ export default function Home() {
               One receipt. Three places to read it.
             </h2>
             <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
-              Menu bar, terminal, AI client — three views of the same local
-              evidence. Same labels, same numbers, nothing recomputed per
-              surface.
+              Menu bar, terminal, AI client — same local evidence, same
+              labels, same numbers, nothing recomputed per surface.
             </p>
             <div className="mt-8">
               <ProductTour />
@@ -452,6 +457,17 @@ export default function Home() {
 
         {/* 08 · FAQ */}
         <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <JsonLd
+            data={{
+              "@context": "https://schema.org",
+              "@type": "FAQPage",
+              mainEntity: faqs.map((faq) => ({
+                "@type": "Question",
+                name: faq.question,
+                acceptedAnswer: { "@type": "Answer", text: faq.answer },
+              })),
+            }}
+          />
           <Reveal>
             <Eyebrow>08 · FAQ</Eyebrow>
             <h2 className="mt-3 text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
@@ -475,6 +491,31 @@ export default function Home() {
                 </details>
               ))}
             </div>
+          </Reveal>
+        </section>
+
+        {/* Closing CTA */}
+        <section className="border-b border-hairline px-5 py-16 sm:px-8 sm:py-24">
+          <Reveal>
+            <h2 className="max-w-[640px] text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
+              Run the receipt on your own agents.
+            </h2>
+            <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
+              Ninety seconds from install to evidence. Nothing leaves your
+              machine.
+            </p>
+            <div className="mt-6 max-w-[380px]">
+              <CopyCommand />
+            </div>
+            <p className="mt-4 text-sm text-muted">
+              Running agents for a team?{" "}
+              <a
+                href="/?ref=teams#beta"
+                className="text-ink underline-offset-4 hover:underline"
+              >
+                Become a founding design partner →
+              </a>
+            </p>
           </Reveal>
         </section>
       </main>
