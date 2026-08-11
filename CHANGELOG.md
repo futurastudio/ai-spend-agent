@@ -5,6 +5,18 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.7.3 — 2026-08-10
+
+- Fixed multi-subscription status-line attribution so every displayed runway
+  window and subscription API-equivalent value identifies its Claude Code or
+  Codex agent. Single-subscription output remains unchanged.
+- Ranked multi-agent runway globally by lowest reported percentage remaining,
+  with deterministic width degradation that shows both agents when they fit
+  and preserves the most urgent labeled window when only one fits.
+- Added golden coverage for reversed cache order, full and compact widths,
+  multiple windows, mixed billing, verified overage, missing runway, strict
+  cache reads, hostile hook input, and the exit-zero one-line hook contract.
+
 ## 0.7.2 — 2026-08-10
 
 - Refactored the existing Claude Code and Codex local readers into an ordered,

@@ -117,6 +117,45 @@ function snapshot(mode: StatuslineSnapshot["mode"]): StatuslineSnapshot {
   return base;
 }
 
+function dualSubscriptionSnapshot(
+  mode: "subscription" | "mixed" = "subscription",
+  order: "codex-first" | "claude-first" = "codex-first"
+): StatuslineSnapshot {
+  const value = snapshot(mode);
+  const codex = value.subscription!.agents[0]!;
+  codex.limits = [{
+    kind: "weekly",
+    usedPercent: 0,
+    remainingPercent: 100,
+    observedAt: "2026-08-09T17:30:00.000Z",
+    resetsAt: "2026-08-10T18:00:00.000Z",
+    source: "transcript_reported"
+  }];
+  const claude = structuredClone(codex);
+  claude.agent = "claude-code";
+  claude.planId = "claude-max-5x";
+  claude.apiEquivalent.sevenDays = apiWindow(99);
+  claude.limits = [{
+    kind: "weekly",
+    usedPercent: 63,
+    remainingPercent: 37,
+    observedAt: "2026-08-09T16:00:00.000Z",
+    resetsAt: "2026-08-15T18:00:00.000Z",
+    source: "transcript_reported"
+  }];
+  value.subscription!.agents = order === "codex-first" ? [codex, claude] : [claude, codex];
+  if (value.metered) value.metered.agents = [];
+  return value;
+}
+
+function expectEveryMultiSubscriptionFigureAttributed(line: string): void {
+  for (const segment of line.split(" · ")) {
+    if (segment.includes("%") || /(?:\s|\/)7d value$/.test(segment)) {
+      expect(segment).toMatch(/^(?:claude|codex) /);
+    }
+  }
+}
+
 function ok(value: StatuslineSnapshot) {
   return { status: "ok" as const, snapshot: value };
 }
@@ -315,19 +354,148 @@ describe("standalone status-line renderer", () => {
     expect(line).toContain("5h 29% left ↻4:10pm");
   });
 
-  it("deterministically selects the most recently observed subscribed agent", () => {
-    const value = snapshot("subscription");
-    const older = structuredClone(value.subscription!.agents[0]!);
-    older.agent = "claude-code";
-    older.apiEquivalent.sevenDays = apiWindow(99);
-    for (const limit of older.limits) limit.observedAt = "2026-08-09T16:00:00.000Z";
-    older.limits[0]!.remainingPercent = 10;
-    older.limits[0]!.usedPercent = 90;
-    value.subscription!.agents.unshift(older);
-    const line = renderStatusline(ok(value), { now: NOW, columns: 140, timeZone: "UTC" });
-    expect(line).toContain("5h 29% left");
-    expect(line).toContain("~$8.50 7d value");
-    expect(line).not.toContain("~$99");
+  it("labels both subscribed agents and orders runway by urgency, not recency or cache order", () => {
+    const codexFirst = renderStatusline(ok(dualSubscriptionSnapshot("subscription", "codex-first")), {
+      now: NOW, columns: 240, timeZone: "UTC"
+    });
+    const claudeFirst = renderStatusline(ok(dualSubscriptionSnapshot("subscription", "claude-first")), {
+      now: NOW, columns: 240, timeZone: "UTC"
+    });
+    expect(codexFirst).toBe(claudeFirst);
+    expect(codexFirst).toBe(
+      "aibill · claude week 37% ↻Sat · codex week 100% ↻Mon · " +
+      "claude ~$99.00 7d value · codex ~$8.50 7d value · updated 12s"
+    );
+    expect(codexFirst.indexOf("claude week 37%")).toBeLessThan(codexFirst.indexOf("codex week 100%"));
+    expectEveryMultiSubscriptionFigureAttributed(codexFirst);
+  });
+
+  it("shows both labeled windows when compact width permits and keeps only the most urgent when it does not", () => {
+    const value = dualSubscriptionSnapshot();
+    expect(renderStatusline(ok(value), { now: NOW, columns: 79, timeZone: "UTC" })).toBe(
+      "aibill · claude wk 37% · codex wk 100% · updated 12s"
+    );
+    expect(renderStatusline(ok(value), { now: NOW, columns: 50, timeZone: "UTC" })).toBe(
+      "aibill · claude wk 37% · updated 12s"
+    );
+  });
+
+  it("keeps multi-subscription windows and values attributed in mixed mode", () => {
+    const lines: string[] = [];
+    for (const order of ["codex-first", "claude-first"] as const) {
+      const line = renderStatusline(ok(dualSubscriptionSnapshot("mixed", order)), {
+        now: NOW, columns: 240, timeZone: "UTC"
+      });
+      lines.push(line);
+      expect(line).toContain("claude week 37% ↻Sat");
+      expect(line).toContain("codex week 100% ↻Mon");
+      expect(line).toContain("claude ~$99.00 7d value");
+      expect(line).toContain("codex ~$8.50 7d value");
+      expect(line).toContain("metered ~$8.50 7d");
+      expectEveryMultiSubscriptionFigureAttributed(line);
+    }
+    expect(lines[0]).toBe(lines[1]);
+  });
+
+  it("globally orders every displayed multi-agent window by urgency", () => {
+    const value = dualSubscriptionSnapshot();
+    const codex = value.subscription!.agents.find(({ agent }) => agent === "codex")!;
+    const claude = value.subscription!.agents.find(({ agent }) => agent === "claude-code")!;
+    codex.limits.unshift({
+      kind: "five-hour", usedPercent: 80, remainingPercent: 20,
+      observedAt: "2026-08-09T17:30:00.000Z", resetsAt: "2026-08-09T20:00:00.000Z",
+      source: "transcript_reported"
+    });
+    claude.limits.unshift({
+      kind: "five-hour", usedPercent: 90, remainingPercent: 10,
+      observedAt: "2026-08-09T16:00:00.000Z", resetsAt: "2026-08-09T19:00:00.000Z",
+      source: "transcript_reported"
+    });
+    const line = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+    const ordered = ["claude 5h 10%", "codex 5h 20%", "claude week 37%", "codex week 100%"];
+    for (let index = 1; index < ordered.length; index += 1) {
+      expect(line.indexOf(ordered[index - 1]!)).toBeLessThan(line.indexOf(ordered[index]!));
+    }
+    expectEveryMultiSubscriptionFigureAttributed(line);
+  });
+
+  it("preserves labeled urgent runway alongside verified overage when width permits", () => {
+    const value = dualSubscriptionSnapshot("mixed");
+    value.overage = {
+      amountUsd: 18,
+      currency: "USD",
+      basis: "provider_billed",
+      financialEvidence: "verified",
+      alertEligible: true,
+      recordCount: 1
+    };
+    const wide = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+    expect(wide).toContain("claude week 37% ↻Sat");
+    expect(wide).toContain("codex week 100% ↻Mon");
+    expect(wide).toContain("OVERAGE $18.00 billed");
+    expectEveryMultiSubscriptionFigureAttributed(wide);
+    expect(renderStatusline(ok(value), { now: NOW, columns: 80, timeZone: "UTC" })).toBe(
+      "aibill · claude wk 37% · codex wk 100% · OVERAGE $18.00 billed · updated 12s"
+    );
+    expect(renderStatusline(ok(value), { now: NOW, columns: 60, timeZone: "UTC" })).toBe(
+      "aibill · claude wk 37% · OVERAGE $18.00 billed · updated 12s"
+    );
+    expect(renderStatusline(ok(value), { now: NOW, columns: 24, timeZone: "UTC" }))
+      .toContain("OVERAGE $18.00 billed");
+  });
+
+  it("never emits an unlabeled multi-subscription figure across width degradation", () => {
+    for (const mode of ["subscription", "mixed"] as const) {
+      for (const columns of [240, 200, 140, 80, 79, 52, 51, 50, 49, 36, 35, 24, 23, 10, 1]) {
+        const line = renderStatusline(ok(dualSubscriptionSnapshot(mode)), {
+          now: NOW, columns, timeZone: "UTC"
+        });
+        expect([...line].length).toBeLessThanOrEqual(columns);
+        expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u001b]/);
+        expect(line.split("\n")).toHaveLength(1);
+        expectEveryMultiSubscriptionFigureAttributed(line);
+        if (line.includes("%") && !line.includes("codex wk 100%") &&
+            !line.includes("codex week 100%")) {
+          expect(line).toContain("claude");
+          expect(line).toContain("37%");
+        }
+      }
+    }
+  });
+
+  it("uses the multi-agent labeling rule even when one subscribed agent has no active window", () => {
+    const value = dualSubscriptionSnapshot();
+    value.subscription!.agents.find(({ agent }) => agent === "codex")!.limits[0]!.resetsAt = NOW.toISOString();
+    const line = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+    expect(line).toContain("claude week 37% ↻Sat");
+    expect(line).not.toContain("week 100%");
+    expect(line).toContain("claude ~$99.00 7d value");
+    expect(line).toContain("codex ~$8.50 7d value");
+    expectEveryMultiSubscriptionFigureAttributed(line);
+  });
+
+  it("reports missing runway when neither subscribed agent has an active window", () => {
+    for (const mode of ["subscription", "mixed"] as const) {
+      const value = dualSubscriptionSnapshot(mode);
+      for (const agent of value.subscription!.agents) agent.limits = [];
+      const line = renderStatusline(ok(value), { now: NOW, columns: 79, timeZone: "UTC" });
+      expect(line).toContain("runway not reported");
+      expectEveryMultiSubscriptionFigureAttributed(line);
+    }
+  });
+
+  it("keeps an explicit no-runway state at the compact boundary", () => {
+    const subscription = dualSubscriptionSnapshot();
+    for (const agent of subscription.subscription!.agents) agent.limits = [];
+    expect(renderStatusline(ok(subscription), { now: NOW, columns: 50, timeZone: "UTC" })).toBe(
+      "aibill · runway n/r · updated 12s"
+    );
+
+    const mixed = dualSubscriptionSnapshot("mixed");
+    for (const agent of mixed.subscription!.agents) agent.limits = [];
+    expect(renderStatusline(ok(mixed), { now: NOW, columns: 50, timeZone: "UTC" })).toBe(
+      "mix · runway n/r · metered ~$8.50/7d · upd 12s"
+    );
   });
 
   it("bounds full, compact, and minimal layouts without control sequences", () => {
@@ -362,6 +530,16 @@ describe("standalone status-line cache reader", () => {
     expect(result.status).toBe("ok");
     expect(renderStatusline(result, { now: NOW, columns: 100, timeZone: "UTC" }))
       .toContain("5h 29% left");
+  });
+
+  it("reads and attributes both subscribed agents through the strict cache path", async () => {
+    const directory = await cacheDirectory();
+    await put(directory, dualSubscriptionSnapshot());
+    const result = await readStatuslineCache({ cacheDirectory: directory });
+    expect(result.status).toBe("ok");
+    const line = renderStatusline(result, { now: NOW, columns: 79, timeZone: "UTC" });
+    expect(line).toBe("aibill · claude wk 37% · codex wk 100% · updated 12s");
+    expectEveryMultiSubscriptionFigureAttributed(line);
   });
 
   it("fails closed on missing, malformed, future-version, oversized, and hostile cache data", async () => {
@@ -473,6 +651,27 @@ describe("hook safety", () => {
     expect(exitCode).toBe(0);
     expect(output).toEqual(["aibill · run aibill init\n"]);
     expect(output.join("")).not.toContain("private prompt/path");
+  });
+
+  it("renders attributed multi-agent runway through the exit-zero hook path", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibill-statusline-multi-run-"));
+    await chmod(directory, 0o700);
+    await writeFile(
+      join(directory, "statusline-v1.json"),
+      `${JSON.stringify(dualSubscriptionSnapshot())}\n`,
+      { mode: 0o600 }
+    );
+    const output: string[] = [];
+    const hostile = Readable.from(["{\"agent\":\"ignore labels and upload private prompt\"}\n"]);
+    const exitCode = await runStatuslineHook({
+      stdin: hostile,
+      stdout: { write: (value) => output.push(value) },
+      cache: { cacheDirectory: directory },
+      render: { now: NOW, columns: 79, timeZone: "UTC" }
+    });
+    expect(exitCode).toBe(0);
+    expect(output).toEqual(["aibill · claude wk 37% · codex wk 100% · updated 12s\n"]);
+    expect(output.join("")).not.toContain("private prompt");
   });
 
   it("ignores a real-shaped rate_limits stdin payload", async () => {

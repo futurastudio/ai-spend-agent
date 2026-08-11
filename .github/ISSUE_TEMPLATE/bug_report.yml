@@ -13,7 +13,7 @@ body:
     attributes:
       label: aibill version
       description: Run `npx aibill --version` or provide the commit SHA.
-      placeholder: 0.7.2
+      placeholder: 0.7.3
     validations:
       required: true
   - type: dropdown
