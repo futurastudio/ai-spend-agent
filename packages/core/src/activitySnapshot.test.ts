@@ -1161,7 +1161,9 @@ describe("buildActivitySnapshot", () => {
 
   it("derives accepted agents and cohort bounds from the local-agent registry", () => {
     expect(activitySnapshotAgentValues).toEqual(
-      localAgentFormatDescriptors.map((descriptor) => descriptor.id)
+      localAgentFormatDescriptors
+        .filter((descriptor) => descriptor.capabilities.statuslineSnapshot)
+        .map((descriptor) => descriptor.id)
     );
 
     const snapshot = buildActivitySnapshot({

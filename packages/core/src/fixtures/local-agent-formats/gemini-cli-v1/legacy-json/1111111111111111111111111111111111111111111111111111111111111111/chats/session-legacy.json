@@ -1,0 +1,38 @@
+{
+  "sessionId": "fixture-gemini-legacy-session",
+  "projectHash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "startTime": "2026-08-10T12:00:00.000Z",
+  "lastUpdated": "2026-08-10T12:02:00.000Z",
+  "kind": "main",
+  "messages": [
+    {
+      "id": "fixture-gemini-legacy-user",
+      "timestamp": "2026-08-10T12:00:00.000Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "Synthetic fixture prompt."
+        }
+      ]
+    },
+    {
+      "id": "fixture-gemini-legacy-response",
+      "timestamp": "2026-08-10T12:02:00.000Z",
+      "type": "gemini",
+      "content": [
+        {
+          "text": "Synthetic fixture response."
+        }
+      ],
+      "model": "gemini-2.5-pro",
+      "tokens": {
+        "input": 1200,
+        "output": 120,
+        "cached": 400,
+        "thoughts": 30,
+        "tool": 50,
+        "total": 1400
+      }
+    }
+  ]
+}

@@ -10,7 +10,7 @@ import type { ParsedInvocationFile } from "../toolInvocations.js";
  * registry-owned change so existing exhaustive consumers do not see an
  * unbounded `string` in a patch release.
  */
-export type LocalAgentFormatId = "claude-code" | "codex";
+export type LocalAgentFormatId = "claude-code" | "codex" | "gemini-cli";
 
 export type LocalAgentFormatDescriptor = {
   readonly schemaVersion: 1;
@@ -19,11 +19,19 @@ export type LocalAgentFormatDescriptor = {
   readonly label: string;
   readonly provider: string;
   readonly defaultHomeRelative: readonly string[];
-  readonly legacyDirectoryOption?: "claudeProjectsDir" | "codexSessionsDir";
+  readonly legacyDirectoryOption?:
+    | "claudeProjectsDir"
+    | "codexSessionsDir"
+    | "geminiSessionsDir";
   readonly discovery: {
     readonly extension?: string;
+    readonly extensions?: readonly string[];
     readonly basename?: string;
     readonly basenamePrefix?: string;
+    /** Required directory name somewhere above a financial evidence file. */
+    readonly ancestorBasename?: string;
+    /** Presence signal only. This file must never reach a financial parser. */
+    readonly detectionBasename?: string;
   };
   readonly confidenceDefaults: {
     readonly validationCoverage: "live_verified" | "fixture_verified" | "untested" | "failed";
@@ -40,6 +48,8 @@ export type LocalAgentFormatDescriptor = {
     readonly operation: string;
   };
   readonly capabilities: {
+    /** May local rows from this source feed recommendation or Apply logic? */
+    readonly actionPlanning: boolean;
     readonly activity: boolean;
     readonly contextHealth: boolean;
     readonly financialFastPath: boolean;
@@ -47,8 +57,10 @@ export type LocalAgentFormatDescriptor = {
     readonly invocationEvidence: boolean;
     readonly planContext: boolean;
     readonly rateLimits: boolean;
+    /** Whether this source is allowed into the fixed Glance/statusline cache. */
+    readonly statuslineSnapshot: boolean;
   };
-  readonly financialRead: "full_jsonl" | "bounded_event_jsonl";
+  readonly financialRead: "full_jsonl" | "bounded_event_jsonl" | "full_session_files";
   readonly validationNote: string;
   readonly docs: {
     readonly format: string;
@@ -69,7 +81,7 @@ export type LocalAgentFormatParseContext = {
   sinceMs?: number;
   collectInvocationEvidence: boolean;
   onDiagnostic: (diagnostic: {
-    code: "malformed_jsonl" | "unsupported_token_shape";
+    code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
     count: number;
   }) => void;
 };

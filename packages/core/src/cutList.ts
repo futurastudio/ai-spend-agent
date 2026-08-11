@@ -5,6 +5,7 @@ import {
   type CostConfidence,
   type UsageRecord
 } from "./schema.js";
+import { localAgentFormatSupports } from "./localAgentFormats/registry.js";
 
 /**
  * Actionable, dollar-specific "cut" suggestions.
@@ -166,9 +167,11 @@ export function generateCutList(records: UsageRecord[]): CutAction[] {
   // Local transcript aggregates remain eligible only for the observed-only
   // context exposure path below; they never earn a modeled savings number.
   const callLevelRecords = records.filter(hasModeledWorkloadEvidence);
-  const contextEvidenceRecords = records.filter((record) =>
-    isLocalAgentRecord(record) || (hasCallLevelProvenance(record) && hasPricedEvidence(record))
-  );
+  const contextEvidenceRecords = records.filter((record) => (
+    hasPricedEvidence(record) && (
+      isActionPlanningLocalAgentRecord(record) || hasCallLevelProvenance(record)
+    )
+  ));
   const actions: CutAction[] = [
     ...modelDowngradeActions(callLevelRecords),
     ...contextTrimActions(contextEvidenceRecords),
@@ -187,6 +190,13 @@ export function generateCutList(records: UsageRecord[]): CutAction[] {
         right.affectedSpendUsd - left.affectedSpendUsd ||
         left.id.localeCompare(right.id)
     );
+}
+
+function isActionPlanningLocalAgentRecord(record: UsageRecord): boolean {
+  if (!isLocalAgentRecord(record)) return false;
+  // Preserve old local caches that predate agentId, but make every registered
+  // source opt into recommendation/Apply semantics explicitly.
+  return !record.agentId || localAgentFormatSupports(record.agentId, "actionPlanning");
 }
 
 /** Sum of all per-action estimated monthly savings. */

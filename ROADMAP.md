@@ -20,7 +20,10 @@ documented in the README and release notes.
 
 ## Public beta: trustworthy local evidence
 
-- One-command Claude Code and Codex activity discovery.
+- One-command Claude Code and Codex activity discovery plus experimental,
+  financial-only Gemini CLI chats ingestion. Gemini remains fixture-verified
+  and outside Glance/statusline, Context Health, and Apply until those evidence
+  capabilities are independently supported.
 - Honest separation of provider-billed cost, subscription context,
   API-equivalent value, and missing cost bases.
 - Project/model attribution, source coverage, freshness, and provenance.

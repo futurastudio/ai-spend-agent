@@ -3,6 +3,7 @@ import {
   buildRecommendedPlan,
   computePlanChecks,
   generateCutList,
+  localAgentFormatSupports,
   sanitizeLocalActivityText,
   usageWindowDays
 } from "@agent-finops/core";
@@ -109,7 +110,7 @@ function dataModeBannerLines(dataMode: SpendReportInput["dataMode"]): string[] {
   }
   if (dataMode === "local_logs") {
     return [
-      "> **Local-log estimates.** Dollar figures are priced from your Claude Code / Codex logs at API-equivalent rates. They are usage-value comparisons, not a bill. Connect provider reporting to add official cost evidence beside them.",
+      "> **Local-log estimates.** Dollar figures are priced from supported local coding-agent session evidence at API-equivalent rates. Gemini CLI support is experimental and fixture-verified. These are usage-value comparisons, not a bill. Connect provider reporting to add official cost evidence beside them.",
       ""
     ];
   }
@@ -124,18 +125,23 @@ function dataModeBannerLines(dataMode: SpendReportInput["dataMode"]): string[] {
 
 function generateLocalLogMarkdownReport(input: SpendReportInput): string {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
-  const { evidenceWindow, windowDays, windowRecords } = localApplyEvidenceWindow({
+  const { evidenceWindow, windowDays, windowRecords } = localFinancialEvidenceWindow({
+    ...input,
+    generatedAt
+  });
+  const { windowRecords: actionRecords } = localApplyEvidenceWindow({
     ...input,
     generatedAt
   });
   const summary = analyzeSpend(windowRecords);
-  const contextCandidates = generateCutList(windowRecords)
+  const financialCoverage = localFinancialCoverage(windowRecords);
+  const contextCandidates = generateCutList(actionRecords)
     .filter((candidate) => candidate.impactBasis === "observed_value_no_counterfactual")
     .slice(0, 8);
   const dead = input.deadContext?.hasData && !input.deadContext.isSample
     ? input.deadContext
     : undefined;
-  const planChecks = computePlanChecks(windowRecords, input.detectedPlans ?? []);
+  const planChecks = computePlanChecks(actionRecords, input.detectedPlans ?? []);
   const contextHealth = input.contextHealth;
   const sessionCandidate = contextHealth?.recommendation === "start_fresh";
   const candidateCount = contextCandidates.length + (dead?.deadItems.length ?? 0) + (sessionCandidate ? 1 : 0);
@@ -144,12 +150,12 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "",
     `Generated: ${generatedAt}`,
     "",
-    "> Built locally from Claude Code / Codex transcript metadata. API-equivalent value is comparison evidence—not an invoice, subscription charge, or verified saving. No report or transcript data was uploaded.",
+    "> Built locally from supported coding-agent session metadata. Gemini CLI support is experimental and financial-only. API-equivalent value is comparison evidence—not an invoice, subscription charge, or verified saving. No report or transcript data was uploaded.",
     "",
     "## Evidence boundary",
     "",
     `- Shared UTC window: ${evidenceWindow} (${windowDays} days).`,
-    `- Observed API-equivalent value: ${formatUsd(summary.totalUsd)} across ${summary.recordCount} day + agent + model + project aggregate${summary.recordCount === 1 ? "" : "s"}.`,
+    `- ${localFinancialHeadline(financialCoverage, "day + agent + model + project aggregate")}`,
     `- Scoped candidates: ${candidateCount}. A candidate opens an investigation; it does not prove that a change is safe, useful, or financially material.`,
     "- Provider-billed cost is not inferred from local transcripts. Connect an official provider report separately when a cash claim is required.",
     ...localBillingContextLines(input.detectedPlans ?? []).map((line) => `- ${line}`),
@@ -158,11 +164,11 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "",
     "### By project",
     "",
-    ...localValueBreakdownLines(summary.byProject),
+    ...localValueBreakdownLines(summary.byProject, windowRecords, "project"),
     "",
     "### By model",
     "",
-    ...localValueBreakdownLines(summary.byModel),
+    ...localValueBreakdownLines(summary.byModel, windowRecords, "model"),
     "",
     "## Plan and reported-limit context",
     "",
@@ -240,13 +246,71 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
   return lines.join("\n");
 }
 
-function localValueBreakdownLines(entries: SpendSummary["bySource"]): string[] {
+type LocalBreakdownDimension = "project" | "model";
+
+type LocalFinancialCoverage = {
+  records: UsageRecord[];
+  pricedRecords: UsageRecord[];
+  missingRecords: UsageRecord[];
+  amountUsd: number;
+};
+
+function localFinancialCoverage(records: UsageRecord[]): LocalFinancialCoverage {
+  const pricedRecords = records.filter((record) => typeof record.amountUsd === "number");
+  const missingRecords = records.filter((record) => record.amountUsd === null);
+  return {
+    records,
+    pricedRecords,
+    missingRecords,
+    amountUsd: pricedRecords.reduce((total, record) => total + (record.amountUsd ?? 0), 0)
+  };
+}
+
+function localFinancialHeadline(coverage: LocalFinancialCoverage, unit: string): string {
+  const count = coverage.records.length;
+  const suffix = `${unit}${count === 1 ? "" : "s"}`;
+  if (coverage.pricedRecords.length === 0) {
+    if (count === 0) {
+      return "Observed API-equivalent value: Unavailable — no local financial records were present in this window.";
+    }
+    return `Observed API-equivalent value: Unavailable across ${count} ${suffix}; all ${coverage.missingRecords.length} record${coverage.missingRecords.length === 1 ? " has" : "s have"} missing cost evidence. Missing/null is not zero.`;
+  }
+  if (coverage.missingRecords.length > 0) {
+    return `Observed API-equivalent value: ${formatUsd(coverage.amountUsd)} (partial) across ${count} ${suffix}; ${coverage.pricedRecords.length} priced and ${coverage.missingRecords.length} missing. Missing/null is not zero.`;
+  }
+  return `Observed API-equivalent value: ${formatUsd(coverage.amountUsd)} across ${count} ${suffix}.`;
+}
+
+function localBreakdownRecords(
+  records: UsageRecord[],
+  dimension: LocalBreakdownDimension,
+  key: string
+): UsageRecord[] {
+  return records.filter((record) => {
+    const recordKey = dimension === "model" ? record.model : (record.projectId ?? "unmapped");
+    return recordKey === key;
+  });
+}
+
+function localValueBreakdownLines(
+  entries: SpendSummary["bySource"],
+  records: UsageRecord[],
+  dimension: LocalBreakdownDimension
+): string[] {
   if (entries.length === 0) {
     return ["- No observed API-equivalent value in this dimension."];
   }
-  return entries.map((entry) =>
-    `- ${safePromptMetadata(entry.key, 140)}: ${formatUsd(entry.amountUsd)} across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"} (${entry.confidence}).`
-  );
+  return entries.map((entry) => {
+    const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
+    const label = safePromptMetadata(entry.key, 140);
+    if (groupCoverage.pricedRecords.length === 0) {
+      return `- ${label}: Unavailable across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"} (${entry.confidence}); missing/null is not zero.`;
+    }
+    if (groupCoverage.missingRecords.length > 0) {
+      return `- ${label}: ${formatUsd(groupCoverage.amountUsd)} partial observed API-equivalent value across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"}; ${groupCoverage.pricedRecords.length} priced and ${groupCoverage.missingRecords.length} missing (${entry.confidence}).`;
+    }
+    return `- ${label}: ${formatUsd(groupCoverage.amountUsd)} across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"} (${entry.confidence}).`;
+  });
 }
 
 type ReportFinancialPresentationBasis =
@@ -844,18 +908,22 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
   ].join("\n");
 }
 
-function localApplyEvidenceWindow(input: SpendReportInput): {
+type LocalEvidenceWindow = {
   windowDays: number;
   generatedAt: Date;
   windowStart: number;
   windowRecords: UsageRecord[];
   evidenceWindow: string;
-} {
+};
+
+function localEvidenceWindow(input: SpendReportInput, actionPlanningOnly: boolean): LocalEvidenceWindow {
   const windowDays = Math.max(1, input.deadContext?.windowDays ?? 30);
   const generatedAt = validDate(input.generatedAt) ?? new Date();
   const windowEnd = generatedAt.getTime();
   const windowStart = windowEnd - windowDays * 24 * 60 * 60 * 1_000;
-  const windowRecords = (input.allRecords ?? []).filter((record) => {
+  const windowRecords = (input.allRecords ?? []).filter((record) => (
+    !actionPlanningOnly || !record.agentId || localAgentFormatSupports(record.agentId, "actionPlanning")
+  )).filter((record) => {
     const timestamp = Date.parse(record.timestamp);
     return Number.isFinite(timestamp) && timestamp >= windowStart && timestamp <= windowEnd;
   }).map((record) => ({
@@ -872,6 +940,14 @@ function localApplyEvidenceWindow(input: SpendReportInput): {
     windowRecords,
     evidenceWindow: `${new Date(windowStart).toISOString()} through ${generatedAt.toISOString()}`
   };
+}
+
+function localFinancialEvidenceWindow(input: SpendReportInput): LocalEvidenceWindow {
+  return localEvidenceWindow(input, false);
+}
+
+function localApplyEvidenceWindow(input: SpendReportInput): LocalEvidenceWindow {
+  return localEvidenceWindow(input, true);
 }
 
 function localBillingContextLines(plans: DetectedPlan[]): string[] {
@@ -1022,7 +1098,9 @@ function generateLocalActionPlanMarkdown(input: SpendReportInput): string {
     "## Evidence boundary",
     "",
     `- Shared UTC window: ${evidenceWindow} (${windowDays} days).`,
-    `- Observed API-equivalent value: ${formatUsd(observedValue)} across ${windowRecords.length} daily aggregate${windowRecords.length === 1 ? "" : "s"}. This is comparison evidence, not an invoice or subscription charge.`,
+    windowRecords.length > 0
+      ? `- Observed API-equivalent value: ${formatUsd(observedValue)} across ${windowRecords.length} daily aggregate${windowRecords.length === 1 ? "" : "s"}. This is comparison evidence, not an invoice or subscription charge.`
+      : "- Observed API-equivalent value: unavailable — no local records from a recommendation/Apply-capable source were present in this window.",
     `- Scoped candidates: ${candidateCount}. A candidate is not proof that a change is safe or beneficial.`,
     ...localBillingContextLines(input.detectedPlans ?? []).map((line) => `- ${line}`),
     "",
@@ -2278,15 +2356,19 @@ function formatPercent(ratio: number): string {
 function generateLocalLogHtmlReport(input: SpendReportInput): string {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const records = input.allRecords ?? [];
+  const actionRecords = records.filter((record) => (
+    !record.agentId || localAgentFormatSupports(record.agentId, "actionPlanning")
+  ));
+  const financialCoverage = localFinancialCoverage(records);
   const windowDays = usageWindowDays(records);
-  const cutList = generateCutList(records);
+  const cutList = generateCutList(actionRecords);
   const plan = buildRecommendedPlan(cutList);
-  const planChecks = computePlanChecks(records, input.detectedPlans ?? []);
+  const planChecks = computePlanChecks(actionRecords, input.detectedPlans ?? []);
   const valueCheck = planChecks.find(
     (check) => check.detectedPlan?.billing === "subscription" && typeof check.valueMultiple === "number" && check.suggestedPlan
   );
   const dead = input.deadContext && input.deadContext.hasData && !input.deadContext.isSample ? input.deadContext : undefined;
-  const summary = input.summary;
+  const summary = analyzeSpend(records);
   const hittingLimits = planChecks.some((check) => check.upgradeHint);
   const observedContextValue = cutList
     .filter((cut) => cut.impactBasis === "observed_value_no_counterfactual")
@@ -2308,10 +2390,34 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     ? "the next comparable provider-reported cost window"
     : "the chosen operational metric; a cash claim requires a later matched provider-reported cost source";
 
-  const barRow = (key: string, amountUsd: number): string => {
-    const share = summary.totalUsd > 0 ? amountUsd / summary.totalUsd : 0;
-    const pct = Math.max(1, Math.round(share * 100));
-    return `<div class="row"><span class="k">${escapeHtml(key === "unmapped" ? "(unmapped)" : key)}</span><span class="bar"><i class="estimated-bar" style="width:${pct}%"></i></span><span class="v estimated-value">${formatUsd(amountUsd)}<em>${formatPercent(share)}</em></span></div>`;
+  const financialValue = financialCoverage.pricedRecords.length > 0
+    ? formatUsd(financialCoverage.amountUsd)
+    : "Unavailable";
+  const financialNote = financialCoverage.pricedRecords.length === 0
+    ? financialCoverage.records.length === 0
+      ? "no local financial records in this report"
+      : `${financialCoverage.missingRecords.length} record${financialCoverage.missingRecords.length === 1 ? "" : "s"} missing cost · missing/null is not zero`
+    : financialCoverage.missingRecords.length > 0
+      ? `partial value · ${financialCoverage.pricedRecords.length} priced · ${financialCoverage.missingRecords.length} missing`
+      : `${summary.recordCount} session-day record${summary.recordCount === 1 ? "" : "s"} · estimated`;
+
+  const barRow = (
+    entry: SpendSummary["bySource"][number],
+    dimension: LocalBreakdownDimension
+  ): string => {
+    const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
+    const key = escapeHtml(entry.key === "unmapped" ? "(unmapped)" : entry.key);
+    if (groupCoverage.pricedRecords.length === 0) {
+      return `<div class="row"><span class="k">${key}</span><span class="bar"></span><span class="v estimated-value">Unavailable<em>share unavailable · missing/null is not zero</em></span></div>`;
+    }
+    const share = financialCoverage.amountUsd > 0 ? groupCoverage.amountUsd / financialCoverage.amountUsd : 0;
+    const pct = share > 0 ? Math.max(1, Math.round(share * 100)) : 0;
+    const coverageNote = groupCoverage.missingRecords.length > 0
+      ? `${formatPercent(share)} of priced value · ${groupCoverage.missingRecords.length} missing`
+      : financialCoverage.missingRecords.length > 0
+        ? `${formatPercent(share)} of priced value · report partial`
+        : formatPercent(share);
+    return `<div class="row"><span class="k">${key}</span><span class="bar"><i class="estimated-bar" style="width:${pct}%"></i></span><span class="v estimated-value">${formatUsd(groupCoverage.amountUsd)}${groupCoverage.missingRecords.length > 0 ? " partial" : ""}<em>${coverageNote}</em></span></div>`;
   };
 
   const statCard = (label: string, value: string, note: string, tone = ""): string =>
@@ -2353,25 +2459,27 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
         <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${windowDays} day${windowDays === 1 ? "" : "s"} of data · report rendered locally · no aibill telemetry</span></p>
 
         <div class="hero">
-          ${valueCheck
+          ${valueCheck && financialCoverage.pricedRecords.length > 0
             ? `<div class="hero-big estimated-value">~${valueCheck.valueMultiple}×</div><div class="hero-sub">COMPARED WITH <strong>${escapeHtml(valueCheck.suggestedPlan!.name)}</strong> ($${valueCheck.suggestedPlan!.monthlyUsd}/mo) — API-equivalent usage is ~${valueCheck.valueMultiple}× the listed plan price${hittingLimits ? ` <span class="warn">· check the reported limit signal</span>` : ""}</div>`
-            : `<div class="hero-big estimated-value">${formatUsd(summary.totalUsd)}</div><div class="hero-sub">API-equivalent usage from local Claude Code / Codex transcripts · estimated</div>`}
+            : `<div class="hero-big estimated-value">${financialValue}</div><div class="hero-sub">${escapeHtml(financialNote)}</div>`}
         </div>
 
         ${sectionHead("WHAT HAPPENED", "measured from this machine's transcripts")}
         <div class="stats">
-          ${valueCheck ? statCard("API-rate comparison", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} list price`, "estimated-card") : statCard("Tracked", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`, "estimated-card")}
-          ${statCard("Usage", formatUsd(summary.totalUsd), `${summary.recordCount} session-day records · estimated`, "estimated-card")}
+          ${valueCheck && financialCoverage.pricedRecords.length > 0 ? statCard("API-rate comparison", `~${valueCheck.valueMultiple}×`, `${escapeHtml(valueCheck.suggestedPlan!.name)} list price`, "estimated-card") : statCard("Tracked", financialValue, financialNote, "estimated-card")}
+          ${statCard("Usage value", financialValue, financialNote, "estimated-card")}
           ${plan.recommendedSavingsUsd > 0
             ? statCard("Modeled opportunity", `~${formatUsd(plan.recommendedSavingsUsd)}/mo`, "connected-workload model · verify", "estimated-card")
-            : statCard("Context exposure", formatUsd(observedContextValue), "observed value · reduction unproven", "estimated-card")}
+            : observedContextValue > 0
+              ? statCard("Context exposure", formatUsd(observedContextValue), "observed value · reduction unproven", "estimated-card")
+              : statCard("Context exposure", "Unavailable", "no action-capable priced context candidate", "estimated-card")}
           ${dead ? statCard("Config candidates", `${dead.deadCount} of ${dead.loadedCount}`, `no matching invocation in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : statCard("Config candidates", "none", "no supported candidate evidence")}
         </div>
 
         ${sectionHead("WHY", "where it goes")}
         <div class="cols">
-          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry.key, entry.amountUsd)).join("")}</div>
-          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry.key, entry.amountUsd)).join("")}</div>
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}</div>
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Configured/catalogued with no matching invocation (loading and future need may be unmeasured):</span> ${deadChips}</div>` : ""}
 

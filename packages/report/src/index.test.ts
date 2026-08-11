@@ -774,6 +774,108 @@ describe("board-style report generation", () => {
     expect(markdown).not.toContain("Spend by");
   });
 
+  it("keeps Gemini financial-only evidence out of Apply and never renders missing cost as $0", () => {
+    const geminiRecords: UsageRecord[] = [{
+      id: "gemini-heavy-missing",
+      timestamp: "2026-07-29T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "google", confidence: "estimated", observedFrom: "fixture" },
+      model: "gemini-future-unknown",
+      inputTokens: 180_000,
+      outputTokens: 10_000,
+      amountUsd: null,
+      costConfidence: "missing",
+      agentId: "gemini-cli",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate",
+      operation: "gemini-cli sessions"
+    }];
+    const localInput: SpendReportInput = {
+      ...input,
+      generatedAt: "2026-07-30T00:00:00.000Z",
+      dataMode: "local_logs",
+      allRecords: geminiRecords,
+      summary: analyzeSpend(geminiRecords),
+      providerRecords: []
+    };
+
+    const artifact = generateApplyArtifactMarkdown(localInput);
+    const action = generateActionPlanMarkdown(localInput);
+    const markdown = generateMarkdownReport(localInput);
+    const html = generateHtmlReport(localInput);
+
+    expect(artifact).toContain("NO SCOPED CHANGE CANDIDATE");
+    expect(artifact).not.toContain("USAGE-001");
+    expect(artifact).not.toContain("$0.00");
+    expect(action).toContain("Observed API-equivalent value: unavailable");
+    expect(action).not.toContain("$0.00");
+    expect(markdown).toContain("Observed API-equivalent value: Unavailable");
+    expect(markdown).toContain("gemini-future-unknown: Unavailable");
+    expect(markdown).toContain("missing/null is not zero");
+    expect(markdown).not.toContain("$0.00");
+    expect(html).toContain("gemini-future-unknown");
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("share unavailable · missing/null is not zero");
+    expect(html).not.toContain("$0.00");
+  });
+
+  it("keeps mixed Gemini financial coverage partial without leaking Gemini into actions", () => {
+    const pricedCodex: UsageRecord = {
+      id: "codex-priced",
+      timestamp: "2026-07-29T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model: "gpt-5.6-sol",
+      inputTokens: 12_000,
+      outputTokens: 1_000,
+      amountUsd: 12,
+      costConfidence: "estimated",
+      agentId: "codex",
+      projectId: "priced-project",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate",
+      operation: "codex sessions"
+    };
+    const missingGemini: UsageRecord = {
+      id: "gemini-missing",
+      timestamp: "2026-07-29T01:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "google", confidence: "estimated", observedFrom: "fixture" },
+      model: "gemini-future-unknown",
+      inputTokens: 18_000,
+      outputTokens: 2_000,
+      amountUsd: null,
+      costConfidence: "missing",
+      agentId: "gemini-cli",
+      projectId: "gemini-opaque-project",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate",
+      operation: "gemini-cli sessions"
+    };
+    const records = [pricedCodex, missingGemini];
+    const localInput: SpendReportInput = {
+      ...input,
+      generatedAt: "2026-07-30T00:00:00.000Z",
+      dataMode: "local_logs",
+      allRecords: records,
+      summary: analyzeSpend(records),
+      providerRecords: []
+    };
+
+    const markdown = generateMarkdownReport(localInput);
+    const html = generateHtmlReport(localInput);
+    const artifact = generateApplyArtifactMarkdown(localInput);
+
+    expect(markdown).toContain("Observed API-equivalent value: $12.00 (partial)");
+    expect(markdown).toContain("1 priced and 1 missing");
+    expect(markdown).toContain("gemini-opaque-project: Unavailable");
+    expect(markdown).toContain("gemini-future-unknown: Unavailable");
+    expect(markdown).not.toContain("gemini-future-unknown: $0.00");
+    expect(html).toContain("partial value · 1 priced · 1 missing");
+    expect(html).toContain("gemini-opaque-project");
+    expect(html).toContain("share unavailable · missing/null is not zero");
+    expect(html).not.toContain("$0.00");
+    expect(artifact).not.toContain("gemini-opaque-project");
+    expect(artifact).not.toContain("gemini-future-unknown");
+  });
+
   it("keeps hostile local metadata inside the evidence boundary and preserves the prompt fence", () => {
     const artifact = generateApplyArtifactMarkdown({
       ...input,

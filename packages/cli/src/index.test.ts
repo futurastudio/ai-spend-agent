@@ -21,6 +21,11 @@ beforeEach(async () => {
   // process directory avoids process.env races when Vitest runs files in
   // parallel while still staying outside the developer's real ~/.aibill.
   await mkdir(sharedTestTrustDirectory, { recursive: true });
+  process.env.AI_SPEND_GEMINI_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-no-gemini-"));
+});
+
+afterEach(() => {
+  delete process.env.AI_SPEND_GEMINI_LOGS_DIR;
 });
 
 describe("zero-key instant demo first run", () => {
@@ -169,7 +174,7 @@ describe("zero-key instant demo first run", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.7\.3$/);
+    expect(result.stdout).toMatch(/^0\.8\.0$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -855,6 +860,68 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).not.toContain("not wired in this slice");
   });
 
+  it("detects Gemini logs.json without turning prompt history into spend or demo data", async () => {
+    const geminiRoot = await mkdtemp(join(tmpdir(), "ai-spend-gemini-presence-"));
+    const projectDirectory = join(geminiRoot, "fixture-opaque-project");
+    await mkdir(projectDirectory, { recursive: true });
+    await writeFile(join(projectDirectory, "logs.json"), `${JSON.stringify([{
+      sessionId: "fixture-presence-session",
+      messageId: 0,
+      timestamp: new Date().toISOString(),
+      type: "user",
+      message: "synthetic presence entry"
+    }])}\n`, "utf8");
+    process.env.AI_SPEND_GEMINI_LOGS_DIR = geminiRoot;
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-gemini-presence-project-"));
+
+    const result = await runCli(["--path", dir, "--no-color"]);
+    const doctor = await runCli(["doctor", "--path", dir]);
+    const sources = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATA MODE: local agent evidence (financial value unavailable; no demo sample substituted)");
+    expect(result.stdout).toContain("Gemini CLI was detected, but no supported chats JSON/JSONL financial evidence was found");
+    expect(result.stdout).toContain("+1 or contribute a synthetic fixture");
+    expect(result.stdout).toContain("issues/new?template=provider_or_agent.yml");
+    expect(result.stdout).toContain("Unavailable");
+    expect(result.stdout).not.toContain("$87.00");
+    expect(doctor.stdout).toContain("Gemini CLI sessions: detected, but no supported chats financial rows found");
+    expect(sources.stdout).toContain("Gemini CLI local logs (gemini-cli)");
+    expect(sources.stdout).toContain("logs.json is presence-only evidence; zero financial rows were created");
+    expect(sources.stdout).toContain("issues/new?template=provider_or_agent.yml");
+  });
+
+  it("prices complete Gemini chats evidence while preserving fixture-level validation", async () => {
+    const geminiRoot = await mkdtemp(join(tmpdir(), "ai-spend-gemini-financial-"));
+    const opaqueProject = "9999999999999999999999999999999999999999999999999999999999999999";
+    const chatsDirectory = join(geminiRoot, opaqueProject, "chats");
+    await mkdir(chatsDirectory, { recursive: true });
+    await writeFile(join(chatsDirectory, "fixture-session.json"), `${JSON.stringify({
+      sessionId: "fixture-financial-session",
+      projectHash: opaqueProject,
+      startTime: new Date(Date.now() - 60_000).toISOString(),
+      messages: [{
+        id: "fixture-financial-response",
+        timestamp: new Date().toISOString(),
+        type: "gemini",
+        model: "gemini-2.5-pro",
+        tokens: { input: 900, output: 90, cached: 300, thoughts: 20, tool: 10, total: 1020 }
+      }]
+    })}\n`, "utf8");
+    process.env.AI_SPEND_GEMINI_LOGS_DIR = geminiRoot;
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-gemini-financial-project-"));
+
+    const result = await runCli(["--path", dir, "--no-color", "--group-by", "model"]);
+    const sources = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("DATA MODE: your local agent logs");
+    expect(result.stdout).toContain("OBSERVED API-EQUIVALENT VALUE");
+    expect(result.stdout).toContain("gemini-2.5-pro");
+    expect(result.stdout).not.toContain(opaqueProject);
+    expect(sources.stdout).toMatch(/Gemini CLI local logs \(gemini-cli\)\n  validation coverage: fixture_verified\n  financial evidence: estimated/);
+  });
+
   it("shows proof-conservative source status on two separate axes", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-doctor-sources-"));
     const result = await runCli(["doctor", "--sources", "--path", dir]);
@@ -1428,7 +1495,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["init", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("local usage scope: all Claude Code + Codex activity on this machine (last 30 days)");
+    expect(result.stdout).toContain("local usage scope: supported Claude Code, Codex, and Gemini CLI financial evidence on this machine (last 30 days)");
     expect(result.stdout).toContain("billing unresolved: ~$7.50 1d · ~$7.50 7d · ~$7.50 30d (API-equivalent; not billed spend)");
     expect(result.stdout).toContain("claude-code: readable; 1/1 files parsed; 1/1 rows priced");
     expect(result.stdout).not.toContain("demo sample");
@@ -1471,7 +1538,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(`state project: ${basename(dir)}`);
     expect(result.stdout).toContain(
-      "local usage scope: all Claude Code + Codex activity on this machine (last 30 days)"
+      "local usage scope: supported Claude Code, Codex, and Gemini CLI financial evidence on this machine (last 30 days)"
     );
     expect(result.stdout).toContain(
       "provider scope: trusted connected billing from this state project only (shown separately)"

@@ -1,0 +1,9 @@
+[
+  {
+    "sessionId": "fixture-gemini-process-session",
+    "messageId": 0,
+    "timestamp": "2026-08-10T19:00:00.000Z",
+    "type": "user",
+    "message": "Synthetic prompt-history presence signal."
+  }
+]

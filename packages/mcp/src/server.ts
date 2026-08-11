@@ -94,13 +94,16 @@ export function createServer(): McpServer {
   server.registerTool(
     "sync_local_agent_spend",
     {
-      title: "Sync local Claude Code and Codex usage value",
+      title: "Sync supported local coding-agent usage value",
       description:
-        "Read local Claude Code and Codex transcript metadata, calculate API-equivalent usage value (not billed spend), and persist a local evidence report. Day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. Transcript contents are not uploaded. Optionally filter the aggregate records to one project name.",
+        "Read supported Claude Code, Codex, and experimental Gemini CLI financial metadata, calculate API-equivalent usage value where evidence is complete (not billed spend), and persist a local evidence report. Gemini logs.json is detection-only and never creates a financial row. Day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. Transcript contents are not uploaded. Optionally filter the aggregate records to one project name.",
       inputSchema: {
         path: absolutePath.describe("Absolute project folder where .ai-spend-agent state may be written."),
         sinceDays: z.number().int().min(1).max(365).optional().describe("Lookback window in days; defaults to 30."),
-        project: z.string().min(1).optional().describe("Optional exact project name filter, such as agent-finops.")
+        project: z.string().min(1).max(1_024).refine(
+          (value) => !/[\u0000-\u001F\u007F]/.test(value),
+          "project must not contain control characters"
+        ).optional().describe("Optional exact project name filter, such as agent-finops.")
       },
       annotations: {
         readOnlyHint: false,

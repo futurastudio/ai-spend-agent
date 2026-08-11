@@ -1,0 +1,2 @@
+{"sessionId":"fixture-gemini-inconsistent-session","projectHash":"4444444444444444444444444444444444444444444444444444444444444444","startTime":"2026-08-10T15:00:00.000Z","lastUpdated":"2026-08-10T15:01:00.000Z","kind":"main"}
+{"id":"fixture-gemini-inconsistent-response","timestamp":"2026-08-10T15:01:00.000Z","type":"gemini","content":[{"text":"Synthetic inconsistent total fixture."}],"model":"gemini-2.5-pro","tokens":{"input":700,"output":70,"cached":200,"thoughts":20,"tool":10,"total":999}}

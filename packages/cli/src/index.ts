@@ -34,6 +34,7 @@ import {
   loadLocalAgentFinancialUsage,
   localAgentFormatDescriptors,
   localAgentFormatLabel,
+  localAgentFormatSupports,
   loadSampleUsageData,
   parseUsageRecord,
   scanLocalUsageSignals,
@@ -365,7 +366,7 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     view: args.groupBy ? "breakdown" : "full"
   });
 
-  const header = [`  ${dataModeBanner(mode)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
+  const header = [`  ${dataModeBanner(mode, summaryRecords)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
   return ok(`${header}\n${summaryText}`);
 }
 
@@ -375,12 +376,16 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso: sinceIsoForDays(sinceDays),
     collectCodexInvocationEvidence: true
   });
+  const glanceCalls = logs.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "glance")
+  ));
   const calls = args.project
-    ? logs.calls.filter((call) => call.project === args.project)
-    : logs.calls;
+    ? glanceCalls.filter((call) => call.project === args.project)
+    : glanceCalls;
   const latestWorkingDirectory = latestObservedWorkingDirectory(calls);
   const contextProjectDir = args.pathExplicit
     ? resolve(args.path)
@@ -415,10 +420,14 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
     codexInvocationFiles: logs.codexInvocationFiles
   });
   const snapshot = buildUsageGlance(calls, {
-    filesParsed: logs.filesParsed,
-    detectedAgents: logs.agentsDetected,
+    filesParsed: logs.sourceScans
+      .filter((scan) => localAgentFormatSupports(scan.agent, "glance"))
+      .reduce((total, scan) => total + scan.filesParsed, 0),
+    detectedAgents: logs.agentsDetected.filter((agent) => (
+      localAgentFormatSupports(agent, "glance")
+    )),
     detectedPlans,
-    limitCalls: logs.calls,
+    limitCalls: glanceCalls,
     contextHealth
   });
   return ok(JSON.stringify(snapshot));
@@ -431,12 +440,16 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso,
     collectCodexInvocationEvidence: true
   });
+  const contextCalls = logs.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "contextHealth")
+  ));
   const calls = args.project
-    ? logs.calls.filter((call) => call.project === args.project)
-    : logs.calls;
+    ? contextCalls.filter((call) => call.project === args.project)
+    : contextCalls;
   const health = await loadContextHealth(calls, {
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
@@ -654,6 +667,7 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     // Env overrides keep tests (and unusual installs) isolated from $HOME.
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso: sinceIsoForDays(args.sinceDays ?? 30),
     collectCodexInvocationEvidence: true
   }).catch(() => undefined);
@@ -669,6 +683,21 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
       mode: "local-logs",
       warnings,
       codexInvocationFiles: logs.codexInvocationFiles
+    };
+  }
+
+  const geminiPresence = logs?.sourceScans.find((scan) => scan.agent === "gemini-cli");
+  if (geminiPresence && (
+    (geminiPresence.detectionSignals ?? 0) > 0 || geminiPresence.filesDiscovered > 0
+  )) {
+    warnings.push(
+      "Gemini CLI was detected, but no supported chats JSON/JSONL financial evidence was found. No financial rows were created; logs.json is presence-only evidence. Need this coverage? +1 or contribute a synthetic fixture: https://github.com/futurastudio/ai-spend-agent/issues/new?template=provider_or_agent.yml"
+    );
+    return {
+      records: [],
+      mode: "local-logs",
+      warnings,
+      codexInvocationFiles: logs?.codexInvocationFiles
     };
   }
 
@@ -693,8 +722,12 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
 }
 
 /** A one-line, unmissable banner telling the user which data they're seeing. */
-function dataModeBanner(mode: InstantReadMode): string {
-  if (mode === "local-logs") return "DATA MODE: your local agent logs (estimated at API-equivalent rates)";
+function dataModeBanner(mode: InstantReadMode, records: readonly UsageRecord[]): string {
+  if (mode === "local-logs") {
+    return records.some((record) => typeof record.amountUsd === "number")
+      ? "DATA MODE: your local agent logs (estimated at API-equivalent rates)"
+      : "DATA MODE: local agent evidence (financial value unavailable; no demo sample substituted)";
+  }
   if (mode === "connected") return "DATA MODE: connected provider billing";
   return "DATA MODE: demo sample (illustrative — not your real spend)";
 }
@@ -717,12 +750,20 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
 
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
   }).catch(() => undefined);
   const detected = logs?.agentsDetected ?? [];
   const claudeFound = detected.includes("claude-code");
   const codexFound = detected.includes("codex");
-  const hasLogs = claudeFound || codexFound;
+  const geminiScan = logs?.sourceScans.find((scan) => scan.agent === "gemini-cli");
+  const geminiFinancialFound = detected.includes("gemini-cli");
+  const geminiPresenceFound = Boolean(
+    geminiScan && ((geminiScan.detectionSignals ?? 0) > 0 || geminiScan.filesDiscovered > 0)
+  );
+  const geminiFound = geminiFinancialFound || geminiPresenceFound;
+  const hasFinancialLogs = claudeFound || codexFound || geminiFinancialFound;
+  const hasLocalSource = hasFinancialLogs || geminiPresenceFound;
 
   const detection = await detectLocalCredentials({
     cwd: rootPath,
@@ -744,13 +785,18 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   if (persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === false) {
     warnings.push(`${persisted.connectedTrust.message} Run \`npx aibill connect <provider>\` or repeat the prior \`npx aibill sync-provider ...\` command.`);
   }
-  if (!hasLogs) warnings.push("no real Claude Code / Codex logs found — a first run here will show DEMO sample data");
+  if (geminiPresenceFound && !geminiFinancialFound) {
+    warnings.push("Gemini CLI detected, but no supported chats JSON/JSONL financial evidence was found. No financial rows were created; logs.json is presence-only evidence. Need this coverage? +1 or contribute a synthetic fixture: https://github.com/futurastudio/ai-spend-agent/issues/new?template=provider_or_agent.yml");
+  }
+  if (!hasLocalSource) warnings.push("no supported Claude Code, Codex, or Gemini CLI session evidence found — a first run here will show DEMO sample data");
   if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic to add official provider-reported cost (local logs stay API-equivalent estimates)");
 
   const predictedMode = connectedStateTrusted
     ? "connected provider billing"
-    : hasLogs
+    : hasFinancialLogs
       ? "your local agent logs (estimated at API-equivalent rates)"
+      : geminiPresenceFound
+        ? "local Gemini CLI presence only (financial evidence unavailable; no sample substituted)"
       : "demo sample (illustrative)";
 
   const lines = [
@@ -763,6 +809,11 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
     `state mode: ${stateMode}`,
     `Claude Code logs: ${claudeFound ? "found" : "not found"}`,
     `Codex logs: ${codexFound ? "found" : "not found"}`,
+    `Gemini CLI sessions: ${geminiFinancialFound
+      ? "found"
+      : geminiPresenceFound
+        ? "detected, but no supported chats financial rows found"
+        : "not found"}`,
     `provider env references: ${providerRefs.length > 0 ? providerRefs.join(", ") : "none detected"}`,
     `subscription plans: ${planLine}`,
     "redaction policy: secrets are never printed or persisted",
@@ -808,7 +859,8 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
   try {
     localLogs = await loadLocalAgentUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
     });
   } catch (error) {
     localError = sanitizeSecretishError(error instanceof Error ? error.message : String(error));
@@ -923,14 +975,18 @@ function localFinancialEvidenceNote(
     if (scan.directoryStatus === "unreadable") {
       return "The local transcript path could not be read; absence of usage cannot be confirmed.";
     }
+    if (scan.agent === "gemini-cli" && (scan.detectionSignals ?? 0) > 0 &&
+        scan.filesDiscovered === 0) {
+      return "Gemini CLI detected, but no supported chats JSON/JSONL financial evidence was found. logs.json is presence-only evidence; zero financial rows were created. Need this coverage? +1 or contribute a synthetic fixture: https://github.com/futurastudio/ai-spend-agent/issues/new?template=provider_or_agent.yml";
+    }
     if (scan.filesDiscovered === 0) {
-      return "The local transcript directory was readable, but no JSONL files were found.";
+      return "The local transcript directory was readable, but no supported session files were found.";
     }
     if (scan.unreadableFiles > 0) {
       return `${scan.filesDiscovered} transcript file(s) were found, but ${scan.unreadableFiles} could not be read; absence of usage cannot be confirmed.`;
     }
     if (scan.malformedLines > 0) {
-      return `${scan.filesDiscovered} transcript file(s) were found, but no valid usage rows were parsed; ${scan.malformedLines} malformed JSONL line(s) were skipped.`;
+      return `${scan.filesDiscovered} transcript file(s) were found, but no valid usage rows were parsed; ${scan.malformedLines} malformed session record(s) were skipped.`;
     }
     return `${scan.filesDiscovered} transcript file(s) were found, but no supported usage rows were observed.`;
   }
@@ -966,10 +1022,16 @@ function localAgentDiagnosticSummary(
 ): string | undefined {
   const relevant = diagnostics.filter((diagnostic) => diagnostic.code !== "directory_missing");
   const unsupported = relevant.filter((diagnostic) => diagnostic.code === "unsupported_token_shape");
-  const malformed = relevant.filter((diagnostic) => diagnostic.code === "malformed_jsonl");
+  const malformed = relevant.filter((diagnostic) => (
+    diagnostic.code === "malformed_jsonl" || diagnostic.code === "malformed_session_file"
+  ));
   const messages = [...new Set(
     relevant
-      .filter((diagnostic) => !["unsupported_token_shape", "malformed_jsonl"].includes(diagnostic.code))
+      .filter((diagnostic) => ![
+        "unsupported_token_shape",
+        "malformed_jsonl",
+        "malformed_session_file"
+      ].includes(diagnostic.code))
       .map((diagnostic) => diagnostic.message)
   )];
   const unsupportedCount = unsupported
@@ -980,7 +1042,7 @@ function localAgentDiagnosticSummary(
   const malformedCount = malformed
     .reduce((total, diagnostic) => total + diagnostic.count, 0);
   if (malformedCount > 0) {
-    messages.push(`${malformedCount} malformed JSONL line(s) were skipped in ${localAgentFormatLabel(malformed[0]!.agent)} transcripts.`);
+    messages.push(`${malformedCount} malformed session record(s) were skipped in ${localAgentFormatLabel(malformed[0]!.agent)} transcripts.`);
   }
   return messages.length > 0 ? messages.join(" ") : undefined;
 }
@@ -1567,6 +1629,7 @@ async function collectAndPublishActivitySnapshot(input: {
     logs = await loadLocalAgentFinancialUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
       sinceIso: sinceIsoForDays(30, asOf)
     });
   } catch (error) {
@@ -1582,9 +1645,12 @@ async function collectAndPublishActivitySnapshot(input: {
 
   let activitySnapshot: ActivitySnapshot | undefined;
   let cacheStatus: ActivityCacheRefreshResult["cacheStatus"];
+  const statuslineSourceScans = logs?.sourceScans.filter((scan) => (
+    localAgentFormatSupports(scan.agent, "statuslineSnapshot")
+  )) ?? [];
   const structuredSourceFailure = logs !== undefined &&
-    logs.sourceScans.some((scan) => scan.directoryStatus === "unreadable") &&
-    !logs.sourceScans.some((scan) => scan.directoryStatus === "readable");
+    statuslineSourceScans.some((scan) => scan.directoryStatus === "unreadable") &&
+    !statuslineSourceScans.some((scan) => scan.directoryStatus === "readable");
   if (logs && !structuredSourceFailure) {
     let refreshErrorCode: ActivitySnapshotRefreshErrorCode = "invalid_evidence";
     try {
@@ -1945,13 +2011,18 @@ function activitySnapshotProvider(provider: string): ActivitySnapshotProvider {
 function formatInitReceipt(input: InitReceiptInput): string {
   const records = input.logs?.records ?? [];
   const pricedRecords = records.filter((record) => typeof record.amountUsd === "number");
+  const registryOnlyLines = initRegistryOnlyFinancialLines(records);
   const sourceFailures = (input.logs?.sourceScans ?? []).some((scan) => scan.directoryStatus === "unreadable") ||
     (input.logs?.diagnostics ?? []).some((diagnostic) => diagnostic.severity === "error");
-  const receiptLines = input.scanError || sourceFailures && records.length === 0
+  const snapshotLines = input.scanError || sourceFailures && records.length === 0
     ? ["API-equivalent usage value: unavailable — the local scan could not prove an empty result"]
     : input.activitySnapshot
       ? initApiEquivalentWindowLines(input.activitySnapshot)
       : ["API-equivalent usage value: unavailable — no snapshot was produced"];
+  const receiptLines = registryOnlyLines.length > 0 &&
+      input.activitySnapshot?.mode === "empty" && !input.scanError
+    ? registryOnlyLines
+    : [...snapshotLines, ...registryOnlyLines];
 
   const planLine = input.detectedPlans.length > 0
     ? input.detectedPlans.map((plan) => {
@@ -1969,7 +2040,10 @@ function formatInitReceipt(input: InitReceiptInput): string {
     const validation = scan.jsonlValidationCoverage === "financial_events_only"
       ? "; financial-event JSONL validation only"
       : "";
-    return `  ${scan.agent}: ${scan.directoryStatus}; ${scan.filesParsed}/${scan.filesDiscovered} files parsed; ${priced}/${agentRecords.length} rows priced${skipped > 0 ? `; ${skipped} old files skipped` : ""}${validation}`;
+    const detection = (scan.detectionSignals ?? 0) > 0
+      ? `; ${scan.detectionSignals} presence-only signal(s)`
+      : "";
+    return `  ${scan.agent}: ${scan.directoryStatus}; ${scan.filesParsed}/${scan.filesDiscovered} files parsed; ${priced}/${agentRecords.length} rows priced${detection}${skipped > 0 ? `; ${skipped} old files skipped` : ""}${validation}`;
   });
   const diagnosticLines = (input.logs?.diagnostics ?? [])
     .filter((diagnostic) => diagnostic.code !== "directory_missing")
@@ -1980,7 +2054,7 @@ function formatInitReceipt(input: InitReceiptInput): string {
   return [
     "aibill init",
     `state project: ${sanitizeSecretishError(basename(input.rootPath))}`,
-    "local usage scope: all Claude Code + Codex activity on this machine (last 30 days)",
+    "local usage scope: supported Claude Code, Codex, and Gemini CLI financial evidence on this machine (last 30 days)",
     "provider scope: trusted connected billing from this state project only (shown separately)",
     "",
     "FIRST RECEIPT · API-equivalent usage value · last 30 days",
@@ -1999,6 +2073,26 @@ function formatInitReceipt(input: InitReceiptInput): string {
     "manifest: written last",
     "next: npx aibill doctor --sources"
   ].filter((line) => line !== "").join("\n");
+}
+
+function initRegistryOnlyFinancialLines(records: readonly UsageRecord[]): string[] {
+  const lines: string[] = [];
+  for (const descriptor of localAgentFormatDescriptors) {
+    if (descriptor.capabilities.statuslineSnapshot) continue;
+    const sourceRecords = records.filter((record) => record.agentId === descriptor.id);
+    if (sourceRecords.length === 0) continue;
+    const priced = sourceRecords.filter((record) => typeof record.amountUsd === "number");
+    if (priced.length === 0) {
+      lines.push(`${descriptor.id} API-equivalent value: unavailable — ${sourceRecords.length} observed row(s) lacked complete token components or a supported model price`);
+      continue;
+    }
+    const amount = analyzeSpend(priced).totalUsd;
+    const unpriced = sourceRecords.length - priced.length;
+    lines.push(
+      `${descriptor.id} experimental value: ~${formatOptionalUsd(amount)} 30d (API-equivalent; fixture-verified; not billed spend${unpriced > 0 ? `; ${unpriced} row(s) unpriced` : ""})`
+    );
+  }
+  return lines;
 }
 
 function formatInitProviderEvidence(input: InitReceiptInput): string[] {
@@ -2316,7 +2410,8 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
       // never serve a stale snapshot.
       const logs = await loadLocalAgentUsage({
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+        geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
       }).catch(() => undefined);
       if (logs && logs.records.length > 0) {
         records = logs.records;
@@ -3110,6 +3205,7 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     const logs = await loadLocalAgentUsage({
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
       sinceIso,
       collectCodexInvocationEvidence: true
     }).catch(() => undefined);
@@ -3138,12 +3234,12 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     }
     if (unavailablePersistedLocalLogs) {
       throw new Error(
-        "Persisted local-log state is an untrusted cache and its source Claude Code/Codex records are unavailable. " +
+        "Persisted local-log state is an untrusted cache and its source local-agent records are unavailable. " +
           "Re-run `npx aibill` while the local transcripts are available; no report or Apply action was generated from repository state alone."
       );
     }
     throw new Error(
-      "no persisted spend state and no local Claude Code/Codex logs found. " +
+      "no persisted spend state and no supported local-agent financial evidence found. " +
         "Run `npx aibill` first (or `npx aibill scan --sample --path <dir>` for a demo-data report)."
     );
   }
@@ -3221,7 +3317,9 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
   // If live transcript calls are unavailable, omit it instead of fabricating a
   // session-level recommendation from day-aggregate spend records.
   const contextHealth = spendState.mode === "local_logs" && freshLocalCalls
-    ? await loadContextHealth(freshLocalCalls, {
+    ? await loadContextHealth(freshLocalCalls.filter((call) => (
+        localAgentFormatSupports(call.agent, "contextHealth")
+      )), {
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
         codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,

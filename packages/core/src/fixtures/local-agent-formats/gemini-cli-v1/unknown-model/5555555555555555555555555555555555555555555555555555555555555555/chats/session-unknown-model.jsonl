@@ -1,0 +1,2 @@
+{"sessionId":"fixture-gemini-unknown-model-session","projectHash":"5555555555555555555555555555555555555555555555555555555555555555","startTime":"2026-08-10T16:00:00.000Z","lastUpdated":"2026-08-10T16:01:00.000Z","kind":"main"}
+{"id":"fixture-gemini-unknown-model-response","timestamp":"2026-08-10T16:01:00.000Z","type":"gemini","content":[{"text":"Synthetic unknown model fixture."}],"model":"gemini-future-synthetic-unknown","tokens":{"input":600,"output":60,"cached":100,"thoughts":10,"tool":0,"total":670}}

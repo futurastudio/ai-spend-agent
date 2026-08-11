@@ -86,7 +86,7 @@ try {
   await callExpectedError("sync_local_agent_spend", {
     path: stateRoot,
     sinceDays: 30
-  }, /No local Claude Code or Codex usage records/);
+  }, /No supported Claude Code, Codex, or Gemini CLI financial rows/);
   await callExpectedError("sync_provider_spend", {
     path: stateRoot,
     provider: "openai",

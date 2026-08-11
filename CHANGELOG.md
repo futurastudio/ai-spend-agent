@@ -5,7 +5,44 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.7.3 — 2026-08-10
+## 0.8.0 — Unreleased
+
+- Added an experimental, registry-native Gemini CLI financial reader for
+  supported JSON and JSONL sessions under
+  `~/.gemini/tmp/<opaque-project-id>/chats/`. `logs.json` is presence-only and
+  can never enter the financial parser or create a financial row.
+- Preserved explicit input, output, cached, thought, tool, and total-token
+  evidence. Cached input is never double-counted; thought/tool splits are
+  priced only when the full token equation is internally consistent. Missing
+  components, inconsistent totals, unknown or suffixed model identifiers, and
+  evolving shapes remain `missing` rather than estimated `$0`.
+- Applied Gemini 2.5 Pro's published per-request prompt tiers at the exact
+  200,000-token boundary before daily aggregation. A request is priced only
+  when the separate prompt and tool-token counts agree on the tier; ambiguous
+  rows stay missing. Thought tokens use the output rate. Flash/Flash-Lite rows
+  stay missing because chats omit modality while published modality rates
+  differ. Mixed small/large calls are never priced as one synthetic request.
+- Kept project hashes private and irreversible. Gemini rows use session-carried
+  project/cwd evidence when usable, otherwise a deterministic opaque alias or
+  no project attribution.
+- Added bounded synthetic JSON/JSONL, nested-session, malformed, partial,
+  unknown-model, duplicate-update, and `logs.json`-only fixtures plus generated
+  source documentation and CLI/MCP empty-state coverage.
+- Kept Gemini out of the Claude Code status line, Glance, Context Health, plan
+  runway, invocation evidence, recommendations, and Apply activity logic.
+  Existing Claude Code and Codex behavior remains capability-gated and
+  unchanged.
+- Preserved source-version provenance when the evolving session format reports
+  a safe version, deduplicated copied stable session/message identities across
+  the chats tree, failed conflicting duplicate identities closed, and
+  documented component subsets so cached/tool/thought fields cannot be added
+  to normalized headline totals twice.
+- Kept MCP local-log reads inside their original project scope on every
+  authoritative transcript re-read and surfaced sanitized complete/partial/
+  missing coverage without paths or transcript content. Unrelated detected
+  sources no longer change the selected records' validation label.
+
+## 0.7.3 — 2026-08-11
 
 - Fixed multi-subscription status-line attribution so every displayed runway
   window and subscription API-equivalent value identifies its Claude Code or

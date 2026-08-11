@@ -18,10 +18,12 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-export const activitySnapshotAgentValues: readonly LocalAgentFormatId[] = Object.freeze(
-  localAgentFormatDescriptors.map((descriptor) => descriptor.id)
+export type ActivitySnapshotAgent = Extract<LocalAgentFormatId, "claude-code" | "codex">;
+export const activitySnapshotAgentValues: readonly ActivitySnapshotAgent[] = Object.freeze(
+  localAgentFormatDescriptors
+    .filter((descriptor) => descriptor.capabilities.statuslineSnapshot)
+    .map((descriptor) => descriptor.id as ActivitySnapshotAgent)
 );
-export type ActivitySnapshotAgent = LocalAgentFormatId;
 const activitySnapshotAgentValueSet = new Set(activitySnapshotAgentValues);
 const activitySnapshotAgentLimit = activitySnapshotAgentValues.length;
 
@@ -573,7 +575,12 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
   // Horizon filtering must precede ID conflict detection: stale history must
   // neither activate a cohort nor suppress a current row that reused an ID.
   const horizonRecords = input.records.filter((record) =>
-    validRecordTimestampInHorizon(record, horizonStartMs, asOfMs)
+    validRecordTimestampInHorizon(record, horizonStartMs, asOfMs) &&
+    // The statusline cache is a deliberately narrower contract than the full
+    // parser registry. Registry-native sources join only after their snapshot
+    // capability has its own host/UI verification.
+    (record.providerCostType !== "local_agent_logs" ||
+      record.agentId === undefined || isSnapshotAgent(record.agentId))
   );
   const deduplicated = deduplicateRecords(horizonRecords);
   const classified = deduplicated.records
@@ -585,6 +592,7 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
   // daily aggregate at asOf; activity and limit selection remain <= asOf.
   const allCalls = dedupeCumulativeSessionCalls(
     [...(input.calls ?? [])].filter((call) =>
+      isSnapshotAgent(call.agent) &&
       // One preceding bucket is needed to preserve the denominator when a
       // daily aggregate straddles the 30-day cutoff.
       validCallAtOrAfter(call, horizonStartMs - DAY_MS)

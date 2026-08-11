@@ -3,7 +3,13 @@ import { lstat, open, readdir, readFile, stat, type FileHandle } from "node:fs/p
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
-import { estimateTokenCostUsd, type TokenUsage } from "./modelPricing.js";
+import {
+  estimateTokenCostUsd,
+  estimateTokenCostsUsd,
+  promptTierThreshold,
+  usesPromptTieredPricing,
+  type TokenUsage
+} from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
 import { redactSecrets } from "./discovery.js";
 import type { ParsedInvocationFile } from "./toolInvocations.js";
@@ -11,6 +17,7 @@ import {
   localAgentFormatDescriptor,
   localAgentFormatDescriptors,
   localAgentFormatLabel,
+  matchesLocalAgentDetectionFile,
   matchesLocalAgentFormatFile,
   validateLocalAgentFormatDescriptors
 } from "./localAgentFormats/registry.js";
@@ -20,6 +27,10 @@ import type {
   LocalAgentFormatId,
   LocalAgentFormatRuntime
 } from "./localAgentFormats/types.js";
+import {
+  parseGeminiSession,
+  type GeminiParseDiagnostic
+} from "./localAgentFormats/gemini.js";
 
 /**
  * Local agent-session log ingestion: turns the transcript files that coding
@@ -40,6 +51,8 @@ import type {
 
 export type LocalAgentCall = {
   agent: LocalAgentFormatId;
+  /** Stable source call/message identity when the format safely exposes one. */
+  callId?: string;
   model: string;
   /** ISO timestamp of this call, or the latest cumulative usage event. */
   timestamp: string;
@@ -70,6 +83,18 @@ export type LocalAgentCall = {
   usageSupport?: "complete" | "unsupported_token_shape";
   /** Provider-reported total retained when component fields are unavailable. */
   reportedTotalTokens?: number;
+  /** Optional parser/source version when the evolving session format reports it. */
+  sourceVersion?: string;
+  /** Raw Gemini token split retained for evidence/debugging, never prompt content. */
+  geminiTokenEvidence?: {
+    input?: number;
+    output?: number;
+    cached?: number;
+    thoughts?: number;
+    tool?: number;
+    total?: number;
+    cacheAccounting: "included" | "none" | "unknown";
+  };
   usage: TokenUsage;
   sessionId?: string;
   /** Provider-reported plan windows embedded in the transcript, when present. */
@@ -148,6 +173,8 @@ export type LocalAgentLogOptions = {
   claudeProjectsDir?: string;
   /** Default: ~/.codex/sessions */
   codexSessionsDir?: string;
+  /** Default: ~/.gemini/tmp (financial evidence is bounded to chats files). */
+  geminiSessionsDir?: string;
   /** Registry-native source-root overrides, keyed by format id. */
   sourceDirectories?: Readonly<Partial<Record<LocalAgentFormatId, string>>>;
   /** Only include calls at/after this ISO timestamp. */
@@ -171,6 +198,7 @@ export type LocalAgentLogDiagnosticCode =
   | "directory_unreadable"
   | "file_unreadable"
   | "malformed_jsonl"
+  | "malformed_session_file"
   | "unsupported_token_shape";
 
 export type LocalAgentLogDiagnostic = {
@@ -191,6 +219,8 @@ export type LocalAgentSourceScan = {
   malformedLines: number;
   unreadableFiles: number;
   unsupportedUsageSnapshots: number;
+  /** Presence-only files such as Gemini CLI logs.json; never financial rows. */
+  detectionSignals?: number;
   /** Regular files safely excluded because their metadata predates `sinceIso`. */
   filesSkippedBeforeWindow?: number;
   /** Codex files resolved from bounded head/tail financial evidence. */
@@ -221,7 +251,7 @@ export type LocalAgentLogResult = {
 };
 
 type TranscriptParseDiagnostic = {
-  code: "malformed_jsonl" | "unsupported_token_shape";
+  code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
   count: number;
 };
 
@@ -231,12 +261,40 @@ type TranscriptParseDiagnosticHandler = (diagnostic: TranscriptParseDiagnostic) 
  * Codex rollout/compaction files can repeat the same session's cumulative
  * token counter. Keep only the latest snapshot per session so financial value,
  * Glance, and project totals never add cumulative checkpoints together.
- * Turn-scoped Claude calls and calls without a stable session id are retained.
+ * Turn-scoped calls with a stable session+call identity are also deduplicated
+ * across copied/checkpointed files. Calls without that proof are retained.
  */
-export function dedupeCumulativeSessionCalls(calls: LocalAgentCall[]): LocalAgentCall[] {
+export function dedupeCumulativeSessionCalls(
+  calls: LocalAgentCall[],
+  onStableTurnConflict?: (agent: LocalAgentFormatId) => void
+): LocalAgentCall[] {
   const retained: LocalAgentCall[] = [];
   const cumulative = new Map<string, LocalAgentCall>();
+  const stableTurns = new Map<string, LocalAgentCall>();
   for (const call of calls) {
+    if (call.usageScope === "turn" && call.sessionId && call.callId) {
+      const key = `${call.agent}:${call.sessionId}:${call.callId}`;
+      const prior = stableTurns.get(key);
+      if (!prior) {
+        stableTurns.set(key, call);
+      } else if (isStableTurnConflict(prior)) {
+        continue;
+      } else if (isCompleteStableTurn(prior) && isCompleteStableTurn(call) &&
+          stableTurnEvidenceFingerprint(call) !== stableTurnEvidenceFingerprint(prior)) {
+        stableTurns.set(key, conflictingStableTurn(prior, call));
+        onStableTurnConflict?.(call.agent);
+      } else if (!isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
+        // JSONL/checkpoint copies can preserve an early tokenless snapshot
+        // beside its later complete update. Complete evidence supersedes only
+        // unsupported evidence for the same stable identity.
+        stableTurns.set(key, call);
+      } else if (!isCompleteStableTurn(call) && isCompleteStableTurn(prior)) {
+        continue;
+      } else if (isLaterCumulativeSnapshot(call, prior)) {
+        stableTurns.set(key, call);
+      }
+      continue;
+    }
     if (call.usageScope !== "session_cumulative" || !call.sessionId) {
       retained.push(call);
       continue;
@@ -247,7 +305,54 @@ export function dedupeCumulativeSessionCalls(calls: LocalAgentCall[]): LocalAgen
       cumulative.set(key, call);
     }
   }
-  return [...retained, ...cumulative.values()];
+  return [...retained, ...stableTurns.values(), ...cumulative.values()];
+}
+
+function isCompleteStableTurn(call: LocalAgentCall): boolean {
+  return call.usageSupport !== "unsupported_token_shape";
+}
+
+function stableTurnEvidenceFingerprint(call: LocalAgentCall): string {
+  return JSON.stringify({
+    timestamp: call.timestamp,
+    model: call.model,
+    project: call.project ?? null,
+    workingDirectory: call.workingDirectory ?? null,
+    usageSupport: call.usageSupport ?? null,
+    reportedTotalTokens: call.reportedTotalTokens ?? null,
+    usage: {
+      inputTokens: call.usage.inputTokens,
+      outputTokens: call.usage.outputTokens,
+      cacheReadTokens: call.usage.cacheReadTokens ?? null,
+      cacheWrite5mTokens: call.usage.cacheWrite5mTokens ?? null,
+      cacheWrite1hTokens: call.usage.cacheWrite1hTokens ?? null,
+      thoughtTokens: call.usage.thoughtTokens ?? null,
+      toolTokens: call.usage.toolTokens ?? null
+    },
+    geminiTokenEvidence: call.geminiTokenEvidence ?? null
+  });
+}
+
+function isStableTurnConflict(call: LocalAgentCall): boolean {
+  return call.model === "conflicting-local-evidence" &&
+    call.usageSupport === "unsupported_token_shape";
+}
+
+function conflictingStableTurn(
+  left: LocalAgentCall,
+  right: LocalAgentCall
+): LocalAgentCall {
+  const call = left.timestamp.localeCompare(right.timestamp) <= 0 ? left : right;
+  return {
+    agent: call.agent,
+    ...(call.callId ? { callId: call.callId } : {}),
+    ...(call.sessionId ? { sessionId: call.sessionId } : {}),
+    model: "conflicting-local-evidence",
+    timestamp: call.timestamp,
+    usageScope: "turn",
+    usageSupport: "unsupported_token_shape",
+    usage: { inputTokens: 0, outputTokens: 0 }
+  };
 }
 
 function isLaterCumulativeSnapshot(candidate: LocalAgentCall, prior: LocalAgentCall): boolean {
@@ -261,7 +366,9 @@ function totalUsageTokens(usage: TokenUsage): number {
     usage.outputTokens +
     (usage.cacheReadTokens ?? 0) +
     (usage.cacheWrite5mTokens ?? 0) +
-    (usage.cacheWrite1hTokens ?? 0);
+    (usage.cacheWrite1hTokens ?? 0) +
+    (usage.thoughtTokens ?? 0) +
+    (usage.toolTokens ?? 0);
 }
 
 type ParsedClaudeFinancialUsage = {
@@ -875,7 +982,15 @@ export async function loadLocalAgentUsageWithFormats(
     }
   }
 
-  const normalizedCalls = dedupeCumulativeSessionCalls(calls);
+  const normalizedCalls = dedupeCumulativeSessionCalls(calls, (agent) => {
+    const scan = sourceScans.find((entry) => entry.agent === agent);
+    if (scan) {
+      recordParseDiagnostic(agent, scan, diagnostics, {
+        code: "unsupported_token_shape",
+        count: 1
+      });
+    }
+  });
   const filtered = typeof sinceMs === "number"
     ? normalizedCalls.filter((call) => Date.parse(call.timestamp) >= sinceMs)
     : normalizedCalls;
@@ -968,7 +1083,15 @@ export async function loadLocalAgentFinancialUsageWithFormats(
   // Sources scan concurrently, but flatten in registry order to preserve the
   // long-standing Claude-then-Codex output and diagnostic contract.
   const calls = scanned.flatMap((entry) => entry.calls);
-  const normalizedCalls = dedupeCumulativeSessionCalls(calls);
+  const normalizedCalls = dedupeCumulativeSessionCalls(calls, (agent) => {
+    const source = scanned.find((entry) => entry.scan.agent === agent);
+    if (source) {
+      recordParseDiagnostic(agent, source.scan, source.diagnostics, {
+        code: "unsupported_token_shape",
+        count: 1
+      });
+    }
+  });
   const filtered = typeof sinceMs === "number"
     ? normalizedCalls.filter((call) => Date.parse(call.timestamp) >= sinceMs)
     : normalizedCalls;
@@ -1067,6 +1190,47 @@ export async function readCodexFinancialFileForRegistry(
   return call ? [call] : [];
 }
 
+/** @internal Runtime hook owned by the Gemini CLI registry entry. */
+export async function readGeminiFinancialFileForRegistry(
+  context: LocalAgentFormatFinancialFileContext
+): Promise<LocalAgentCall[]> {
+  const { filePath, sinceMs, scan, diagnostics } = context;
+  if (!await shouldStreamFile(filePath, sinceMs, "gemini-cli", scan, diagnostics)) {
+    return [];
+  }
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    recordUnreadableFile("gemini-cli", scan, diagnostics, error);
+    return [];
+  }
+  if (!content) return [];
+  scan.filesParsed += 1;
+  const parsed = parseGeminiSession(content, { filePath, ...(sinceMs !== undefined ? { sinceMs } : {}) });
+  for (const diagnostic of parsed.diagnostics) {
+    recordParseDiagnostic(
+      "gemini-cli",
+      scan,
+      diagnostics,
+      normalizeGeminiDiagnostic(diagnostic)
+    );
+  }
+  return parsed.calls;
+}
+
+function normalizeGeminiDiagnostic(
+  diagnostic: GeminiParseDiagnostic
+): TranscriptParseDiagnostic {
+  if (diagnostic.code === "malformed_jsonl") {
+    return { code: "malformed_jsonl", count: diagnostic.count };
+  }
+  if (diagnostic.code === "unsupported_token_shape") {
+    return { code: "unsupported_token_shape", count: diagnostic.count };
+  }
+  return { code: "malformed_session_file", count: diagnostic.count };
+}
+
 async function localAgentFormatRuntimes(): Promise<readonly LocalAgentFormatRuntime[]> {
   const module = await import("./localAgentFormats/runtimeRegistry.js");
   return module.localAgentFormatRuntimeRegistry;
@@ -1084,6 +1248,9 @@ function localAgentFormatRoot(
   }
   if (descriptor.legacyDirectoryOption === "codexSessionsDir" && options.codexSessionsDir) {
     return options.codexSessionsDir;
+  }
+  if (descriptor.legacyDirectoryOption === "geminiSessionsDir" && options.geminiSessionsDir) {
+    return options.geminiSessionsDir;
   }
   const canonicalHome = resolve(home);
   const root = resolve(canonicalHome, ...descriptor.defaultHomeRelative);
@@ -1724,10 +1891,22 @@ export function aggregateCallsForFormats(
       outputTokens: sum(groupCalls, (c) => c.usage.outputTokens),
       cacheReadTokens: sum(groupCalls, (c) => c.usage.cacheReadTokens ?? 0),
       cacheWrite5mTokens: sum(groupCalls, (c) => c.usage.cacheWrite5mTokens ?? 0),
-      cacheWrite1hTokens: sum(groupCalls, (c) => c.usage.cacheWrite1hTokens ?? 0)
+      cacheWrite1hTokens: sum(groupCalls, (c) => c.usage.cacheWrite1hTokens ?? 0),
+      thoughtTokens: sum(groupCalls, (c) => c.usage.thoughtTokens ?? 0),
+      toolTokens: sum(groupCalls, (c) => c.usage.toolTokens ?? 0)
     };
     const usageSupported = groupCalls.every((call) => call.usageSupport !== "unsupported_token_shape");
-    const amountUsd = usageSupported && format ? estimateTokenCostUsd(model, usage) : undefined;
+    const sourceVersions = [...new Set(
+      groupCalls.flatMap((call) => call.sourceVersion ? [call.sourceVersion] : [])
+    )].sort().slice(0, 8);
+    const tieredPricingEvidenceSupported = !usesPromptTieredPricing(model) ||
+      agent !== "gemini-cli" ||
+      groupCalls.every(hasCompleteGeminiPromptEvidence);
+    const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
+      ? agent === "gemini-cli" && usesPromptTieredPricing(model)
+        ? estimateTokenCostsUsd(model, groupCalls.map((call) => call.usage))
+        : estimateTokenCostUsd(model, usage)
+      : undefined;
     const priced = usageSupported && typeof amountUsd === "number";
     records.push({
       id: slug(["local", agent, day, model, project].join("-")),
@@ -1740,8 +1919,27 @@ export function aggregateCallsForFormats(
         observedFrom: format?.sourceRecord.observedFrom ?? "unregistered local transcript (this machine)"
       },
       model,
-      inputTokens: usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWrite5mTokens ?? 0) + (usage.cacheWrite1hTokens ?? 0),
-      outputTokens: usage.outputTokens,
+      inputTokens: usage.inputTokens + (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWrite5mTokens ?? 0) + (usage.cacheWrite1hTokens ?? 0) +
+        (usage.toolTokens ?? 0),
+      outputTokens: usage.outputTokens + (usage.thoughtTokens ?? 0),
+      ...(agent === "gemini-cli"
+        ? {
+            ...(groupCalls.every((call) => call.usage.cacheReadTokens !== undefined)
+              ? { cacheReadTokens: usage.cacheReadTokens ?? 0 }
+              : {}),
+            ...(groupCalls.every((call) => call.usage.thoughtTokens !== undefined)
+              ? { thoughtTokens: usage.thoughtTokens ?? 0 }
+              : {}),
+            ...(groupCalls.every((call) => call.usage.toolTokens !== undefined)
+              ? { toolTokens: usage.toolTokens ?? 0 }
+              : {}),
+            ...(groupCalls.every((call) => call.reportedTotalTokens !== undefined)
+              ? { reportedTotalTokens: sum(groupCalls, (call) => call.reportedTotalTokens ?? 0) }
+              : {}),
+            ...(sourceVersions.length > 0 ? { sourceVersions } : {})
+          }
+        : {}),
       amountUsd: priced ? amountUsd : null,
       costConfidence: priced
         ? format?.confidenceDefaults.pricedFinancialEvidence ?? "estimated"
@@ -1758,6 +1956,48 @@ export function aggregateCallsForFormats(
     });
   }
   return records.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function hasCompleteGeminiPromptEvidence(call: LocalAgentCall): boolean {
+  const evidence = call.geminiTokenEvidence;
+  if (call.usageSupport !== "complete" || !evidence ||
+      evidence.cacheAccounting === "unknown") {
+    return false;
+  }
+  const components = [
+    evidence.input,
+    evidence.output,
+    evidence.cached,
+    evidence.thoughts,
+    evidence.tool,
+    evidence.total
+  ];
+  if (!components.every((value) => Number.isSafeInteger(value) && (value ?? -1) >= 0)) {
+    return false;
+  }
+  const input = evidence.input!;
+  const output = evidence.output!;
+  const cached = evidence.cached!;
+  const thoughts = evidence.thoughts!;
+  const tool = evidence.tool!;
+  const freshInput = evidence.cacheAccounting === "included"
+    ? input - cached
+    : input;
+  const expectedTotal = input + output + thoughts + tool;
+  const threshold = promptTierThreshold(call.model);
+  // Gemini exposes promptTokenCount and toolUsePromptTokenCount separately,
+  // while the published >200k rule does not resolve which side owns tool
+  // prompt tokens. Only price when both interpretations select the same tier.
+  const promptTierIsUnambiguous = threshold === undefined ||
+    input > threshold || input + tool <= threshold;
+  return freshInput >= 0 && Number.isSafeInteger(expectedTotal) &&
+    promptTierIsUnambiguous &&
+    evidence.total === expectedTotal &&
+    call.usage.inputTokens === freshInput &&
+    call.usage.outputTokens === output &&
+    call.usage.cacheReadTokens === cached &&
+    call.usage.thoughtTokens === thoughts &&
+    call.usage.toolTokens === tool;
 }
 
 async function listFormatCandidateFiles(
@@ -1824,15 +2064,15 @@ async function listFormatCandidateFiles(
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) queue.push(path);
-      else if (entry.isFile() && (
-        !descriptor.discovery.extension || entry.name.endsWith(descriptor.discovery.extension)
-      )) {
+      else if (entry.isFile() && matchesLocalAgentDetectionFile(descriptor, path)) {
+        scan.detectionSignals = (scan.detectionSignals ?? 0) + 1;
+      } else if (entry.isFile() && matchesLocalAgentFormatFile(descriptor, path)) {
         out.push(path);
         scan.filesDiscovered += 1;
       }
     }
   }
-  return out;
+  return out.sort((left, right) => left.localeCompare(right));
 }
 
 function emptySourceScan(agent: LocalAgentFormatId): LocalAgentSourceScan {
@@ -1869,13 +2109,15 @@ function recordParseDiagnostic(
   diagnostics: LocalAgentLogDiagnostic[],
   diagnostic: TranscriptParseDiagnostic
 ): void {
-  if (diagnostic.code === "malformed_jsonl") {
+  if (diagnostic.code === "malformed_jsonl" || diagnostic.code === "malformed_session_file") {
     scan.malformedLines += diagnostic.count;
     diagnostics.push({
       agent,
       code: diagnostic.code,
       severity: "warning",
-      message: `${diagnostic.count} malformed JSONL line(s) were skipped in ${agentLabel(agent)} transcripts.`,
+      message: diagnostic.code === "malformed_jsonl"
+        ? `${diagnostic.count} malformed JSONL line(s) were skipped in ${agentLabel(agent)} transcripts.`
+        : `${diagnostic.count} malformed session file(s) were skipped in ${agentLabel(agent)} transcripts.`,
       count: diagnostic.count
     });
     return;
@@ -1885,7 +2127,7 @@ function recordParseDiagnostic(
     agent,
     code: diagnostic.code,
     severity: "warning",
-    message: `${diagnostic.count} ${agentLabel(agent)} token snapshot(s) lacked the input/output components required for pricing.`,
+    message: `${diagnostic.count} ${agentLabel(agent)} token snapshot(s) lacked the complete, internally consistent fields required for safe normalization and pricing.`,
     count: diagnostic.count
   });
 }

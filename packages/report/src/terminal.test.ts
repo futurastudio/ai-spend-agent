@@ -60,6 +60,84 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).not.toMatch(ansiPattern);
   });
 
+  it("renders all-missing local evidence as unavailable instead of estimated $0", () => {
+    const records: UsageRecord[] = [{
+      id: "local-gemini-missing",
+      timestamp: "2026-08-11T00:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Local agent session logs",
+        provider: "google",
+        confidence: "estimated",
+        observedFrom: "gemini-cli chats session JSON/JSONL (this machine)"
+      },
+      model: "gemini-future-synthetic-unknown",
+      inputTokens: 600,
+      outputTokens: 70,
+      amountUsd: null,
+      costConfidence: "missing",
+      agentId: "gemini-cli",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs"
+    });
+    const normalized = normalizeWhitespace(text);
+
+    expect(normalized).toContain("OBSERVED VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
+    expect(text).toContain("Not priced");
+    expect(normalized).not.toContain("OBSERVED API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
+  });
+
+  it("never renders a missing Gemini breakdown row as zero or a known share", () => {
+    const records: UsageRecord[] = [
+      {
+        id: "local-gemini-priced",
+        timestamp: "2026-08-11T00:00:00.000Z",
+        source: { id: "local-agent-logs", name: "Local logs", provider: "google", confidence: "estimated", observedFrom: "fixture" },
+        model: "gemini-2.5-pro",
+        inputTokens: 1_000,
+        outputTokens: 100,
+        amountUsd: 0.01,
+        costConfidence: "estimated",
+        projectId: "priced-project",
+        agentId: "gemini-cli",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate"
+      },
+      {
+        id: "local-gemini-missing-row",
+        timestamp: "2026-08-11T00:00:00.000Z",
+        source: { id: "local-agent-logs", name: "Local logs", provider: "google", confidence: "estimated", observedFrom: "fixture" },
+        model: "gemini-future-unknown",
+        inputTokens: 1_000,
+        outputTokens: 100,
+        amountUsd: null,
+        costConfidence: "missing",
+        projectId: "missing-project",
+        agentId: "gemini-cli",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate"
+      }
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "breakdown",
+      groupBy: "project"
+    });
+    const missingRow = text.split("\n").find((line) => line.includes("missing-project"));
+
+    expect(missingRow).toContain("Unavailable");
+    expect(missingRow).toContain("missing");
+    expect(missingRow).not.toContain("$0.00");
+    expect(missingRow).not.toContain("0%");
+  });
+
   it("includes ANSI escapes when color is forced on", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);

@@ -29,6 +29,7 @@ beforeEach(async () => {
   // process directory avoids process.env races when Vitest runs files in
   // parallel while still staying outside the developer's real ~/.aibill.
   await mkdir(sharedTestTrustDirectory, { recursive: true });
+  vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", await mkdtemp(join(tmpdir(), "ai-spend-no-gemini-")));
 });
 
 afterEach(() => {
@@ -963,6 +964,431 @@ describe("MCP analyst tools", () => {
     expect(glanceContract).toEqual(contextContract);
   });
 
+  it("reapplies a persisted project scope on authoritative reads and keeps unrelated detection out of validation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-scope-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-scope-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-scope-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-local-scope-gemini-"));
+    const selectedProject = "selected-project";
+    const otherProject = "other-project";
+    const timestamp = new Date().toISOString();
+    await writeFile(join(claudeDir, "selected.jsonl"), `${JSON.stringify({
+      type: "assistant",
+      timestamp,
+      cwd: join(dir, selectedProject),
+      sessionId: "selected-session",
+      requestId: "selected-request",
+      message: {
+        id: "selected-message",
+        model: "claude-opus-4-8",
+        usage: {
+          input_tokens: 200_000,
+          output_tokens: 100,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
+        }
+      }
+    })}\n`);
+    await writeFile(join(codexDir, "rollout-other.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp,
+        payload: { id: "other-session", cwd: join(dir, otherProject), timestamp }
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp,
+        payload: { model: "gpt-5.1-codex" }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp,
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 900_000,
+              cached_input_tokens: 0,
+              output_tokens: 1_000,
+              total_tokens: 901_000
+            },
+            last_token_usage: {
+              input_tokens: 900_000,
+              cached_input_tokens: 0,
+              output_tokens: 1_000,
+              total_tokens: 901_000
+            }
+          }
+        }
+      })
+    ].join("\n") + "\n");
+    const geminiPresenceDir = join(geminiDir, "opaque-gemini-project");
+    await mkdir(geminiPresenceDir, { recursive: true });
+    await writeFile(join(geminiPresenceDir, "logs.json"), "[]\n");
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const sync = await syncLocalAgentSpendTool({
+      path: dir,
+      sinceDays: 30,
+      project: selectedProject
+    });
+    const report = await getSpendReportTool({ path: dir }) as {
+      records: Array<{ agentId?: string; projectId?: string }>;
+      summary: { totalUsd: number };
+      accounting: { localEvidenceCoverage: { status: string; contributingSources: string[] } };
+    };
+    const cuts = await recommendCutsTool({ path: dir });
+
+    expect(sync).toMatchObject({
+      projectFilter: selectedProject,
+      validationCoverage: "live_verified",
+      sourcesDetected: ["claude-code", "codex", "gemini-cli"],
+      evidenceCoverage: {
+        status: "complete",
+        contributingSources: ["claude-code"],
+        diagnostics: []
+      }
+    });
+    expect(report.records).toEqual([
+      expect.objectContaining({ agentId: "claude-code", projectId: selectedProject })
+    ]);
+    expect(report.summary.totalUsd).toBe(sync.summary.totalUsd);
+    expect(report.accounting.localEvidenceCoverage).toMatchObject({
+      status: "complete",
+      contributingSources: ["claude-code"]
+    });
+    expect(JSON.stringify({ report, cuts })).not.toContain(otherProject);
+
+    const spendPath = join(dir, ".ai-spend-agent", "spend.json");
+    const legacyState = JSON.parse(await readFile(spendPath, "utf8")) as Record<string, unknown>;
+    delete legacyState.projectFilter;
+    await writeFile(spendPath, `${JSON.stringify(legacyState)}\n`);
+    const legacyReport = await getSpendReportTool({ path: dir }) as {
+      records: Array<{ agentId?: string; projectId?: string }>;
+    };
+    expect(legacyReport.records).toEqual([
+      expect.objectContaining({ agentId: "claude-code", projectId: selectedProject })
+    ]);
+    expect(JSON.stringify(legacyReport)).not.toContain(otherProject);
+
+    legacyState.projectFilter = otherProject;
+    await writeFile(spendPath, `${JSON.stringify(legacyState)}\n`);
+    await expect(getSpendReportTool({ path: dir })).rejects.toThrow(
+      /persisted project filter does not match every cached row/
+    );
+  });
+
+  it("rejects unsafe project filters before writing local state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-project-filter-"));
+
+    await expect(syncLocalAgentSpendTool({
+      path: dir,
+      sinceDays: 30,
+      project: "hostile\nproject"
+    })).rejects.toThrow(/MCP project filter must be a bounded plain string/);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("reports Gemini logs.json as presence-only without persisting a financial row", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-presence-project-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-no-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-no-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-presence-"));
+    const opaqueDirectory = join(geminiDir, "fixture-opaque-project");
+    await mkdir(opaqueDirectory, { recursive: true });
+    await writeFile(join(opaqueDirectory, "logs.json"), `${JSON.stringify([{
+      sessionId: "fixture-gemini-presence",
+      messageId: 0,
+      timestamp: new Date().toISOString(),
+      type: "user",
+      message: "synthetic presence entry"
+    }])}\n`);
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30 });
+
+    expect(result).toMatchObject({
+      validationCoverage: "fixture_verified",
+      financialEvidence: "missing",
+      agentsDetected: [],
+      sourcesDetected: ["gemini-cli"],
+      recordCount: 0,
+      financialValue: {
+        availability: "missing",
+        amountUsd: null,
+        pricedRecordCount: 0,
+        missingRecordCount: 0,
+        recordCount: 0
+      },
+      presenceOnly: {
+        source: "gemini-cli",
+        financialRowsCreated: 0
+      }
+    });
+    expect(result.presenceOnly?.note).toContain("logs.json is presence-only");
+    expect(result.presenceOnly?.note).toContain("+1 or contribute a synthetic fixture");
+    const persisted = JSON.parse(await readFile(
+      join(dir, ".ai-spend-agent", "spend.json"),
+      "utf8"
+    ));
+    const report = await getSpendReportTool({ path: dir }) as {
+      mode: string;
+      records: unknown[];
+      financialValue: { availability: string; amountUsd: number | null };
+      fallback?: unknown;
+    };
+    expect(persisted).toMatchObject({
+      mode: "local_logs",
+      records: [],
+      financialValue: { availability: "missing", amountUsd: null },
+      presenceOnly: { source: "gemini-cli", financialRowsCreated: 0 }
+    });
+    expect(report).toMatchObject({
+      mode: "local_logs",
+      records: [],
+      financialValue: { availability: "missing", amountUsd: null }
+    });
+    expect(report.fallback).toBeUndefined();
+  });
+
+  it("syncs Gemini chats as fixture-verified estimates while keeping Glance isolated", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-project-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-no-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-no-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-financial-"));
+    const opaqueProject = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const chatsDirectory = join(geminiDir, opaqueProject, "chats");
+    await mkdir(chatsDirectory, { recursive: true });
+    await writeFile(join(chatsDirectory, "fixture.jsonl"), [
+      JSON.stringify({
+        sessionId: "fixture-gemini-session",
+        projectHash: opaqueProject,
+        startTime: new Date(Date.now() - 60_000).toISOString()
+      }),
+      JSON.stringify({
+        id: "fixture-gemini-response",
+        timestamp: new Date().toISOString(),
+        type: "gemini",
+        model: "gemini-2.5-pro",
+        tokens: { input: 900, output: 90, cached: 300, thoughts: 20, tool: 10, total: 1020 }
+      })
+    ].join("\n") + "\n");
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30 });
+    const report = await getSpendReportTool({ path: dir }) as {
+      records: Array<{ amountUsd: number | null; agentId?: string }>;
+      sourceStatuses: Array<{ id: string; validationCoverage: string; financialEvidence: string }>;
+    };
+    const glance = await getUsageGlanceTool({ path: dir, sinceDays: 30 });
+
+    expect(result).toMatchObject({
+      validationCoverage: "fixture_verified",
+      financialEvidence: "estimated",
+      agentsDetected: ["gemini-cli"],
+      sourcesDetected: ["gemini-cli"],
+      recordCount: 1
+    });
+    expect(result.financialValue).toMatchObject({
+      availability: "available",
+      amountUsd: expect.any(Number),
+      pricedRecordCount: 1,
+      missingRecordCount: 0,
+      recordCount: 1
+    });
+    expect(report.records).toEqual([expect.objectContaining({
+      agentId: "gemini-cli",
+      amountUsd: expect.any(Number)
+    })]);
+    expect(report.sourceStatuses.find((status) => status.id === "gemini-cli"))
+      .toMatchObject({ validationCoverage: "fixture_verified", financialEvidence: "estimated" });
+    expect(JSON.stringify(report)).not.toContain(opaqueProject);
+    expect(glance.currentSession).toBeNull();
+    await expect(syncLocalAgentSpendTool({
+      path: dir,
+      sinceDays: 30,
+      project: "not-a-gemini-project"
+    })).rejects.toThrow("No supported local-agent usage records matched the requested project filter.");
+  });
+
+  it("returns null MCP financial value for all-missing Gemini rows, never numeric zero", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-missing-project-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-missing-no-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-missing-no-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-missing-financial-"));
+    const chatsDirectory = join(geminiDir, "opaque-project", "chats");
+    await mkdir(chatsDirectory, { recursive: true });
+    await writeFile(join(chatsDirectory, "fixture.jsonl"), [
+      JSON.stringify({ sessionId: "missing-session", projectHash: "opaque-project" }),
+      JSON.stringify({
+        id: "missing-response",
+        timestamp: new Date().toISOString(),
+        type: "gemini",
+        model: "gemini-future-unpriced",
+        tokens: { input: 900, output: 90, cached: 300, thoughts: 20, tool: 10, total: 1020 }
+      })
+    ].join("\n") + "\n");
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const sync = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30 });
+    const report = await getSpendReportTool({ path: dir }) as {
+      financialValue: {
+        availability: "available" | "partial" | "missing";
+        amountUsd: number | null;
+        pricedRecordCount: number;
+        missingRecordCount: number;
+        recordCount: number;
+      };
+      summary: { totalUsd: number };
+    };
+
+    expect(sync.financialEvidence).toBe("missing");
+    expect(sync.financialValue).toEqual({
+      availability: "missing",
+      amountUsd: null,
+      pricedRecordCount: 0,
+      missingRecordCount: 1,
+      recordCount: 1
+    });
+    expect(report.financialValue).toEqual(sync.financialValue);
+    expect(report.summary.totalUsd).toBe(0);
+    expect(report.financialValue.amountUsd).not.toBe(0);
+  });
+
+  it("surfaces sanitized partial Gemini coverage beside valid rows", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-partial-project-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-partial-no-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-partial-no-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-gemini-partial-"));
+    const opaqueProject = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const chatsDirectory = join(geminiDir, opaqueProject, "chats");
+    const timestamp = new Date().toISOString();
+    const secretishMalformedContent = "sk-proj-must-not-leak-from-malformed-gemini";
+    await mkdir(chatsDirectory, { recursive: true });
+    await writeFile(join(chatsDirectory, "valid.jsonl"), [
+      JSON.stringify({ sessionId: "valid-session", startTime: timestamp }),
+      JSON.stringify({
+        id: "valid-response",
+        timestamp,
+        type: "gemini",
+        model: "gemini-2.5-pro",
+        tokens: { input: 900, output: 90, cached: 300, thoughts: 20, tool: 10, total: 1020 }
+      })
+    ].join("\n") + "\n");
+    await writeFile(join(chatsDirectory, "partial.jsonl"), [
+      `{this is malformed ${secretishMalformedContent}`,
+      JSON.stringify({ sessionId: "partial-session", startTime: timestamp }),
+      JSON.stringify({
+        id: "unsupported-response",
+        timestamp,
+        type: "gemini",
+        model: "gemini-2.5-pro",
+        tokens: { input: 100, output: 10, total: 110 }
+      })
+    ].join("\n") + "\n");
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const sync = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30 });
+    const report = await getSpendReportTool({ path: dir }) as {
+      accounting: {
+        localEvidenceCoverage: {
+          status: string;
+          contributingSources: string[];
+          diagnostics: Array<{ source: string; code: string; severity: string; count: number }>;
+        };
+      };
+    };
+    const expectedDiagnostics = expect.arrayContaining([
+      expect.objectContaining({
+        source: "gemini-cli",
+        code: "malformed_jsonl",
+        severity: "warning",
+        count: 1
+      }),
+      expect.objectContaining({
+        source: "gemini-cli",
+        code: "unsupported_token_shape",
+        severity: "warning",
+        count: 1
+      })
+    ]);
+
+    expect(sync.validationCoverage).toBe("fixture_verified");
+    expect(sync.evidenceCoverage).toMatchObject({
+      status: "partial",
+      contributingSources: ["gemini-cli"],
+      diagnostics: expectedDiagnostics
+    });
+    expect(report.accounting.localEvidenceCoverage).toMatchObject({
+      status: "partial",
+      contributingSources: ["gemini-cli"],
+      diagnostics: expectedDiagnostics
+    });
+    expect(JSON.stringify({ sync, report })).not.toContain(secretishMalformedContent);
+    expect(JSON.stringify({ sync, report })).not.toContain(opaqueProject);
+    expect(JSON.stringify(sync.evidenceCoverage)).not.toMatch(/\/private\/|\/Users\//);
+  });
+
+  it("keeps an unsupported-only detected source in mixed-source coverage", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-mixed-unsupported-project-"));
+    const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-mixed-unsupported-claude-"));
+    const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-mixed-unsupported-codex-"));
+    const geminiDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-mixed-unsupported-gemini-"));
+    const timestamp = new Date().toISOString();
+    await writeFile(join(claudeDir, "valid.jsonl"), `${JSON.stringify({
+      type: "assistant",
+      timestamp,
+      cwd: dir,
+      sessionId: "valid-claude-session",
+      requestId: "valid-claude-request",
+      message: {
+        id: "valid-claude-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 1_000, output_tokens: 100 }
+      }
+    })}\n`);
+    const chatsDirectory = join(geminiDir, "opaque-project", "chats");
+    await mkdir(chatsDirectory, { recursive: true });
+    await writeFile(join(chatsDirectory, "future.jsonl"), [
+      JSON.stringify({ sessionId: "future-gemini-session", projectHash: "opaque-project" }),
+      JSON.stringify({
+        id: "future-gemini-message",
+        timestamp,
+        type: "gemini-next",
+        model: "gemini-2.5-pro",
+        tokens: { input: 100, output: 10, cached: 0, thoughts: 0, tool: 0, total: 110 }
+      })
+    ].join("\n") + "\n");
+    vi.stubEnv("AI_SPEND_CLAUDE_LOGS_DIR", claudeDir);
+    vi.stubEnv("AI_SPEND_CODEX_LOGS_DIR", codexDir);
+    vi.stubEnv("AI_SPEND_GEMINI_LOGS_DIR", geminiDir);
+
+    const result = await syncLocalAgentSpendTool({ path: dir, sinceDays: 30 });
+
+    expect(result.recordCount).toBe(1);
+    expect(result.sourcesDetected).toEqual(["claude-code", "gemini-cli"]);
+    expect(result.evidenceCoverage).toMatchObject({
+      status: "partial",
+      contributingSources: ["claude-code", "gemini-cli"],
+      diagnostics: [expect.objectContaining({
+        source: "gemini-cli",
+        code: "unsupported_token_shape",
+        severity: "warning",
+        count: 1
+      })]
+    });
+  });
+
   it("scopes implicit Glance inventory to the latest observed transcript cwd, matching CLI", async () => {
     const claudeDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-claude-"));
     const codexDir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-cwd-codex-"));
@@ -1757,7 +2183,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.7.3" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.8.0" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",

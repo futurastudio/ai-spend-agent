@@ -58,8 +58,22 @@ export const usageRecordSchema = z.object({
   timestamp: z.string().datetime({ offset: true }),
   source: spendSourceSchema,
   model: z.string().min(1),
+  /** Inclusive input-side total. Gemini includes cached + tool tokens here. */
   inputTokens: z.number().int().nonnegative(),
+  /** Inclusive output-side total. Gemini includes thought tokens here. */
   outputTokens: z.number().int().nonnegative(),
+  /**
+   * Optional component subsets retained as provenance. These fields are
+   * already included in inputTokens/outputTokens and must not be added again.
+   */
+  cacheReadTokens: z.number().int().nonnegative().optional(),
+  thoughtTokens: z.number().int().nonnegative().optional(),
+  toolTokens: z.number().int().nonnegative().optional(),
+  reportedTotalTokens: z.number().int().nonnegative().optional(),
+  /** Sanitized CLI/source versions observed within this aggregate. */
+  sourceVersions: z.array(
+    z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/)
+  ).max(8).optional(),
   amountUsd: z.number().nonnegative().nullable(),
   costConfidence: costConfidenceSchema,
   clientId: z.string().min(1).optional(),

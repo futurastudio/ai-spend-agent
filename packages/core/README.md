@@ -2,8 +2,10 @@
 
 The canonical local-first evidence and decision engine for
 [aibill](https://github.com/futurastudio/ai-spend-agent): Claude Code/Codex
-activity ingestion, provider cost semantics, attribution, provenance, runway,
-Context Health, and the shared Glance contract.
+activity ingestion, experimental Gemini CLI financial ingestion, provider cost
+semantics, attribution, provenance, runway, Context Health, and the shared
+Glance contract. Gemini support is fixture-verified and does not enter the
+Glance/status-line or Context Health contracts.
 
 Most users should run `npx aibill`. This package is for integrations that
 need the same evidence-labeled calculations as the CLI and MCP server.

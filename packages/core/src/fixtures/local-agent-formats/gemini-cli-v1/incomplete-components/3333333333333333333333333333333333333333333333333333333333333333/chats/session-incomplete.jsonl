@@ -1,0 +1,2 @@
+{"sessionId":"fixture-gemini-incomplete-session","projectHash":"3333333333333333333333333333333333333333333333333333333333333333","startTime":"2026-08-10T14:00:00.000Z","lastUpdated":"2026-08-10T14:01:00.000Z","kind":"main"}
+{"id":"fixture-gemini-incomplete-response","timestamp":"2026-08-10T14:01:00.000Z","type":"gemini","content":[{"text":"Synthetic incomplete token fixture."}],"model":"gemini-2.5-pro","tokens":{"input":500,"cached":100,"tool":10,"total":560}}

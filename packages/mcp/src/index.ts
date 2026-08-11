@@ -20,6 +20,7 @@ import {
   loadContextHealth,
   loadLocalAgentUsage,
   localAgentFormatDescriptors,
+  localAgentFormatSupports,
   loadSampleUsageData,
   normalizeSourceRegistry,
   downgradeUntrustedSourceRegistryClaims,
@@ -105,6 +106,8 @@ type SyncProviderOverrides = {
 
 type PersistedSpendState = {
   mode: "sample" | "local_logs" | "connected_provider";
+  /** Exact project constraint chosen at local sync time. */
+  projectFilter?: string;
   /** Time this persisted source read completed; separate from row timestamps. */
   checkedAt?: string;
   checkedAtByProvider?: Record<string, string>;
@@ -114,6 +117,33 @@ type PersistedSpendState = {
   financialsByProvider?: Record<string, ProviderFinancialSummary>;
   records: UsageRecord[];
   summary: SpendSummary;
+};
+
+type LocalAgentEvidenceDiagnostic = {
+  source: string;
+  code: "directory_unreadable" | "file_unreadable" | "malformed_jsonl" |
+    "malformed_session_file" | "unsupported_token_shape";
+  severity: "warning" | "error";
+  count: number;
+};
+
+type LocalAgentEvidenceCoverage = {
+  status: "complete" | "partial" | "missing";
+  contributingSources: string[];
+  diagnostics: LocalAgentEvidenceDiagnostic[];
+};
+
+type FinancialValueCoverage = {
+  availability: "available" | "partial" | "missing";
+  amountUsd: number | null;
+  pricedRecordCount: number;
+  missingRecordCount: number;
+  recordCount: number;
+};
+
+type RevalidatedSpendEvidence = {
+  records: UsageRecord[];
+  localEvidenceCoverage?: LocalAgentEvidenceCoverage;
 };
 
 type ProviderRecordsState = {
@@ -258,7 +288,8 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
   }
   const persisted = parsePersistedSpendState(JSON.parse(exactSpendContents));
   await assertTrustedConnectedState(rootPath, persisted, exactSpendContents);
-  const records = await recordsForPersistedMode(persisted);
+  const evidence = await evidenceForPersistedMode(persisted);
+  const records = evidence.records;
   const headlineRecords = persisted.mode === "connected_provider"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -280,6 +311,7 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
     mode: persisted.mode,
     records,
     summary: analyzeSpend(headlineRecords),
+    financialValue: financialValueCoverage(headlineRecords),
     sourceStatuses,
     accounting: {
       policy: persisted.mode === "connected_provider"
@@ -304,6 +336,9 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
         : {}),
       ...(persisted.coverageIntervalsByProvider
         ? { coverageIntervalsByProvider: persisted.coverageIntervalsByProvider }
+        : {}),
+      ...(evidence.localEvidenceCoverage
+        ? { localEvidenceCoverage: evidence.localEvidenceCoverage }
         : {}),
       financialsByProvider
     },
@@ -338,6 +373,7 @@ async function sampleSpendReportFallback(stateDir?: string): Promise<unknown> {
     mode: "sample",
     records,
     summary: analyzeSpend(records),
+    financialValue: financialValueCoverage(records),
     sourceStatuses,
     accounting: {
       policy: "demo_sample_not_user_data",
@@ -384,7 +420,7 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
     await assertTrustedConnectedState(rootPath, spendState, persistedSpendContents);
   }
   const safeRecords = spendState
-    ? await recordsForPersistedMode(spendState)
+    ? (await evidenceForPersistedMode(spendState)).records
     : [];
   if (spendState?.mode === "sample") {
     return {
@@ -668,52 +704,145 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
   validationCoverage: SourceValidationCoverage;
   financialEvidence: FinancialEvidenceStatus;
   agentsDetected: string[];
+  sourcesDetected: string[];
   filesParsed: number;
   recordCount: number;
   projectFilter?: string;
+  evidenceCoverage: LocalAgentEvidenceCoverage;
   valueBasis: "local_api_equivalent_value_not_billed_spend";
   anomalyBasis: "unavailable_no_comparable_call_level_records";
   summary: SpendSummary;
+  financialValue: FinancialValueCoverage;
+  presenceOnly?: {
+    source: "gemini-cli";
+    financialRowsCreated: 0;
+    note: string;
+  };
 }> {
+  const projectFilter = input.project === undefined
+    ? undefined
+    : parseProjectFilter(input.project, "MCP project filter");
   const rootPath = await resolveSafeScanRoot(input.path);
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
   const sinceDays = input.sinceDays ?? 30;
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString()
   });
-  const records = input.project
-    ? logs.records.filter((record) => record.projectId === input.project)
+  const records = projectFilter
+    ? logs.records.filter((record) => record.projectId === projectFilter)
     : logs.records;
-  if (records.length === 0) {
+  const sourcesDetected = logs.sourceScans
+    .filter((scan) => scan.filesDiscovered > 0 || (scan.detectionSignals ?? 0) > 0)
+    .map((scan) => scan.agent);
+  const geminiScan = logs.sourceScans.find((scan) => scan.agent === "gemini-cli");
+  const geminiPresenceOnly = logs.records.length === 0 &&
+    (geminiScan?.detectionSignals ?? 0) > 0 &&
+    geminiScan?.filesDiscovered === 0;
+  const detectedWithoutRows = projectFilter
+    ? []
+    : logs.sourceScans.filter((scan) => (
+        (scan.filesDiscovered > 0 || (scan.detectionSignals ?? 0) > 0) &&
+        !logs.records.some((record) => record.agentId === scan.agent)
+      )).map((scan) => scan.agent);
+  const zeroRowLocalEvidence = logs.records.length === 0 && sourcesDetected.length > 0;
+  if (records.length === 0 && !zeroRowLocalEvidence) {
     throw new Error(
-      input.project
-        ? `No local Claude Code or Codex usage records matched project ${input.project}.`
-        : "No local Claude Code or Codex usage records were found for the requested window."
+      projectFilter
+        ? `No supported local-agent usage records matched the requested project filter.`
+        : "No supported Claude Code, Codex, or Gemini CLI financial rows were found for the requested window."
     );
   }
 
   const summary = analyzeSpend(records);
-  const mappings = attributeUsageRecords(records);
+  const financialValue = financialValueCoverage(records);
+  const validationCoverage = localLogValidationCoverage(
+    logs,
+    records,
+    detectedWithoutRows
+  );
+  const evidenceCoverage = localAgentEvidenceCoverage(
+    logs,
+    records,
+    detectedWithoutRows
+  );
+  const financialEvidence = financialEvidenceForRecords(records);
   const registry = await readRegistryOrCreate(rootPath);
   const localSource = {
     ...createProviderConnectorStub("local-agent-logs", "local_tool_detection"),
-    validationCoverage: "live_verified" as const,
-    financialEvidence: "estimated" as const,
+    validationCoverage,
+    financialEvidence,
     fieldsEstimated: ["input/output/cache token counts", "API-equivalent model cost"],
     fieldsMissing: ["provider-billed amount", "subscription quota state"]
   };
   const nextRegistry = addApprovedSource(registry, localSource);
   const timestamp = new Date().toISOString();
+  if (zeroRowLocalEvidence) {
+    await invalidateConnectedSpendTrustReceipt(rootPath);
+    await writeJson(join(stateDir, "sources.json"), nextRegistry);
+    await writeJson(join(stateDir, "spend.json"), {
+      mode: "local_logs",
+      checkedAt: timestamp,
+      ...(projectFilter ? { projectFilter } : {}),
+      records,
+      summary,
+      financialValue,
+      ...(geminiPresenceOnly
+        ? {
+            presenceOnly: {
+              source: "gemini-cli",
+              financialRowsCreated: 0
+            }
+          }
+        : {})
+    });
+    await writeJson(join(stateDir, "mappings.json"), []);
+    await appendAuditEvent(stateDir, {
+      timestamp,
+      action: "source_scanned",
+      sourceId: localSource.id,
+      path: rootPath,
+      detail: `MCP local-log sync detected ${sourcesDetected.join(", ")} local evidence and persisted an explicit zero-row local state; no sample or financial row was substituted.`
+    });
+    return {
+      sourceId: "local-agent-logs",
+      boundaryApproval: "approved",
+      validationCoverage,
+      financialEvidence,
+      agentsDetected: logs.agentsDetected,
+      sourcesDetected,
+      filesParsed: logs.filesParsed,
+      recordCount: 0,
+      ...(projectFilter ? { projectFilter } : {}),
+      evidenceCoverage,
+      valueBasis: "local_api_equivalent_value_not_billed_spend",
+      anomalyBasis: "unavailable_no_comparable_call_level_records",
+      summary,
+      financialValue,
+      ...(geminiPresenceOnly
+        ? {
+            presenceOnly: {
+              source: "gemini-cli" as const,
+              financialRowsCreated: 0 as const,
+              note: "Gemini CLI detected, but no supported chats JSON/JSONL financial evidence was found. logs.json is presence-only and was not parsed as financial evidence. Need this coverage? +1 or contribute a synthetic fixture: https://github.com/futurastudio/ai-spend-agent/issues/new?template=provider_or_agent.yml"
+            }
+          }
+        : {})
+    };
+  }
+  const mappings = attributeUsageRecords(records);
 
   await invalidateConnectedSpendTrustReceipt(rootPath);
   await writeJson(join(stateDir, "sources.json"), nextRegistry);
   await writeJson(join(stateDir, "spend.json"), {
     mode: "local_logs",
     checkedAt: timestamp,
+    ...(projectFilter ? { projectFilter } : {}),
     records,
-    summary
+    summary,
+    financialValue
   });
   await writeJson(join(stateDir, "mappings.json"), mappings);
   await appendAuditEvent(stateDir, {
@@ -721,7 +850,7 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
     action: "source_scanned",
     sourceId: localSource.id,
     path: rootPath,
-    detail: `MCP local-log sync parsed ${logs.filesParsed} Claude Code/Codex files and persisted ${records.length} aggregate records.`
+    detail: `MCP local-log sync parsed ${logs.filesParsed} supported local-agent session files and persisted ${records.length} aggregate records.`
   });
 
   return {
@@ -730,12 +859,97 @@ export async function syncLocalAgentSpendTool(input: SyncLocalAgentSpendInput): 
     validationCoverage: localSource.validationCoverage,
     financialEvidence: localSource.financialEvidence,
     agentsDetected: logs.agentsDetected,
+    sourcesDetected,
     filesParsed: logs.filesParsed,
     recordCount: records.length,
-    ...(input.project ? { projectFilter: input.project } : {}),
+    ...(projectFilter ? { projectFilter } : {}),
+    evidenceCoverage,
     valueBasis: "local_api_equivalent_value_not_billed_spend",
     anomalyBasis: "unavailable_no_comparable_call_level_records",
-    summary
+    summary,
+    financialValue
+  };
+}
+
+function financialValueCoverage(records: readonly UsageRecord[]): FinancialValueCoverage {
+  const pricedRecords = records.filter((record) => typeof record.amountUsd === "number");
+  const missingRecordCount = records.length - pricedRecords.length;
+  return {
+    availability: pricedRecords.length === 0
+      ? "missing"
+      : missingRecordCount > 0
+        ? "partial"
+        : "available",
+    amountUsd: pricedRecords.length === 0
+      ? null
+      : Math.round(pricedRecords.reduce((total, record) => (
+          total + (record.amountUsd ?? 0)
+        ), 0) * 10_000) / 10_000,
+    pricedRecordCount: pricedRecords.length,
+    missingRecordCount,
+    recordCount: records.length
+  };
+}
+
+function localLogValidationCoverage(
+  logs: Awaited<ReturnType<typeof loadLocalAgentUsage>>,
+  records: readonly UsageRecord[],
+  presenceOnlySources: readonly string[] = []
+): SourceValidationCoverage {
+  const contributing = new Set([
+    ...records.map((record) => record.agentId).filter((value): value is string => Boolean(value)),
+    ...presenceOnlySources
+  ]);
+  if (logs.diagnostics.some((diagnostic) => (
+    contributing.has(diagnostic.agent) && diagnostic.severity === "error"
+  ))) {
+    return "failed";
+  }
+  const coverages = localAgentFormatDescriptors
+    .filter((descriptor) => contributing.has(descriptor.id))
+    .map((descriptor) => descriptor.confidenceDefaults.validationCoverage);
+  if (coverages.includes("failed")) return "failed";
+  if (coverages.includes("untested")) return "untested";
+  if (coverages.includes("fixture_verified")) return "fixture_verified";
+  return "live_verified";
+}
+
+function localAgentEvidenceCoverage(
+  logs: Awaited<ReturnType<typeof loadLocalAgentUsage>>,
+  records: readonly UsageRecord[],
+  presenceOnlySources: readonly string[] = []
+): LocalAgentEvidenceCoverage {
+  const contributingSources = [...new Set(
+    [
+      ...records.map((record) => record.agentId).filter((value): value is string => Boolean(value)),
+      ...presenceOnlySources
+    ]
+  )].sort();
+  const contributing = new Set(contributingSources);
+  const grouped = new Map<string, LocalAgentEvidenceDiagnostic>();
+  for (const diagnostic of logs.diagnostics) {
+    if (!contributing.has(diagnostic.agent) || diagnostic.code === "directory_missing") continue;
+    const code = diagnostic.code;
+    if (code !== "directory_unreadable" && code !== "file_unreadable" &&
+        code !== "malformed_jsonl" && code !== "malformed_session_file" &&
+        code !== "unsupported_token_shape") continue;
+    const severity = diagnostic.severity === "error" ? "error" : "warning";
+    const key = `${diagnostic.agent}:${code}:${severity}`;
+    const prior = grouped.get(key);
+    grouped.set(key, {
+      source: diagnostic.agent,
+      code,
+      severity,
+      count: (prior?.count ?? 0) + diagnostic.count
+    });
+  }
+  const diagnostics = [...grouped.values()].sort((left, right) => (
+    left.source.localeCompare(right.source) || left.code.localeCompare(right.code)
+  ));
+  return {
+    status: records.length === 0 ? "missing" : diagnostics.length > 0 ? "partial" : "complete",
+    contributingSources,
+    diagnostics
   };
 }
 
@@ -746,12 +960,16 @@ export async function getUsageGlanceTool(
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso: new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString(),
     collectCodexInvocationEvidence: true
   });
+  const glanceCalls = logs.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "glance")
+  ));
   const calls = input.project
-    ? logs.calls.filter((call) => call.project === input.project)
-    : logs.calls;
+    ? glanceCalls.filter((call) => call.project === input.project)
+    : glanceCalls;
   const projectDir = input.path
     ? await resolveSafeScanRoot(input.path)
     : latestObservedWorkingDirectory(calls) ?? process.cwd();
@@ -772,12 +990,16 @@ export async function getUsageGlanceTool(
     codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
   }).catch(() => []);
   return buildUsageGlance(calls, {
-    filesParsed: logs.filesParsed,
-    detectedAgents: logs.agentsDetected,
+    filesParsed: logs.sourceScans
+      .filter((scan) => localAgentFormatSupports(scan.agent, "glance"))
+      .reduce((total, scan) => total + scan.filesParsed, 0),
+    detectedAgents: logs.agentsDetected.filter((agent) => (
+      localAgentFormatSupports(agent, "glance")
+    )),
     detectedPlans,
     // Plan windows are account-level metadata, so a project filter must not
     // erase an exact provider-reported reset or remaining percentage.
-    limitCalls: logs.calls,
+    limitCalls: glanceCalls,
     contextHealth
   });
 }
@@ -793,12 +1015,16 @@ export async function getContextHealthTool(
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso,
     collectCodexInvocationEvidence: true
   });
+  const contextCalls = logs.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "contextHealth")
+  ));
   const calls = input.project
-    ? logs.calls.filter((call) => call.project === input.project)
-    : logs.calls;
+    ? contextCalls.filter((call) => call.project === input.project)
+    : contextCalls;
   return loadContextHealth(calls, {
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
@@ -1136,6 +1362,15 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
   const records = mode === "sample"
     ? downgradeSampleUsageEvidence(parsedRecords)
     : parsedRecords;
+  const projectFilter = mode === "local_logs" && value.projectFilter !== undefined
+    ? parseProjectFilter(value.projectFilter, "Persisted project filter")
+    : undefined;
+  if (projectFilter && records.some((record) => record.projectId !== projectFilter)) {
+    throw new Error(
+      "Invalid local spend state: the persisted project filter does not match every cached row. " +
+        "Re-run sync_local_agent_spend; no totals were returned."
+    );
+  }
   const accounting = isRecord(value.accounting) ? value.accounting : undefined;
   const coverageByProvider = mode === "connected_provider"
     ? parseCoverageByProvider(
@@ -1160,6 +1395,7 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
     : undefined;
   return {
     mode,
+    ...(projectFilter ? { projectFilter } : {}),
     ...(typeof value.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}),
     ...(coverageByProvider ? { coverageByProvider } : {}),
     ...(checkedAtByProvider ? { checkedAtByProvider } : {}),
@@ -1169,6 +1405,17 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
     records,
     summary: analyzeSpend([])
   };
+}
+
+function parseProjectFilter(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1_024 ||
+      /[\u0000-\u001F\u007F]/.test(value)) {
+    throw new Error(
+      `${label} must be a bounded plain string without control characters. ` +
+        "No totals were returned."
+    );
+  }
+  return value;
 }
 
 async function assertTrustedConnectedState(
@@ -1231,9 +1478,9 @@ function recordsForMode(
   }));
 }
 
-async function recordsForPersistedMode(state: PersistedSpendState): Promise<UsageRecord[]> {
+async function evidenceForPersistedMode(state: PersistedSpendState): Promise<RevalidatedSpendEvidence> {
   if (state.mode !== "local_logs") {
-    return recordsForMode(state.records.map(sanitizePersistedRecord), state.mode);
+    return { records: recordsForMode(state.records.map(sanitizePersistedRecord), state.mode) };
   }
 
   // local_logs state is a repository cache, not authority. Re-read the actual
@@ -1243,15 +1490,72 @@ async function recordsForPersistedMode(state: PersistedSpendState): Promise<Usag
   const logs = await loadLocalAgentUsage({
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso
   }).catch(() => undefined);
-  if (!logs || logs.records.length === 0) {
+  if (!logs) {
     throw new Error(
-      "Persisted local-log state is an untrusted cache and its source Claude Code/Codex records are unavailable. " +
+      "Persisted local-log state is an untrusted cache and its source local-agent records are unavailable. " +
         "Call `sync_local_agent_spend` while the local transcripts are available; no report or recommendation was returned from repository state alone."
     );
   }
-  return recordsForMode(logs.records.map(sanitizePersistedRecord), "local_logs");
+  const detectedWithoutRows = state.projectFilter
+    ? []
+    : logs.sourceScans.filter((scan) => (
+        (scan.filesDiscovered > 0 || (scan.detectionSignals ?? 0) > 0) &&
+        !logs.records.some((record) => record.agentId === scan.agent)
+      )).map((scan) => scan.agent);
+  const zeroRowLocalEvidence = state.records.length === 0 &&
+    logs.records.length === 0 &&
+    detectedWithoutRows.length > 0;
+  if (zeroRowLocalEvidence) {
+    return {
+      records: [],
+      localEvidenceCoverage: localAgentEvidenceCoverage(logs, [], detectedWithoutRows)
+    };
+  }
+  if (logs.records.length === 0) {
+    throw new Error(
+      "Persisted local-log state is an untrusted cache and its source local-agent records are unavailable. " +
+        "Call `sync_local_agent_spend` while the local transcripts are available; no report or recommendation was returned from repository state alone."
+    );
+  }
+  const records = localRecordsWithinPersistedScope(logs.records, state);
+  if (records.length === 0) {
+    throw new Error(
+      "Persisted local-log state is an untrusted cache and no current local-agent records match its prior scope. " +
+        "Call `sync_local_agent_spend` again; no report or recommendation was returned from repository state alone."
+    );
+  }
+  return {
+    records: recordsForMode(records.map(sanitizePersistedRecord), "local_logs"),
+    localEvidenceCoverage: localAgentEvidenceCoverage(
+      logs,
+      records,
+      state.projectFilter ? [] : detectedWithoutRows
+    )
+  };
+}
+
+function localRecordsWithinPersistedScope(
+  records: readonly UsageRecord[],
+  state: PersistedSpendState
+): UsageRecord[] {
+  if (state.projectFilter) {
+    return records.filter((record) => record.projectId === state.projectFilter);
+  }
+
+  // Legacy snapshots did not persist the caller's explicit project filter.
+  // Conservatively intersect the authoritative re-read with the projects
+  // represented by the prior cache. That may retain an old unfiltered
+  // multi-project scope, but it can never silently widen a scoped snapshot.
+  const projectIds = new Set(
+    state.records.map((record) => record.projectId).filter((value): value is string => Boolean(value))
+  );
+  const includesUnattributed = state.records.some((record) => !record.projectId);
+  return records.filter((record) => (
+    record.projectId ? projectIds.has(record.projectId) : includesUnattributed
+  ));
 }
 
 function observedEvidenceWindow(records: UsageRecord[]): string {
@@ -1490,7 +1794,7 @@ function canonicalSourceLabel(
   }
   if (type === "local_folder") return `Approved local folder (${id})`;
   if (type === "local_tool_detection" && provider === "local-agent-logs") {
-    return "Claude Code and Codex local agent logs";
+    return "supported local coding-agent session evidence";
   }
   const providerLabel = providerCatalog.find((entry) => entry.id === provider)?.label;
   if (providerLabel) return `${providerLabel} (${canonicalSourceTypeLabel(type)})`;

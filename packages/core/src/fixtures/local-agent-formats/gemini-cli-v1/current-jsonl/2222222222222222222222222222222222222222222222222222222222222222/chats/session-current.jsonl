@@ -1,0 +1,7 @@
+{"sessionId":"fixture-gemini-current-session","projectHash":"2222222222222222222222222222222222222222222222222222222222222222","startTime":"2026-08-10T13:00:00.000Z","lastUpdated":"2026-08-10T13:03:00.000Z","kind":"main"}
+{"id":"fixture-gemini-current-user","timestamp":"2026-08-10T13:00:00.000Z","type":"user","content":[{"text":"Synthetic fixture prompt."}]}
+{"$set":{"lastUpdated":"2026-08-10T13:00:00.000Z"}}
+{"id":"fixture-gemini-current-response","timestamp":"2026-08-10T13:03:00.000Z","type":"gemini","content":[{"text":"Synthetic fixture response."}],"model":"gemini-2.5-flash","tokens":null}
+{"$set":{"lastUpdated":"2026-08-10T13:03:00.000Z"}}
+{"id":"fixture-gemini-current-response","timestamp":"2026-08-10T13:03:00.000Z","type":"gemini","content":[{"text":"Synthetic fixture response."}],"model":"gemini-2.5-flash","tokens":{"input":900,"output":90,"cached":300,"thoughts":20,"tool":10,"total":1020}}
+{"$set":{"lastUpdated":"2026-08-10T13:03:00.000Z"}}

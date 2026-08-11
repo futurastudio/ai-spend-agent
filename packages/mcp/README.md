@@ -1,12 +1,15 @@
 # @agent-finops/mcp
 
 **aibill for MCP.** A local-first stdio server that lets Claude, Codex,
-Cursor, and other MCP clients answer sourced questions about local Claude
-Code/Codex work, cost evidence, attribution, runway, and Context Health—or add
-provider billing evidence to the same aibill report.
+Cursor, and other MCP clients answer sourced attribution, runway, and Context
+Health questions from local Claude Code/Codex work. It can also add
+experimental Gemini CLI financial evidence or provider billing evidence to
+the same aibill report.
 
 The protocol is client-neutral. Local Claude Code and Codex readers are
-`live_verified` against an adversarial local corpus. Provider ingestion currently
+`live_verified` against an adversarial local corpus. The Gemini CLI chats
+reader is experimental and `fixture_verified`; it never treats `logs.json` as
+financial evidence. Provider ingestion currently
 supports OpenAI, Anthropic, GitHub Copilot, and Cursor. OpenAI and Anthropic
 have non-empty live-API verification. OpenAI QA reconciled the tested Costs
 total to invoiced API credits less the current provider-UI balance with `$0.00`
@@ -45,7 +48,7 @@ rejected. aibill never sits in the inference path and never stores, prints, or p
 | Tool | Purpose |
 | --- | --- |
 | `scan_ai_spend` | Discover provider files/configuration using opaque descendant-path references; `sample: true` skips local discovery and is explicitly demo-only. |
-| `sync_local_agent_spend` | Build an estimated API-equivalent usage-value report from local Claude Code/Codex metadata. Totals are not billed spend; day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. |
+| `sync_local_agent_spend` | Build an estimated API-equivalent usage-value report from supported local Claude Code, Codex, and experimental Gemini CLI financial metadata. Totals are not billed spend; incomplete Gemini shapes remain `missing`, and day-over-day anomalies remain unavailable because daily aggregates are not comparable calls. |
 | `sync_provider_spend` | Pull read-only provider billing evidence through an `env:NAME` reference, with billed cost, estimates, and coverage kept separate. |
 | `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. An explicit `path` wins; otherwise project inventory follows the latest transcript cwd, matching CLI. |
 | `get_context_health` | Distinguish discoverable, configured, explicitly invoked, hook-injected, and invocation-unobservable context without assuming MCP schemas loaded or running hook commands. |
