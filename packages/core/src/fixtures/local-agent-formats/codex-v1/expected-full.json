@@ -1,0 +1,61 @@
+{
+  "calls": [
+    {
+      "agent": "codex",
+      "model": "gpt-5.1-codex",
+      "timestamp": "2026-08-10T12:20:00.000Z",
+      "startedAt": "2026-08-10T12:00:00.000Z",
+      "project": "sample-project",
+      "workingDirectory": "/workspace/sample-project",
+      "sessionId": "fixture-codex-session",
+      "rateLimits": {
+        "observedAt": "2026-08-10T12:20:00.000Z",
+        "limitId": "codex",
+        "planType": "pro",
+        "windows": [
+          {
+            "kind": "five-hour",
+            "name": "five-hour",
+            "usedPercent": 40,
+            "windowMinutes": 300,
+            "resetsAt": "2026-08-10T16:00:00.000Z"
+          },
+          {
+            "kind": "weekly",
+            "name": "weekly",
+            "usedPercent": 25,
+            "windowMinutes": 10080,
+            "resetsAt": "2026-08-17T12:00:00.000Z"
+          }
+        ]
+      },
+      "activity": {
+        "summary": "Working in sample-project",
+        "kind": "project",
+        "action": "working",
+        "source": "project",
+        "promptCount": 0,
+        "toolCallCount": 0,
+        "files": [],
+        "isSubagent": false
+      },
+      "latestTurnUsage": {
+        "inputTokens": 200,
+        "outputTokens": 50,
+        "cacheReadTokens": 300,
+        "contextTokens": 500,
+        "totalTokens": 550,
+        "source": "transcript_last_token_usage"
+      },
+      "usageScope": "session_cumulative",
+      "usageSupport": "complete",
+      "reportedTotalTokens": 2750,
+      "usage": {
+        "inputTokens": 1500,
+        "outputTokens": 250,
+        "cacheReadTokens": 1000
+      }
+    }
+  ],
+  "diagnostics": []
+}

@@ -9,6 +9,7 @@ import {
   type DeadContextResult
 } from "./deadContext.js";
 import type { LocalAgentCall, LocalAgentTurnUsage } from "./localAgentLogs.js";
+import { localAgentFormatSupports } from "./localAgentFormats/registry.js";
 import {
   loadToolInvocations,
   type InvocationSummary,
@@ -167,7 +168,8 @@ export function buildContextHealth(
   input: BuildContextHealthInput = {}
 ): ContextHealthResult {
   const now = input.now ?? new Date();
-  const calls = input.calls ?? [];
+  const calls = (input.calls ?? [])
+    .filter((call) => localAgentFormatSupports(call.agent, "contextHealth"));
   const items = input.inventory?.items ?? [];
   const invocations = input.invocations ?? emptyInvocations();
   const windowDays = input.windowDays ?? input.deadContext?.windowDays ?? DEFAULT_WINDOW_DAYS;

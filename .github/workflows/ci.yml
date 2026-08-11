@@ -18,6 +18,8 @@ jobs:
       - run: npm ci
       - run: npm run check:adapters
       - run: npm run check:public-boundary
+      - run: npm run check:source-fixtures
+      - run: npm run check:source-docs
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build

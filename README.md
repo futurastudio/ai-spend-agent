@@ -219,6 +219,10 @@ read-only scan, but never turns its contents into verified financial evidence.
 | GitHub Copilot org APIs | Metrics + seats (org/billing admin) | Current official metrics-download and per-seat fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
 | Cursor / Gemini CLI / Cline / Aider local sessions | Local transcript parsing | `untested` / planned | `missing` until a parser produces supported evidence ([request an agent or provider](https://github.com/futurastudio/ai-spend-agent/issues/new/choose)) |
 
+See the generated [local source-format pages](docs/sources/README.md) for each
+reader's discovery boundary, fields used, validation evidence, privacy rules,
+and known limitations.
+
 The August 8 adversarial corpus replay exercised both local readers. Its Codex
 slice produced 25 aggregate rows: 14 supported API-rate estimates and 11
 honestly `missing` rows where pricing or token components were insufficient,

@@ -27,6 +27,8 @@ Before opening a pull request, also run:
 ```bash
 npm run check:public-boundary
 npm run check:adapters
+npm run check:source-fixtures
+npm run check:source-docs
 ```
 
 ## Product and data rules
@@ -50,6 +52,51 @@ npm run check:adapters
    products.
 8. Do not claim savings, productivity, or ROI without an observable outcome and
    sufficient reconciliation evidence.
+
+## Contributing a local-agent parser
+
+Start with a GitHub issue describing the agent, its documented on-device data
+format, and the smallest useful fixture matrix. Do not attach a real transcript.
+A parser proposal should add a registry-owned format descriptor and minimal,
+synthetic recorded fixtures without adding source-specific branches to the CLI,
+MCP server, reports, Glance, or other shared consumers.
+
+Add the stable format ID to `packages/core/src/localAgentFormats/types.ts`,
+then keep its descriptor and runtime adapter under that same registry-owned
+directory. This preserves the existing public TypeScript union while keeping
+future parser changes inside the registry boundary.
+
+Each descriptor must declare:
+
+- a stable format ID, provider, discovery boundary, and deterministic order;
+- validation coverage separately from financial-evidence defaults;
+- `estimated` for supported transcript-derived API-equivalent value and
+  `missing` for unsupported or unpriced values—never provider-billed spend;
+- normalized source-record semantics, capabilities, and full versus optimized
+  financial-reader behavior;
+- documentation for how the format is read, fields used, evidence boundaries,
+  privacy, limitations, and recorded fixture IDs.
+
+Fixtures must be minimal synthetic reproductions of observed format shapes.
+Remove prompts, responses, credentials, account identifiers, session IDs, user
+names, and concrete home paths. A fixture proves reader behavior; it cannot
+promote validation coverage or financial evidence. Malformed, unsupported,
+partial, retry/duplicate, and empty cases should fail honestly, and incomplete
+token shapes must remain `missing` instead of becoming an estimated `$0`.
+
+Keep full and optimized financial readers behavior-compatible and preserve all
+existing CLI/JSON, MCP, report, statusline, cache, and Glance output. Adding a
+future parser must stay inside the parser-registry boundary plus fixtures; do
+not modify shared consumer logic. Regenerate the public source pages from the
+registry and verify that nothing drifted:
+
+```bash
+npm run generate:source-docs
+npm run check:source-docs
+```
+
+The generator reads the built `@agent-finops/core` registry and produces
+deterministic files under `docs/sources/`. Do not edit those pages by hand.
 
 ## Pull requests
 

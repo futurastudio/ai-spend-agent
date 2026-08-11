@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  activitySnapshotAgentValues,
   activitySnapshotSchema,
   buildActivitySnapshot,
   createActivitySnapshotError
 } from "./activitySnapshot.js";
+import { localAgentFormatDescriptors } from "./localAgentFormats/registry.js";
 import {
   aggregateCalls,
   type LocalAgentCall,
@@ -1153,6 +1155,50 @@ describe("buildActivitySnapshot", () => {
       coverage: {
         ...providerSnapshot.coverage,
         providers: [{ ...provider, checkedAt: null }]
+      }
+    }).success).toBe(false);
+  });
+
+  it("derives accepted agents and cohort bounds from the local-agent registry", () => {
+    expect(activitySnapshotAgentValues).toEqual(
+      localAgentFormatDescriptors.map((descriptor) => descriptor.id)
+    );
+
+    const snapshot = buildActivitySnapshot({
+      asOf: AS_OF,
+      generatedAt: AS_OF,
+      records: [record()],
+      detectedPlans: [plan("codex", "api_key")],
+      sourceScans: [scan("codex")]
+    });
+    const cohortAgent = snapshot.metered!.agents[0]!;
+    const coverageAgent = snapshot.coverage.agents[0]!;
+    const everyRegisteredAgent = activitySnapshotAgentValues.map((agent) => ({
+      ...cohortAgent,
+      agent
+    }));
+    const everyRegisteredCoverage = activitySnapshotAgentValues.map((agent) => ({
+      ...coverageAgent,
+      agent
+    }));
+
+    expect(activitySnapshotSchema.safeParse({
+      ...snapshot,
+      metered: {
+        ...snapshot.metered!,
+        agents: everyRegisteredAgent
+      },
+      coverage: {
+        ...snapshot.coverage,
+        agents: everyRegisteredCoverage
+      }
+    }).success).toBe(true);
+
+    expect(activitySnapshotSchema.safeParse({
+      ...snapshot,
+      metered: {
+        ...snapshot.metered!,
+        agents: [{ ...cohortAgent, agent: "unregistered-agent" }]
       }
     }).success).toBe(false);
   });
