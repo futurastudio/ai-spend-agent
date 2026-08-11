@@ -17,22 +17,28 @@ export function PageShell({
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
         <div className="flex h-14 items-center justify-between px-5 sm:px-8">
-          <Link href="/" className="wordmark" aria-label="Tilden — home">
+          <Link href="/" className="wordmark min-h-11" aria-label="Tilden — home">
             Tilden
             <span className="wordmark-cursor" aria-hidden="true" />
           </Link>
           <nav className="flex items-center gap-6">
+            <Link
+              href="/docs"
+              className="inline-flex min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink"
+            >
+              Docs
+            </Link>
             <a
               href="https://github.com/futurastudio/ai-spend-agent"
               target="_blank"
               rel="noreferrer"
-              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
+              className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex"
             >
               GitHub ↗
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
+              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
               Design partners
             </Link>
@@ -85,6 +91,12 @@ export function PageShell({
             </span>
           </p>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-xs text-faint">
+            <Link href="/docs" className="transition-colors hover:text-ink">
+              Docs
+            </Link>
+            <Link href="/docs/roadmap" className="transition-colors hover:text-ink">
+              Roadmap
+            </Link>
             <Link
               href="/blog/claude-code-cost-usage-credits"
               className="transition-colors hover:text-ink"

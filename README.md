@@ -9,23 +9,31 @@ to do next—with the source and limits attached.**
 npx aibill         # short form — same CLI as `npx ai-spend-agent`
 ```
 
+[Documentation](https://asktilden.com/docs) · [Supported sources](https://asktilden.com/docs/sources) · [MCP setup](https://asktilden.com/docs/mcp) · [Roadmap](https://asktilden.com/docs/roadmap)
+
+> **Version boundary:** npm latest is `v0.7.3`. `main` contains the independently
+> gated `v0.8.0` Gemini CLI financial-reader preview, but it is not published.
+> Bare `npx aibill@latest` therefore reads Claude Code and Codex local evidence;
+> see the release notes before relying on behavior from a source checkout.
+
 aibill is building the financial accountability system for the AI-agent
 workforce: connecting what agents did to what they cost, who owns it, what
 outcome it produced, and what should happen next. The public beta establishes
-the private evidence layer for that mission. It consolidates observed Claude
-Code and Codex activity, experimental Gemini CLI token evidence, subscription
+the private evidence layer for that mission. The published package consolidates
+observed Claude Code and Codex activity, subscription
 context, API-equivalent value, optional provider-reported cost, attribution,
 runway, and Context Health into one evidence-labeled local view.
+Current `main` additionally contains an unreleased, experimental Gemini CLI
+financial-only reader; its availability and narrower capability boundary stay
+explicit in the generated source documentation.
 It separates what was billed from what was included in a plan and what was
 calculated at API rates, so the number can support a decision instead of
 becoming another misleading meter.
 
-If you use **Claude Code, Codex, or Gemini CLI**, that one command reads
-supported financial fields from session files already on your machine and
+If you use **Claude Code or Codex**, the published command reads supported
+financial fields from session files already on your machine and
 shows observed usage at API-equivalent rates where the token evidence is
-complete. Claude Code and Codex additionally support the activity, plan, and
-Context Health surfaces described below; Gemini support is experimental and
-financial-only. Dollar savings
+complete. Dollar savings
 appear only when the source supports a counterfactual; local cumulative usage
 stays observed exposure until matched future evidence verifies an effect. No
 provider connection or signup is required, and nothing leaves your laptop
@@ -40,8 +48,9 @@ cost alongside the local evidence.
 > shipped.
 
 No supported agent evidence or detected agent installation? You get a full
-demo on sample data instead. A presence-only Gemini `logs.json` signal produces
-an honest empty state, never sample dollars. When you're ready,
+demo on sample data instead. In the unreleased main preview, a presence-only
+Gemini `logs.json` signal produces an honest empty state, never sample dollars.
+When you're ready,
 add official provider-reported cost with an OpenAI or Anthropic admin/owner
 key. Availability depends on the permissions of that provider account.
 
@@ -55,8 +64,9 @@ terminal copy.*
 ## Get started
 
 1. **Initialize a private personal baseline:** run `npx aibill init` from a
-   project. It detects supported Claude Code, Codex, and Gemini CLI financial
-   evidence and backfills the last 30 days. It prints the first evidence-labeled
+   project. npm v0.7.3 detects supported Claude Code and Codex financial
+   evidence and backfills the last 30 days; the main preview additionally reads
+   supported Gemini CLI financial evidence. It prints the first evidence-labeled
    receipt and stores only the Claude Code/Codex fields supported by the small
    aggregate status-line snapshot under `~/.aibill/cache/`. Empty or unavailable evidence stays
    explicit; init never substitutes sample dollars for your own.
@@ -69,9 +79,11 @@ terminal copy.*
    `npx aibill apply`. Inspect the candidate evidence, approve at most one
    bounded change, then verify matched future sessions before calling the
    result savings. In sample mode, Apply is an explicitly non-executable demo.
-6. **Optional—add official provider-reported cost:** `npx aibill connect
-   openai` or `npx aibill connect anthropic`. The provider report remains
-   separate from local API-equivalent estimates.
+6. **Optional—set up official provider-reported cost:** `npx aibill connect
+   openai` or `npx aibill connect anthropic` registers the connector and prints
+   the exact `sync-provider` command. Only that explicit sync contacts the
+   provider and fetches evidence. The provider report remains separate from
+   local API-equivalent estimates.
 7. **Optional—ask why through AI:** configure the explicit-only MCP/plugin.
 8. **Share a redacted report card:** `npx aibill report-card` writes an SVG and
    caption without client, project, or user names.
@@ -198,9 +210,10 @@ their source, basis, or provenance so an estimate is not mistaken for a bill:
 | `detected_unverified` | A local signal was detected but **not** reconciled against billing. |
 | `missing` | Usage exists but there's no cost basis to price it. |
 
-Priced financial values calculated from your local **Claude Code, Codex, or
-Gemini CLI** session evidence are `estimated` at API-equivalent rates—never
-`verified`. The Gemini reader is experimental and `fixture_verified`; its
+Priced financial values calculated from your local **Claude Code or Codex**
+session evidence are `estimated` at API-equivalent rates—never `verified`.
+The unreleased main preview adds an experimental, `fixture_verified` Gemini
+reader; its
 complete token splits can be priced, while incomplete or unknown shapes remain
 `missing`. Records without a
 supported cost basis stay `missing`. Connecting provider billing adds official
@@ -221,7 +234,7 @@ read-only scan, but never turns its contents into verified financial evidence.
 | --- | --- | --- | --- |
 | Claude Code logs (local) | Observed transcript usage, priced at published API rates | `live_verified` | `estimated` or `missing`—never billed spend |
 | Codex logs (local) | Root-session-aware rollout usage with fork accounting and snapshot deduplication | `live_verified` | `estimated` or `missing`—never billed spend |
-| Gemini CLI chats (local, experimental) | Supported `chats/**/*.json` and `chats/**/*.jsonl` token records; `logs.json` is detection-only | `fixture_verified` | `estimated` only for complete recognized token/model evidence; otherwise `missing`—never billed spend |
+| Gemini CLI chats (local, experimental; **main preview, unreleased**) | Supported `chats/**/*.json` and `chats/**/*.jsonl` token records; `logs.json` is detection-only | `fixture_verified` | `estimated` only for complete recognized token/model evidence; otherwise `missing`—never billed spend |
 | OpenAI Costs/Usage API | Admin-gated billing, per project/key | `live_verified` on a non-empty Admin API window; tested Costs total reconciled to invoiced API credits less the provider-UI balance with `$0.00` variance | `verified`, `estimated`, or `missing` by returned endpoint; each user's final invoice remains separate |
 | Anthropic Cost Report + Claude Code Analytics | Admin-gated billing/usage, per workspace | `live_verified` on non-empty API records | `verified`, `estimated`, or `missing` by returned row |
 | Cursor Admin API | Team spend (Business plan, team admin) | Current official response and pagination fixtures pass; `fixture_verified` beta until live-account QA | `estimated`, `detected_unverified`, or `missing` |
@@ -250,7 +263,7 @@ rates were checked against the official OpenAI model pages on 2026-07-28.
 
 ## Connect provider cost and usage
 
-Provider APIs are admin/owner-gated, so connecting is a deliberate step.
+Provider APIs are admin/owner-gated, so setup and sync are deliberate steps.
 OpenAI and Anthropic Admin API reports can add official provider-reported
 cost. Both connectors have non-empty live-API coverage; OpenAI product QA
 reconciled the tested Costs total to invoiced API credits less the current
@@ -259,27 +272,29 @@ discounts, and later adjustments remain separate. Cursor and Copilot match
 current official response fixtures but remain beta until live-account QA:
 
 ```bash
-npx aibill connect openai          # requires an org-owner Admin credential reference
-npx aibill connect anthropic       # requires an Admin credential reference
-npx aibill connect cursor          # fixture-verified beta; live QA pending
-npx aibill connect github-copilot  # seat estimates + usage evidence; live QA pending
+npx aibill connect openai          # registers a stub; prints the required sync-provider command
+npx aibill connect anthropic       # registers a stub; prints the required sync-provider command
+npx aibill connect cursor          # fixture-verified beta connector setup
+npx aibill connect github-copilot  # fixture-verified beta connector setup
 ```
 
-Credentials are referenced from your local environment (`--auth-reference
-env:NAME`). aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
+`connect` does not fetch billing data. The printed `sync-provider` command makes
+the read-only provider request. Credentials are referenced from your local
+environment (`--auth-reference env:NAME`). aibill never sits in the inference
+path and never stores, prints, or proxies provider credentials.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | _(no command)_ | Zero-key instant readout: your local agent logs if present, sample demo otherwise |
-| `init [--path <dir>] [--statusline]` | Detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
+| `init [--path <dir>] [--statusline]` | On npm v0.7.3, detect supported Claude Code and Codex financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; current main additionally reads experimental Gemini financial evidence; optional `--statusline` is explicit installation consent and sample data is never substituted |
 | `statusline` | Render one plan-aware line from the private cache; no scan, provider call, or network |
 | `statusline refresh` | Explicitly run the foreground local refresh, then render the cache |
 | `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
 | `statusline uninstall` | Remove only the owned setting and restore the preserved predecessor without rolling back unrelated settings |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
-| `connect <provider>` | Connect a provider's cost data (admin-gated) |
+| `connect <provider>` | Register an admin-gated local connector stub and print the required `sync-provider` command; does not fetch billing data |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
 | `context [--project <name>] [--since-days N]` | Human-readable hook-aware Context Health (`--json` emits the canonical contract) |
 | `glance [--project <name>] [--plan <id>] [--since-days N]` | Emit the local machine-readable Glance snapshot |
@@ -337,9 +352,10 @@ The interfaces work best as one local loop:
 
 1. Run `npx aibill init` once to establish the private cross-agent cache, then
    use `npx aibill` for local Claude Code/Codex usage, attribution, plan
-   context, and API-equivalent value plus experimental Gemini CLI financial
-   evidence. Gemini does not enter the status-line, Glance, Context Health, or
-   Apply activity surfaces in this release.
+   context, and API-equivalent value. A current-main source checkout also reads
+   experimental Gemini CLI financial evidence; npm latest does not. Gemini
+   does not enter the statusline, Glance, Context Health, or Apply activity
+   surfaces in the main preview.
 2. Optionally install `npx aibill statusline install` for cache-only runway,
    financial evidence, and freshness inside Claude Code.
 3. Run `npx aibill context` when deciding whether to continue the current
@@ -353,9 +369,9 @@ The interfaces work best as one local loop:
    handoff into your coding agent.
 6. Invoke the optional MCP/plugin only when you want an AI client to explain
    the compatible evidence available to that tool conversationally.
-7. Connect OpenAI or Anthropic only when official provider-reported cost is
-   needed; local estimates, subscription context, and provider reports remain
-   separate.
+7. Set up and explicitly sync OpenAI or Anthropic only when official
+   provider-reported cost is needed; local estimates, subscription context,
+   and provider reports remain separate.
 
 Terminal is the most complete private inspection surface, Glance is the
 monitor and momentum surface, and MCP is the on-demand explanation layer.
@@ -366,9 +382,10 @@ Health logic.
 ## Use it inside an AI client (MCP or optional plugin)
 
 The same engine ships as `@agent-finops/mcp`, so any stdio-compatible MCP
-client can read supported local Claude Code, Codex, and experimental Gemini
-CLI estimates or sync official OpenAI and Anthropic provider reports through
-reference-only credentials:
+client can read supported local Claude Code and Codex estimates or sync
+official OpenAI and Anthropic provider reports through reference-only
+credentials. The current-main v0.8.0 preview additionally reads experimental
+Gemini financial evidence; npm latest v0.7.3 does not:
 
 ```bash
 npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
@@ -448,14 +465,14 @@ The preregistered 8–12-person comprehension/retention protocol is public at
 Its blank scorecard is not a launch result; broad-distribution claims wait for
 real participant sessions and the day-seven follow-up. Mac users can
 [volunteer for the Glance preview
-study](https://ai-spend-agent.vercel.app/?ref=github-glance-study#beta); the
+study](https://asktilden.com/?ref=github-glance-study#beta); the
 current form records interest, not access to a signed download.
 
 ## Privacy & trust
 
 - **Local-first by default.** CLI and Glance transcript analysis happens on
-  your machine and sends no telemetry. A deliberate provider connection sends
-  the referenced credential only to that provider's official API.
+  your machine and sends no telemetry. An explicit `sync-provider` call uses
+  the inherited credential only with that provider's official API.
 - **Explicit MCP boundary.** When you invoke an MCP tool or plugin skill, its
   selected structured result is returned to that AI client and follows the
   client's data policy. The aibill process itself makes no telemetry/upload
@@ -487,7 +504,7 @@ reconciliation, allocation, budgets, approvals, and evidence-backed cost per
 accepted outcome where coverage supports it. It will never be required to
 inspect a user's own local data.
 
-**[Apply as a Workspace design partner →](https://ai-spend-agent.vercel.app/?ref=github-readme#beta)**
+**[Apply as a Workspace design partner →](https://asktilden.com/?ref=github-readme#beta)**
 
 See the [public roadmap](ROADMAP.md) for the evidence-first sequence and its
 explicit non-goals.

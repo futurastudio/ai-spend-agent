@@ -1,5 +1,10 @@
 # aibill MCP Server
 
+> **Version boundary:** npm latest is `v0.7.3` and reads Claude Code and Codex
+> local evidence. The Gemini CLI financial-reader sections below describe the
+> merged `v0.8.0` main preview, which is not yet available from
+> `@agent-finops/mcp@latest`.
+
 `@agent-finops/mcp` is a local-first Model Context Protocol server for aibill.
 It lets compatible AI clients ask sourced questions about coding-agent work,
 cost evidence, attribution, runway, and Context Health from the same contract
@@ -11,9 +16,10 @@ The MCP client and the spend provider are separate concerns:
 
 - **MCP clients:** any stdio-compatible agent can call the tools.
 - **Local usage:** Claude Code and Codex transcript metadata; both readers are
-  `live_verified` against an adversarial local corpus. Experimental Gemini CLI
-  financial evidence is read only from `chats/**/*.{json,jsonl}` and remains
-  `fixture_verified`; `logs.json` is detection-only.
+  `live_verified` against an adversarial local corpus. The unreleased main
+  preview additionally reads experimental Gemini CLI financial evidence only
+  from `chats/**/*.{json,jsonl}`; it remains `fixture_verified`, and
+  `logs.json` is detection-only.
 - **Provider APIs:** OpenAI, Anthropic, GitHub Copilot, and Cursor.
 - **Validation coverage:** OpenAI and Anthropic have non-empty live-API
   verification. OpenAI QA reconciled the tested Costs total to invoiced API

@@ -1,141 +1,107 @@
 # aibill public roadmap
 
-aibill's vision is an open financial intelligence layer for the AI-agent
-economy. Its mission is to build the financial accountability system for the
-AI-agent workforce: connect what agents did to what they cost, who owns it,
-what outcome it produced, and what should happen next.
+aibill is building the financial accountability system for the AI-agent
+workforce: connect what agents did to what they cost, who owns it, which
+outcome is supported, and what should happen next.
 
-The public beta begins with software-development teams and ships the private
-evidence layer for that mission—not the finished company system. The roadmap
-follows one rule: each milestone must turn trustworthy evidence into a clearer
-decision without making local users surrender their data.
+This roadmap describes direction, not a delivery guarantee. Availability is
+part of the product truth: published, merged-preview, and planned capabilities
+stay separate. Shipped behavior is documented in the [release
+notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
+[/docs/roadmap](https://asktilden.com/docs/roadmap).
 
-The end-to-end accountability record is:
+Last updated: August 11, 2026.
 
-**agent work → cost/capacity → owner → evidence → accepted outcome → policy →
-approval → bounded action → verified result**
+## Available now — npm v0.7.3
 
-Roadmap items describe direction, not a delivery guarantee. Shipped behavior is
-documented in the README and release notes.
+- Claude Code and Codex local evidence in the CLI, explicit MCP/plugin,
+  private init/cache, and optional cache-only Claude Code statusline.
+- Separation of provider-billed cost, subscription context, API-equivalent
+  value, validation coverage, freshness, and missing evidence.
+- Optional OpenAI and Anthropic provider reports. Cursor and GitHub Copilot
+  connectors remain `fixture_verified` beta until live-account QA.
+- The additive `AgentEconomicsReceiptV0` core contract plus the data-driven
+  local-reader registry, synthetic fixtures, generated source pages, and
+  contribution path.
+- An unsigned, source-built Glance preview. There is no public Mac download
+  yet.
 
-## Public beta: trustworthy local evidence
+Workspace, accepted-outcome economics, ROI measurement, and autonomous
+enforcement are not shipped.
 
-- One-command Claude Code and Codex activity discovery plus experimental,
-  financial-only Gemini CLI chats ingestion. Gemini remains fixture-verified
-  and outside Glance/statusline, Context Health, and Apply until those evidence
-  capabilities are independently supported.
-- Honest separation of provider-billed cost, subscription context,
-  API-equivalent value, and missing cost bases.
-- Project/model attribution, source coverage, freshness, and provenance.
-- Context Health and one evidence-backed session action.
-- A public-beta `aibill apply` loop that turns scoped evidence into read-only
-  inspection, one explicitly approved reversible change, and a matched
-  future-session verification plan. The user still performs and judges that
-  verification; the beta does not claim autonomous or guaranteed savings.
-- Provider billing buckets, daily aggregates, seat rows, and user totals stay
-  reconciliation evidence. A modeled routing, cache, Batch, downgrade, or
-  context change requires an explicitly call/invocation-level record plus the
-  workload semantics that support that specific counterfactual; otherwise
-  Apply returns the missing evidence instead of inventing a cut.
-- A shared data contract across CLI, MCP/plugin, and the Glance source preview.
-- Optional read-only billing reconciliation: Anthropic and non-empty OpenAI
-  API reads are live-verified. The remaining OpenAI gate is a manual comparison
-  against the provider UI/final invoice, not connector access or empty data.
-- Cursor and GitHub Copilot connectors labeled fixture-verified beta until live
-  account validation is complete.
+## Merged preview — v0.8.0, not published
 
-This layer can answer what observed work is driving the available cost evidence
-and what a user should investigate next. Cross-provider company ownership,
-centralized subscription reconciliation, accepted outcomes, approvals, and ROI
-remain later milestones and must stay labeled as such.
+The experimental Gemini CLI financial reader is merged to `main` but is not
+available from bare `npx aibill@latest`:
 
-## Now: reliability, runway, and distribution
+- supported complete chat-session records may produce `estimated`
+  API-equivalent value;
+- unknown, incomplete, inconsistent, or unsupported evidence stays `missing`;
+- the reader is `fixture_verified`, not live-verified;
+- `logs.json` is presence-only and creates no financial row; and
+- Gemini does not feed statusline, Glance, Context Health, plan runway,
+  invocation evidence, recommendations, or Apply.
 
-- Make clean CLI and MCP installation the fastest path to first value.
-- Make `aibill init` a sub-30-second, idempotent personal backfill and publish
-  one private plan-aware aggregate snapshot for lightweight local surfaces.
-- Finish the human-readable limits/runway view over the existing canonical
-  contract; never infer a window a provider or coding agent did not report.
-- Resolve installation, privacy, data-trust, and semantic issues reported by
-  beta users before adding breadth.
-- Package Glance as a standalone, signed, notarized, independently installable,
-  safely updatable Mac app before describing it as a public download.
-- Complete the public comprehension/retention study and real provider-billing
-  reconciliation cases.
+Publication remains a separate release gate. Until it closes, npm latest is
+v0.7.3.
 
-## Next: an open Agent Economics Receipt
+## Next 30 days — current focus areas, not an exhaustive build order
 
-Publish a portable, versioned record for one unit of agent work. It will keep
-these concepts separate:
+1. **Publish the gated Gemini merge.** After explicit approval, publish the
+   already-gated merge, then run the post-publication cold-registry smoke,
+   exact tag, and GitHub Release. Improve positive sub-cent display separately
+   as post-release polish.
+2. **Deepen attribution and session evidence before outcomes.** Add branch,
+   ticket, and work-unit attribution plus plan presets and session vitals
+   before accepted, rejected, reverted, rework, and unknown outcome states.
+   The first verified unit is an accepted coding task or merged PR—not lines of
+   code or modeled hours.
+3. **Add financial CI carefully.** Begin with warnings, preview, dry-run,
+   explicit approval, rollback, and a verified result. No autonomous control
+   claim without a real adapter and validated team policy.
+4. **Close distribution and comprehension proof.** Run the 8–12-person study,
+   collect real billing-reconciliation cases, and finish signed, notarized,
+   update-safe Glance distribution before offering a public download.
+5. **Earn the organization foundation with design partners.** Test one
+   read-only observability import and gather design-partner proof first. Then
+   begin an opt-in aggregate receipt sync for shared reconciliation,
+   allocation, and approval history. This is a foundation, not Workspace
+   general availability.
 
-- invoice cost, credits/overage, subscription capacity, and API-equivalent
-  value;
-- observed, reported, calculated, estimated, modeled, missing, and verified
-  provenance;
-- source, freshness, coverage, and reconciliation;
-- agent, provider, model, project, client, work unit, attempt, verification,
-  outcome, rework, recommendation, approval, and result.
+## Later — the paid accountability system
 
-Raw prompts and responses will not be embedded by default. External trace and
-task references can provide evidence without making aibill another prompt
-warehouse.
+The intended Workspace is an opt-in, permissioned layer over approved Agent
+Economics Receipts:
 
-## Then: outcomes and financial CI
-
-- `aibill outcome`: connect coding-agent activity to Git, tests, CI, reviews,
-  and task/PR acceptance. Cost per outcome remains pending until the outcome is
-  actually accepted.
-- `aibill guard`: warn on cost-per-success regressions, falling billing
-  coverage, missing attribution, or ROI claims without sufficient evidence.
-- Read-only imports from open observability standards and products instead of
-  rebuilding their tracing and evaluation interfaces.
-
-The first controls will warn, recommend, and request explicit approval. Hard
-enforcement requires a real provider control or gateway adapter and validated
-team policy.
-
-## Later: opt-in aibill Workspace
-
-Workspace will be the paid, permissioned financial teammate over a shared
-organizational ledger of approved Agent Economics Receipts:
-
-- centralized provider and subscription reconciliation;
+- organization-wide provider and subscription reconciliation;
 - project, client, user, agent, and use-case allocation;
-- retained history, budgets, anomalies, approvals, and audit records;
-- verified cost-per-outcome and rework where evidence supports it;
-- export and deletion from the first alpha.
+- budgets, anomalies, approvals, and audit history;
+- accepted-outcome economics and rework where evidence supports them; and
+- a read-only financial teammate that cites freshness, source quality, and
+  missing coverage with every meaningful answer.
 
-Its two role-scoped experiences will answer:
+Defensible ROI requires reconciled cost, an accepted outcome, and independently
+evidenced business value. Token volume, activity, lines of code, or invented
+hours saved are not ROI.
 
-- **Employees:** What am I working on, what is consuming capacity, can I
-  finish, is it attributed correctly, and what should I do next?
-- **Spend owners and finance:** What changed, who owns it, which numbers
-  reconcile, where did cost per accepted outcome regress, what needs approval,
-  and did the approved action work?
+## Explicitly not yet
 
-Defensible ROI comes only after reconciled cost, an accepted outcome, and
-independently evidenced business value. Workspace must not turn activity or
-token volume into an invented ROI number.
+- ROI or productivity claims from usage evidence alone.
+- Autonomous budget enforcement or provider changes.
+- Cursor-local financial parsing from current internal IDE databases; official
+  admin APIs remain the financial path unless a stable, versioned local format
+  emerges.
+- General Workspace availability, RBAC, or team billing.
+- A signed public Glance binary.
+- A general trace explorer, prompt warehouse, model gateway, or long-tail
+  parser race.
 
-Local-only mode will remain free and private. Synchronization will be explicit,
-aggregate-only, inspectable before upload, and optional.
+## Product sequence
 
-## Explicit non-goals for this sequence
+The dependency order remains:
 
-- A general trace explorer or raw-prompt warehouse.
-- Prompt management or a general-purpose evaluation suite.
-- A new model gateway, router, or cache.
-- An always-on financial persona injected into every agent turn.
-- Autonomous spend enforcement without explicit policy and provider support.
-- Productivity or ROI claims based on tokens, lines of code, or invented hours
-  saved.
-- A crowded compact Glance dashboard; it remains current work, runway, source
-  health, and one action.
+**source evidence → Receipt → Outcome → Recommendation → Guard/approval →
+bounded action → verified result**
 
-## How priorities change
-
-Priorities change when beta users or design partners provide evidence, a trust
-or release blocker appears, a provider changes a required data path, or a
-measured product assumption fails. Feature parity and novelty alone are not
-enough. Open an issue describing the user decision, evidence, data source, and
-success measure for a proposed change.
+Open an issue with the user decision, evidence source, privacy boundary, and
+success measure when proposing a priority change.
