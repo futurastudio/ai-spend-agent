@@ -56,6 +56,10 @@ body {
   line-height: 1;
 }
 
+.wordmark.min-h-11 {
+  align-items: center;
+}
+
 .wordmark-sm {
   font-size: 15px;
 }
