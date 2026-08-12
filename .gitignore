@@ -12,4 +12,5 @@ ai-spend-report/
 demo-output/
 .ai-spend-agent/
 .claude/
+.hallmark/
 *.tsbuildinfo

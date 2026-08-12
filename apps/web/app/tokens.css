@@ -1,0 +1,20 @@
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 · genre: modern-minimal · macrostructure: Index-First · theme: existing-Tilden · enrichment: none · nav: compact-side-index · footer: Ft2 · contrast: pass (40–41) · slop: pass (42–45) · honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive: pass (49) · icons: pass (30) · mobile: pass (34, 49, 50–57) */
+:root {
+  --docs-ground: #0c0d09;
+  --docs-panel: #12140e;
+  --docs-well: #0a0b07;
+  --docs-ink: #ededed;
+  --docs-muted: rgba(255, 255, 255, 0.62);
+  --docs-faint: rgba(255, 255, 255, 0.48);
+  --docs-rule: rgba(255, 255, 255, 0.08);
+  --docs-rule-bright: rgba(255, 255, 255, 0.14);
+  --docs-accent: #4cc98a;
+  --docs-accent-line: rgba(76, 201, 138, 0.3);
+  --docs-accent-wash: rgba(76, 201, 138, 0.08);
+  --docs-warning: #c9a24b;
+  --docs-header: rgba(12, 13, 9, 0.97);
+  --docs-reading-width: 46rem;
+  --docs-shell-width: 74rem;
+  --docs-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --docs-duration-short: 180ms;
+}

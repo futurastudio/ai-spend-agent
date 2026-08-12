@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -216,6 +218,159 @@ body {
 
   .text-pretty {
     text-wrap: pretty;
+  }
+}
+
+/* ---- Hosted documentation --------------------------------------------
+   A reference-book layout: fixed-width index, readable text measure, and
+   rules instead of floating cards. All release states remain text-labeled. */
+.docs-shell {
+  margin-inline: auto;
+  max-width: var(--docs-shell-width);
+}
+
+.docs-header {
+  background: var(--docs-header);
+}
+
+.docs-shell .text-faint {
+  color: var(--docs-faint);
+}
+
+.docs-layout {
+  display: grid;
+  min-width: 0;
+}
+
+.docs-side-index {
+  border-bottom: 1px solid var(--docs-rule);
+  background: var(--docs-ground);
+}
+
+.docs-side-link {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  border-inline-start: 1px solid transparent;
+  color: var(--docs-muted);
+  font-size: 0.875rem;
+  white-space: nowrap;
+  transition:
+    border-color var(--docs-duration-short) var(--docs-ease-out),
+    color var(--docs-duration-short) var(--docs-ease-out),
+    background-color var(--docs-duration-short) var(--docs-ease-out);
+}
+
+.docs-side-link:hover,
+.docs-side-link:focus-visible {
+  color: var(--docs-ink);
+}
+
+.docs-side-link[aria-current="page"] {
+  border-inline-start-color: var(--docs-accent);
+  background: var(--docs-accent-wash);
+  color: var(--docs-ink);
+}
+
+.docs-reading-column {
+  min-width: 0;
+  max-width: var(--docs-reading-width);
+}
+
+.docs-reading-column h1,
+.docs-reading-column h2,
+.docs-reading-column h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.docs-shell a:focus-visible,
+.docs-shell button:focus-visible,
+.docs-shell summary:focus-visible,
+.docs-code:focus-visible {
+  outline: 2px solid var(--docs-accent);
+  outline-offset: 3px;
+}
+
+.docs-shell a:active {
+  color: var(--docs-accent);
+}
+
+.docs-code {
+  overflow-x: auto;
+  border-block: 1px solid var(--docs-rule);
+  background: var(--docs-well);
+  color: var(--docs-ink);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.docs-code code {
+  display: block;
+  min-width: max-content;
+}
+
+.docs-status-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-block-start: 1px solid var(--docs-rule);
+  border-inline-start: 1px solid var(--docs-rule);
+}
+
+.docs-status-cell {
+  min-width: 0;
+  border-block-end: 1px solid var(--docs-rule);
+  border-inline-end: 1px solid var(--docs-rule);
+}
+
+.docs-callout-neutral {
+  border-color: var(--docs-rule-bright);
+}
+
+.docs-callout-published {
+  border-color: var(--docs-accent-line);
+}
+
+.docs-callout-preview {
+  border-color: color-mix(in srgb, var(--docs-warning) 40%, transparent);
+}
+
+.docs-callout-title-neutral {
+  color: var(--docs-ink);
+}
+
+.docs-callout-title-published {
+  color: var(--docs-accent);
+}
+
+.docs-callout-title-preview {
+  color: var(--docs-warning);
+}
+
+@media (min-width: 48rem) {
+  .docs-status-grid[data-columns="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .docs-status-grid[data-columns="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 64rem) {
+  .docs-layout {
+    grid-template-columns: 14rem minmax(0, 1fr);
+  }
+
+  .docs-side-index {
+    position: sticky;
+    top: 3.5rem;
+    align-self: start;
+    min-height: calc(100dvh - 3.5rem);
+    border-inline-end: 1px solid var(--docs-rule);
+    border-bottom: 0;
   }
 }
 

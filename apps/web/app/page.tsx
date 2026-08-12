@@ -91,20 +91,26 @@ export default function Home() {
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
         <div className="flex h-14 items-center justify-between px-5 sm:px-8">
-          <a href="#top" className="wordmark" aria-label="Tilden — home">
+          <a href="#top" className="wordmark min-h-11" aria-label="Tilden — home">
             Tilden
             <span className="wordmark-cursor" aria-hidden="true" />
           </a>
           <nav className="flex items-center gap-6" aria-label="Primary navigation">
             <a
               href="#product"
-              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
+              className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex"
             >
               Product
             </a>
             <a
+              href="/docs"
+              className="inline-flex min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink"
+            >
+              Docs
+            </a>
+            <a
               href="#teams"
-              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
+              className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex"
             >
               Teams
             </a>
@@ -112,13 +118,13 @@ export default function Home() {
               href={REPO}
               target="_blank"
               rel="noreferrer"
-              className="hidden text-sm text-muted transition-colors hover:text-ink sm:inline"
+              className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex"
             >
               GitHub ↗
             </a>
             <a
               href="/?ref=teams#beta"
-              className="rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
+              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
               Design partners
             </a>
@@ -131,11 +137,11 @@ export default function Home() {
         <section className="border-b border-hairline px-5 pb-16 pt-16 sm:px-8 sm:pb-20 sm:pt-28">
           <h1 className="max-w-[840px] text-[34px] font-medium leading-[1.08] tracking-[-0.03em] text-ink sm:text-[56px]">
             Know what your AI agents cost.
-            <br className="hidden sm:block" /> Prove what they&apos;re worth.
+            <br className="hidden sm:block" /> See the work behind the bill.
           </h1>
           <p className="mt-5 max-w-[560px] text-base leading-relaxed text-muted sm:text-lg">
-            Reads your coding agents&apos; own activity and your real bills.
-            Local-first, every dollar labeled, in 90 seconds.
+            Reads supported coding-agent activity and optional provider cost
+            reports. Local-first, every number labeled, in 90 seconds.
           </p>
           <div className="mt-8 max-w-[380px]">
             <CopyCommand />
@@ -196,8 +202,7 @@ export default function Home() {
               </p>
               <div>
                 <p className="max-w-[420px] text-lg leading-relaxed text-muted">
-                  Variance when we reconciled OpenAI&apos;s reported costs
-                  against the actual invoice.
+                  Variance in our tested OpenAI Costs API reconciliation.
                 </p>
                 <p className="mt-3 max-w-[420px] text-[13px] leading-relaxed text-faint">
                   v0.6.0 release QA — the Costs total reconciled to invoiced
@@ -379,6 +384,14 @@ export default function Home() {
             <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
               Transcripts locally; billing APIs only when you connect them.
             </p>
+            <p className="mt-4 text-sm">
+              <a
+                href="/docs/sources"
+                className="text-ink underline decoration-hairline-bright underline-offset-4 transition-colors hover:decoration-green"
+              >
+                View coverage and limitations →
+              </a>
+            </p>
             <div className="mt-8 grid border-l border-t border-hairline sm:grid-cols-2 lg:grid-cols-3">
               {sources.map((source) => (
                 <div
@@ -548,13 +561,14 @@ export default function Home() {
             >
               npm ↗
             </a>
-            <a
-              href={`${REPO}/blob/main/docs/MCP.md`}
-              target="_blank"
-              rel="noreferrer"
-              className="transition-colors hover:text-ink"
-            >
-              MCP docs ↗
+            <a href="/docs" className="transition-colors hover:text-ink">
+              Docs
+            </a>
+            <a href="/docs/mcp" className="transition-colors hover:text-ink">
+              MCP
+            </a>
+            <a href="/docs/roadmap" className="transition-colors hover:text-ink">
+              Roadmap
             </a>
             <a href="#privacy" className="transition-colors hover:text-ink">
               Privacy

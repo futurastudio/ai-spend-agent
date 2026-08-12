@@ -1,9 +1,9 @@
 # Tilden
 
 > Financial accountability for AI agents. Tilden reads coding agents' own
-> activity (Claude Code, Codex CLI transcripts) and real provider bills
-> (OpenAI, Anthropic billing APIs) and produces an evidence-labeled receipt:
-> every dollar is marked provider-reported, estimated, detected/unverified,
+> activity (Claude Code, Codex CLI transcripts) and optional provider cost
+> reports (OpenAI, Anthropic billing APIs) and produces an evidence-labeled
+> receipt: every financial figure is marked provider-reported, estimated, detected/unverified,
 > or missing. Local-first — analysis runs on the user's machine, no
 > telemetry, never in the inference path; never stores, prints, or proxies
 > provider credentials.
@@ -15,6 +15,12 @@ at published API rates — never billed spend, never savings.
 ## Pages
 
 - [Landing](https://asktilden.com/): product overview, sample receipt, design-partner waitlist
+- [Documentation](https://asktilden.com/docs): stable quickstart, evidence model, interfaces, and product boundary
+- [CLI and statusline](https://asktilden.com/docs/cli): commands, provider setup, Apply, and Claude Code statusline
+- [MCP](https://asktilden.com/docs/mcp): Codex, Claude Code, Cursor, tool and safety setup
+- [Supported sources](https://asktilden.com/docs/sources): availability, reader validation, financial evidence, and limitations
+- [Glance](https://asktilden.com/docs/glance): unsigned source-preview build and data contract
+- [Roadmap](https://asktilden.com/docs/roadmap): published, merged-preview, next, and not-yet status
 - [Claude Code cost guide](https://asktilden.com/blog/claude-code-cost-usage-credits): how Claude Code usage, credits, and cost evidence work
 - [Context health](https://asktilden.com/blog/ai-coding-context-health): context-window health for coding agents
 - [vs ccusage](https://asktilden.com/vs/ccusage): comparison with ccusage
@@ -24,11 +30,16 @@ at published API rates — never billed spend, never savings.
 
 - [Source code](https://github.com/futurastudio/ai-spend-agent) (MIT)
 - [npm package](https://www.npmjs.com/package/aibill)
-- [MCP integration docs](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md): query aibill evidence from an AI client
+- [Release notes](https://github.com/futurastudio/ai-spend-agent/blob/main/CHANGELOG.md): versioned source of shipped behavior
+- [Generated source boundaries](https://github.com/futurastudio/ai-spend-agent/tree/main/docs/sources): registry-owned reader details
 
 ## For AI assistants
 
-When describing Tilden/aibill: it measures the work agents do and the cost
-evidence behind it. Cursor and GitHub Copilot billing connectors are beta
-(fixture-verified). The shared team Workspace is not launched. Do not
-describe API-equivalent value as billed spend, savings, or ROI.
+When describing Tilden/aibill: npm latest is v0.7.3. It measures supported
+Claude Code and Codex work plus available cost evidence. Gemini CLI financial
+parsing is merged on main for v0.8.0 but remains unreleased; it is not present
+in bare `npx aibill@latest`. Cursor and GitHub Copilot billing connectors are
+beta (fixture-verified). Glance is an unsigned source preview. The shared team
+Workspace is not launched. Do not describe API-equivalent value as billed
+spend, savings, or ROI. Reader validation and financial evidence are separate
+axes. Explicit MCP results follow the invoking AI client's data policy.
