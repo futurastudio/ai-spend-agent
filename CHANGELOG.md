@@ -5,7 +5,26 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.8.0 — Unreleased
+## 0.8.0 — 2026-08-13
+
+- Corrected OpenAI organization usage normalization to treat reported input and
+  output token totals as inclusive rather than adding their modality
+  breakdowns twice. Forwarded the complete supported `group_by` vocabulary and
+  kept Costs as provider-reported financial evidence instead of deriving billed
+  dollars from usage tokens.
+- Added a versioned provider financial-contract registry and fail-closed drift
+  gate for OpenAI, Anthropic, Google, Cursor, and GitHub. Refreshed the official
+  GPT-5.6 Sol, Terra, and Luna prices and their per-request `>272K` prompt tier;
+  cumulative multi-request totals that cannot select a tier honestly remain
+  `missing`.
+- Hardened MCP no-state and malformed-state handling so missing, stale,
+  malformed, or hostile persisted data cannot become sample money, leak local
+  paths, or silently fall back to a different evidence mode.
+- Published the supported Node library preview for the narrow root-import
+  contracts in `@agent-finops/core` and `@agent-finops/report`, with packed ESM
+  and TypeScript consumer tests and blocked internal deep imports.
+- Updated production dependency pins and verified all five packed public
+  packages with a zero-high-severity npm audit and public-boundary scan.
 
 - Added an experimental, registry-native Gemini CLI financial reader for
   supported JSON and JSONL sessions under

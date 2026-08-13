@@ -164,7 +164,7 @@ Users should not have to clone the repo or ask an AI to install Glance.
 Glance is currently an unsigned, source-built preview—not a public Mac
 download. If you actively use Claude Code or Codex and want to volunteer for
 the 8–12-person comprehension study, [register your interest through the
-design-partner form](https://ai-spend-agent.vercel.app/?ref=glance-study#beta).
+design-partner form](https://asktilden.com/?ref=glance-study#beta).
 The form records study interest; it does not promise immediate access to a
 signed build.
 

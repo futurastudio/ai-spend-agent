@@ -4,7 +4,6 @@ import { CopyCodeButton } from "@/components/CopyCodeButton";
 import {
   DOCS_UPDATED,
   ISSUE_URL,
-  MAIN_PREVIEW_VERSION,
   NPM_STABLE_VERSION,
   REPO_URL,
   docsNavigation,
@@ -90,7 +89,7 @@ export function DocsPage({
           <DocsLinks current={current} />
           <div className="mx-6 border-t border-hairline pt-5 font-mono text-[11px] leading-6 text-faint">
             <p>npm latest · v{NPM_STABLE_VERSION}</p>
-            <p>main · v{MAIN_PREVIEW_VERSION} preview</p>
+            <p>Gemini CLI · experimental</p>
           </div>
         </aside>
 
@@ -108,7 +107,7 @@ export function DocsPage({
                 <span className="text-green">Published</span> · npm latest v{NPM_STABLE_VERSION}
               </p>
               <p>
-                <span className="text-muted">Main preview</span> · v{MAIN_PREVIEW_VERSION} is merged but unreleased
+                <span className="text-muted">Gemini CLI</span> · experimental, fixture-verified, financial-only
               </p>
             </div>
 

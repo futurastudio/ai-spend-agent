@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CodeBlock, DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
+import { NPM_STABLE_VERSION } from "@/lib/docs";
 
 export const metadata: Metadata = {
   title: "aibill CLI and Claude Code statusline docs",
@@ -33,7 +34,7 @@ export default function CliDocsPage() {
     <DocsPage
       current="/docs/cli"
       title="The complete private workflow."
-      intro="Use the CLI to inspect the full evidence receipt, understand coverage, draft one bounded action, and compare what happened afterward. npm latest is v0.7.3."
+      intro={`Use the CLI to inspect the full evidence receipt, understand coverage, draft one bounded action, and compare what happened afterward. npm latest is v${NPM_STABLE_VERSION}.`}
       repoPath="apps/web/app/docs/cli/page.tsx"
     >
       <DocsSection id="first-run" label="01 · First run" title="Initialize once, inspect anytime">
@@ -41,7 +42,10 @@ export default function CliDocsPage() {
 npx aibill
 npx aibill doctor --sources`}</CodeBlock>
         <p>
-          Init performs a real 30-day machine-wide Claude Code and Codex financial scan. The project where you run it owns the project-local <code className="font-mono text-ink">.ai-spend-agent</code> state directory; init preserves existing connector, audit, and spend state. The private status cache contains aggregates—not prompts, responses, project names, transcript paths, session IDs, or credential references.
+          Init performs a real 30-day machine-wide Claude Code, Codex, and experimental Gemini CLI financial scan. The project where you run it owns the project-local <code className="font-mono text-ink">.ai-spend-agent</code> state directory; init preserves existing connector, audit, and spend state. The private status cache contains Claude Code and Codex aggregates—not prompts, responses, project names, transcript paths, session IDs, or credential references.
+        </p>
+        <p className="mt-4">
+          Gemini is fixture-verified and financial-only. It can contribute estimated API-equivalent value when supported chat evidence is complete; otherwise the evidence stays missing. Gemini never enters statusline, Glance, Context Health, Apply, plan, runway, or invocation evidence.
         </p>
         <p className="mt-4">
           Use <code className="font-mono text-ink">--plan &lt;id&gt;</code> only when automatic plan detection cannot identify your subscription. A plan label does not prove remaining entitlement or billed cost.

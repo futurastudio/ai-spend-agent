@@ -6,6 +6,7 @@ import {
   DocsSection,
   TextLink,
 } from "@/components/DocsPage";
+import { NPM_STABLE_VERSION } from "@/lib/docs";
 
 export const metadata: Metadata = {
   title: "aibill docs — private AI cost and usage evidence",
@@ -51,7 +52,7 @@ export default function DocsOverviewPage() {
     >
       <DocsSection id="quickstart" label="01 · Quickstart" title="Your first private receipt">
         <p>
-          Run init inside a specific project. On npm v0.7.3 it reads the last 30 days of supported Claude Code and Codex financial metadata on this machine, prints a personal receipt, preserves or creates project-local aibill state, and seeds a private aggregate cache.
+          Run init inside a specific project. On npm v{NPM_STABLE_VERSION} it reads the last 30 days of supported Claude Code, Codex, and experimental Gemini CLI financial metadata on this machine, prints a personal receipt, preserves or creates project-local aibill state, and seeds a private aggregate cache for Claude Code and Codex.
         </p>
         <CodeBlock label="Terminal">{`npx aibill init
 npx aibill`}</CodeBlock>
@@ -106,11 +107,11 @@ npx aibill`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="boundary" label="05 · Product boundary" title="What is—and is not—available">
-        <DocsCallout title="Published · npm v0.7.3" tone="published">
-          Claude Code and Codex local evidence, the CLI, optional Claude Code statusline, explicit MCP/plugin, provider connectors, parser registry, generated source documentation, and the additive Receipt v0 core contract.
+        <DocsCallout title={`Published · npm v${NPM_STABLE_VERSION}`} tone="published">
+          Claude Code and Codex local evidence, the experimental Gemini CLI financial reader, the CLI, optional Claude Code statusline, explicit MCP/plugin, provider connectors, parser registry, generated source documentation, and the additive Receipt v0 core contract.
         </DocsCallout>
-        <DocsCallout title="Merged preview · v0.8.0 unreleased" tone="preview">
-          Experimental Gemini CLI financial parsing is on main but is not available from bare <code className="font-mono text-ink">npx aibill@latest</code>. It is financial-only and does not feed statusline, Glance, Context Health, Apply, plan, runway, or invocation surfaces.
+        <DocsCallout title="Gemini CLI · published experimental boundary" tone="preview">
+          Gemini is <code className="font-mono text-ink">fixture_verified</code>, not live-verified. Its supported chat records can contribute estimated API-equivalent financial value or missing evidence, but it does not feed statusline, Glance, Context Health, Apply, plan, runway, or invocation surfaces.
         </DocsCallout>
         <p>
           Workspace, company-wide reconciliation, accepted-outcome economics, ROI measurement, autonomous enforcement, and a signed Glance download are not shipped. See the factual <TextLink href="/docs/roadmap">Now / Next / Later roadmap</TextLink>.

@@ -20,7 +20,7 @@ at published API rates — never billed spend, never savings.
 - [MCP](https://asktilden.com/docs/mcp): Codex, Claude Code, Cursor, tool and safety setup
 - [Supported sources](https://asktilden.com/docs/sources): availability, reader validation, financial evidence, and limitations
 - [Glance](https://asktilden.com/docs/glance): unsigned source-preview build and data contract
-- [Roadmap](https://asktilden.com/docs/roadmap): published, merged-preview, next, and not-yet status
+- [Roadmap](https://asktilden.com/docs/roadmap): published, experimental, next, and not-yet status
 - [Claude Code cost guide](https://asktilden.com/blog/claude-code-cost-usage-credits): how Claude Code usage, credits, and cost evidence work
 - [Context health](https://asktilden.com/blog/ai-coding-context-health): context-window health for coding agents
 - [vs ccusage](https://asktilden.com/vs/ccusage): comparison with ccusage
@@ -35,11 +35,14 @@ at published API rates — never billed spend, never savings.
 
 ## For AI assistants
 
-When describing Tilden/aibill: npm latest is v0.7.3. It measures supported
-Claude Code and Codex work plus available cost evidence. Gemini CLI financial
-parsing is merged on main for v0.8.0 but remains unreleased; it is not present
-in bare `npx aibill@latest`. Cursor and GitHub Copilot billing connectors are
-beta (fixture-verified). Glance is an unsigned source preview. The shared team
-Workspace is not launched. Do not describe API-equivalent value as billed
-spend, savings, or ROI. Reader validation and financial evidence are separate
-axes. Explicit MCP results follow the invoking AI client's data policy.
+When describing Tilden/aibill: npm latest is v0.8.0. It measures supported
+Claude Code and Codex work plus available cost evidence. The published Gemini
+CLI reader is experimental, fixture-verified, and financial-only: it can
+produce estimated API-equivalent value or missing evidence from supported
+chat records, but never enters statusline, Glance, Context Health, Apply,
+plan, runway, or invocation evidence. Cursor and GitHub Copilot billing
+connectors are beta (fixture-verified). Glance is an unsigned source preview.
+The shared team Workspace is not launched. Do not describe API-equivalent
+value as billed spend, savings, or ROI. Reader validation and financial
+evidence are separate axes. Explicit MCP results follow the invoking AI
+client's data policy.

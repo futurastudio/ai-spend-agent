@@ -5,16 +5,17 @@ workforce: connect what agents did to what they cost, who owns it, which
 outcome is supported, and what should happen next.
 
 This roadmap describes direction, not a delivery guarantee. Availability is
-part of the product truth: published, merged-preview, and planned capabilities
+part of the product truth: published and planned capabilities
 stay separate. Shipped behavior is documented in the [release
 notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
 [/docs/roadmap](https://asktilden.com/docs/roadmap).
 
-Last updated: August 11, 2026.
+Last updated: August 13, 2026.
 
-## Available now — npm v0.7.3
+## Available now — npm v0.8.0
 
-- Claude Code and Codex local evidence in the CLI, explicit MCP/plugin,
+- Claude Code, Codex, and experimental Gemini CLI financial evidence in the CLI
+  and explicit MCP/plugin,
   private init/cache, and optional cache-only Claude Code statusline.
 - Separation of provider-billed cost, subscription context, API-equivalent
   value, validation coverage, freshness, and missing evidence.
@@ -26,43 +27,29 @@ Last updated: August 11, 2026.
 - An unsigned, source-built Glance preview. There is no public Mac download
   yet.
 
+The Gemini reader is `fixture_verified`, not live-verified. It reads supported
+chat-session JSON/JSONL financial evidence; unknown, incomplete, inconsistent,
+or unsupported evidence stays `missing`, and `logs.json` is presence-only.
+Gemini does not feed statusline, Glance, Context Health, plan runway,
+invocation evidence, recommendations, or Apply.
+
 Workspace, accepted-outcome economics, ROI measurement, and autonomous
 enforcement are not shipped.
 
-## Merged preview — v0.8.0, not published
-
-The experimental Gemini CLI financial reader is merged to `main` but is not
-available from bare `npx aibill@latest`:
-
-- supported complete chat-session records may produce `estimated`
-  API-equivalent value;
-- unknown, incomplete, inconsistent, or unsupported evidence stays `missing`;
-- the reader is `fixture_verified`, not live-verified;
-- `logs.json` is presence-only and creates no financial row; and
-- Gemini does not feed statusline, Glance, Context Health, plan runway,
-  invocation evidence, recommendations, or Apply.
-
-Publication remains a separate release gate. Until it closes, npm latest is
-v0.7.3.
-
 ## Next 30 days — current focus areas, not an exhaustive build order
 
-1. **Publish the gated Gemini merge.** After explicit approval, publish the
-   already-gated merge, then run the post-publication cold-registry smoke,
-   exact tag, and GitHub Release. Improve positive sub-cent display separately
-   as post-release polish.
-2. **Deepen attribution and session evidence before outcomes.** Add branch,
+1. **Deepen attribution and session evidence before outcomes.** Add branch,
    ticket, and work-unit attribution plus plan presets and session vitals
    before accepted, rejected, reverted, rework, and unknown outcome states.
    The first verified unit is an accepted coding task or merged PR—not lines of
    code or modeled hours.
-3. **Add financial CI carefully.** Begin with warnings, preview, dry-run,
+2. **Add financial CI carefully.** Begin with warnings, preview, dry-run,
    explicit approval, rollback, and a verified result. No autonomous control
    claim without a real adapter and validated team policy.
-4. **Close distribution and comprehension proof.** Run the 8–12-person study,
+3. **Close distribution and comprehension proof.** Run the 8–12-person study,
    collect real billing-reconciliation cases, and finish signed, notarized,
    update-safe Glance distribution before offering a public download.
-5. **Earn the organization foundation with design partners.** Test one
+4. **Earn the organization foundation with design partners.** Test one
    read-only observability import and gather design-partner proof first. Then
    begin an opt-in aggregate receipt sync for shared reconciliation,
    allocation, and approval history. This is a foundation, not Workspace

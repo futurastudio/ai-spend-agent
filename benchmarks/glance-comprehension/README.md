@@ -38,7 +38,7 @@ transcripts, screenshots containing private work, or credentials.
 Glance is currently an unsigned, source-built preview; there is no public Mac
 download yet. Active Claude Code and Codex users can [register interest in the
 study through the design-partner
-form](https://ai-spend-agent.vercel.app/?ref=glance-study#beta). The attributed
+form](https://asktilden.com/?ref=glance-study#beta). The attributed
 link identifies Glance-study volunteers, but submission does not promise
 immediate access or a signed build. Keep volunteer contact data in the private
 signup system, not in this repository or the scorecard below.

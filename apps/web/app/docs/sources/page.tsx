@@ -19,7 +19,7 @@ export default function SourcesDocsPage() {
       <DocsSection id="labels" label="01 · Read the labels" title="Three axes, one source row">
         <div className="docs-status-grid" data-columns="3">
           {[
-            ["Availability", "Published, merged preview, beta, planned, or unavailable in the version you are running."],
+            ["Availability", "Published, experimental, beta, planned, or unavailable in the version you are running."],
             ["Reader validation", "live_verified, fixture_verified, untested, or failed—the path’s test coverage."],
             ["Financial evidence", "verified, estimated, detected_unverified, or missing—the basis of a particular number."],
           ].map(([title, description]) => (
@@ -66,8 +66,8 @@ export default function SourcesDocsPage() {
             </article>
           ))}
         </div>
-        <DocsCallout title="Gemini release boundary" tone="preview">
-          Gemini CLI is merged for v0.8.0 but is not available from npm latest v0.7.3. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing.
+        <DocsCallout title="Gemini experimental boundary" tone="preview">
+          Gemini CLI is published in npm v0.8.0 as an experimental, <code className="font-mono text-ink">fixture_verified</code>, financial-only reader. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing. Gemini is excluded from statusline, Glance, Context Health, Apply, plan, runway, and invocation evidence.
         </DocsCallout>
       </DocsSection>
 
