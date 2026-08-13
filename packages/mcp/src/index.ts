@@ -1099,7 +1099,9 @@ async function readRegistryOrCreate(rootPath: string): Promise<SourceRegistry> {
 
 async function readTrustedRegistry(rootPath: string, stateDir: string): Promise<SourceRegistry> {
   const exactSourceRegistryContents = await readSafeStateText(stateDir, "sources.json");
-  const registry = parseSourceRegistry(parseLocalStateJson(exactSourceRegistryContents));
+  const registry = collapseLocalStateParse(() =>
+    parseSourceRegistry(parseLocalStateJson(exactSourceRegistryContents))
+  );
   try {
     const exactSpendContents = await readSafeStateText(stateDir, "spend.json");
     const parsedSpend = parseLocalStateJson<{ mode?: unknown }>(exactSpendContents);
@@ -1392,7 +1394,20 @@ function providerFinancialEvidenceNote(
   return `${parts.join("; ")}. Row-level financial evidence remains separate.`;
 }
 
+function collapseLocalStateParse<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof MalformedLocalStateError) throw error;
+    throw new MalformedLocalStateError();
+  }
+}
+
 function parsePersistedSpendState(value: unknown): PersistedSpendState {
+  return collapseLocalStateParse(() => parsePersistedSpendStateValue(value));
+}
+
+function parsePersistedSpendStateValue(value: unknown): PersistedSpendState {
   if (!isRecord(value) || !Array.isArray(value.records)) {
     throw new Error("Invalid local spend state: expected a records array. Re-run the aibill sync that created it.");
   }
@@ -1438,11 +1453,11 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
         "local spend accounting"
       )
     : undefined;
-  const qaByProvider = mode === "connected_provider" && isRecord(accounting?.qaByProvider)
-    ? accounting.qaByProvider as Record<string, ProviderQaSummary>
+  const qaByProvider = mode === "connected_provider"
+    ? parseProviderObjectMap<ProviderQaSummary>(accounting?.qaByProvider, "local spend accounting", "qaByProvider")
     : undefined;
-  const financialsByProvider = mode === "connected_provider" && isRecord(accounting?.financialsByProvider)
-    ? accounting.financialsByProvider as Record<string, ProviderFinancialSummary>
+  const financialsByProvider = mode === "connected_provider"
+    ? parseProviderObjectMap<ProviderFinancialSummary>(accounting?.financialsByProvider, "local spend accounting", "financialsByProvider")
     : undefined;
   return {
     mode,
@@ -1619,6 +1634,10 @@ function observedEvidenceWindow(records: UsageRecord[]): string {
 }
 
 function parseProviderRecordsState(value: unknown): ProviderRecordsState {
+  return collapseLocalStateParse(() => parseProviderRecordsStateValue(value));
+}
+
+function parseProviderRecordsStateValue(value: unknown): ProviderRecordsState {
   if (!isRecord(value) || !Array.isArray(value.records)) {
     throw new Error("Invalid local provider state: expected a records array.");
   }
@@ -1631,16 +1650,43 @@ function parseProviderRecordsState(value: unknown): ProviderRecordsState {
     value.coverageIntervalsByProvider,
     "local provider state"
   );
+  const qaByProvider = parseProviderObjectMap<unknown>(
+    value.qaByProvider,
+    "local provider state",
+    "qaByProvider"
+  );
+  const financialsByProvider = parseProviderObjectMap<ProviderFinancialSummary>(
+    value.financialsByProvider,
+    "local provider state",
+    "financialsByProvider"
+  );
   return {
     records: value.records.map((record) => parseUsageRecord(record)),
-    ...(isRecord(value.qaByProvider) ? { qaByProvider: value.qaByProvider } : {}),
+    ...(qaByProvider ? { qaByProvider } : {}),
     ...(checkedAtByProvider ? { checkedAtByProvider } : {}),
     ...(coverageByProvider ? { coverageByProvider } : {}),
     ...(coverageIntervalsByProvider ? { coverageIntervalsByProvider } : {}),
-    ...(isRecord(value.financialsByProvider)
-      ? { financialsByProvider: value.financialsByProvider as Record<string, ProviderFinancialSummary> }
-      : {})
+    ...(financialsByProvider ? { financialsByProvider } : {})
   };
+}
+
+function parseProviderObjectMap<T>(
+  value: unknown,
+  context: string,
+  label: string
+): Record<string, T> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${context}: ${label} must be an object.`);
+  }
+  const parsed: Record<string, T> = {};
+  for (const [provider, item] of Object.entries(value)) {
+    if (!isProviderStatusId(provider) || !isRecord(item)) {
+      throw new Error(`Invalid ${context}: ${label} contains an unsupported provider or value.`);
+    }
+    parsed[provider] = item as T;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
 function parseCheckedAtByProvider(
@@ -1653,7 +1699,7 @@ function parseCheckedAtByProvider(
   }
   const checkedAt: Record<string, string> = {};
   for (const [provider, timestamp] of Object.entries(value)) {
-    if (!validIsoString(timestamp)) {
+    if (!isProviderStatusId(provider) || !validIsoString(timestamp)) {
       throw new Error(`Invalid ${context}: ${provider} checkedAt must be an ISO timestamp.`);
     }
     checkedAt[provider] = timestamp;
@@ -1671,7 +1717,8 @@ function parseCoverageIntervalsByProvider(
   }
   const intervals: Record<string, ProviderCoverageInterval> = {};
   for (const [provider, interval] of Object.entries(value)) {
-    if (!isRecord(interval) ||
+    if (!isProviderStatusId(provider) ||
+        !isRecord(interval) ||
         !validIsoString(interval.coverageStart) ||
         !validIsoString(interval.coverageEnd)) {
       throw new Error(`Invalid ${context}: ${provider} must have ISO coverageStart and coverageEnd timestamps.`);
@@ -1697,7 +1744,7 @@ function parseCoverageByProvider(
   }
   const coverage: Record<string, ProviderCoverageStatus> = {};
   for (const [provider, status] of Object.entries(value)) {
-    if (status !== "complete" && status !== "partial") {
+    if (!isProviderStatusId(provider) || (status !== "complete" && status !== "partial")) {
       throw new Error(`Invalid ${context}: ${provider} has an unsupported coverage status.`);
     }
     coverage[provider] = status;

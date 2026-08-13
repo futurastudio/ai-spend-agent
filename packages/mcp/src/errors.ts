@@ -48,5 +48,5 @@ export function isMalformedLocalStateError(error: unknown): boolean {
   if (error instanceof MalformedLocalStateError) return true;
   const message = error instanceof Error ? error.message : String(error);
   return message === MALFORMED_LOCAL_STATE_MESSAGE ||
-    /Invalid local (?:spend|provider|source) state|Invalid local source registry/i.test(message);
+    /^Invalid local (?:spend state|spend accounting|provider state|source state|source registry)\b/i.test(message);
 }
