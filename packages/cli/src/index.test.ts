@@ -2508,15 +2508,17 @@ describe("minimal CLI vertical slice", () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-"));
     const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
     process.env.OPENAI_ADMIN_KEY = fakeToken;
-    vi.stubGlobal("fetch", vi.fn(async () => ({
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
       ok: true,
       status: 200,
-      json: async () => ({
+      json: async () => String(url).includes("/costs") ? ({
         data: [{
           start_time: 1761955200,
+          end_time: 1762041600,
           results: [{ amount: { value: 9.75, currency: "usd" }, project_id: "proj_sales", line_item: "Responses API" }]
-        }]
-      })
+        }],
+        has_more: false
+      }) : ({ data: [], has_more: false })
     })));
     await runCli(["init", "--path", dir]);
 
@@ -2583,6 +2585,66 @@ describe("minimal CLI vertical slice", () => {
       })
     ]));
     expect(sourcesRaw).not.toContain('"verification"');
+  });
+
+  it("keeps inclusive OpenAI multimodal totals identical in persisted CLI JSON and the saved report", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-openai-inclusive-"));
+    const fakeToken = "sk-" + "inclusive-token-fixture-do-not-store";
+    const fixture = JSON.parse(await readFile(
+      new URL("../../core/src/fixtures/providers/openai-usage-official-page-1.json", import.meta.url),
+      "utf8"
+    ));
+    const completeFixture = { ...fixture, has_more: false, next_page: null };
+    vi.stubEnv("OPENAI_ADMIN_KEY", fakeToken);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("/organization/costs")
+        ? { object: "page", data: [], has_more: false }
+        : completeFixture
+    })));
+
+    try {
+      await runCli(["init", "--path", dir]);
+      const sync = await runCli([
+        "sync-provider",
+        "--path",
+        dir,
+        "--provider",
+        "openai",
+        "--auth-reference",
+        "env:OPENAI_ADMIN_KEY",
+        "--start-time",
+        "1761955200",
+        "--end-time",
+        "1762041600"
+      ]);
+      const report = await runCli(["report", "--path", dir, "--out", "openai-inclusive"]);
+      const providerState = JSON.parse(await readFile(
+        join(dir, ".ai-spend-agent", "provider-records.json"),
+        "utf8"
+      ));
+      const records = providerState.records as Array<Record<string, unknown>>;
+      const markdown = await readFile(join(dir, "openai-inclusive.md"), "utf8");
+
+      expect(sync.exitCode).toBe(0);
+      expect(sync.stdout).toContain("records fetched: 3");
+      expect(report.exitCode).toBe(0);
+      expect(records.reduce((total, record) => total + Number(record.inputTokens), 0)).toBe(2_100);
+      expect(records.reduce((total, record) => total + Number(record.outputTokens), 0)).toBe(750);
+      expect(records.find((record) => record.projectId === "proj_multimodal")).toMatchObject({
+        inputTokens: 1_000,
+        outputTokens: 500,
+        inputAudioTokens: 100,
+        outputAudioTokens: 100,
+        cacheReadTokens: 300
+      });
+      expect(markdown).toContain("Verified usage evidence: 2,850 tokens across 3 records");
+      expect(markdown).not.toContain("3,550 tokens");
+      expect(JSON.stringify(providerState)).not.toContain(fakeToken);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not launder attacker-authored prior provider rows through a successful CLI sync", async () => {
@@ -3179,6 +3241,7 @@ describe("minimal CLI vertical slice", () => {
         ? {
             data: [{
               start_time: 1761955200,
+              end_time: 1762041600,
               results: [
                 { amount: { value: 42.5, currency: "usd" }, project_id: "proj_acme", line_item: "gpt-4.1", api_key_id: "key_a" },
                 { amount: { value: 12, currency: "usd" }, project_id: "proj_beta", line_item: "gpt-4.1-mini", api_key_id: "key_b" }

@@ -67,6 +67,20 @@ export const usageRecordSchema = z.object({
    * already included in inputTokens/outputTokens and must not be added again.
    */
   cacheReadTokens: z.number().int().nonnegative().optional(),
+  inputUncachedTokens: z.number().int().nonnegative().optional(),
+  inputCacheWriteTokens: z.number().int().nonnegative().optional(),
+  inputTextTokens: z.number().int().nonnegative().optional(),
+  inputImageTokens: z.number().int().nonnegative().optional(),
+  inputAudioTokens: z.number().int().nonnegative().optional(),
+  inputCachedTextTokens: z.number().int().nonnegative().optional(),
+  inputCachedImageTokens: z.number().int().nonnegative().optional(),
+  inputCachedAudioTokens: z.number().int().nonnegative().optional(),
+  outputTextTokens: z.number().int().nonnegative().optional(),
+  outputImageTokens: z.number().int().nonnegative().optional(),
+  outputAudioTokens: z.number().int().nonnegative().optional(),
+  /** Provider grouping dimensions retained so bucket identities stay unique. */
+  serviceTier: z.string().min(1).optional(),
+  batch: z.boolean().optional(),
   thoughtTokens: z.number().int().nonnegative().optional(),
   toolTokens: z.number().int().nonnegative().optional(),
   reportedTotalTokens: z.number().int().nonnegative().optional(),

@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { generateCutList } from "./cutList.js";
 import {
+  AGENT_ECONOMICS_RECEIPT_KIND,
+  AGENT_ECONOMICS_RECEIPT_V0_VERSION,
+  createAgentEconomicsReceiptV0,
+  createReceiptSourceRecordReference,
+  projectAgentEconomicsReceiptV0ToFocus,
+  projectAgentEconomicsReceiptV0ToOpenTelemetryGenAi
+} from "./agentEconomicsReceipt.js";
+import {
   createProviderConnection,
   fetchProviderUsageRecords,
   normalizeAnthropicCostResponse,
@@ -63,6 +71,156 @@ describe("real provider connector implementations", () => {
         operation: "OpenAI completions usage evidence"
       })
     ]);
+  });
+
+  it("keeps OpenAI inclusive totals canonical while retaining multimodal and cache components", () => {
+    const response = providerFixtureJson("openai-usage-official-page-1.json");
+    const records = normalizeOpenAiUsageResponse(response, {
+      sourceId: "openai-provider-api",
+      observedFrom: "OpenAI organization usage API"
+    });
+
+    expect(records).toHaveLength(3);
+    expect(records.reduce((total, record) => total + record.inputTokens, 0)).toBe(2_100);
+    expect(records.reduce((total, record) => total + record.outputTokens, 0)).toBe(750);
+    expect(records.find((record) => record.projectId === "proj_multimodal")).toMatchObject({
+      inputTokens: 1_000,
+      outputTokens: 500,
+      inputUncachedTokens: 600,
+      inputCacheWriteTokens: 100,
+      cacheReadTokens: 300,
+      inputTextTokens: 350,
+      inputImageTokens: 150,
+      inputAudioTokens: 100,
+      inputCachedTextTokens: 200,
+      inputCachedImageTokens: 60,
+      inputCachedAudioTokens: 40,
+      outputTextTokens: 300,
+      outputImageTokens: 100,
+      outputAudioTokens: 100
+    });
+    expect(records.find((record) => record.projectId === "proj_audio")).toMatchObject({
+      inputTokens: 300,
+      outputTokens: 200,
+      inputAudioTokens: 300,
+      outputAudioTokens: 200
+    });
+    expect(records.find((record) => record.projectId === "proj_cached")).toMatchObject({
+      inputTokens: 800,
+      outputTokens: 50,
+      cacheReadTokens: 600,
+      inputCachedTextTokens: 500,
+      inputCachedImageTokens: 100
+    });
+    expect(records.some((record) => record.projectId === "proj_zero")).toBe(false);
+  });
+
+  it("keeps the corrected OpenAI totals unchanged through Receipt v0 and standards projections", () => {
+    const [record] = normalizeOpenAiUsageResponse(
+      providerFixtureJson("openai-usage-official-page-1.json"),
+      { sourceId: "openai-provider-api", observedFrom: "OpenAI organization usage API" }
+    );
+    expect(record).toBeDefined();
+
+    const sourceId = "openai-provider-api";
+    const sourceRecordReferences = [createReceiptSourceRecordReference(sourceId, record!.id)];
+    const receipt = createAgentEconomicsReceiptV0({
+      kind: AGENT_ECONOMICS_RECEIPT_KIND,
+      schemaVersion: AGENT_ECONOMICS_RECEIPT_V0_VERSION,
+      generatedAt: "2025-11-02T00:00:01.000Z",
+      mode: "connected",
+      demoOnly: false,
+      window: {
+        start: "2025-11-01T00:00:00.000Z",
+        end: "2025-11-02T00:00:00.000Z"
+      },
+      sources: [{
+        id: sourceId,
+        kind: "provider_usage_api",
+        provider: "openai",
+        validationCoverage: "live_verified",
+        freshness: {
+          status: "fresh",
+          checkedAt: "2025-11-02T00:00:00.000Z",
+          latestEvidenceAt: record!.timestamp
+        }
+      }],
+      lines: [{
+        id: "openai-usage-multimodal",
+        kind: "token_usage",
+        sourceId,
+        provider: "openai",
+        model: record!.model,
+        observedAt: record!.timestamp,
+        granularity: "usage_bucket",
+        inputTokens: record!.inputTokens,
+        outputTokens: record!.outputTokens,
+        provenance: { origin: "provider_reported", transformations: ["normalized", "aggregated"] },
+        sourceRecordReferences
+      }],
+      mappingGaps: [{ code: "cost_unpriced", lineId: "openai-usage-multimodal", sourceId }]
+    });
+
+    expect(receipt.lines[0]).toMatchObject({ inputTokens: 1_000, outputTokens: 500 });
+    expect(projectAgentEconomicsReceiptV0ToOpenTelemetryGenAi(receipt).rows[0]).toMatchObject({
+      attributes: {
+        "gen_ai.usage.input_tokens": 1_000,
+        "gen_ai.usage.output_tokens": 500
+      }
+    });
+    expect(projectAgentEconomicsReceiptV0ToFocus(receipt, "focus_1_5_working_draft").rows)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ ConsumedQuantity: 1_000, ConsumedUnit: "input_token" }),
+        expect.objectContaining({ ConsumedQuantity: 500, ConsumedUnit: "output_token" })
+      ]));
+  });
+
+  it("fails malformed OpenAI usage components closed while retaining independent request evidence", async () => {
+    const firstPage = providerFixtureJson("openai-usage-official-page-1.json");
+    const secondPage = providerFixtureJson("openai-usage-official-page-2.json");
+    const calls: string[] = [];
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762128000,
+      fetcher: async (url) => {
+        calls.push(url);
+        if (url.includes("/organization/costs")) {
+          return { ok: true, status: 200, json: async () => ({ object: "page", data: [], has_more: false }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => url.includes("page=openai-usage-page-2") ? secondPage : firstPage
+        };
+      }
+    });
+
+    const usageRecords = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
+    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("page=openai-usage-page-2")]));
+    expect(usageRecords).toHaveLength(4);
+    expect(usageRecords.reduce((total, record) => total + record.inputTokens, 0)).toBe(2_100);
+    expect(usageRecords.reduce((total, record) => total + record.outputTokens, 0)).toBe(750);
+    expect(usageRecords.find((record) => record.projectId === "proj_request_only")).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      quantity: 3
+    });
+    expect(usageRecords.some((record) => record.projectId === "proj_partial")).toBe(false);
+    expect(usageRecords.some((record) => record.model === "must-not-survive")).toBe(false);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "data[0].results[1].input_audio_tokens" }),
+      expect.objectContaining({ field: "data[0].results[1].output_tokens" }),
+      expect.objectContaining({ field: "data[0].results[1].input_uncached_tokens" }),
+      expect.objectContaining({ field: "data[0].results[1].input_cached_text_tokens" }),
+      expect.objectContaining({ field: "data[0].results[2]" }),
+      expect.objectContaining({ field: "data[1].start_time" }),
+      expect.objectContaining({ field: "data[2]" })
+    ]));
   });
 
   it("normalizes Anthropic Claude Code usage reports into per-user estimated cost and productivity records", () => {
@@ -206,15 +364,15 @@ describe("real provider connector implementations", () => {
     const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {
       calls.push({ url, headers: init?.headers ?? {} });
       if (url.includes("/organization/costs") && !url.includes("page=cost-next")) {
-        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1761955200, results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }] }], has_more: true, next_page: "cost-next" }) };
+        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1761955200, end_time: 1762041600, results: [{ amount: { value: 2, currency: "usd" }, line_item: "Responses API" }] }], has_more: true, next_page: "cost-next" }) };
       }
       if (url.includes("/organization/costs") && url.includes("page=cost-next")) {
-        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1762041600, results: [{ amount: { value: 3, currency: "usd" }, line_item: "Batch API" }] }], has_more: false }) };
+        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1762041600, end_time: 1762128000, results: [{ amount: { value: 3, currency: "usd" }, line_item: "Batch API" }] }], has_more: false }) };
       }
       if (url.includes("/usage/completions") && !url.includes("page=usage-next")) {
-        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1761955200, results: [{ input_tokens: 100, output_tokens: 20, user_id: "user_1", model: "gpt-5.1" }] }], has_more: true, next_page: "usage-next" }) };
+        return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1761955200, end_time: 1762041600, results: [{ input_tokens: 100, output_tokens: 20, user_id: "user_1", model: "gpt-5.1" }] }], has_more: true, next_page: "usage-next" }) };
       }
-      return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1762041600, results: [{ input_tokens: 200, output_tokens: 40, user_id: "user_2", model: "gpt-5.1" }] }], has_more: false }) };
+      return { ok: true, status: 200, json: async () => ({ data: [{ start_time: 1762041600, end_time: 1762128000, results: [{ input_tokens: 200, output_tokens: 40, user_id: "user_2", model: "gpt-5.1" }] }], has_more: false }) };
     };
 
     const result = await fetchProviderUsageRecords({
@@ -239,6 +397,230 @@ describe("real provider connector implementations", () => {
       coverageEnd: "2025-11-03T00:00:00.000Z"
     });
     expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("stops repeated OpenAI cursors and deduplicates repeated provider rows", async () => {
+    let usageCalls = 0;
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762041600,
+      fetcher: async (url) => {
+        if (url.includes("/organization/costs")) {
+          return { ok: true, status: 200, json: async () => ({ data: [], has_more: false }) };
+        }
+        usageCalls += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: [{ input_tokens: 100, output_tokens: 20, model: "gpt-5.6" }]
+            }],
+            has_more: true,
+            next_page: "same"
+          })
+        };
+      }
+    });
+
+    const usage = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
+    expect(usageCalls).toBe(2);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ inputTokens: 100, outputTokens: 20 });
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.pagination).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "OpenAI usage API", stoppedBecause: "missing_cursor", pagesFetched: 2 })
+    ]));
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ issue: expect.stringContaining("repeated a pagination cursor") }),
+      expect.objectContaining({ issue: expect.stringContaining("duplicate provider record") })
+    ]));
+  });
+
+  it("omits contradictory OpenAI component families and marks coverage partial", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762041600,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? { data: [], has_more: false }
+          : {
+              data: [{
+                start_time: 1761955200,
+                end_time: 1762041600,
+                results: [{
+                  input_tokens: 100,
+                  input_uncached_tokens: 60,
+                  input_cache_write_tokens: 60,
+                  input_cached_tokens: 60,
+                  input_text_tokens: 60,
+                  input_image_tokens: 60,
+                  input_audio_tokens: 60,
+                  input_cached_text_tokens: 30,
+                  input_cached_image_tokens: 30,
+                  input_cached_audio_tokens: 30,
+                  output_tokens: 50,
+                  output_text_tokens: 40,
+                  output_image_tokens: 40,
+                  output_audio_tokens: 40,
+                  model: "gpt-5.6"
+                }]
+              }],
+              has_more: false
+            }
+      })
+    });
+    const [usage] = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
+
+    expect(usage).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+    for (const field of [
+      "inputUncachedTokens", "inputCacheWriteTokens", "cacheReadTokens",
+      "inputTextTokens", "inputImageTokens", "inputAudioTokens",
+      "inputCachedTextTokens", "inputCachedImageTokens", "inputCachedAudioTokens",
+      "outputTextTokens", "outputImageTokens", "outputAudioTokens"
+    ]) expect(usage).not.toHaveProperty(field);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ issue: expect.stringContaining("contradictory component family was excluded") })
+    ]));
+  });
+
+  it("excludes OpenAI buckets outside or inconsistent with the requested window", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762041600,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: url.includes("/organization/costs")
+            ? [{
+                start_time: 946684800,
+                end_time: 946771200,
+                results: [{ amount: { value: 99, currency: "usd" }, line_item: "outside window" }]
+              }]
+            : [{
+                start_time: 1761955200,
+                end_time: 1761955199,
+                results: [{ input_tokens: 100, output_tokens: 20, model: "gpt-5.6" }]
+              }],
+          has_more: false
+        })
+      })
+    });
+
+    expect(result.records).toEqual([]);
+    expect(result.coverage).toBe("partial");
+    expect(result.coverageInterval).toEqual({
+      coverageStart: "2025-11-01T00:00:00.000Z",
+      coverageEnd: "2025-11-02T00:00:00.000Z"
+    });
+    expect(result.qa.responseDrift.filter((issue) => issue.issue.includes("bucket boundary was missing"))).toHaveLength(2);
+  });
+
+  it("excludes OpenAI buckets whose end boundary is missing from an exact requested window", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762041600,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            start_time: 1761955200,
+            results: url.includes("/organization/costs")
+              ? [{ amount: { value: 4.2, currency: "usd" }, line_item: "missing boundary" }]
+              : [{ input_tokens: 100, output_tokens: 20, model: "gpt-5.6" }]
+          }],
+          has_more: false
+        })
+      })
+    });
+
+    expect(result.records).toEqual([]);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift.filter((issue) => issue.issue.includes("bucket boundary was missing"))).toHaveLength(2);
+  });
+
+  it("excludes future-starting OpenAI buckets from an open-ended sync", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const futureStart = now + 86_400;
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: now - 86_400,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [{
+            start_time: futureStart,
+            end_time: futureStart + 86_400,
+            results: url.includes("/organization/costs")
+              ? [{ amount: { value: 4.2, currency: "usd" }, line_item: "future bucket" }]
+              : [{ input_tokens: 100, output_tokens: 20, model: "gpt-5.6" }]
+          }],
+          has_more: false
+        })
+      })
+    });
+
+    expect(result.records).toEqual([]);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift.filter((issue) => issue.issue.includes("future-starting"))).toHaveLength(2);
+  });
+
+  it("does not infer verified zero tokens when canonical OpenAI totals are missing", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? { data: [], has_more: false }
+          : {
+              data: [{
+                start_time: 1761955200,
+                end_time: 1762041600,
+                results: [{ num_model_requests: 3, model: "gpt-5.6", project_id: "missing-tokens" }]
+              }],
+              has_more: false
+            }
+      })
+    });
+
+    expect(result.records).toEqual([]);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "data[0].results[0].input_tokens", issue: expect.stringContaining("required") }),
+      expect.objectContaining({ field: "data[0].results[0].output_tokens", issue: expect.stringContaining("required") })
+    ]));
   });
 
   it("keeps valid OpenAI billed rows but marks malformed cost rows as partial schema drift", async () => {
@@ -460,12 +842,6 @@ describe("real provider connector implementations", () => {
         amountUsd: 2,
         quantity: undefined
       }),
-      expect.objectContaining({
-        providerCostType: "openai_usage_evidence",
-        inputTokens: 100,
-        outputTokens: 0,
-        quantity: undefined
-      })
     ]));
     expect(result.records.every((record) =>
       Number.isInteger(record.inputTokens) && record.inputTokens >= 0 &&
@@ -855,12 +1231,14 @@ describe("real provider connector implementations", () => {
         json: async () => url.includes("/usage/completions") ? ({
           data: [{
             start_time: 1761955200,
+            end_time: 1762041600,
             start_time_iso: "2025-11-01T00:00:00Z",
             end_time_iso: "2025-11-02T00:00:00Z",
             results: [{
               input_tokens: 100,
               input_uncached_tokens: 80,
               input_cache_write_tokens: 5,
+              input_cached_tokens: 15,
               input_cached_text_tokens: 15,
               output_tokens: 25,
               output_text_tokens: 25,
@@ -875,6 +1253,7 @@ describe("real provider connector implementations", () => {
         }) : ({
           data: [{
             start_time: 1761955200,
+            end_time: 1762041600,
             start_time_iso: "2025-11-01T00:00:00Z",
             end_time_iso: "2025-11-02T00:00:00Z",
             results: [{
@@ -904,10 +1283,14 @@ describe("real provider connector implementations", () => {
 
     expect(calls[0].url).toContain("https://api.openai.com/v1/organization/costs");
     expect(calls[1].url).toContain("https://api.openai.com/v1/organization/usage/completions");
-    expect(calls[1].url).toContain("group_by=model");
-    expect(calls[1].url).toContain("group_by=user_id");
-    expect(calls[1].url).toContain("group_by=project_id");
-    expect(calls[1].url).toContain("group_by=api_key_id");
+    expect(new URL(calls[1].url).searchParams.getAll("group_by")).toEqual([
+      "project_id",
+      "user_id",
+      "api_key_id",
+      "model",
+      "batch",
+      "service_tier"
+    ]);
     expect(calls[0].url).toContain("group_by=project_id");
     expect(calls[0].url).toContain("group_by=line_item");
     expect(calls[0].url).toContain("group_by=api_key_id");
