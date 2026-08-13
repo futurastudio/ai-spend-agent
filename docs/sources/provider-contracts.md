@@ -39,7 +39,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
   - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `d845e13329e9c12b8eedc894cb599f8506970e839f471ae3825c98850e47bf07`
-  - [pricing](https://developers.openai.com/api/docs/models) — semantic `06fff7d00b7e0397e70180b9a19cb70099d7751dcfb7a7a2083e16fbb0378b23`; reviewed content `9ae313e2d3b8deab2b8fbc6f3ccf64661d2f92be25f8435c2e3b118561c92c59`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `c49f848e243dbea2d85389b9c431da60a697db95f032439af738381b39e6d179`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `5858003704ea61655e70cdce93c3f5fbc430ca8b0b118a5a7532802cb49e3632`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `e290ffacf5e3fd191f40a2bdd696712ad3f0949957d605469cc5d064b2801723`
 
 ## Anthropic Platform Usage and Cost Admin API
 
@@ -126,7 +128,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `e9d02a6b6bfe8e9c75e9b6c9bc168acd8b4a9d763c435378034b533e869fe779`
   - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `924a273c0ac9c0dd1aeb8fe66c844941f695f7f18f47eda30531493b0145d19b`; reviewed content `33a139dd50b601c37eda3c7ade001f3ad665ec7d2651d94d3e5adf2bc2b87e60`
-  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `2e867a1d1f5553571d9b97afeaf704f06cf46765949d19be2cbccd5ff926f9e0`; reviewed content `e8a72674c0e143366b7ff80766bfbca6c6111abb786e9fabe0a74e86f95a84f3`
+  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `2cdb62fc26c68d0cbfa0a5a20881e2576c884e36b6afc2d10153deb3e25992b3`; reviewed content `de47b3e23423eba6d6444ec17c4a346b5477df9c82d68bb2f233698a9778bb87`
 
 ## Cursor Admin API spending and usage events
 

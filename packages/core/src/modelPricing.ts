@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-07-28";
+export const PRICING_TABLE_AS_OF = "2026-08-13";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -52,9 +52,42 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
   // OpenAI (newer and more specific families must precede the GPT-5 fallback)
-  { match: /^gpt-5\.6(?:-sol)?$/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
-  { match: /^gpt-5\.6-terra/i, inputPerM: 2.5, outputPerM: 15, cacheReadPerM: 0.25 },
-  { match: /^gpt-5\.6-luna/i, inputPerM: 1, outputPerM: 6, cacheReadPerM: 0.1 },
+  {
+    match: /^gpt-5\.6(?:-sol)?$/i,
+    inputPerM: 5,
+    outputPerM: 30,
+    cacheReadPerM: 0.5,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 10,
+      outputPerM: 45,
+      cacheReadPerM: 1
+    }
+  },
+  {
+    match: /^gpt-5\.6-terra/i,
+    inputPerM: 2,
+    outputPerM: 12,
+    cacheReadPerM: 0.2,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 4,
+      outputPerM: 18,
+      cacheReadPerM: 0.4
+    }
+  },
+  {
+    match: /^gpt-5\.6-luna/i,
+    inputPerM: 0.2,
+    outputPerM: 1.2,
+    cacheReadPerM: 0.02,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 0.4,
+      outputPerM: 1.8,
+      cacheReadPerM: 0.04
+    }
+  },
   { match: /^gpt-5\.5(?:-codex)?/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
   { match: /^gpt-5\.4-mini/i, inputPerM: 0.75, outputPerM: 4.5, cacheReadPerM: 0.075 },
   { match: /^gpt-5\.4-nano/i, inputPerM: 0.2, outputPerM: 1.25, cacheReadPerM: 0.02 },
@@ -143,19 +176,31 @@ export function promptTierThreshold(model: string): number | undefined {
   return findPricingRule(model)?.abovePromptTokens?.threshold;
 }
 
+/**
+ * Tiered prices are selected per request, never from a multi-request sum.
+ * An aggregate is still unambiguous when its entire non-negative prompt-side
+ * total is at or below the threshold; then no constituent request can have
+ * crossed it. Larger aggregates fail closed until request-level evidence is
+ * available.
+ */
+export function canPriceTokenUsageAtScope(
+  model: string,
+  usage: TokenUsage,
+  scope: "request" | "aggregate"
+): boolean {
+  const threshold = promptTierThreshold(model);
+  if (threshold === undefined || scope === "request") return true;
+  return effectivePromptTokens(usage) <= threshold;
+}
+
 function rawTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
   const rule = findPricingRule(model);
   if (!rule) {
     return undefined;
   }
-  const effectivePromptTokens =
-    usage.inputTokens +
-    (usage.cacheReadTokens ?? 0) +
-    (usage.cacheWrite5mTokens ?? 0) +
-    (usage.cacheWrite1hTokens ?? 0) +
-    (usage.toolTokens ?? 0);
+  const promptTokens = effectivePromptTokens(usage);
   const rates = rule.abovePromptTokens &&
-      effectivePromptTokens > rule.abovePromptTokens.threshold
+      promptTokens > rule.abovePromptTokens.threshold
     ? rule.abovePromptTokens
     : rule;
   const cacheRead = rates.cacheReadPerM ?? rates.inputPerM * 0.1;
@@ -171,6 +216,14 @@ function rawTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
       (usage.toolTokens ?? 0) * rates.inputPerM) /
     1_000_000;
   return usd;
+}
+
+function effectivePromptTokens(usage: TokenUsage): number {
+  return usage.inputTokens +
+    (usage.cacheReadTokens ?? 0) +
+    (usage.cacheWrite5mTokens ?? 0) +
+    (usage.cacheWrite1hTokens ?? 0) +
+    (usage.toolTokens ?? 0);
 }
 
 function roundUsd(usd: number): number {

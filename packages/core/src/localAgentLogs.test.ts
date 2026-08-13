@@ -1260,6 +1260,50 @@ describe("aggregateCalls", () => {
     });
   });
 
+  it("prices GPT-5.6 per turn but fails closed for an ambiguous cumulative long-context aggregate", () => {
+    const base = {
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      project: "agent-finops",
+      usageSupport: "complete" as const
+    };
+    const turns = aggregateCalls([
+      {
+        ...base,
+        timestamp: "2026-08-13T10:00:00.000Z",
+        sessionId: "session-1",
+        callId: "turn-1",
+        usageScope: "turn",
+        usage: { inputTokens: 150_000, outputTokens: 10_000 }
+      },
+      {
+        ...base,
+        timestamp: "2026-08-13T11:00:00.000Z",
+        sessionId: "session-1",
+        callId: "turn-2",
+        usageScope: "turn",
+        usage: { inputTokens: 150_000, outputTokens: 10_000 }
+      }
+    ]);
+    const cumulative = aggregateCalls([{
+      ...base,
+      timestamp: "2026-08-13T11:00:00.000Z",
+      sessionId: "session-2",
+      usageScope: "session_cumulative",
+      usage: { inputTokens: 300_000, outputTokens: 20_000 }
+    }]);
+
+    expect(turns[0]).toMatchObject({
+      quantity: 2,
+      amountUsd: 2.1,
+      costConfidence: "estimated"
+    });
+    expect(cumulative[0]).toMatchObject({
+      amountUsd: null,
+      costConfidence: "missing"
+    });
+  });
+
   it("prices Gemini 2.5 Pro per turn before daily aggregation", () => {
     const geminiCall = (timestamp: string, inputTokens = 150_000) => ({
       agent: "gemini-cli" as const,

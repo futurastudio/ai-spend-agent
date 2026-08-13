@@ -52,14 +52,39 @@
         },
         {
           "kind": "pricing",
-          "url": "https://developers.openai.com/api/docs/models",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
           "requiredMarkers": [
-            "Input price",
-            "Output price",
-            "Compare models"
+            "GPT-5.6 Sol",
+            "Input $5.00 Cached input $0.50 Output $30.00",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
           ],
-          "semanticSha256": "06fff7d00b7e0397e70180b9a19cb70099d7751dcfb7a7a2083e16fbb0378b23",
-          "contentSha256": "9ae313e2d3b8deab2b8fbc6f3ccf64661d2f92be25f8435c2e3b118561c92c59"
+          "semanticSha256": "979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6",
+          "contentSha256": "c49f848e243dbea2d85389b9c431da60a697db95f032439af738381b39e6d179"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+          "requiredMarkers": [
+            "GPT-5.6 Terra",
+            "Input $2.00 Cached input $0.20 Output $12.00",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
+          ],
+          "semanticSha256": "b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877",
+          "contentSha256": "5858003704ea61655e70cdce93c3f5fbc430ca8b0b118a5a7532802cb49e3632"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+          "requiredMarkers": [
+            "GPT-5.6 Luna",
+            "Input $0.20 Cached input $0.02 Output $1.20",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
+          ],
+          "semanticSha256": "a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53",
+          "contentSha256": "e290ffacf5e3fd191f40a2bdd696712ad3f0949957d605469cc5d064b2801723"
         }
       ]
     },
@@ -229,12 +254,13 @@
           "kind": "reconciliation",
           "url": "https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery",
           "requiredMarkers": [
+            "FOCUS usage cost data",
             "Standard usage cost",
             "Detailed usage cost",
             "Pricing data"
           ],
-          "semanticSha256": "2e867a1d1f5553571d9b97afeaf704f06cf46765949d19be2cbccd5ff926f9e0",
-          "contentSha256": "e8a72674c0e143366b7ff80766bfbca6c6111abb786e9fabe0a74e86f95a84f3"
+          "semanticSha256": "2cdb62fc26c68d0cbfa0a5a20881e2576c884e36b6afc2d10153deb3e25992b3",
+          "contentSha256": "de47b3e23423eba6d6444ec17c4a346b5477df9c82d68bb2f233698a9778bb87"
         }
       ]
     },

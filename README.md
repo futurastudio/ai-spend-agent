@@ -266,7 +266,9 @@ price — hosting rates vary several-fold — so those records are honestly
 labeled `missing` rather than guessed. New model out? One pricing rule +
 a PR: `packages/core/src/modelPricing.ts`. The bundled table exposes its
 `pricingAsOf` date in the Glance provenance contract; GPT-5.2 through GPT-5.6
-rates were checked against the official OpenAI model pages on 2026-07-28.
+rates were checked against the official OpenAI model pages on 2026-08-13.
+GPT-5.6's published long-context tier is applied only from request-level
+evidence; ambiguous cumulative aggregates fail closed as `missing`.
 
 ## Connect provider cost and usage
 
