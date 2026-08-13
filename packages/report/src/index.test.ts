@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { analyzeSpend, buildContextHealth } from "@agent-finops/core";
+import { readFileSync } from "node:fs";
+import { analyzeSpend, buildContextHealth, normalizeOpenAiUsageResponse } from "@agent-finops/core";
 import type { SourceRegistry, UsageRecord } from "@agent-finops/core";
 import type { SpendReportInput } from "./index.js";
 import {
@@ -232,6 +233,33 @@ const input: SpendReportInput = {
 };
 
 describe("board-style report generation", () => {
+  it("uses the same inclusive OpenAI usage totals as the provider connector", () => {
+    const response = JSON.parse(readFileSync(
+      new URL("../../core/src/fixtures/providers/openai-usage-official-page-1.json", import.meta.url),
+      "utf8"
+    ));
+    const records = normalizeOpenAiUsageResponse(response, {
+      sourceId: "openai-provider-api",
+      observedFrom: "OpenAI organization usage API"
+    });
+    const reportInput: SpendReportInput = {
+      ...input,
+      dataMode: "connected_provider",
+      summary: analyzeSpend(records),
+      allRecords: records,
+      providerRecords: records,
+      providerCoverage: "complete"
+    };
+
+    const markdown = generateMarkdownReport(reportInput);
+    const html = generateHtmlReport(reportInput);
+
+    expect(markdown).toContain("Verified usage evidence: 2,850 tokens across 3 records");
+    expect(html).toContain("2,850 tokens");
+    expect(markdown).not.toContain("3,550 tokens");
+    expect(html).not.toContain("3,550 tokens");
+  });
+
   it("turns spend analysis into an executive accountability brief and action plan", () => {
     const markdown = generateMarkdownReport(input);
 

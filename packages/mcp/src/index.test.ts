@@ -1528,7 +1528,7 @@ describe("MCP analyst tools", () => {
       provider: "openai",
       authReference: "env:OPENAI_ADMIN_KEY",
       startTime,
-      endTime: startTime
+      endTime: startTime + 86_400
     }, {
       tokenResolver: () => openAiToken,
       fetcher: async (url) => okResponse(url.includes("/costs")
@@ -1624,7 +1624,7 @@ describe("MCP analyst tools", () => {
       financialEvidence: "verified",
       coverageInterval: {
         coverageStart: "2025-06-15T15:06:40.000Z",
-        coverageEnd: "2025-06-15T15:06:40.000Z"
+        coverageEnd: "2025-06-16T15:06:40.000Z"
       }
     });
     expect(anthropicResult.syncedRecordCount).toBe(2);
@@ -1661,7 +1661,7 @@ describe("MCP analyst tools", () => {
     expect(spendState.accounting.coverageIntervalsByProvider).toEqual({
       openai: {
         coverageStart: "2025-06-15T15:06:40.000Z",
-        coverageEnd: "2025-06-15T15:06:40.000Z"
+        coverageEnd: "2025-06-16T15:06:40.000Z"
       },
       anthropic: {
         coverageStart: "2025-06-15T15:06:40.000Z",
@@ -1709,6 +1709,57 @@ describe("MCP analyst tools", () => {
         coverageEnd: "2025-06-15T15:06:40.000Z"
       }
     });
+  });
+
+  it("returns the shared OpenAI inclusive-token corpus unchanged through MCP", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-openai-inclusive-"));
+    const fixture = JSON.parse(await readFile(
+      new URL("../../core/src/fixtures/providers/openai-usage-official-page-1.json", import.meta.url),
+      "utf8"
+    ));
+    const completeFixture = { ...fixture, has_more: false, next_page: null };
+    const okResponse = (payload: unknown) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => payload
+    });
+
+    const sync = await syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      startTime: 1761955200,
+      endTime: 1762041600
+    }, {
+      tokenResolver: () => "sk-mcp-inclusive-fixture-do-not-store",
+      fetcher: async (url) => okResponse(url.includes("/organization/costs")
+        ? { object: "page", data: [], has_more: false }
+        : completeFixture)
+    });
+    const report = await getSpendReportTool({ path: dir }) as {
+      records: Array<{
+        projectId?: string;
+        inputTokens: number;
+        outputTokens: number;
+        inputAudioTokens?: number;
+        outputAudioTokens?: number;
+        cacheReadTokens?: number;
+      }>;
+      accounting: { financialsByProvider: Record<string, { headlineUsd: number | null }> };
+    };
+
+    expect(sync.syncedRecordCount).toBe(3);
+    expect(report.records.reduce((total, record) => total + record.inputTokens, 0)).toBe(2_100);
+    expect(report.records.reduce((total, record) => total + record.outputTokens, 0)).toBe(750);
+    expect(report.records.find((record) => record.projectId === "proj_multimodal")).toMatchObject({
+      inputTokens: 1_000,
+      outputTokens: 500,
+      inputAudioTokens: 100,
+      outputAudioTokens: 100,
+      cacheReadTokens: 300
+    });
+    expect(report.accounting.financialsByProvider.openai?.headlineUsd).toBeNull();
   });
 
   it("surfaces partial connected coverage without downgrading verified financial rows", async () => {
