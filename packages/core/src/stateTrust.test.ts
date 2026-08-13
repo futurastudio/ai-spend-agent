@@ -126,6 +126,8 @@ describe("connected provider state trust", () => {
       { trustDirectory: trustLink }
     );
     expect(result).toMatchObject({ trusted: false, reason: "invalid" });
+    if (result.trusted) throw new Error("Expected the symlinked trust directory to be rejected.");
+    expect(result.message).not.toContain(trustLink);
     await expect(writeConnectedSpendTrustReceipt(root, "{}\n", { trustDirectory: trustLink }))
       .rejects.toThrow(/not a real directory/);
 
@@ -135,9 +137,15 @@ describe("connected provider state trust", () => {
     await writeFile(target, "{}\n");
     await import("node:fs/promises").then(({ unlink }) => unlink(join(outside, receiptName!)));
     await symlink(target, join(outside, receiptName!));
-    await expect(verifyConnectedSpendTrustReceipt(root, "{}\n", { trustDirectory: outside })).resolves.toMatchObject({
-      trusted: false,
-      reason: "invalid"
-    });
+    const symlinkedReceipt = await verifyConnectedSpendTrustReceipt(
+      root,
+      "{}\n",
+      { trustDirectory: outside }
+    );
+    expect(symlinkedReceipt).toMatchObject({ trusted: false, reason: "invalid" });
+    if (symlinkedReceipt.trusted) throw new Error("Expected the symlinked trust receipt to be rejected.");
+    expect(symlinkedReceipt.message).not.toContain(outside);
+    expect(symlinkedReceipt.message).not.toContain(receiptName!);
+    expect(symlinkedReceipt.message).not.toContain(target);
   });
 });

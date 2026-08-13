@@ -40,6 +40,12 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 
 ## Quick start from npm
 
+> **AI-client data boundary for every setup below:** aibill sends no telemetry
+> and does not upload transcript contents. The selected structured result of a
+> tool you invoke is returned to the configured AI client and then follows that
+> client's data-handling policy. Choose the client, account, and project scope
+> accordingly.
+
 ### Codex
 
 Add the server with the Codex CLI:
@@ -413,12 +419,14 @@ provider, or explicit sample sync:
 An explicit sample remains `mode: sample` after persistence. Its accounting
 policy is `demo_sample_not_user_data`; it is never silently reclassified as
 connected provider evidence. If no synced spend state exists at all,
-`get_spend_report` returns the same unmistakably labeled sample in memory with
-`fallback.automatic: true`, `fallback.persisted: false`, and
-`fallback.demoOnly: true`. It does not create project state. A malformed,
-untrusted, or failed real local/provider state never silently becomes sample
-data; use `scan_ai_spend` with `sample: true` only when you deliberately want a
-persisted demo fixture.
+`get_spend_report` returns `mode: no_state`, `records: []`, `summary: null`,
+`financialHeadline: null`, and `financialValue.amountUsd: null`. Its
+`nextSteps` gives exact tool calls for local sync, provider sync, or a demo.
+This is financial absence, not a zero-dollar report. A malformed, untrusted,
+or failed real local/provider state still fails closed and never silently
+becomes sample data. `scan_ai_spend` with `sample: true` is the only MCP path
+that loads bundled sample rows, and should be used only when the user
+deliberately requests a persisted demo fixture.
 
 ### `recommend_cuts`
 
@@ -480,9 +488,9 @@ npm run benchmark:context
   arguments.
 - **Provider returns 401/403:** the credential needs organization/admin
   billing-read scopes, not a normal inference API key.
-- **`get_spend_report` returns `mode: sample`:** no synced spend state exists.
-  The fallback is bundled, in-memory, demo-only data; run a local/provider sync
-  for real evidence or an explicit sample scan only when you want to persist the
-  demo fixture.
+- **`get_spend_report` returns `mode: no_state`:** no synced spend state exists.
+  Follow the returned `nextSteps` to sync local or provider evidence. No
+  zero-dollar total or sample rows were inferred. Use an explicit sample scan
+  only when you want a demo fixture.
 - **A root is refused:** select a specific project folder; broad-root refusal
   is intentional prompt-injection protection.

@@ -47,6 +47,9 @@ jobs:
       # Install all five real tarballs into an empty consumer project, then
       # exercise the CLI alias and MCP protocol from the installed graph.
       - run: npm run smoke:packed-install
+      # Exercise the documented Node/TypeScript library contract from packed
+      # core/report tarballs and prove unsupported deep imports stay closed.
+      - run: npm run smoke:library
 
   web:
     name: Waitlist app typecheck + build

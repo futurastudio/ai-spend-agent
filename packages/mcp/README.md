@@ -22,6 +22,10 @@ folder boundary never means its financial contents were verified.
 
 ## Run from npm
 
+> **AI-client data boundary:** aibill sends no telemetry and does not upload
+> transcript contents. A selected tool result is returned to the AI client you
+> configure below and then follows that client's data-handling policy.
+
 ```bash
 npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 ```
@@ -53,7 +57,7 @@ rejected. aibill never sits in the inference path and never stores, prints, or p
 | `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. An explicit `path` wins; otherwise project inventory follows the latest transcript cwd, matching CLI. |
 | `get_context_health` | Distinguish discoverable, configured, explicitly invoked, hook-injected, and invocation-unobservable context without assuming MCP schemas loaded or running hook commands. |
 | `list_sources` | List canonical product-authored source names/scopes, the approved local root, ingestion methods, and separate boundary/validation/financial axes without trusting persisted capability or credential metadata. |
-| `get_spend_report` | Return the active records, data mode, analyzed summary, and separate connector-validation, financial-evidence, freshness, and last-error source statuses. With no synced state, it returns a clearly labeled, non-persisted in-memory sample; malformed or untrusted real state still fails closed. |
+| `get_spend_report` | Return the active records, data mode, analyzed summary, and separate connector-validation, financial-evidence, freshness, and last-error source statuses. With no synced state, it returns `no_state`, zero records, a null financial headline, and exact sync/demo next steps. Sample rows require an explicit `scan_ai_spend(sample=true)`; malformed or untrusted real state still fails closed. |
 | `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. Use `npx aibill apply` for approval, rollback, and a matched future-session comparison. |
 
 State tools use an absolute project `path`; broad roots, state symlinks, and

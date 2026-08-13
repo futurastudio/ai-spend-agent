@@ -85,6 +85,35 @@ type FetchPagesResult = {
 
 export type ProviderId = "openai" | "anthropic" | "github-copilot" | "cursor" | string;
 
+export type ProviderConnectorErrorCode =
+  | "authentication_error"
+  | "provider_request_error";
+
+/**
+ * Trusted connector failure metadata. Provider prose remains untrusted and is
+ * used only as a sanitized human-readable message; callers classify failures
+ * from this product-authored code and the observed HTTP status instead.
+ */
+export class ProviderConnectorError extends Error {
+  readonly code: ProviderConnectorErrorCode;
+  readonly status?: number;
+
+  constructor(
+    message: string,
+    options: { code: ProviderConnectorErrorCode; status?: number }
+  ) {
+    super(message);
+    this.name = "ProviderConnectorError";
+    this.code = options.code;
+    this.status = options.status;
+  }
+}
+
+export function isProviderAuthenticationError(error: unknown): boolean {
+  return error instanceof ProviderConnectorError &&
+    error.code === "authentication_error";
+}
+
 export type ProviderConnectorInput = {
   provider: ProviderId;
   sourceId?: string;
@@ -151,22 +180,29 @@ type AnthropicCostBucket = {
   }>;
 };
 
-type OpenAiUsageBucket = {
-  start_time?: number;
-  end_time?: number;
-  results?: Array<{
-    object?: string;
-    input_tokens?: number;
-    output_tokens?: number;
-    input_cached_tokens?: number;
-    input_audio_tokens?: number;
-    output_audio_tokens?: number;
-    num_model_requests?: number;
-    project_id?: string | null;
-    user_id?: string | null;
-    api_key_id?: string | null;
-    model?: string | null;
-  }>;
+type OpenAiUsageResult = {
+  object?: string;
+  input_tokens?: number;
+  input_uncached_tokens?: number;
+  input_cache_write_tokens?: number;
+  output_tokens?: number;
+  input_cached_tokens?: number;
+  input_text_tokens?: number;
+  input_image_tokens?: number;
+  input_audio_tokens?: number;
+  input_cached_text_tokens?: number;
+  input_cached_image_tokens?: number;
+  input_cached_audio_tokens?: number;
+  output_text_tokens?: number;
+  output_image_tokens?: number;
+  output_audio_tokens?: number;
+  num_model_requests?: number;
+  project_id?: string | null;
+  user_id?: string | null;
+  api_key_id?: string | null;
+  model?: string | null;
+  batch?: boolean | null;
+  service_tier?: string | null;
 };
 
 type NormalizerOptions = { sourceId: string; observedFrom: string; accountId?: string };
@@ -227,31 +263,113 @@ export function normalizeOpenAiCostResponse(response: unknown, options: Normaliz
 }
 
 export function normalizeOpenAiUsageResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
-  const data = isObject(response) && Array.isArray(response.data) ? response.data as OpenAiUsageBucket[] : [];
+  const data = isObject(response) && Array.isArray(response.data) ? response.data : [];
   const records: UsageRecord[] = [];
 
-  for (const bucket of data) {
-    const startTime = typeof bucket.start_time === "number" ? bucket.start_time : 0;
+  for (const bucketValue of data) {
+    if (!isRecord(bucketValue) || !Array.isArray(bucketValue.results)) continue;
+    const startTime = validEpochSeconds(bucketValue.start_time);
+    if (typeof startTime !== "number") continue;
     const timestamp = new Date(startTime * 1000).toISOString();
-    for (const result of bucket.results ?? []) {
-      const projectId = result.project_id ?? undefined;
-      const userId = result.user_id ?? undefined;
-      const apiKeyId = result.api_key_id ?? undefined;
-      const model = result.model ?? "openai-usage";
-      const inputTokens = nonNegativeIntegerValue(result.input_tokens) ?? 0;
-      const outputTokens = nonNegativeIntegerValue(result.output_tokens) ?? 0;
-      const cachedTokens = nonNegativeIntegerValue(result.input_cached_tokens) ?? 0;
-      const audioInputTokens = nonNegativeIntegerValue(result.input_audio_tokens) ?? 0;
-      const audioOutputTokens = nonNegativeIntegerValue(result.output_audio_tokens) ?? 0;
+    for (const resultValue of bucketValue.results) {
+      if (!isRecord(resultValue)) continue;
+      const result = resultValue as OpenAiUsageResult;
+      const projectId = stringValue(result.project_id);
+      const userId = stringValue(result.user_id);
+      const apiKeyId = stringValue(result.api_key_id);
+      const model = stringValue(result.model) ?? "openai-usage";
+      const serviceTier = stringValue(result.service_tier);
+      const batch = typeof result.batch === "boolean" ? result.batch : undefined;
+      // OpenAI's organization completions Usage API defines these as
+      // inclusive totals across text, audio, image, cache reads, and cache
+      // writes. The modality/cache fields below are subsets for provenance;
+      // adding them again double-counts usage.
+      // https://developers.openai.com/cookbook/examples/completions_usage_api
+      const inputTokens = nonNegativeIntegerValue(result.input_tokens);
+      const outputTokens = nonNegativeIntegerValue(result.output_tokens);
+      // A request count does not prove a zero-token result. Preserve explicit
+      // 0/0 totals, but fail closed when either canonical total is absent or
+      // invalid so missing provider evidence never becomes a verified zero.
+      if (typeof inputTokens !== "number" || typeof outputTokens !== "number") continue;
       const requestCount = nonNegativeIntegerValue(result.num_model_requests);
-      if (inputTokens + outputTokens + audioInputTokens + audioOutputTokens === 0 && typeof requestCount !== "number") continue;
+      if (inputTokens + outputTokens === 0 && !(typeof requestCount === "number" && requestCount > 0)) continue;
+      const inputComponent = (value: unknown) => boundedTokenComponent(value, inputTokens);
+      const outputComponent = (value: unknown) => boundedTokenComponent(value, outputTokens);
+      const cacheReadTokens = inputComponent(result.input_cached_tokens);
+      const cachedComponent = (value: unknown) => {
+        const component = inputComponent(value);
+        return component !== undefined && (cacheReadTokens === undefined || component <= cacheReadTokens)
+          ? component
+          : undefined;
+      };
+      const inputAccountingValid = componentFamilyWithinParent([
+        result.input_uncached_tokens,
+        result.input_cache_write_tokens,
+        result.input_cached_tokens
+      ], inputTokens);
+      const inputModalitiesValid = componentFamilyWithinParent([
+        result.input_text_tokens,
+        result.input_image_tokens,
+        result.input_audio_tokens
+      ], inputTokens);
+      const cachedModalitiesPresent = [
+        result.input_cached_text_tokens,
+        result.input_cached_image_tokens,
+        result.input_cached_audio_tokens
+      ].some((value) => value !== undefined);
+      const cachedModalitiesValid = !cachedModalitiesPresent || (cacheReadTokens !== undefined && componentFamilyWithinParent([
+        result.input_cached_text_tokens,
+        result.input_cached_image_tokens,
+        result.input_cached_audio_tokens
+      ], cacheReadTokens));
+      const outputModalitiesValid = componentFamilyWithinParent([
+        result.output_text_tokens,
+        result.output_image_tokens,
+        result.output_audio_tokens
+      ], outputTokens);
       records.push({
-        id: slugifySourceId(["openai-usage", String(startTime), projectId, userId, apiKeyId, model].filter(Boolean).join("-")),
+        id: slugifySourceId(["openai-usage", String(startTime), projectId, userId, apiKeyId, model, serviceTier, batch === undefined ? undefined : `batch-${batch}`].filter(Boolean).join("-")),
         timestamp,
         source: { id: options.sourceId, name: "OpenAI organization usage API", provider: "openai", confidence: "verified", observedFrom: options.observedFrom },
         model,
-        inputTokens: inputTokens + audioInputTokens,
-        outputTokens: outputTokens + audioOutputTokens,
+        inputTokens,
+        outputTokens,
+        ...(inputAccountingValid && inputComponent(result.input_uncached_tokens) !== undefined
+          ? { inputUncachedTokens: inputComponent(result.input_uncached_tokens) }
+          : {}),
+        ...(inputAccountingValid && inputComponent(result.input_cache_write_tokens) !== undefined
+          ? { inputCacheWriteTokens: inputComponent(result.input_cache_write_tokens) }
+          : {}),
+        ...(inputAccountingValid && cacheReadTokens !== undefined
+          ? { cacheReadTokens }
+          : {}),
+        ...(inputModalitiesValid && inputComponent(result.input_text_tokens) !== undefined
+          ? { inputTextTokens: inputComponent(result.input_text_tokens) }
+          : {}),
+        ...(inputModalitiesValid && inputComponent(result.input_image_tokens) !== undefined
+          ? { inputImageTokens: inputComponent(result.input_image_tokens) }
+          : {}),
+        ...(inputModalitiesValid && inputComponent(result.input_audio_tokens) !== undefined
+          ? { inputAudioTokens: inputComponent(result.input_audio_tokens) }
+          : {}),
+        ...(cachedModalitiesValid && cachedComponent(result.input_cached_text_tokens) !== undefined
+          ? { inputCachedTextTokens: cachedComponent(result.input_cached_text_tokens) }
+          : {}),
+        ...(cachedModalitiesValid && cachedComponent(result.input_cached_image_tokens) !== undefined
+          ? { inputCachedImageTokens: cachedComponent(result.input_cached_image_tokens) }
+          : {}),
+        ...(cachedModalitiesValid && cachedComponent(result.input_cached_audio_tokens) !== undefined
+          ? { inputCachedAudioTokens: cachedComponent(result.input_cached_audio_tokens) }
+          : {}),
+        ...(outputModalitiesValid && outputComponent(result.output_text_tokens) !== undefined
+          ? { outputTextTokens: outputComponent(result.output_text_tokens) }
+          : {}),
+        ...(outputModalitiesValid && outputComponent(result.output_image_tokens) !== undefined
+          ? { outputImageTokens: outputComponent(result.output_image_tokens) }
+          : {}),
+        ...(outputModalitiesValid && outputComponent(result.output_audio_tokens) !== undefined
+          ? { outputAudioTokens: outputComponent(result.output_audio_tokens) }
+          : {}),
         amountUsd: null,
         costConfidence: "missing",
         projectId,
@@ -260,12 +378,26 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
         providerCostType: "openai_usage_evidence",
         usageGranularity: "usage_bucket",
         quantity: requestCount,
+        ...(serviceTier ? { serviceTier } : {}),
+        ...(batch !== undefined ? { batch } : {}),
         operation: "OpenAI completions usage evidence"
       });
     }
   }
 
   return records;
+}
+
+function boundedTokenComponent(value: unknown, inclusiveTotal: number): number | undefined {
+  const component = nonNegativeIntegerValue(value);
+  return typeof component === "number" && component <= inclusiveTotal ? component : undefined;
+}
+
+function componentFamilyWithinParent(values: unknown[], parent: number): boolean {
+  const components = values
+    .map(nonNegativeIntegerValue)
+    .filter((value): value is number => typeof value === "number");
+  return components.reduce((sum, value) => sum + value, 0) <= parent;
 }
 
 export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
@@ -562,7 +694,10 @@ function redactResolvedCredentialError(error: unknown, credentialVariants: strin
     sanitizeProviderMessage(withoutResolvedCredential),
     credentialVariants
   ).trim();
-  return new Error(safeMessage || "Provider connector request failed without a safe error message.");
+  const message = safeMessage || "Provider connector request failed without a safe error message.";
+  return error instanceof ProviderConnectorError
+    ? new ProviderConnectorError(message, { code: error.code, status: error.status })
+    : new Error(message);
 }
 
 function redactResolvedCredentialValue<T>(value: T, credentialVariants: string[]): T {
@@ -592,12 +727,15 @@ async function fetchOpenAi(input: ProviderConnectorInput, token: string, fetcher
   };
   const costFetch = await fetchPaginatedJson(fetcher, buildOpenAiCostsUrl(input.startTime, input.endTime), request, "openai", "OpenAI costs API");
   markMalformedCostRows(costFetch, "openai", "OpenAI costs API");
+  enforceOpenAiRequestedWindow(costFetch, input.startTime, input.endTime, "OpenAI costs API");
   const usageFetch = await fetchPaginatedJson(fetcher, buildOpenAiUsageUrl(input.startTime, input.endTime), request, "openai", "OpenAI usage API");
   markMalformedUsageRows(usageFetch, "openai", "OpenAI usage API");
-  const records = [
+  enforceOpenAiRequestedWindow(usageFetch, input.startTime, input.endTime, "OpenAI usage API");
+  const normalizedRecords = [
     ...costFetch.pages.flatMap((page) => normalizeOpenAiCostResponse(page, { sourceId, observedFrom: "OpenAI organization costs API" })),
     ...usageFetch.pages.flatMap((page) => normalizeOpenAiUsageResponse(page, { sourceId, observedFrom: "OpenAI organization usage API" }))
   ];
+  const records = dedupeProviderRecords(normalizedRecords, [costFetch, usageFetch]);
   return providerResult(
     "openai",
     sourceId,
@@ -821,7 +959,7 @@ async function fetchTextOrThrow(
       return response.text();
     }
     const payload = await response.json().catch(() => undefined);
-    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    lastError = providerRequestError(provider, label, response, payload);
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt === maxFetchRetries) break;
     const retryAfterSeconds = headerNumber(response.headers, "retry-after");
@@ -895,7 +1033,20 @@ async function fetchPaginatedJson(
   let stoppedBecause: ProviderQaPagination["stoppedBecause"] = "complete";
   let note: string | undefined;
   const maxPages = 50;
+  const seenUrls = new Set<string>();
   for (let pageCount = 0; nextUrl && pageCount < maxPages; pageCount += 1) {
+    if (seenUrls.has(nextUrl)) {
+      stoppedBecause = "missing_cursor";
+      note = `Stopped after ${pages.length} page(s): provider repeated a pagination URL.`;
+      responseDrift.push({
+        label,
+        field: "next_page",
+        issue: "provider repeated a pagination cursor; duplicate pages were not fetched"
+      });
+      nextUrl = undefined;
+      break;
+    }
+    seenUrls.add(nextUrl);
     let response;
     try {
       response = await fetchJsonOrThrow(fetcher, nextUrl, request, provider, label);
@@ -944,6 +1095,67 @@ async function fetchPaginatedJson(
     rateLimits,
     responseDrift
   };
+}
+
+function enforceOpenAiRequestedWindow(
+  fetchResult: FetchPagesResult,
+  requestedStart: number,
+  requestedEnd: number | undefined,
+  label: string
+): void {
+  let excluded = 0;
+  const nowEpochSeconds = Math.floor(Date.now() / 1000);
+  fetchResult.pages = fetchResult.pages.map((page) => {
+    if (!isRecord(page) || !Array.isArray(page.data)) return page;
+    const data = page.data.filter((bucket) => {
+      if (!isRecord(bucket)) return true;
+      const start = validEpochSeconds(bucket.start_time);
+      const hasEnd = bucket.end_time !== undefined;
+      const end = hasEnd ? validEpochSeconds(bucket.end_time) : undefined;
+      const invalidEnd = hasEnd && (typeof end !== "number" || typeof start !== "number" || end <= start);
+      const missingRequiredEnd = typeof requestedEnd === "number" && typeof end !== "number";
+      const outsideStart = typeof start !== "number" || start < requestedStart ||
+        (typeof requestedEnd === "number" && start >= requestedEnd);
+      const outsideEnd = typeof requestedEnd === "number" && typeof end === "number" && end > requestedEnd;
+      const futureOpenEndedStart = requestedEnd === undefined && typeof start === "number" && start > nowEpochSeconds;
+      if (!invalidEnd && !missingRequiredEnd && !outsideStart && !outsideEnd && !futureOpenEndedStart) return true;
+      excluded += 1;
+      fetchResult.responseDrift.push({
+        label,
+        field: "data[].start_time/end_time",
+        issue: "bucket boundary was missing, invalid, future-starting, or outside the requested interval; the bucket was excluded"
+      });
+      return false;
+    });
+    return { ...page, data };
+  });
+  if (excluded > 0) fetchResult.coverageIncomplete = true;
+}
+
+function dedupeProviderRecords(records: UsageRecord[], fetches: FetchPagesResult[]): UsageRecord[] {
+  const byId = new Map<string, UsageRecord>();
+  const conflicted = new Set<string>();
+  for (const record of records) {
+    const existing = byId.get(record.id);
+    if (!existing && !conflicted.has(record.id)) {
+      byId.set(record.id, record);
+      continue;
+    }
+    const target = record.providerCostType === "openai_cost" ? fetches[0] : fetches[1];
+    target.coverageIncomplete = true;
+    target.responseDrift.push({
+      label: target.pagination.label,
+      field: "normalized records[].id",
+      issue: existing && JSON.stringify(existing) === JSON.stringify(record)
+        ? "duplicate provider record was excluded"
+        : "conflicting provider records shared one stable identity; all conflicting rows were excluded"
+    });
+    if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
+      byId.delete(record.id);
+      conflicted.add(record.id);
+    }
+  }
+  return Array.from(byId.values());
 }
 
 function validatePaginationUrl(initialUrl: string, candidate: string): string | undefined {
@@ -1032,7 +1244,7 @@ async function fetchJsonOrThrow(
     if (response.ok) {
       return { payload, rateLimit: rateLimitFromHeaders(label, response.headers), headers: response.headers };
     }
-    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    lastError = providerRequestError(provider, label, response, payload);
     // 429 and 5xx are transient: honor retry-after when present, otherwise
     // back off briefly and try again. 4xx auth/scope errors fail immediately.
     const retryable = response.status === 429 || response.status >= 500;
@@ -1224,6 +1436,9 @@ function markMalformedUsageRows(
           report(bucketPath, "usage response contained a malformed bucket or omitted its results array");
           continue;
         }
+        if (typeof validEpochSeconds(bucketValue.start_time) !== "number") {
+          report(`${bucketPath}.start_time`, "usage bucket start_time must be a non-negative whole-second timestamp; the bucket was excluded");
+        }
         for (const [resultIndex, resultValue] of bucketValue.results.entries()) {
           const resultPath = `${bucketPath}.results[${resultIndex}]`;
           if (!isRecord(resultValue)) {
@@ -1249,6 +1464,67 @@ function markMalformedUsageRows(
             checkInteger(resultValue[field], `${resultPath}.${field}`, "token count");
           }
           checkInteger(resultValue.num_model_requests, `${resultPath}.num_model_requests`, "quantity");
+
+          const inputTotal = nonNegativeIntegerValue(resultValue.input_tokens);
+          const outputTotal = nonNegativeIntegerValue(resultValue.output_tokens);
+          const cachedTotal = nonNegativeIntegerValue(resultValue.input_cached_tokens);
+          if (typeof inputTotal !== "number") {
+            report(`${resultPath}.input_tokens`, "canonical input_tokens total is required; the usage row was excluded");
+          }
+          if (typeof outputTotal !== "number") {
+            report(`${resultPath}.output_tokens`, "canonical output_tokens total is required; the usage row was excluded");
+          }
+          for (const field of [
+            "input_uncached_tokens",
+            "input_cache_write_tokens",
+            "input_cached_tokens",
+            "input_text_tokens",
+            "input_image_tokens",
+            "input_audio_tokens",
+            "input_cached_text_tokens",
+            "input_cached_image_tokens",
+            "input_cached_audio_tokens"
+          ] as const) {
+            const component = nonNegativeIntegerValue(resultValue[field]);
+            if (typeof component === "number" && typeof inputTotal === "number" && component > inputTotal) {
+              report(`${resultPath}.${field}`, "input component exceeds the inclusive input_tokens total; the component was excluded");
+            }
+          }
+          for (const field of ["output_text_tokens", "output_image_tokens", "output_audio_tokens"] as const) {
+            const component = nonNegativeIntegerValue(resultValue[field]);
+            if (typeof component === "number" && typeof outputTotal === "number" && component > outputTotal) {
+              report(`${resultPath}.${field}`, "output component exceeds the inclusive output_tokens total; the component was excluded");
+            }
+          }
+          for (const field of [
+            "input_cached_text_tokens",
+            "input_cached_image_tokens",
+            "input_cached_audio_tokens"
+          ] as const) {
+            const component = nonNegativeIntegerValue(resultValue[field]);
+            if (typeof component === "number" && typeof cachedTotal === "number" && component > cachedTotal) {
+              report(`${resultPath}.${field}`, "cached component exceeds input_cached_tokens; the component was excluded");
+            }
+          }
+          if (typeof cachedTotal !== "number" && [
+            resultValue.input_cached_text_tokens,
+            resultValue.input_cached_image_tokens,
+            resultValue.input_cached_audio_tokens
+          ].some((value) => typeof nonNegativeIntegerValue(value) === "number")) {
+            report(`${resultPath}.input_cached_*_tokens`, "cached modality components require input_cached_tokens; the component family was excluded");
+          }
+          const reportFamilyOverflow = (fields: readonly string[], parent: number | undefined, parentField: string) => {
+            if (typeof parent !== "number") return;
+            const values = fields.map((field) => nonNegativeIntegerValue(resultValue[field]));
+            const present = values.filter((value): value is number => typeof value === "number");
+            if (present.reduce((sum, value) => sum + value, 0) > parent) {
+              report(`${resultPath}.${fields.join("+")}`, `component family exceeds ${parentField}; the contradictory component family was excluded`);
+            }
+          };
+          reportFamilyOverflow(["input_uncached_tokens", "input_cache_write_tokens", "input_cached_tokens"], inputTotal, "input_tokens");
+          reportFamilyOverflow(["input_text_tokens", "input_image_tokens", "input_audio_tokens"], inputTotal, "input_tokens");
+          reportFamilyOverflow(["input_cached_text_tokens", "input_cached_image_tokens", "input_cached_audio_tokens"], cachedTotal, "input_cached_tokens");
+          reportFamilyOverflow(["output_text_tokens", "output_image_tokens", "output_audio_tokens"], outputTotal, "output_tokens");
         }
       }
       continue;
@@ -1449,6 +1725,22 @@ function providerPermissionPrompt(provider: string, label: string, response: Pro
   return `${label} request failed with ${status}. ${rawMessage}`.trim();
 }
 
+function providerRequestError(
+  provider: string,
+  label: string,
+  response: ProviderResponse,
+  payload: unknown
+): ProviderConnectorError {
+  const authenticationFailure = response.status === 401 || response.status === 403;
+  return new ProviderConnectorError(
+    providerPermissionPrompt(provider, label, response, payload),
+    {
+      code: authenticationFailure ? "authentication_error" : "provider_request_error",
+      status: response.status
+    }
+  );
+}
+
 function extractProviderMessage(payload: unknown): string {
   if (!isRecord(payload)) return "";
   const error = isRecord(payload.error) ? payload.error : undefined;
@@ -1633,15 +1925,24 @@ function formatProviderUsd(value: number): string {
 
 export function resolveTokenReference(reference: string, env: Record<string, string | undefined> = process.env): string {
   if (!reference.startsWith("env:")) {
-    throw new Error("Provider auth reference must be a local reference such as env:OPENAI_ADMIN_KEY; raw secrets are not accepted.");
+    throw new ProviderConnectorError(
+      "Provider auth reference must be a local reference such as env:OPENAI_ADMIN_KEY; raw secrets are not accepted.",
+      { code: "authentication_error" }
+    );
   }
   const envName = reference.slice("env:".length);
   if (!/^[A-Z0-9_]+$/.test(envName)) {
-    throw new Error("Provider auth env reference must use an uppercase environment variable name.");
+    throw new ProviderConnectorError(
+      "Provider auth env reference must use an uppercase environment variable name.",
+      { code: "authentication_error" }
+    );
   }
   const value = env[envName];
   if (!value) {
-    throw new Error(`Provider auth reference ${reference} is not set in the local environment.`);
+    throw new ProviderConnectorError(
+      `Provider auth reference ${reference} is not set in the local environment.`,
+      { code: "authentication_error" }
+    );
   }
   return value;
 }
@@ -1667,6 +1968,8 @@ function buildOpenAiUsageUrl(startTime: number, endTime?: number): string {
   url.searchParams.append("group_by", "user_id");
   url.searchParams.append("group_by", "api_key_id");
   url.searchParams.append("group_by", "model");
+  url.searchParams.append("group_by", "batch");
+  url.searchParams.append("group_by", "service_tier");
   if (endTime !== undefined) url.searchParams.set("end_time", String(endTime));
   return url.toString();
 }
@@ -1747,7 +2050,7 @@ function stringValue(value: unknown): string | undefined {
 
 function validEpochSeconds(value: unknown): number | undefined {
   const seconds = numberValue(value);
-  return typeof seconds === "number" && seconds >= 0 && Number.isFinite(new Date(seconds * 1000).getTime())
+  return typeof seconds === "number" && Number.isInteger(seconds) && seconds >= 0 && Number.isFinite(new Date(seconds * 1000).getTime())
     ? seconds
     : undefined;
 }

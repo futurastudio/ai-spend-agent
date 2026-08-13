@@ -18,6 +18,8 @@ import {
   financialEvidenceForRecords,
   generateCutList,
   hasModeledWorkloadEvidence,
+  isProviderAuthenticationError,
+  ProviderConnectorError,
   isBundledSampleUsage,
   latestObservedWorkingDirectory,
   loadContextHealth,
@@ -65,6 +67,12 @@ import {
   type ContextHealthResult,
   type UsageRecord
 } from "@agent-finops/core";
+import {
+  isMalformedLocalStateError,
+  MalformedLocalStateError,
+  McpToolError,
+  parseLocalStateJson
+} from "./errors.js";
 
 export type ScanAiSpendInput = {
   path: string;
@@ -280,17 +288,17 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
   try {
     stateDir = await resolveSafeStateDirectory(rootPath);
   } catch (error) {
-    if (isNodeError(error, "ENOENT")) return sampleSpendReportFallback();
+    if (isNodeError(error, "ENOENT")) return noStateSpendReport(rootPath);
     throw error;
   }
   let exactSpendContents: string;
   try {
     exactSpendContents = await readSafeStateText(stateDir, "spend.json");
   } catch (error) {
-    if (isNodeError(error, "ENOENT")) return sampleSpendReportFallback(stateDir);
+    if (isNodeError(error, "ENOENT")) return noStateSpendReport(rootPath, stateDir);
     throw error;
   }
-  const persisted = parsePersistedSpendState(JSON.parse(exactSpendContents));
+  const persisted = parsePersistedSpendState(parseLocalStateJson(exactSpendContents));
   await assertTrustedConnectedState(rootPath, persisted, exactSpendContents);
   const evidence = await evidenceForPersistedMode(persisted);
   const records = persisted.mode === "connected_provider"
@@ -359,45 +367,53 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
 }
 
 /**
- * A first MCP read should be demonstrable without pretending bundled records
- * are the user's data. This fallback is in-memory only: it never creates or
- * overwrites project state, and any recorded source failure remains visible.
+ * Missing state is a financial absence, not permission to substitute demo
+ * money. Keep the shape explicit and machine-actionable so an AI client can
+ * distinguish "nothing synced" from a valid zero-dollar report. The only MCP
+ * path that can load sample rows is scan_ai_spend(sample=true).
  */
-async function sampleSpendReportFallback(stateDir?: string): Promise<unknown> {
-  const records = await loadSampleUsageData();
+async function noStateSpendReport(rootPath: string, stateDir?: string): Promise<unknown> {
+  const records: UsageRecord[] = [];
   const sourceStatuses = stateDir
-    ? await sourceStatusesForReport(stateDir, "sample", records)
+    ? await sourceStatusesForReport(stateDir, "no_state", records)
     : buildSourceStatuses([]);
-  const financialsByProvider = Object.fromEntries(
-    [...new Set(records.map((record) => record.source.provider))]
-      .map((provider) => [
-        provider,
-        summarizeProviderFinancials(records.filter((record) => record.source.provider === provider))
-      ])
-  );
   return {
-    mode: "sample",
+    mode: "no_state",
     records,
-    summary: analyzeSpend(records),
+    summary: null,
+    financialHeadline: null,
     financialValue: financialValueCoverage(records),
     sourceStatuses,
     accounting: {
-      policy: "demo_sample_not_user_data",
-      anomalyBasis: "demo_only_not_user_anomaly_evidence",
-      financialsByProvider
+      policy: "no_state_no_financial_evidence",
+      anomalyBasis: "unavailable_no_synced_spend_state",
+      financialsByProvider: {}
     },
-    fallback: {
-      automatic: true,
-      reason: "no_synced_spend_state",
-      persisted: false,
-      demoOnly: true
-    },
+    nextSteps: [
+      {
+        tool: "sync_local_agent_spend",
+        arguments: { path: rootPath },
+        purpose: "Read supported local coding-agent evidence and create the first real local report."
+      },
+      {
+        tool: "sync_provider_spend",
+        arguments: { path: rootPath },
+        requiredArguments: ["provider", "authReference", "startTime"],
+        purpose: "Add provider-reported billing or usage evidence using an inherited env:NAME credential reference and an explicit time window."
+      },
+      {
+        tool: "scan_ai_spend",
+        arguments: { path: rootPath, sample: true },
+        purpose: "Load bundled illustrative records only when the user explicitly asks for a demo.",
+        demoOnly: true
+      }
+    ],
     provenance: {
-      state: "bundled_sample_fallback",
+      state: "no_state",
       schemaValidated: true,
       persistedSummaryTrusted: false,
-      untrustedLabels: "none_bundled_fixture",
-      note: "No synced local/provider spend state exists. These bundled illustrative records were loaded in memory, were not persisted, and are not this user's logs, provider account, bill, project, client, or workflow."
+      untrustedLabels: "none_no_records",
+      note: "No synced local or provider spend state exists. No financial rows, zero-dollar total, sample data, recommendation, or user evidence was inferred."
     }
   };
 }
@@ -421,7 +437,7 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
     });
   const spendState = persistedSpendContents === undefined
     ? undefined
-    : parsePersistedSpendState(JSON.parse(persistedSpendContents));
+    : parsePersistedSpendState(parseLocalStateJson(persistedSpendContents));
   if (spendState && persistedSpendContents !== undefined) {
     await assertTrustedConnectedState(rootPath, spendState, persistedSpendContents);
   }
@@ -510,8 +526,21 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
     return { source: "spend_report", recommendations: analyzedRecommendations };
   }
 
-  const discovery = await readDiscovery(input.path);
-  const providers = Array.from(new Set(discovery.signals.map((signal) => signal.provider))).sort();
+  if (spendState?.mode === "connected_provider") {
+    return {
+      source: "spend_report",
+      recommendations: [
+        "NO FINANCIAL ROWS: the connected provider sync returned no usable spend or usage records. No zero-dollar total, cut, or Apply action was inferred. Review connector coverage and the requested window, then re-run sync_provider_spend before proposing a change."
+      ]
+    };
+  }
+
+  const discoveredProviders = await readDiscoveryProviders(input.path).catch((error) => {
+    if (isNodeError(error, "ENOENT")) return undefined;
+    throw error;
+  });
+  if (!discoveredProviders) return noStateRecommendationFallback();
+  const providers = Array.from(new Set(discoveredProviders)).sort();
   const recommendations = providers.length === 0
     ? ["Collect local-agent or provider usage evidence before proposing a change; discovery alone does not support a cut or savings claim."]
     : [
@@ -527,7 +556,7 @@ function noStateRecommendationFallback(): {
   return {
     source: "spend_report",
     recommendations: [
-      "DEMO ONLY: no synced local or provider spend state exists. The automatic sample shown by get_spend_report is bundled illustrative data, is not persisted, and cannot support a real cut or Apply action. Collect real local-agent or connected provider evidence first."
+      "NO STATE: no synced local or provider spend evidence exists. No total, sample, cut, or Apply action was inferred. Call sync_local_agent_spend for supported local evidence or sync_provider_spend for provider evidence; use scan_ai_spend with sample=true only when the user explicitly asks for a demo."
     ]
   };
 }
@@ -566,7 +595,10 @@ export async function syncProviderSpendTool(
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
   try {
     if (!/^env:[A-Z_][A-Z0-9_]*$/.test(input.authReference)) {
-      throw new Error("authReference must be an environment reference such as env:OPENAI_ADMIN_KEY; raw provider keys are never accepted.");
+      throw new McpToolError(
+        "authentication_error",
+        "authReference must be an environment reference such as env:OPENAI_ADMIN_KEY; raw provider keys are never accepted."
+      );
     }
     const trustedPrior = await readTrustedPriorConnectedState(rootPath, stateDir);
     const registry = await readRegistryOrCreate(rootPath);
@@ -712,7 +744,16 @@ export async function syncProviderSpendTool(
       // Attempt state is diagnostic only. Never replace the provider's real,
       // already-sanitized failure with a derived-state persistence error.
     });
-    throw new Error(message);
+    const code = error instanceof McpToolError
+      ? error.code
+      : isProviderAuthenticationError(error)
+        ? "authentication_error"
+        : error instanceof ProviderConnectorError
+          ? "tool_error"
+          : isMalformedLocalStateError(error)
+            ? "malformed_state"
+            : "tool_error";
+    throw new McpToolError(code, message);
   }
 }
 
@@ -1076,10 +1117,12 @@ async function readRegistryOrCreate(rootPath: string): Promise<SourceRegistry> {
 
 async function readTrustedRegistry(rootPath: string, stateDir: string): Promise<SourceRegistry> {
   const exactSourceRegistryContents = await readSafeStateText(stateDir, "sources.json");
-  const registry = parseSourceRegistry(JSON.parse(exactSourceRegistryContents));
+  const registry = collapseLocalStateParse(() =>
+    parseSourceRegistry(parseLocalStateJson(exactSourceRegistryContents))
+  );
   try {
     const exactSpendContents = await readSafeStateText(stateDir, "spend.json");
-    const parsedSpend = JSON.parse(exactSpendContents) as { mode?: unknown };
+    const parsedSpend = parseLocalStateJson<{ mode?: unknown }>(exactSpendContents);
     if (parsedSpend.mode === "connected_provider") {
       const trust = await verifyConnectedSourceRegistryTrustReceipt(
         rootPath,
@@ -1099,14 +1142,24 @@ function parseSourceRegistry(value: unknown): SourceRegistry {
   return normalizeSourceRegistry(value);
 }
 
-async function readDiscovery(rootPath: string): Promise<LocalDiscoveryResult> {
+async function readDiscoveryProviders(rootPath: string): Promise<string[]> {
   const resolvedRoot = await resolveSafeScanRoot(rootPath);
   const stateDir = await resolveSafeStateDirectory(resolvedRoot);
-  return readJson<LocalDiscoveryResult>(join(stateDir, "discovery.json"));
+  const value = await readJson<unknown>(join(stateDir, "discovery.json"));
+  if (!isRecord(value) || !Array.isArray(value.signals)) {
+    throw new MalformedLocalStateError();
+  }
+  return value.signals.map((signal) => {
+    if (!isRecord(signal) || typeof signal.provider !== "string") {
+      throw new MalformedLocalStateError();
+    }
+    const provider = sanitizePersistedLabel(signal.provider);
+    return provider.startsWith("[") ? "untrusted-provider-signal" : provider;
+  });
 }
 
 async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readSafeStateText(dirname(path), basename(path))) as T;
+  return parseLocalStateJson<T>(await readSafeStateText(dirname(path), basename(path)));
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
@@ -1131,7 +1184,7 @@ function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoExcepti
 
 async function sourceStatusesForReport(
   stateDir: string,
-  mode: PersistedSpendState["mode"],
+  mode: PersistedSpendState["mode"] | "no_state",
   records: readonly UsageRecord[],
   checkedAt?: string,
   coverageByProvider?: Record<string, ProviderCoverageStatus>
@@ -1223,7 +1276,7 @@ function parsePersistedSourceAttemptState(value: unknown): {
       checkedAt: rawAttempt.checkedAt,
       lastError: rawAttempt.lastError === null
         ? null
-        : (sanitizeProviderSyncError(rawAttempt.lastError) || "Provider sync failed without a safe error message.")
+        : `${provider}: a prior provider sync failed; rerun sync_provider_spend to inspect a current typed error.`
     };
   }
   return { state: { version: 1, providers } };
@@ -1359,7 +1412,20 @@ function providerFinancialEvidenceNote(
   return `${parts.join("; ")}. Row-level financial evidence remains separate.`;
 }
 
+function collapseLocalStateParse<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof MalformedLocalStateError) throw error;
+    throw new MalformedLocalStateError();
+  }
+}
+
 function parsePersistedSpendState(value: unknown): PersistedSpendState {
+  return collapseLocalStateParse(() => parsePersistedSpendStateValue(value));
+}
+
+function parsePersistedSpendStateValue(value: unknown): PersistedSpendState {
   if (!isRecord(value) || !Array.isArray(value.records)) {
     throw new Error("Invalid local spend state: expected a records array. Re-run the aibill sync that created it.");
   }
@@ -1408,11 +1474,11 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
         "local spend accounting"
       )
     : undefined;
-  const qaByProvider = mode === "connected_provider" && isRecord(accounting?.qaByProvider)
-    ? accounting.qaByProvider as Record<string, ProviderQaSummary>
+  const qaByProvider = mode === "connected_provider"
+    ? parseProviderObjectMap<ProviderQaSummary>(accounting?.qaByProvider, "local spend accounting", "qaByProvider")
     : undefined;
-  const financialsByProvider = mode === "connected_provider" && isRecord(accounting?.financialsByProvider)
-    ? accounting.financialsByProvider as Record<string, ProviderFinancialSummary>
+  const financialsByProvider = mode === "connected_provider"
+    ? parseProviderObjectMap<ProviderFinancialSummary>(accounting?.financialsByProvider, "local spend accounting", "financialsByProvider")
     : undefined;
   return {
     mode,
@@ -1471,7 +1537,7 @@ async function readTrustedPriorConnectedState(
 
   let state: PersistedSpendState;
   try {
-    state = parsePersistedSpendState(JSON.parse(exactSpendContents));
+    state = parsePersistedSpendState(parseLocalStateJson(exactSpendContents));
   } catch {
     return undefined;
   }
@@ -1589,6 +1655,10 @@ function observedEvidenceWindow(records: UsageRecord[]): string {
 }
 
 function parseProviderRecordsState(value: unknown): ProviderRecordsState {
+  return collapseLocalStateParse(() => parseProviderRecordsStateValue(value));
+}
+
+function parseProviderRecordsStateValue(value: unknown): ProviderRecordsState {
   if (!isRecord(value) || !Array.isArray(value.records)) {
     throw new Error("Invalid local provider state: expected a records array.");
   }
@@ -1601,16 +1671,43 @@ function parseProviderRecordsState(value: unknown): ProviderRecordsState {
     value.coverageIntervalsByProvider,
     "local provider state"
   );
+  const qaByProvider = parseProviderObjectMap<unknown>(
+    value.qaByProvider,
+    "local provider state",
+    "qaByProvider"
+  );
+  const financialsByProvider = parseProviderObjectMap<ProviderFinancialSummary>(
+    value.financialsByProvider,
+    "local provider state",
+    "financialsByProvider"
+  );
   return {
     records: value.records.map((record) => parseUsageRecord(record)),
-    ...(isRecord(value.qaByProvider) ? { qaByProvider: value.qaByProvider } : {}),
+    ...(qaByProvider ? { qaByProvider } : {}),
     ...(checkedAtByProvider ? { checkedAtByProvider } : {}),
     ...(coverageByProvider ? { coverageByProvider } : {}),
     ...(coverageIntervalsByProvider ? { coverageIntervalsByProvider } : {}),
-    ...(isRecord(value.financialsByProvider)
-      ? { financialsByProvider: value.financialsByProvider as Record<string, ProviderFinancialSummary> }
-      : {})
+    ...(financialsByProvider ? { financialsByProvider } : {})
   };
+}
+
+function parseProviderObjectMap<T>(
+  value: unknown,
+  context: string,
+  label: string
+): Record<string, T> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid ${context}: ${label} must be an object.`);
+  }
+  const parsed: Record<string, T> = {};
+  for (const [provider, item] of Object.entries(value)) {
+    if (!isProviderStatusId(provider) || !isRecord(item)) {
+      throw new Error(`Invalid ${context}: ${label} contains an unsupported provider or value.`);
+    }
+    parsed[provider] = item as T;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
 function parseCheckedAtByProvider(
@@ -1623,7 +1720,7 @@ function parseCheckedAtByProvider(
   }
   const checkedAt: Record<string, string> = {};
   for (const [provider, timestamp] of Object.entries(value)) {
-    if (!validIsoString(timestamp)) {
+    if (!isProviderStatusId(provider) || !validIsoString(timestamp)) {
       throw new Error(`Invalid ${context}: ${provider} checkedAt must be an ISO timestamp.`);
     }
     checkedAt[provider] = timestamp;
@@ -1641,7 +1738,8 @@ function parseCoverageIntervalsByProvider(
   }
   const intervals: Record<string, ProviderCoverageInterval> = {};
   for (const [provider, interval] of Object.entries(value)) {
-    if (!isRecord(interval) ||
+    if (!isProviderStatusId(provider) ||
+        !isRecord(interval) ||
         !validIsoString(interval.coverageStart) ||
         !validIsoString(interval.coverageEnd)) {
       throw new Error(`Invalid ${context}: ${provider} must have ISO coverageStart and coverageEnd timestamps.`);
@@ -1667,7 +1765,7 @@ function parseCoverageByProvider(
   }
   const coverage: Record<string, ProviderCoverageStatus> = {};
   for (const [provider, status] of Object.entries(value)) {
-    if (status !== "complete" && status !== "partial") {
+    if (!isProviderStatusId(provider) || (status !== "complete" && status !== "partial")) {
       throw new Error(`Invalid ${context}: ${provider} has an unsupported coverage status.`);
     }
     coverage[provider] = status;

@@ -11,6 +11,11 @@ npx aibill         # short form — same CLI as `npx ai-spend-agent`
 
 [Documentation](https://asktilden.com/docs) · [Supported sources](https://asktilden.com/docs/sources) · [MCP setup](https://asktilden.com/docs/mcp) · [Roadmap](https://asktilden.com/docs/roadmap)
 
+Building a Node integration? The
+[supported library preview](docs/LIBRARY.md) documents the narrow, packed-test
+contract for usage-record validation, analysis, Receipt v0, pinned standards
+projections, and terminal rendering.
+
 > **Version boundary:** npm latest is `v0.7.3`. `main` contains the independently
 > gated `v0.8.0` Gemini CLI financial-reader preview, but it is not published.
 > Bare `npx aibill@latest` therefore reads Claude Code and Codex local evidence;
@@ -388,6 +393,10 @@ client can read supported local Claude Code and Codex estimates or sync
 official OpenAI and Anthropic provider reports through reference-only
 credentials. The current-main v0.8.0 preview additionally reads experimental
 Gemini financial evidence; npm latest v0.7.3 does not:
+
+> **AI-client data boundary:** aibill sends no telemetry and does not upload
+> transcript contents. The selected MCP result is returned to the AI client
+> you configure and then follows that client's data-handling policy.
 
 ```bash
 npx --yes --package @agent-finops/mcp@latest ai-spend-mcp

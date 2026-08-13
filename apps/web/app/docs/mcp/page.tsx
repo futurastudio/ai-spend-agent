@@ -27,6 +27,9 @@ export default function McpDocsPage() {
       repoPath="apps/web/app/docs/mcp/page.tsx"
     >
       <DocsSection id="install" label="01 · Install" title="Choose your MCP client">
+        <DocsCallout title="AI-client data boundary" tone="neutral">
+          aibill sends no telemetry and does not upload transcript contents. A selected tool result is returned to the AI client you configure below and then follows that client&apos;s data policy.
+        </DocsCallout>
         <h3 className="text-lg font-medium text-ink">Codex</h3>
         <CodeBlock label="Terminal">{`codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 codex mcp list`}</CodeBlock>
@@ -76,7 +79,7 @@ subscription context, and missing evidence separate.`}</CodeBlock>
           <li>Use the CLI Apply workflow for the complete approval, rollback, and verification artifact.</li>
         </ol>
         <p className="mt-5">
-          With no synced state, <code className="font-mono text-ink">get_spend_report</code> can return an unmistakably labeled, in-memory demo fallback. It does not silently become user evidence or create project state.
+          With no synced state, <code className="font-mono text-ink">get_spend_report</code> returns <code className="font-mono text-ink">no_state</code>, zero rows, a null financial headline, and exact next steps. Sample rows appear only after an explicit <code className="font-mono text-ink">scan_ai_spend(sample=true)</code> request.
         </p>
       </DocsSection>
 
@@ -97,7 +100,7 @@ subscription context, and missing evidence separate.`}</CodeBlock>
             ["Tools do not appear", "Run the exact npx server command in a terminal, confirm Node 22+, restart the client, and verify that it supports local stdio MCP."],
             ["Provider returns 401 or 403", "Use an organization/admin billing-read credential rather than a normal inference API key."],
             ["A path is refused", "Select one project directory. Broad-root refusal is intentional prompt-injection protection."],
-            ["Report says sample", "Run a local or provider sync for real evidence. An automatic sample is demo-only and not persisted."],
+            ["Report says no_state", "Run a local or provider sync for real evidence. No zero-dollar total or sample rows were inferred; sample data requires an explicit demo request."],
           ].map(([term, detail]) => (
             <div key={term} className="border-b border-hairline py-4">
               <dt className="font-medium text-ink">{term}</dt>
