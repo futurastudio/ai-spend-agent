@@ -6,7 +6,11 @@ import {
   dedupeCumulativeSessionCalls,
   sanitizeLocalActivityText
 } from "./localAgentLogs.js";
-import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
+import {
+  canPriceTokenUsageAtScope,
+  estimateTokenCostUsd,
+  PRICING_TABLE_AS_OF
+} from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { subscriptionPlans } from "./planMath.js";
 import { buildContextHealth, type ContextHealthResult } from "./contextHealth.js";
@@ -919,6 +923,11 @@ function limitActionName(limit: GlanceLimit): string {
 
 function callCost(call: LocalAgentCall): number | undefined {
   if (call.usageSupport === "unsupported_token_shape") return undefined;
+  if (!canPriceTokenUsageAtScope(
+    call.model,
+    call.usage,
+    call.usageScope === "turn" ? "request" : "aggregate"
+  )) return undefined;
   return estimateTokenCostUsd(call.model, call.usage);
 }
 

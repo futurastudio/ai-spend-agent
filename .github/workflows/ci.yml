@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   packages:
@@ -20,6 +21,7 @@ jobs:
       - run: npm run check:public-boundary
       - run: npm run check:source-fixtures
       - run: npm run check:source-docs
+      - run: npm run check:provider-contracts
       - run: npm run typecheck
       - run: npx vitest run
       - run: npm run build
@@ -82,3 +84,16 @@ jobs:
         with:
           node-version: 22
       - run: npm audit --audit-level=high
+
+  provider-contract-release:
+    name: Exact-ref provider release gate
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:release-provider-contracts

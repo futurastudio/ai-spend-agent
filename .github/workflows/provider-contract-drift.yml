@@ -1,0 +1,78 @@
+name: Provider contract drift
+
+on:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  contracts:
+    name: Official provider contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate reviewed contract declarations
+        id: static
+        continue-on-error: true
+        run: npm run check:provider-contracts
+      - name: Fetch and compare official contracts
+        id: drift
+        continue-on-error: true
+        run: npm run check:provider-contract-drift
+      - name: Run provider structural fixtures
+        id: fixtures
+        continue-on-error: true
+        run: npx vitest run packages/core/src/providerConnectors.test.ts packages/core/src/sourceStatus.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: provider-contract-drift-report
+          path: provider-contract-drift.json
+          if-no-files-found: error
+      - name: Open or update drift issue
+        if: always() && (steps.static.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.fixtures.outcome == 'failure')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Provider contract drift requires review';
+            const report = fs.existsSync('provider-contract-drift.json')
+              ? fs.readFileSync('provider-contract-drift.json', 'utf8')
+              : JSON.stringify({ status: 'stale_contract', failures: ['Static provider contract validation failed before a remote report was written.'] }, null, 2);
+            const body = [
+              'The daily read-only provider contract monitor detected a documentation or semantic fingerprint change.',
+              '',
+              'No pricing or financial behavior was changed automatically. Treat the affected contract as `stale_contract` until a human reviews the official source and lands an explicit update.',
+              `Checks: declarations=${{ steps.static.outcome }}, remote=${{ steps.drift.outcome }}, fixtures=${{ steps.fixtures.outcome }}.`,
+              '',
+              '```json',
+              report.slice(0, 50000),
+              '```',
+              '',
+              `Workflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            ].join('\n');
+            const { data } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+            const existing = data.find((issue) => issue.title === title && !issue.pull_request);
+            if (existing) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+            }
+      - name: Fail unresolved drift
+        if: always() && (steps.static.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.fixtures.outcome == 'failure')
+        run: exit 1

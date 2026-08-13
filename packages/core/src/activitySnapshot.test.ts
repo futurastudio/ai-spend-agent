@@ -149,27 +149,27 @@ describe("buildActivitySnapshot", () => {
   it("uses exact local-call timestamps at every rolling-window boundary", () => {
     const asOf = "2026-08-09T12:00:00.000Z";
     const calls = [
-      call("codex", { timestamp: "2026-08-08T13:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 23h
-      call("codex", { timestamp: "2026-08-08T11:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 25h
-      call("codex", { timestamp: "2026-08-02T13:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 6d23h
-      call("codex", { timestamp: "2026-08-02T11:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 7d1h
-      call("codex", { timestamp: "2026-07-10T13:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 29d23h
-      call("codex", { timestamp: "2026-07-10T11:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }) // 30d1h
+      call("codex", { timestamp: "2026-08-08T13:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 23h
+      call("codex", { timestamp: "2026-08-08T11:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 25h
+      call("codex", { timestamp: "2026-08-02T13:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 6d23h
+      call("codex", { timestamp: "2026-08-02T11:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 7d1h
+      call("codex", { timestamp: "2026-07-10T13:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }), // 29d23h
+      call("codex", { timestamp: "2026-07-10T11:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }) // 30d1h
     ];
     const snapshot = meteredSnapshotFromCalls(calls, asOf);
 
     expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 5,
+      amountUsd: 10,
       recordCount: 1,
       coverage: "complete"
     });
     expect(snapshot.metered?.apiEquivalent.sevenDays).toMatchObject({
-      amountUsd: 15,
+      amountUsd: 30,
       recordCount: 3,
       coverage: "complete"
     });
     expect(snapshot.metered?.apiEquivalent.thirtyDays).toMatchObject({
-      amountUsd: 25,
+      amountUsd: 50,
       recordCount: 5,
       coverage: "complete"
     });
@@ -177,23 +177,23 @@ describe("buildActivitySnapshot", () => {
 
   it("splits a same-day aggregate at the exact asOf cutoff without changing its total", () => {
     const calls = [
-      call("codex", { timestamp: "2026-08-09T10:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } }),
-      call("codex", { timestamp: "2026-08-09T14:00:00.000Z", usage: { inputTokens: 1_000_000, outputTokens: 0 } })
+      call("codex", { timestamp: "2026-08-09T10:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } }),
+      call("codex", { timestamp: "2026-08-09T14:00:00.000Z", usageScope: "turn", usage: { inputTokens: 1_000_000, outputTokens: 0 } })
     ];
     const beforeSecondCall = meteredSnapshotFromCalls(calls, "2026-08-09T12:00:00.000Z");
     const afterSecondCall = meteredSnapshotFromCalls(calls, "2026-08-09T15:00:00.000Z");
 
     expect(beforeSecondCall.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 5,
+      amountUsd: 10,
       recordCount: 1,
       coverage: "complete"
     });
     expect(afterSecondCall.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 10,
+      amountUsd: 20,
       recordCount: 2,
       coverage: "complete"
     });
-    expect(aggregateCalls(calls)[0]?.amountUsd).toBe(10);
+    expect(aggregateCalls(calls)[0]?.amountUsd).toBe(20);
   });
 
   it("deduplicates cumulative calls before splitting local daily aggregates", () => {
@@ -215,10 +215,12 @@ describe("buildActivitySnapshot", () => {
     ];
     const snapshot = meteredSnapshotFromCalls(calls, "2026-08-09T12:00:00.000Z");
 
-    expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 10,
+    expect(snapshot.metered?.apiEquivalent.oneDay).toEqual({
+      amountUsd: null,
       recordCount: 1,
-      coverage: "complete"
+      basis: "api_equivalent",
+      financialEvidence: "missing",
+      coverage: "partial"
     });
   });
 
@@ -240,10 +242,12 @@ describe("buildActivitySnapshot", () => {
       financialEvidence: "missing",
       coverage: "partial"
     });
-    expect(snapshot.metered?.apiEquivalent.sevenDays).toMatchObject({
-      amountUsd: 5,
+    expect(snapshot.metered?.apiEquivalent.sevenDays).toEqual({
+      amountUsd: null,
       recordCount: 1,
-      coverage: "complete"
+      basis: "api_equivalent",
+      financialEvidence: "missing",
+      coverage: "partial"
     });
   });
 
@@ -859,6 +863,7 @@ describe("buildActivitySnapshot", () => {
   ])("keeps priced values but marks $label coverage partial", ({ scanEvidence }) => {
     const calls = [call("codex", {
       timestamp: "2026-08-09T12:00:00.000Z",
+      usageScope: "turn",
       usage: { inputTokens: 1_000_000, outputTokens: 0 }
     })];
     const snapshot = buildActivitySnapshot({
@@ -874,7 +879,7 @@ describe("buildActivitySnapshot", () => {
     });
 
     expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 5,
+      amountUsd: 10,
       financialEvidence: "estimated",
       coverage: "partial"
     });

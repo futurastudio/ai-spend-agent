@@ -236,7 +236,7 @@ describe("buildUsageGlance", () => {
         source: "local_calculation",
         basis: "transcript_tokens_at_public_api_rates",
         confidence: "estimated",
-        pricingAsOf: "2026-07-28"
+        pricingAsOf: "2026-08-13"
       },
       plan: {
         source: "local_agent_account_metadata",

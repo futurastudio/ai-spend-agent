@@ -8,6 +8,7 @@ build/
 .vercel/
 coverage/
 ai-spend-report/
+provider-contract-drift.json
 
 demo-output/
 .ai-spend-agent/

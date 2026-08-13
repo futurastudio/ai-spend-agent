@@ -8,7 +8,11 @@ import {
 } from "./localAgentLogs.js";
 import { localAgentFormatDescriptors } from "./localAgentFormats/registry.js";
 import type { LocalAgentFormatId } from "./localAgentFormats/types.js";
-import { estimateTokenCostUsd, PRICING_TABLE_AS_OF } from "./modelPricing.js";
+import {
+  canPriceTokenUsageAtScope,
+  estimateTokenCostUsd,
+  PRICING_TABLE_AS_OF
+} from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
 import { isBundledSampleUsage, type UsageRecord } from "./schema.js";
 import {
@@ -1009,9 +1013,19 @@ function allocateAggregateAmount(
   calls: readonly LocalAgentCall[]
 ): Array<number | null> {
   if (amountUsd === null) return calls.map(() => null);
+  const priceable = calls.map((call) =>
+    canPriceTokenUsageAtScope(
+      call.model,
+      call.usage,
+      call.usageScope === "turn" ? "request" : "aggregate"
+    ) && estimateTokenCostUsd(call.model, call.usage) !== undefined
+  );
+  if (priceable.some((supported) => !supported)) return calls.map(() => null);
   const weights = calls.map((call) => estimateTokenCostUsd(call.model, call.usage) ?? 0);
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-  if (totalWeight <= 0) return calls.map(() => amountUsd / calls.length);
+  if (totalWeight <= 0) {
+    return amountUsd === 0 ? calls.map(() => 0) : calls.map(() => null);
+  }
   return weights.map((weight) => amountUsd * weight / totalWeight);
 }
 

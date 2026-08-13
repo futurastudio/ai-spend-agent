@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import {
+  canPriceTokenUsageAtScope,
   estimateTokenCostUsd,
   estimateTokenCostsUsd,
   promptTierThreshold,
@@ -1900,10 +1901,15 @@ export function aggregateCallsForFormats(
       groupCalls.flatMap((call) => call.sourceVersion ? [call.sourceVersion] : [])
     )].sort().slice(0, 8);
     const tieredPricingEvidenceSupported = !usesPromptTieredPricing(model) ||
-      agent !== "gemini-cli" ||
-      groupCalls.every(hasCompleteGeminiPromptEvidence);
+      groupCalls.every((call) =>
+        canPriceTokenUsageAtScope(
+          model,
+          call.usage,
+          call.usageScope === "turn" ? "request" : "aggregate"
+        ) && (agent !== "gemini-cli" || hasCompleteGeminiPromptEvidence(call))
+      );
     const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
-      ? agent === "gemini-cli" && usesPromptTieredPricing(model)
+      ? usesPromptTieredPricing(model)
         ? estimateTokenCostsUsd(model, groupCalls.map((call) => call.usage))
         : estimateTokenCostUsd(model, usage)
       : undefined;

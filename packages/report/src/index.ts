@@ -1161,6 +1161,7 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
   }
   const records = input.allRecords ?? input.providerRecords ?? [];
   const candidate = connectedModeledCandidates(records)[0];
+  const financialAmountAvailable = reportFinancialPresentationBasis(input) !== "connected_missing";
   const candidateRecordIds = new Set(candidate?.recordIds ?? []);
   const candidateRecords = records.filter((record) => candidateRecordIds.has(record.id));
   return [
@@ -1182,8 +1183,8 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     `    canonicalCandidateId: ${yamlString(candidate?.id ?? "none")}`,
     `    recordIds: ${yamlString(candidate?.recordIds.join(",") ?? "none")}`,
     `  targetOwnership: ${yamlString(candidate ? connectedOwnerSummary(candidateRecords) : "unmapped")}`,
-    `  currentCostValueEvidenceUsd: ${(candidate?.affectedSpendUsd ?? input.summary.totalUsd).toFixed(2)}`,
-    `  modeledOpportunityUsd: ${(candidate?.estimatedMonthlySavingsUsd ?? 0).toFixed(2)}`,
+    `  currentCostValueEvidenceUsd: ${financialAmountAvailable ? (candidate?.affectedSpendUsd ?? input.summary.totalUsd).toFixed(2) : "null"}`,
+    `  modeledOpportunityUsd: ${candidate ? candidate.estimatedMonthlySavingsUsd.toFixed(2) : "null"}`,
     "  allowedApplyModes:",
     "    - coding_agent_prompt",
     "    - policy_draft",
@@ -1299,6 +1300,7 @@ export function generateVerificationPlanMarkdown(input: SpendReportInput): strin
   }
   const records = input.allRecords ?? input.providerRecords ?? [];
   const candidate = connectedModeledCandidates(records)[0];
+  const financialAmountAvailable = reportFinancialPresentationBasis(input) !== "connected_missing";
   return [
     "# AI Spend Verification Plan",
     "",
@@ -1306,7 +1308,7 @@ export function generateVerificationPlanMarkdown(input: SpendReportInput): strin
     "",
     "## Before baseline",
     "",
-    `- Available cost/value evidence: ${formatUsd(input.summary.totalUsd)} (${input.summary.confidence}).`,
+    `- Available cost/value evidence: ${financialAmountAvailable ? `${formatUsd(input.summary.totalUsd)} (${input.summary.confidence})` : "Unavailable (missing; missing/null is not zero)"}.`,
     `- Canonical modeled candidate: ${candidate ? safePromptMetadata(candidate.id, 120) : "none; do not approve or run a change"}.`,
     `- Candidate cost/value evidence: ${candidate ? formatUsd(candidate.affectedSpendUsd) : "not available"}`,
     `- Candidate record IDs: ${candidate ? candidate.recordIds.slice(0, 12).map((id) => safePromptMetadata(id, 100)).join(", ") : "not available"}`,
@@ -1397,6 +1399,7 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     ].join("\n");
   }
   const sampleOnly = input.dataMode === "sample";
+  const financialAmountAvailable = reportFinancialPresentationBasis(input) !== "connected_missing";
   const reportCommand = sampleOnly
     ? "npx aibill report --sample --path ./demo-workspace"
     : "npx aibill report --path ./demo-workspace";
@@ -1420,7 +1423,9 @@ export function generateDemoPackageMarkdown(input: SpendReportInput): string {
     "",
     "## What the buyer should understand in 10 seconds",
     "",
-    `- The agent found ${formatUsd(input.summary.totalUsd)} of ${sampleOnly ? "illustrative, mixed" : "labeled"} cost/value evidence across ${input.summary.recordCount} records.`,
+    financialAmountAvailable
+      ? `- The agent found ${formatUsd(input.summary.totalUsd)} of ${sampleOnly ? "illustrative, mixed" : "labeled"} cost/value evidence across ${input.summary.recordCount} records.`
+      : `- The agent found no priced financial evidence across ${input.summary.recordCount} records: Unavailable; missing/null is not zero.`,
     `- It generated ${input.summary.recommendations.length} ${sampleOnly ? "illustrative modeled" : "ranked optimization"} recommendation(s).`,
     `- It labels confidence as ${input.summary.confidence} and separates provider-reported cost, API-equivalent estimates, usage-only evidence, and missing cost data.`,
     sampleOnly

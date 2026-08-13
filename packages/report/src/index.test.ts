@@ -423,7 +423,7 @@ describe("board-style report generation", () => {
     expect(action).not.toContain("Approve a routing policy");
     expect(policy).toContain('candidateStatus: "no_scoped_change_candidate"');
     expect(policy).toContain('financialClaim: "none"');
-    expect(policy).toContain("modeledOpportunityUsd: 0.00");
+    expect(policy).toContain("modeledOpportunityUsd: null");
     expect(verification).toContain("none; do not approve or run a change");
   });
 
@@ -1277,6 +1277,17 @@ describe("board-style report generation", () => {
     expect(missingHtml).toContain('<strong class="metric-value">Unavailable</strong>');
     expect(missingHtml).toContain("missing/null is not zero");
     expect(missingHtml).not.toContain("$0.00");
+    const missingVerification = generateVerificationPlanMarkdown(missingInput);
+    const missingPolicy = generatePolicyConfigDraftMarkdown(missingInput);
+    const missingDemo = generateDemoPackageMarkdown(missingInput);
+    expect(missingVerification).toContain("Available cost/value evidence: Unavailable (missing; missing/null is not zero)");
+    expect(missingVerification).not.toContain("Available cost/value evidence: $0.00");
+    expect(missingPolicy).toContain("currentCostValueEvidenceUsd: null");
+    expect(missingPolicy).toContain("modeledOpportunityUsd: null");
+    expect(missingPolicy).not.toContain("currentCostValueEvidenceUsd: 0.00");
+    expect(missingDemo).toContain("no priced financial evidence");
+    expect(missingDemo).toContain("Unavailable; missing/null is not zero");
+    expect(missingDemo).not.toContain("found $0.00");
 
     const tinyRecord: UsageRecord = {
       ...estimatedRecord,

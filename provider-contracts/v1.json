@@ -1,0 +1,383 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-13",
+  "defaultReviewCadenceDays": 14,
+  "statusVocabulary": [
+    "current",
+    "stale_contract"
+  ],
+  "contracts": [
+    {
+      "id": "openai-platform",
+      "provider": "openai",
+      "label": "OpenAI Platform organization usage and costs",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "first_class",
+      "validationTarget": "live_verified",
+      "apiVersion": "Current Organization API reference; endpoint paths are not date-versioned",
+      "auth": "Organization Admin API key with read access to organization usage and costs",
+      "endpoints": [
+        "GET /v1/organization/usage/completions",
+        "GET /v1/organization/costs"
+      ],
+      "implementedEndpoints": [
+        "GET /v1/organization/usage/completions",
+        "GET /v1/organization/costs"
+      ],
+      "pagination": "Cursor pagination through next_page while has_more is true; query scope must remain unchanged",
+      "units": "Usage totals are inclusive input_tokens/output_tokens; modality and cache fields are breakdowns. Cost amount.value carries its currency.",
+      "currency": "Use the Costs API currency and amount; never derive billed money from Usage API tokens",
+      "window": "start_time inclusive and end_time exclusive for an explicitly reported Unix-second interval",
+      "freshnessAndRevision": "Treat API results as provider-reported accrued cost/usage for the requested interval; final invoice, credits, tax, discounts and later adjustments remain separate",
+      "financialBasis": "provider_reported_accrued_cost",
+      "reconciliationAnchor": "OpenAI Costs export or invoice-detail export for the identical organization scope and period",
+      "exclusions": [
+        "ChatGPT and Codex workspace seats, credits and subscription invoices",
+        "Prepaid credit application, tax, refunds, discounts and final cash settlement",
+        "Usage endpoints other than the connector's explicitly fetched surfaces"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage",
+          "requiredMarkers": [
+            "GET /organization/usage/completions",
+            "including cached and cache-write tokens",
+            "across text, audio, and image outputs",
+            "GET /organization/costs"
+          ],
+          "semanticSha256": "84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8",
+          "contentSha256": "d845e13329e9c12b8eedc894cb599f8506970e839f471ae3825c98850e47bf07"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "requiredMarkers": [
+            "GPT-5.6 Sol",
+            "Input $5.00 Cached input $0.50 Output $30.00",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
+          ],
+          "semanticSha256": "979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6",
+          "contentSha256": "c49f848e243dbea2d85389b9c431da60a697db95f032439af738381b39e6d179"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+          "requiredMarkers": [
+            "GPT-5.6 Terra",
+            "Input $2.00 Cached input $0.20 Output $12.00",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
+          ],
+          "semanticSha256": "b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877",
+          "contentSha256": "5858003704ea61655e70cdce93c3f5fbc430ca8b0b118a5a7532802cb49e3632"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+          "requiredMarkers": [
+            "GPT-5.6 Luna",
+            "Input $0.20 Cached input $0.02 Output $1.20",
+            "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
+            "Cache writes are billed at 1.25x the uncached input token rate"
+          ],
+          "semanticSha256": "a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53",
+          "contentSha256": "e290ffacf5e3fd191f40a2bdd696712ad3f0949957d605469cc5d064b2801723"
+        }
+      ]
+    },
+    {
+      "id": "anthropic-platform",
+      "provider": "anthropic",
+      "label": "Anthropic Platform Usage and Cost Admin API",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "first_class",
+      "validationTarget": "live_verified",
+      "apiVersion": "anthropic-version: 2023-06-01",
+      "auth": "Claude Console organization Admin API key; unavailable to individual accounts and distinct from Enterprise Analytics keys",
+      "endpoints": [
+        "GET /v1/organizations/usage_report/messages",
+        "GET /v1/organizations/cost_report",
+        "GET /v1/organizations/usage_report/claude_code"
+      ],
+      "implementedEndpoints": [
+        "GET /v1/organizations/cost_report",
+        "GET /v1/organizations/usage_report/claude_code"
+      ],
+      "pagination": "Follow has_more and next_page without changing the original query",
+      "units": "Usage separates uncached input, cache creation/read, output and server tools. Cost amount is a decimal string in fractional cents.",
+      "currency": "USD fractional cents divided by 100 using decimal-safe arithmetic",
+      "window": "RFC3339 starting_at/ending_at with source-specific bucket widths; Claude Code analytics is daily",
+      "freshnessAndRevision": "Usage/cost data normally appears within minutes; exact invoice settlement and Priority Tier cost remain outside the Cost endpoint",
+      "financialBasis": "provider_reported_accrued_cost",
+      "reconciliationAnchor": "Claude Console cost export or invoice for the identical organization scope and period",
+      "exclusions": [
+        "Priority Tier cost from the Cost endpoint",
+        "Claude Enterprise parent organizations and their Analytics-key-only data",
+        "Final invoice credits, tax, contract adjustments and payment status",
+        "Bedrock, Vertex and Foundry activity not returned by the named endpoints"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
+          "requiredMarkers": [
+            "/v1/organizations/usage_report/messages",
+            "/v1/organizations/cost_report",
+            "Priority Tier costs",
+            "next_page"
+          ],
+          "semanticSha256": "d1c47363e9bbb9bcb57e2ed741962708f5f5807d827230f1a882979e34157fa1",
+          "contentSha256": "9f33f0aff45bfdd6cf8e111863e8c8032340d474972a179d34f5db99e2a4452d"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "requiredMarkers": [
+            "Input Tokens",
+            "Output Tokens",
+            "Prompt caching"
+          ],
+          "semanticSha256": "f51408cdc70dd332e3932ab5ec1d856448ab038ea45ab36c80379b6ab18723b4",
+          "contentSha256": "f29a88363e375c271970e864245776cda9c3501af904436590c6d6c11257745d"
+        }
+      ]
+    },
+    {
+      "id": "anthropic-enterprise",
+      "provider": "anthropic",
+      "label": "Claude Enterprise Analytics",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "contract_only",
+      "validationTarget": "untested",
+      "apiVersion": "Claude Enterprise Analytics API current reference",
+      "auth": "Analytics API key with read:analytics created by the Claude Enterprise primary owner; not interchangeable with an Admin API key",
+      "endpoints": [
+        "GET /v1/organizations/analytics/cost_report",
+        "GET /v1/organizations/analytics/user_cost_report",
+        "GET /v1/organizations/analytics/usage_report",
+        "GET /v1/organizations/analytics/user_usage_report",
+        "GET /v1/organizations/analytics/summaries",
+        "GET /v1/organizations/analytics/users"
+      ],
+      "implementedEndpoints": [],
+      "pagination": "Cursors are bound to the original filters, grouping and period; changing scope requires restarting from page one",
+      "units": "Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only",
+      "currency": "Post-discount, pre-credit USD fractional cents for reported usage credits; not the contracted Enterprise seat invoice",
+      "window": "Explicit ending_at at or before data_refreshed_at for stable cost/usage results",
+      "freshnessAndRevision": "Cost and usage may be revised for up to 30 days; recent tails after data_refreshed_at are incomplete",
+      "financialBasis": "provider_reported_provisional_usage_credit_cost_not_seat_bill",
+      "reconciliationAnchor": "Organization cost report older than the revision window reconciled separately from the matching Enterprise seat invoice/contract",
+      "exclusions": [
+        "Credits, tax, contract true-ups and payment settlement",
+        "Contracted Enterprise seat charges are not reported by Analytics usage-credit cost rows",
+        "Per-user rows do not include unattributable automation/API traffic",
+        "RBAC-group rows can overlap and must not be summed",
+        "Claude Code through Amazon Bedrock"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://platform.claude.com/docs/en/manage-claude/analytics-api",
+          "requiredMarkers": [
+            "Analytics API key",
+            "read:analytics",
+            "data_refreshed_at",
+            "revised for up to 30 days"
+          ],
+          "semanticSha256": "a0ea372a1c4444401b8463d209b36dbce82aca091dd5fbf12a74b8ee8f44deea",
+          "contentSha256": "032acd940f5064f2a0016a63b9396fee0e544632f27672a37efd847abe154b88"
+        }
+      ]
+    },
+    {
+      "id": "google-gemini",
+      "provider": "google",
+      "label": "Gemini CLI and Google billing evidence",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "experimental",
+      "validationTarget": "fixture_verified",
+      "apiVersion": "Gemini CLI session format is officially evolving; record the observed CLI version per fixture",
+      "auth": "Local CLI evidence needs no cloud credential; billed money requires an authorized Google Cloud Billing export or account record",
+      "endpoints": [
+        "~/.gemini/tmp/<project_hash>/chats/**/*.json",
+        "~/.gemini/tmp/<project_hash>/chats/**/*.jsonl",
+        "Google Cloud Billing export to BigQuery"
+      ],
+      "implementedEndpoints": [
+        "~/.gemini/tmp/<project_hash>/chats/**/*.json",
+        "~/.gemini/tmp/<project_hash>/chats/**/*.jsonl"
+      ],
+      "pagination": "Local sessions are bounded files; Cloud Billing export completeness is established by the chosen billing account, table and period",
+      "units": "Input, output, cached, thought, tool and total tokens where the session record supplies complete components; thought is priced as output only when the dated pricing contract supports it",
+      "currency": "Local tokens are API-equivalent value only; Cloud Billing export currency establishes provider-reported money",
+      "window": "Session timestamps for local evidence; explicit billing export usage period for cash",
+      "freshnessAndRevision": "Unknown shapes, auth modes, project hashes and token components remain missing; billing export revisions follow Google Cloud Billing",
+      "financialBasis": "api_equivalent_value_until_billing_export",
+      "reconciliationAnchor": "Google Cloud Billing detailed or FOCUS export for the same project/billing account and period",
+      "exclusions": [
+        "logs.json is presence-only and never financial evidence",
+        "Opaque project hashes are not reversed or guessed",
+        "Free, subscription and pay-as-you-go auth modes are not inferred",
+        "Local session value is not a Google invoice"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://geminicli.com/docs/cli/session-management/",
+          "requiredMarkers": [
+            "Token usage statistics",
+            "sessions are stored in ~/.gemini/tmp/",
+            "/chats/",
+            "Sessions are project-specific"
+          ],
+          "semanticSha256": "053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b",
+          "contentSha256": "e9d02a6b6bfe8e9c75e9b6c9bc168acd8b4a9d763c435378034b533e869fe779"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "requiredMarkers": [
+            "Output price (including thinking tokens)",
+            "Context caching price",
+            "Paid Tier"
+          ],
+          "semanticSha256": "924a273c0ac9c0dd1aeb8fe66c844941f695f7f18f47eda30531493b0145d19b",
+          "contentSha256": "33a139dd50b601c37eda3c7ade001f3ad665ec7d2651d94d3e5adf2bc2b87e60"
+        },
+        {
+          "kind": "reconciliation",
+          "url": "https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery",
+          "requiredMarkers": [
+            "FOCUS usage cost data",
+            "Standard usage cost",
+            "Detailed usage cost",
+            "Pricing data"
+          ],
+          "semanticSha256": "2cdb62fc26c68d0cbfa0a5a20881e2576c884e36b6afc2d10153deb3e25992b3",
+          "contentSha256": "de47b3e23423eba6d6444ec17c4a346b5477df9c82d68bb2f233698a9778bb87"
+        }
+      ]
+    },
+    {
+      "id": "cursor-admin",
+      "provider": "cursor",
+      "label": "Cursor Admin API spending and usage events",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "beta",
+      "validationTarget": "fixture_verified",
+      "apiVersion": "Current Cursor Admin API reference; no date-version header",
+      "auth": "Cursor team Admin API key via HTTP Basic authentication",
+      "endpoints": [
+        "POST /teams/spend",
+        "POST /teams/filtered-usage-events"
+      ],
+      "implementedEndpoints": [
+        "POST /teams/spend"
+      ],
+      "pagination": "One-indexed page/pageSize; complete all reported pages and prove member/event coverage for the requested scope",
+      "units": "Use spendCents/overallSpendCents aggregates and chargedCents event details as provider fields; preserve model, kind, usage pool, Cursor Token Rate context, Max mode and token/cache splits without repricing",
+      "currency": "Provider cents divided by 100 only after event detail reconciles to the matching aggregate; keep Cursor Models, Other Models, included, on-demand and BYOK bases separate",
+      "window": "Team spend is the current subscription cycle; filtered events use inclusive epoch-millisecond bounds and hourly aggregation",
+      "freshnessAndRevision": "Polling guidance is hourly; incomplete pagination or event/aggregate residual remains partial/missing",
+      "financialBasis": "provider_reported_cost_beta",
+      "reconciliationAnchor": "Sum filtered usage-event chargedCents and reconcile to /teams/spend for the identical current cycle, then compare with invoice/export",
+      "exclusions": [
+        "Undocumented local IDE/CLI stores are not financial evidence",
+        "Included usage is not silently treated as incremental cash",
+        "Usage-pool and Cursor Token Rate terms are pricing context, not a license to reconstruct billed cost from token counts",
+        "A fixture-only connector is not live or invoice reconciliation",
+        "Seat contracts, tax, credits and final invoice adjustments"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://cursor.com/docs/account/teams/admin-api",
+          "requiredMarkers": [
+            "/teams/spend",
+            "/teams/filtered-usage-events",
+            "chargedCents",
+            "reconcile event-level costs"
+          ],
+          "semanticSha256": "d941a941d6433e0a93c4d6ba0412d6da9ffa246155bd89602ca1fa5815d746be",
+          "contentSha256": "876d1db4f489e490e85762664831ed40e0815d243d25e4b645de8b21a4a1c5f2"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://cursor.com/docs/models-and-pricing",
+          "requiredMarkers": [
+            "Models & Pricing",
+            "Usage pools",
+            "Token"
+          ],
+          "semanticSha256": "be63febe7d7935b434e4e9dca93e474cedf9c632e31d90b08fb3ea57c5041bc7",
+          "contentSha256": "83abb8526e35d50071e83f0b97158826540c9c74f67084d837c57f3b1c15237a"
+        }
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "provider": "github",
+      "label": "GitHub Copilot AI-credit billing",
+      "owner": "aibill-provider-contracts",
+      "state": "current",
+      "availability": "beta",
+      "validationTarget": "fixture_verified",
+      "apiVersion": "X-GitHub-Api-Version: 2026-03-10",
+      "auth": "Organization or enterprise administrator/billing manager using a fine-grained token or GitHub App with read Administration permission",
+      "endpoints": [
+        "GET /organizations/{org}/settings/billing/ai_credit/usage",
+        "GET /organizations/{org}/settings/billing/usage",
+        "Copilot seats and organization metrics APIs"
+      ],
+      "implementedEndpoints": [
+        "Copilot seats and organization metrics APIs"
+      ],
+      "pagination": "AI-credit reports are period/filter scoped; seats and metrics retain their own pagination/completeness contracts",
+      "units": "Preserve product, SKU, model, unit type, price per unit, gross/discount/net quantities and amounts; keep adoption metrics and seats separate",
+      "currency": "Use provider grossAmount, discountAmount and netAmount; one AI credit is the provider billing unit and not a token",
+      "window": "Explicit organization/enterprise year, month and optional day; only the past 24 months are available on the AI-credit endpoint",
+      "freshnessAndRevision": "The current dated API version is required; preview endpoints remain subject to change and incomplete access stays missing",
+      "financialBasis": "provider_reported_net_cost_beta",
+      "reconciliationAnchor": "Organization or enterprise AI-credit report reconciled to the matching billing usage summary and invoice period",
+      "exclusions": [
+        "User-level endpoints when the organization or enterprise pays",
+        "Seat count and adoption metrics are not incremental AI-credit spend",
+        "Premium-request legacy units are not silently blended with AI credits",
+        "Tax, contract true-ups, credits and invoice payment settlement"
+      ],
+      "resources": [
+        {
+          "kind": "contract",
+          "url": "https://docs.github.com/en/rest/billing/usage",
+          "requiredMarkers": [
+            "settings/billing/ai_credit/usage",
+            "X-GitHub-Api-Version: 2026-03-10",
+            "grossAmount",
+            "discountAmount",
+            "netAmount"
+          ],
+          "semanticSha256": "6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c",
+          "contentSha256": "c45c2995595d2013c9cb0d8d978320d3db31e7c2eee777a312011c97132babed"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises",
+          "requiredMarkers": [
+            "GitHub AI Credits are the billing unit",
+            "1 AI credit = $0.01 USD",
+            "input tokens"
+          ],
+          "semanticSha256": "6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815",
+          "contentSha256": "b977adac0ddf5471ca91d6926dfc56a31fb31f2a32b2fd41d4cca7dad6d522bd"
+        }
+      ]
+    }
+  ]
+}
