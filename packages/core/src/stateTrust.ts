@@ -91,7 +91,7 @@ export async function verifyConnectedSpendTrustReceipt(
     if (isNodeError(error, "ENOENT")) {
       return missingTrust();
     }
-    return invalidTrust(error instanceof Error ? error.message : String(error));
+    return invalidTrust("the external trust directory failed safety validation");
   }
 
   let rawReceipt: string;
@@ -99,7 +99,7 @@ export async function verifyConnectedSpendTrustReceipt(
     rawReceipt = await readPrivateFile(trustDirectory, receiptFileName(canonicalRoot));
   } catch (error) {
     if (isNodeError(error, "ENOENT")) return missingTrust();
-    return invalidTrust(error instanceof Error ? error.message : String(error));
+    return invalidTrust("the external provider-sync receipt failed safety validation");
   }
 
   let receipt: unknown;

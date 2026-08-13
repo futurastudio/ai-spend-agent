@@ -392,6 +392,10 @@ official OpenAI and Anthropic provider reports through reference-only
 credentials. The current-main v0.8.0 preview additionally reads experimental
 Gemini financial evidence; npm latest v0.7.3 does not:
 
+> **AI-client data boundary:** aibill sends no telemetry and does not upload
+> transcript contents. The selected MCP result is returned to the AI client
+> you configure and then follows that client's data-handling policy.
+
 ```bash
 npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 ```
