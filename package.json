@@ -19,6 +19,7 @@
     "generate:source-docs": "npm run build --workspace @agent-finops/core && node scripts/generate-local-agent-source-docs.mjs",
     "check:source-docs": "npm run build --workspace @agent-finops/core && node scripts/generate-local-agent-source-docs.mjs --check",
     "smoke:packed-install": "node scripts/smoke-packed-install.mjs",
+    "smoke:library": "node scripts/smoke-library-consumer.mjs",
     "audit:mcp-fixtures": "node scripts/audit-mcp-fixture-matrix.mjs",
     "benchmark:context": "npm run build && node scripts/benchmark-context-health.mjs",
     "benchmark:init": "npm run build && node scripts/benchmark-init.mjs",
