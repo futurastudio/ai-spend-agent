@@ -11,6 +11,8 @@ import {
   normalizeOpenAiUsageResponse,
   normalizeAnthropicClaudeCodeUsageResponse,
   normalizeGitHubCopilotSeatResponse,
+  isProviderAuthenticationError,
+  ProviderConnectorError,
   resolveTokenReference,
   selectProviderFinancialHeadlineRecords
 } from "./providerConnectors.js";
@@ -610,16 +612,21 @@ describe("real provider connector implementations", () => {
   });
 
   it("returns actionable missing-scope prompts on provider permission failures without leaking the token", async () => {
-    await expect(fetchProviderUsageRecords({
+    const openAiFailure = await fetchProviderUsageRecords({
       provider: "openai",
       sourceId: "openai-provider-api",
       authReference: "env:OPENAI_ADMIN_KEY",
       tokenResolver: () => fakeToken,
       startTime: 1761955200,
       fetcher: async () => ({ ok: false, status: 403, statusText: "Forbidden", json: async () => ({ error: { message: `scope denied for ${fakeToken}` } }) })
-    })).rejects.toThrow(/Missing OpenAI admin read scopes/);
+    }).catch((error: unknown) => error);
 
-    await expect(fetchProviderUsageRecords({
+    expect(openAiFailure).toBeInstanceOf(ProviderConnectorError);
+    expect(isProviderAuthenticationError(openAiFailure)).toBe(true);
+    expect(openAiFailure).toMatchObject({ code: "authentication_error", status: 403 });
+    expect((openAiFailure as Error).message).toMatch(/Missing OpenAI admin read scopes/);
+
+    const copilotFailure = await fetchProviderUsageRecords({
       provider: "github-copilot",
       sourceId: "github-copilot-provider-api",
       authReference: "env:GITHUB_COPILOT_TOKEN",
@@ -627,7 +634,34 @@ describe("real provider connector implementations", () => {
       startTime: 1761955200,
       org: "futurastudio",
       fetcher: async () => ({ ok: false, status: 401, statusText: "Unauthorized", json: async () => ({ message: `bad token ${fakeToken}` }) })
-    })).rejects.toThrow(/Missing GitHub Copilot org or enterprise read scopes/);
+    }).catch((error: unknown) => error);
+
+    expect(copilotFailure).toMatchObject({ code: "authentication_error", status: 401 });
+    expect(isProviderAuthenticationError(copilotFailure)).toBe(true);
+    expect((copilotFailure as Error).message).toMatch(/Missing GitHub Copilot org or enterprise read scopes/);
+  });
+
+  it("does not promote forged authentication prose on a non-auth provider response", async () => {
+    const failure = await fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      fetcher: async () => ({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: async () => ({
+          error: {
+            message: "Missing OpenAI admin read scopes; environment variable and credential reference invalid"
+          }
+        })
+      })
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "provider_request_error", status: 400 });
+    expect(isProviderAuthenticationError(failure)).toBe(false);
   });
 
   it("strips terminal controls from provider errors without weakening exact credential redaction", async () => {
