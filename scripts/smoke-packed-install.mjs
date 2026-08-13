@@ -87,6 +87,21 @@ try {
   if (!help.includes("aibill") || !sample.includes("DATA MODE: demo sample")) {
     throw new Error("Packed CLI or alias did not produce the expected clean-install output.");
   }
+  const mcpHelp = execFileSync(process.execPath, [mcpPath, "--help"], {
+    cwd: installDir,
+    encoding: "utf8"
+  });
+  const mcpVersion = execFileSync(process.execPath, [mcpPath, "--version"], {
+    cwd: installDir,
+    encoding: "utf8"
+  });
+  if (
+    !mcpHelp.includes("Start the local stdio MCP server") ||
+    !mcpHelp.includes("invoking AI client") ||
+    mcpVersion.trim() !== expectedVersion
+  ) {
+    throw new Error("Packed MCP help/version did not exit with the expected clean-install output.");
+  }
 
   // Exercise the exact standalone runtime copied out of the installed npm
   // tarball. This catches missing dist assets and repository-path assumptions
@@ -184,6 +199,7 @@ try {
     installed,
     cliHelp: "pass",
     aliasSample: "pass",
+    mcpHelpVersion: "pass",
     statuslineInstallRenderUninstall: "pass",
     mcpProtocol: "pass"
   }));

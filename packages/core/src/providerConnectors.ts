@@ -85,6 +85,35 @@ type FetchPagesResult = {
 
 export type ProviderId = "openai" | "anthropic" | "github-copilot" | "cursor" | string;
 
+export type ProviderConnectorErrorCode =
+  | "authentication_error"
+  | "provider_request_error";
+
+/**
+ * Trusted connector failure metadata. Provider prose remains untrusted and is
+ * used only as a sanitized human-readable message; callers classify failures
+ * from this product-authored code and the observed HTTP status instead.
+ */
+export class ProviderConnectorError extends Error {
+  readonly code: ProviderConnectorErrorCode;
+  readonly status?: number;
+
+  constructor(
+    message: string,
+    options: { code: ProviderConnectorErrorCode; status?: number }
+  ) {
+    super(message);
+    this.name = "ProviderConnectorError";
+    this.code = options.code;
+    this.status = options.status;
+  }
+}
+
+export function isProviderAuthenticationError(error: unknown): boolean {
+  return error instanceof ProviderConnectorError &&
+    error.code === "authentication_error";
+}
+
 export type ProviderConnectorInput = {
   provider: ProviderId;
   sourceId?: string;
@@ -665,7 +694,10 @@ function redactResolvedCredentialError(error: unknown, credentialVariants: strin
     sanitizeProviderMessage(withoutResolvedCredential),
     credentialVariants
   ).trim();
-  return new Error(safeMessage || "Provider connector request failed without a safe error message.");
+  const message = safeMessage || "Provider connector request failed without a safe error message.";
+  return error instanceof ProviderConnectorError
+    ? new ProviderConnectorError(message, { code: error.code, status: error.status })
+    : new Error(message);
 }
 
 function redactResolvedCredentialValue<T>(value: T, credentialVariants: string[]): T {
@@ -927,7 +959,7 @@ async function fetchTextOrThrow(
       return response.text();
     }
     const payload = await response.json().catch(() => undefined);
-    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    lastError = providerRequestError(provider, label, response, payload);
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt === maxFetchRetries) break;
     const retryAfterSeconds = headerNumber(response.headers, "retry-after");
@@ -1212,7 +1244,7 @@ async function fetchJsonOrThrow(
     if (response.ok) {
       return { payload, rateLimit: rateLimitFromHeaders(label, response.headers), headers: response.headers };
     }
-    lastError = new Error(providerPermissionPrompt(provider, label, response, payload));
+    lastError = providerRequestError(provider, label, response, payload);
     // 429 and 5xx are transient: honor retry-after when present, otherwise
     // back off briefly and try again. 4xx auth/scope errors fail immediately.
     const retryable = response.status === 429 || response.status >= 500;
@@ -1693,6 +1725,22 @@ function providerPermissionPrompt(provider: string, label: string, response: Pro
   return `${label} request failed with ${status}. ${rawMessage}`.trim();
 }
 
+function providerRequestError(
+  provider: string,
+  label: string,
+  response: ProviderResponse,
+  payload: unknown
+): ProviderConnectorError {
+  const authenticationFailure = response.status === 401 || response.status === 403;
+  return new ProviderConnectorError(
+    providerPermissionPrompt(provider, label, response, payload),
+    {
+      code: authenticationFailure ? "authentication_error" : "provider_request_error",
+      status: response.status
+    }
+  );
+}
+
 function extractProviderMessage(payload: unknown): string {
   if (!isRecord(payload)) return "";
   const error = isRecord(payload.error) ? payload.error : undefined;
@@ -1869,15 +1917,24 @@ function formatProviderUsd(value: number): string {
 
 export function resolveTokenReference(reference: string, env: Record<string, string | undefined> = process.env): string {
   if (!reference.startsWith("env:")) {
-    throw new Error("Provider auth reference must be a local reference such as env:OPENAI_ADMIN_KEY; raw secrets are not accepted.");
+    throw new ProviderConnectorError(
+      "Provider auth reference must be a local reference such as env:OPENAI_ADMIN_KEY; raw secrets are not accepted.",
+      { code: "authentication_error" }
+    );
   }
   const envName = reference.slice("env:".length);
   if (!/^[A-Z0-9_]+$/.test(envName)) {
-    throw new Error("Provider auth env reference must use an uppercase environment variable name.");
+    throw new ProviderConnectorError(
+      "Provider auth env reference must use an uppercase environment variable name.",
+      { code: "authentication_error" }
+    );
   }
   const value = env[envName];
   if (!value) {
-    throw new Error(`Provider auth reference ${reference} is not set in the local environment.`);
+    throw new ProviderConnectorError(
+      `Provider auth reference ${reference} is not set in the local environment.`,
+      { code: "authentication_error" }
+    );
   }
   return value;
 }

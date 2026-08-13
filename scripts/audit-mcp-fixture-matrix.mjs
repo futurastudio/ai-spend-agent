@@ -58,19 +58,23 @@ try {
   const tools = await client.listTools();
   assert.deepEqual(tools.tools.map((tool) => tool.name), expectedTools);
 
-  // P0.3: a first report with no transcripts or synced state falls back to an
-  // unmistakable in-memory sample without creating project state.
+  // A first report with no synced state returns financial absence, exact next
+  // steps, and no rows. Sample data requires the explicit call below.
   await callOk("get_spend_report", { path: stateRoot }, (data) => {
-    assert.equal(data.mode, "sample");
-    assert.equal(data.accounting?.policy, "demo_sample_not_user_data");
-    assert.equal(data.fallback?.automatic, true);
-    assert.equal(data.fallback?.persisted, false);
-    assert.equal(data.fallback?.demoOnly, true);
-    assert.equal(data.provenance?.state, "bundled_sample_fallback");
-    assert.ok(data.records?.length > 0);
-    assert.ok(data.records.every((record) => record.costConfidence !== "verified"));
-    assert.equal(data.accounting?.financialsByProvider?.openai?.providerReportedBilledUsd, null);
-    assert.equal(data.accounting?.financialsByProvider?.openai?.headlineBasis, "provider_estimated_cost");
+    assert.equal(data.mode, "no_state");
+    assert.deepEqual(data.records, []);
+    assert.equal(data.summary, null);
+    assert.equal(data.financialHeadline, null);
+    assert.equal(data.financialValue?.amountUsd, null);
+    assert.equal(data.accounting?.policy, "no_state_no_financial_evidence");
+    assert.deepEqual(data.nextSteps?.map((step) => step.tool), [
+      "sync_local_agent_spend",
+      "sync_provider_spend",
+      "scan_ai_spend"
+    ]);
+    assert.equal(data.nextSteps?.[2]?.arguments?.sample, true);
+    assert.equal(data.nextSteps?.[2]?.demoOnly, true);
+    assert.equal(data.provenance?.state, "no_state");
   }, false);
 
   await callOk("scan_ai_spend", { path: stateRoot, sample: true }, (data) => {
@@ -124,7 +128,10 @@ try {
     assert.equal(openai?.validationCoverage, "failed");
     assert.equal(openai?.financialEvidence, "missing");
     assert.equal(openai?.freshness?.status, "fresh");
-    assert.match(openai?.lastError ?? "", /environment variable|credential reference/i);
+    assert.equal(
+      openai?.lastError,
+      "openai: a prior provider sync failed; rerun sync_provider_spend to inspect a current typed error."
+    );
   });
   await callOk("recommend_cuts", { path: stateRoot }, (data) => {
     assert.match(data.recommendations?.[0] ?? "", /^DEMO ONLY:/);
@@ -142,7 +149,12 @@ try {
   }, false);
 
   await writeFile(join(stateRoot, ".ai-spend-agent", "spend.json"), "{not-json\n");
-  await callExpectedError("get_spend_report", { path: stateRoot }, /JSON|Unexpected|property name/i, false);
+  await callExpectedError(
+    "get_spend_report",
+    { path: stateRoot },
+    /^Malformed local aibill state was rejected\. Re-run the sync or scan that created it; no records, totals, or recommendations were returned\.$/,
+    false
+  );
 
   assert.deepEqual(results.map((result) => result.tool), expectedTools);
   console.log(JSON.stringify({
@@ -150,12 +162,12 @@ try {
     transport: "stdio",
     serverVersion: client.getServerVersion(),
     tools: results,
-    sampleFallback: {
-      explicit: true,
-      dataMode: "sample",
-      automatic: true,
-      automaticPersistence: false,
-      reason: "With no synced state, get_spend_report returns a clearly labeled in-memory sample. Failed or malformed real state is never silently replaced."
+    noStateBoundary: {
+      defaultMode: "no_state",
+      defaultRecords: 0,
+      explicitSampleOnly: true,
+      explicitSampleMode: "sample",
+      reason: "With no synced state, get_spend_report returns no financial rows and exact next steps. Failed or malformed real state is never replaced; sample rows require sample=true."
     },
     reliability: {
       staleSourceStatus: "pass",
