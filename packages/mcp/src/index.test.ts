@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createProviderConnectorStub, writeConnectedSpendTrustReceipt } from "@agent-finops/core";
+import { createProviderConnectorStub, sourceStatusDefinitions, writeConnectedSpendTrustReceipt } from "@agent-finops/core";
 import {
   getContextHealthTool,
   getUsageGlanceTool,
@@ -1682,6 +1682,22 @@ describe("MCP analyst tools", () => {
     expect(providerState).not.toContain(openAiToken);
     expect(providerState).not.toContain(anthropicToken);
 
+    const openAiDefinition = sourceStatusDefinitions.find((entry) => entry.id === "openai");
+    const priorContractState = openAiDefinition?.contractState;
+    expect(openAiDefinition).toBeDefined();
+    openAiDefinition!.contractState = "stale_contract";
+    try {
+      const upgradedSources = await listSourcesTool({ path: dir });
+      const upgradedOpenAi = upgradedSources.approvedSources.find((source) => source.provider === "openai");
+      expect(upgradedOpenAi).toMatchObject({
+        financialEvidence: "missing"
+      });
+      expect(upgradedOpenAi?.scope).not.toContain("verified");
+      expect(upgradedOpenAi?.scope).not.toContain("$1.25");
+    } finally {
+      openAiDefinition!.contractState = priorContractState;
+    }
+
     const openEndedResult = await syncProviderSpendTool({
       path: dir,
       provider: "openai",
@@ -1709,6 +1725,64 @@ describe("MCP analyst tools", () => {
         coverageEnd: "2025-06-15T15:06:40.000Z"
       }
     });
+  });
+
+  it("fails a direct provider sync closed when its reviewed contract is stale", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-stale-contract-"));
+    const openAiDefinition = sourceStatusDefinitions.find((entry) => entry.id === "openai");
+    expect(openAiDefinition).toBeDefined();
+    const priorState = openAiDefinition!.contractState;
+    openAiDefinition!.contractState = "stale_contract";
+    try {
+      const startTime = 1_761_955_200;
+      const result = await syncProviderSpendTool({
+        path: dir,
+        provider: "openai",
+        authReference: "env:OPENAI_ADMIN_KEY",
+        startTime,
+        endTime: startTime + 86_400
+      }, {
+        tokenResolver: () => "synthetic-openai-secret",
+        fetcher: async (url) => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => url.includes("/organization/costs")
+            ? {
+                data: [{
+                  start_time: startTime,
+                  results: [{ amount: { value: 12, currency: "usd" }, line_item: "Responses API" }]
+                }],
+                has_more: false
+              }
+            : { data: [], has_more: false }
+        })
+      });
+      const providerState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "provider-records.json"), "utf8"));
+      const sourceState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "sources.json"), "utf8"));
+
+      expect(result).toMatchObject({
+        completeness: "missing",
+        financialEvidence: "missing",
+        syncedTotalUsd: null,
+        financials: { headlineBasis: "unavailable", headlineUsd: null },
+        combinedSummary: { totalUsd: 0, confidence: "missing" }
+      });
+      expect(providerState).toMatchObject({
+        completeness: "missing",
+        financials: { headlineBasis: "unavailable", headlineUsd: null },
+        records: [{ amountUsd: null, costConfidence: "missing", source: { confidence: "missing" } }]
+      });
+      expect(sourceState.approvedSources).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "openai-provider-api",
+          financialEvidence: "missing",
+          scope: expect.stringContaining("financial evidence: missing; financial headline: an unavailable financial headline")
+        })
+      ]));
+    } finally {
+      openAiDefinition!.contractState = priorState;
+    }
   });
 
   it("surfaces partial connected coverage without downgrading verified financial rows", async () => {

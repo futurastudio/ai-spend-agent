@@ -243,7 +243,9 @@ read-only scan, but never turns its contents into verified financial evidence.
 
 See the generated [local source-format pages](docs/sources/README.md) for each
 reader's discovery boundary, fields used, validation evidence, privacy rules,
-and known limitations.
+and known limitations. The generated [provider financial contracts](docs/sources/provider-contracts.md)
+pin each official endpoint, authentication boundary, units, windows, exclusions,
+reconciliation anchor, review state, and semantic drift fingerprint.
 
 The August 8 adversarial corpus replay exercised the live-verified Claude Code
 and Codex readers. Its Codex

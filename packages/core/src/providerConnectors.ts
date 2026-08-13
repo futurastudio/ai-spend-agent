@@ -1500,6 +1500,22 @@ export function summarizeProviderFinancials(records: UsageRecord[]): ProviderFin
   return { providerReportedBilledUsd, apiEquivalentEstimatedUsd, providerEstimatedUsd, headlineUsd: null, headlineBasis: "unavailable" };
 }
 
+export function providerFinancialCompleteness(
+  records: UsageRecord[],
+  coverage: ProviderCoverageStatus
+): ProviderConnectorResult["completeness"] {
+  const financials = summarizeProviderFinancials(records);
+  const headlineConfidence: ProviderConnectorResult["completeness"] =
+    financials.headlineBasis === "provider_reported_billed_cost"
+      ? "verified"
+      : financials.headlineBasis === "unavailable"
+        ? "missing"
+        : "estimated";
+  return coverage === "partial" && headlineConfidence !== "missing"
+    ? "detected_unverified"
+    : headlineConfidence;
+}
+
 /**
  * Keep evidence records available to callers, but never add estimates to a
  * provider's official billed total. This selection is intended for aggregate
@@ -1541,15 +1557,7 @@ function providerResult(
   const coverage: ProviderCoverageStatus = resolvedQa.coverage
     ?? (resolvedQa.pagination.every((pagination) => pagination.stoppedBecause === "complete") ? "complete" : "partial");
   const financials = summarizeProviderFinancials(records);
-  const headlineConfidence: ProviderConnectorResult["completeness"] =
-    financials.headlineBasis === "provider_reported_billed_cost"
-      ? "verified"
-      : financials.headlineBasis === "unavailable"
-        ? "missing"
-        : "estimated";
-  const completeness = coverage === "partial" && headlineConfidence !== "missing"
-    ? "detected_unverified"
-    : headlineConfidence;
+  const completeness = providerFinancialCompleteness(records, coverage);
   return {
     provider,
     source: createProviderConnection({ provider, sourceId, authReference, verifiedRecordCount: records.length, totalUsd: financials.headlineUsd, completeness }),
@@ -1606,7 +1614,7 @@ export function createProviderConnection(input: CreateProviderConnectionInput): 
     validationCoverage: validationCoverageForCompletedProviderSync(input.provider),
     financialEvidence,
     authReference: input.authReference,
-    fieldsMissing: [],
+    fieldsMissing: financialEvidence === "missing" ? ["provider financial headline"] : [],
     scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} record(s); financial evidence: ${financialEvidence}; financial headline: ${total}.`
   };
 }

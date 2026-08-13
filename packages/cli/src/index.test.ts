@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activitySnapshotCacheFileName,
   readActivitySnapshot,
+  sourceStatusDefinitions,
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
@@ -919,7 +920,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).toContain("OBSERVED API-EQUIVALENT VALUE");
     expect(result.stdout).toContain("gemini-2.5-pro");
     expect(result.stdout).not.toContain(opaqueProject);
-    expect(sources.stdout).toMatch(/Gemini CLI local logs \(gemini-cli\)\n  validation coverage: fixture_verified\n  financial evidence: estimated/);
+    expect(sources.stdout).toMatch(/Gemini CLI local logs \(gemini-cli\)\n  validation coverage: fixture_verified\n  provider contract: current\n  financial evidence: estimated/);
   });
 
   it("shows proof-conservative source status on two separate axes", async () => {
@@ -933,10 +934,10 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stdout).toContain("financial evidence: verified | estimated | detected_unverified | missing");
     expect(result.stdout).toMatch(/Claude Code local logs \(claude-code\)\n  validation coverage: live_verified\n  financial evidence: missing/);
     expect(result.stdout).toMatch(/Codex local logs \(codex\)\n  validation coverage: live_verified\n  financial evidence: missing/);
-    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  financial evidence: missing/);
-    expect(result.stdout).toMatch(/Anthropic Cost Report and Claude Code Analytics \(anthropic\)\n  validation coverage: live_verified\n  financial evidence: missing/);
-    expect(result.stdout).toMatch(/Cursor Admin API \(cursor\)\n  validation coverage: fixture_verified\n  financial evidence: missing/);
-    expect(result.stdout).toMatch(/GitHub Copilot organization APIs \(github-copilot\)\n  validation coverage: fixture_verified\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  provider contract: current\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/Anthropic Cost Report and Claude Code Analytics \(anthropic\)\n  validation coverage: live_verified\n  provider contract: current\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/Cursor Admin API \(cursor\)\n  validation coverage: fixture_verified\n  provider contract: current\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/GitHub Copilot organization APIs \(github-copilot\)\n  validation coverage: fixture_verified\n  provider contract: current\n  financial evidence: missing/);
     expect(result.stdout).toContain("freshness: not_checked (no local check recorded)");
     expect(result.stdout).toContain("last error: none recorded");
   });
@@ -993,7 +994,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["doctor", "--sources", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  financial evidence: verified\n  freshness: fresh/);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: live_verified\n  provider contract: current\n  financial evidence: verified\n  freshness: fresh/);
     expect(result.stdout).toContain("1 provider row(s) include official provider-reported cost");
     expect(result.stdout).toContain("Product connector QA exercised non-empty Admin cost and usage API paths");
     expect(result.stdout).toContain("This does not reconcile the current user's account");
@@ -1113,7 +1114,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["doctor", "--sources", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  financial evidence: missing/);
+    expect(result.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  provider contract: current\n  financial evidence: missing/);
     expect(result.stdout).toContain("last error: OpenAI costs: HTTP 403 for [REDACTED]");
     expect(result.stdout).not.toContain(rawSecret);
   });
@@ -2583,6 +2584,19 @@ describe("minimal CLI vertical slice", () => {
       })
     ]));
     expect(sourcesRaw).not.toContain('"verification"');
+
+    const openAiDefinition = sourceStatusDefinitions.find((entry) => entry.id === "openai");
+    const priorContractState = openAiDefinition?.contractState;
+    expect(openAiDefinition).toBeDefined();
+    openAiDefinition!.contractState = "stale_contract";
+    try {
+      const upgradedList = await runCli(["list-sources", "--path", dir]);
+      const openAiBlock = upgradedList.stdout.slice(upgradedList.stdout.indexOf("openai-provider-api"));
+      expect(openAiBlock).toContain("financial evidence: missing");
+      expect(openAiBlock).not.toContain("financial evidence: verified");
+    } finally {
+      openAiDefinition!.contractState = priorContractState;
+    }
   });
 
   it("does not launder attacker-authored prior provider rows through a successful CLI sync", async () => {
@@ -2702,7 +2716,7 @@ describe("minimal CLI vertical slice", () => {
     expect(quickstart.stdout).toContain("CONNECTED · PARTIAL COVERAGE");
     expect(quickstart.stdout).toContain("available rows keep their financial evidence labels");
     expect(quickstart.stdout).not.toContain("CONNECTED · VERIFIED PROVIDER COST");
-    expect(doctor.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  financial evidence: verified/);
+    expect(doctor.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  provider contract: current\n  financial evidence: verified/);
     expect(doctor.stdout).toMatch(/last error: .*Stopped after 1 page|last error: .*page cursor expired/);
     expect(receipt.exitCode).toBe(0);
     expect(receipt.stdout).toMatch(/provider coverage was partial/i);
@@ -3122,6 +3136,61 @@ describe("minimal CLI vertical slice", () => {
     const history = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "watch-history.json"), "utf8"));
     expect(latest.totalUsd).toBe(87);
     expect(history).toHaveLength(2);
+  });
+
+  it("keeps connected missing financial evidence unavailable across report artifacts and watch state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connected-missing-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: "2026-08-13T12:00:00.000Z",
+      records: [{
+        id: "openai-stale-contract-row",
+        timestamp: "2026-08-13T11:00:00.000Z",
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI organization costs API",
+          provider: "openai",
+          confidence: "missing",
+          observedFrom: "provider contract gate"
+        },
+        model: "Responses API",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: null,
+        costConfidence: "missing",
+        providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket"
+      }],
+      summary: { totalUsd: 0 }
+    }, null, 2)}\n`;
+    await writeFile(join(stateDir, "spend.json"), spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const report = await runCli(["report", "--path", dir]);
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout).toContain("cost/value evidence total: Unavailable");
+    expect(report.stdout).not.toContain("cost/value evidence total: $0.00");
+    expect(await readFile(join(stateDir, "ai-spend-verify-plan.md"), "utf8"))
+      .toContain("Available cost/value evidence: Unavailable");
+    expect(await readFile(join(stateDir, "ai-spend-policy-config-draft.md"), "utf8"))
+      .toContain("currentCostValueEvidenceUsd: null");
+    expect(await readFile(join(stateDir, "demo-package.md"), "utf8"))
+      .toContain("no priced financial evidence");
+
+    const watch = await runCli(["watch", "--cycles", "1", "--path", dir]);
+    expect(watch.exitCode).toBe(0);
+    expect(watch.stdout).toContain("Financial baseline is unavailable");
+    expect(watch.stdout).not.toContain("Baseline AI spend is $0.00");
+    const latest = JSON.parse(await readFile(join(stateDir, "watch-latest.json"), "utf8"));
+    const history = JSON.parse(await readFile(join(stateDir, "watch-history.json"), "utf8"));
+    const audit = await readFile(join(stateDir, "audit-log.json"), "utf8");
+    expect(latest.totalUsd).toBeNull();
+    expect(latest.byModel).toEqual([]);
+    expect(history[0].totalUsd).toBeNull();
+    expect(audit).toContain("no priced financial evidence; total unavailable");
+    expect(audit).not.toContain("totaling $0.00");
   });
 
   it("emits the baseline exactly once across a multi-cycle watch (streaming path)", async () => {

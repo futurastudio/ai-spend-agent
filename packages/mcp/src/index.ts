@@ -5,9 +5,12 @@ import {
   analyzeSpend,
   attributeUsageRecords,
   buildSourceStatuses,
+  applyProviderContractGate,
+  applyProviderContractGateToSourceRegistry,
   buildUsageGlance,
   createLocalFolderSourceRegistry,
   createProviderConnectorStub,
+  createProviderConnection,
   createScanAuditLog,
   detectLocalPlans,
   downgradeSampleUsageEvidence,
@@ -37,6 +40,7 @@ import {
   scanLocalUsageSignals,
   selectProviderFinancialHeadlineRecords,
   summarizeProviderFinancials,
+  providerFinancialCompleteness,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -289,7 +293,9 @@ export async function getSpendReportTool(input: RegistryPathInput): Promise<unkn
   const persisted = parsePersistedSpendState(JSON.parse(exactSpendContents));
   await assertTrustedConnectedState(rootPath, persisted, exactSpendContents);
   const evidence = await evidenceForPersistedMode(persisted);
-  const records = evidence.records;
+  const records = persisted.mode === "connected_provider"
+    ? applyProviderContractGate(evidence.records)
+    : evidence.records;
   const headlineRecords = persisted.mode === "connected_provider"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -576,13 +582,25 @@ export async function syncProviderSpendTool(
       fetcher: overrides.fetcher,
       tokenResolver: overrides.tokenResolver
     });
-    const records = [
+    const syncedRecords = applyProviderContractGate(result.records);
+    const syncedFinancials = summarizeProviderFinancials(syncedRecords);
+    const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
+    const syncedSource = createProviderConnection({
+      provider: result.provider,
+      sourceId: result.source.id,
+      authReference: input.authReference,
+      verifiedRecordCount: syncedRecords.length,
+      totalUsd: syncedFinancials.headlineUsd,
+      completeness: syncedCompleteness,
+      fetchedAt: new Date(result.fetchedAt)
+    });
+    const records = applyProviderContractGate([
       ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
-      ...result.records
-    ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+      ...syncedRecords
+    ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const combinedSummary = analyzeSpend(selectProviderFinancialHeadlineRecords(records));
     const mappings = attributeUsageRecords(records);
-    const nextRegistry = addApprovedSource(registry, result.source);
+    const nextRegistry = addApprovedSource(registry, syncedSource);
     const qaByProvider = {
       ...(trustedPrior?.qaByProvider ?? {}),
       [result.provider]: result.qa
@@ -604,7 +622,7 @@ export async function syncProviderSpendTool(
     }
     const financialsByProvider = {
       ...(trustedPrior?.financialsByProvider ?? {}),
-      [result.provider]: result.financials
+      [result.provider]: syncedFinancials
     };
 
     await invalidateConnectedSpendTrustReceipt(rootPath);
@@ -612,10 +630,10 @@ export async function syncProviderSpendTool(
     await writeJson(join(stateDir, "provider-records.json"), {
       provider: result.provider,
       fetchedAt: result.fetchedAt,
-      completeness: result.completeness,
+      completeness: syncedCompleteness,
       coverage: result.coverage,
-      financials: result.financials,
-      sourceId: result.source.id,
+      financials: syncedFinancials,
+      sourceId: syncedSource.id,
       records,
       qa: result.qa,
       qaByProvider,
@@ -655,7 +673,7 @@ export async function syncProviderSpendTool(
     await appendAuditEvent(stateDir, {
       timestamp: result.fetchedAt,
       action: "source_scanned",
-      sourceId: result.source.id,
+      sourceId: syncedSource.id,
       path: rootPath,
       detail: `${result.provider} MCP provider sync read ${result.records.length} records through a reference-only credential; no raw secret was persisted.`
     });
@@ -667,18 +685,18 @@ export async function syncProviderSpendTool(
 
     return {
       provider: result.provider,
-      sourceId: result.source.id,
-      boundaryApproval: result.source.boundaryApproval,
-      validationCoverage: result.source.validationCoverage,
-      financialEvidence: result.source.financialEvidence,
+      sourceId: syncedSource.id,
+      boundaryApproval: syncedSource.boundaryApproval,
+      validationCoverage: syncedSource.validationCoverage,
+      financialEvidence: syncedSource.financialEvidence,
       fetchedAt: result.fetchedAt,
-      completeness: result.completeness,
+      completeness: syncedCompleteness,
       coverage: result.coverage,
       ...(result.coverageInterval ? { coverageInterval: result.coverageInterval } : {}),
-      financials: result.financials,
+      financials: syncedFinancials,
       syncedRecordCount: result.records.length,
       combinedRecordCount: records.length,
-      syncedTotalUsd: result.financials.headlineUsd,
+      syncedTotalUsd: syncedFinancials.headlineUsd,
       combinedSummary,
       qa: result.qa
     };
@@ -1068,13 +1086,13 @@ async function readTrustedRegistry(rootPath: string, stateDir: string): Promise<
         exactSpendContents,
         exactSourceRegistryContents
       );
-      if (trust.trusted) return registry;
+      if (trust.trusted) return applyProviderContractGateToSourceRegistry(registry);
     }
   } catch {
     // Keep the approved read-only boundary, but do not trust repository-authored
     // validation or financial-evidence axes without the external sync receipt.
   }
-  return downgradeUntrustedSourceRegistryClaims(registry);
+  return applyProviderContractGateToSourceRegistry(downgradeUntrustedSourceRegistryClaims(registry));
 }
 
 function parseSourceRegistry(value: unknown): SourceRegistry {
@@ -1359,9 +1377,12 @@ function parsePersistedSpendState(value: unknown): PersistedSpendState {
         "Re-run sync_local_agent_spend, sync_provider_spend, or an explicit sample scan; no totals were returned."
     );
   }
-  const records = mode === "sample"
+  const parsedModeRecords = mode === "sample"
     ? downgradeSampleUsageEvidence(parsedRecords)
     : parsedRecords;
+  const records = mode === "connected_provider"
+    ? applyProviderContractGate(parsedModeRecords)
+    : parsedModeRecords;
   const projectFilter = mode === "local_logs" && value.projectFilter !== undefined
     ? parseProjectFilter(value.projectFilter, "Persisted project filter")
     : undefined;

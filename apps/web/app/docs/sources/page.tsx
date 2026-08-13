@@ -93,6 +93,7 @@ export default function SourcesDocsPage() {
         <p className="mt-7">
           Connector validation never makes every returned row verified. The endpoint, record, coverage window, and final invoice boundary still determine the label.
           {" "}<TextLink href="/docs/cli#providers">Open provider setup →</TextLink>
+          {" · "}<a href={`${REPO_URL}/blob/main/docs/sources/provider-contracts.md`} target="_blank" rel="noreferrer" className="text-ink underline decoration-hairline-bright underline-offset-4 hover:decoration-green">Review the versioned provider contracts ↗</a>
         </p>
       </DocsSection>
 

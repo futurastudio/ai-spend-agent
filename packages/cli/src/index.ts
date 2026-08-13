@@ -20,6 +20,8 @@ import {
   subscriptionPlans,
   unsafeScanRootReason,
   selectProviderFinancialHeadlineRecords,
+  summarizeProviderFinancials,
+  providerFinancialCompleteness,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -41,6 +43,7 @@ import {
   buildMissingSourcePrompts,
   confirmMapping,
   createProviderConnectorStub,
+  createProviderConnection,
   createLocalFolderSourceRegistry,
   createScanAuditLog,
   fetchProviderUsageRecords,
@@ -48,6 +51,8 @@ import {
   normalizeSourceRegistry,
   downgradeUntrustedSourceRegistryClaims,
   buildSourceStatuses,
+  applyProviderContractGate,
+  applyProviderContractGateToSourceRegistry,
   slugifySourceId,
   financialEvidenceForRecords,
   formatSourceStatuses,
@@ -572,9 +577,12 @@ async function readPersistedSpend(
     // tag. A copied/tampered sample must never become connected billing merely
     // because `mode` was changed in JSON.
     const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
-    const records = mode === "sample" || mode === undefined
+    const parsedModeRecords = mode === "sample" || mode === undefined
       ? downgradeSampleUsageEvidence(parsedRecords)
       : parsedRecords;
+    const records = mode === "connected_provider"
+      ? applyProviderContractGate(parsedModeRecords)
+      : parsedModeRecords;
     if (spend.checkedAt !== undefined && !validIsoString(spend.checkedAt)) {
       throw new Error("persisted spend checkedAt must be an ISO timestamp");
     }
@@ -649,7 +657,7 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     persisted.connectedTrust?.trusted === true
   ) {
     return {
-      records: persisted.records,
+      records: applyProviderContractGate(persisted.records),
       mode: "connected",
       warnings,
       ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {})
@@ -1640,7 +1648,7 @@ async function collectAndPublishActivitySnapshot(input: {
   const persisted = persistedResult.persisted;
   const trustedProviderRecords = persisted?.mode === "connected_provider" &&
     persisted.connectedTrust?.trusted === true
-    ? selectProviderFinancialHeadlineRecords(persisted.records)
+      ? selectProviderFinancialHeadlineRecords(applyProviderContractGate(persisted.records))
     : [];
 
   let activitySnapshot: ActivitySnapshot | undefined;
@@ -2378,7 +2386,7 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
 
 type WatchSnapshot = {
   capturedAt: string;
-  totalUsd: number;
+  totalUsd: number | null;
   recordCount: number;
   byModel: Array<{ key: string; amountUsd: number }>;
 };
@@ -2403,7 +2411,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
       // Watch may observe an already trusted provider snapshot, but it may not
       // mint trust from repository-authored provider-records.json or rewrite
       // connected state. Only an explicit provider sync can do that.
-      records = persisted.records;
+      records = applyProviderContractGate(persisted.records);
       mode = "connected_provider";
     } else {
       // Same freshness rule as quickstart/report: re-read local logs live,
@@ -2424,9 +2432,10 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
   }
 
   const headlineRecords = mode === "connected_provider"
-    ? selectProviderFinancialHeadlineRecords(records)
+    ? selectProviderFinancialHeadlineRecords(applyProviderContractGate(records))
     : records;
   const summary = analyzeSpend(headlineRecords);
+  const financialAmountAvailable = headlineRecords.some((record) => typeof record.amountUsd === "number");
   const mappings = attributeUsageRecords(records);
   if (mode !== "connected_provider") {
     await writeLocalSpendState(stateDir, records, summary, mappings, mode);
@@ -2434,9 +2443,11 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
 
   const snapshot: WatchSnapshot = {
     capturedAt: new Date().toISOString(),
-    totalUsd: summary.totalUsd,
+    totalUsd: financialAmountAvailable ? summary.totalUsd : null,
     recordCount: summary.recordCount,
-    byModel: summary.byModel.map((entry) => ({ key: entry.key, amountUsd: entry.amountUsd }))
+    byModel: financialAmountAvailable
+      ? summary.byModel.map((entry) => ({ key: entry.key, amountUsd: entry.amountUsd }))
+      : []
   };
 
   // Append to the rolling history and persist the latest snapshot for the next run.
@@ -2447,7 +2458,9 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     timestamp: snapshot.capturedAt,
     action: "scan_completed",
     sourceId: "watch",
-    detail: `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
+    detail: snapshot.totalUsd === null
+      ? `Watch cycle captured ${snapshot.recordCount} records with no priced financial evidence; total unavailable.`
+      : `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
   });
 
   return { summary, snapshot, records: headlineRecords, mode };
@@ -2455,7 +2468,17 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
 
 function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapshot): string {
   if (!previous) {
+    if (current.totalUsd === null) {
+      return `First watch snapshot. Financial baseline is unavailable across ${current.recordCount} records; missing/null is not zero. Future priced cycles will establish a numeric baseline.`;
+    }
     return `First watch snapshot. Baseline AI spend is $${current.totalUsd.toFixed(2)} across ${current.recordCount} charges. Future cycles will report what changed.`;
+  }
+
+  if (current.totalUsd === null) {
+    return `Financial evidence is unavailable across ${current.recordCount} records; missing/null is not zero and no numeric delta was calculated.`;
+  }
+  if (previous.totalUsd === null) {
+    return `A priced financial baseline is now available at $${current.totalUsd.toFixed(2)} across ${current.recordCount} records. The prior snapshot was unavailable, so no numeric delta was calculated.`;
   }
 
   const deltaUsd = roundMoneyCli(current.totalUsd - previous.totalUsd);
@@ -2718,12 +2741,24 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       enterprise: args.enterprise,
       accountId: args.accountId
     });
-    const records = [
+    const syncedRecords = applyProviderContractGate(result.records);
+    const syncedFinancials = summarizeProviderFinancials(syncedRecords);
+    const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
+    const syncedSource = createProviderConnection({
+      provider: result.provider,
+      sourceId: result.source.id,
+      authReference: args.authReference,
+      verifiedRecordCount: syncedRecords.length,
+      totalUsd: syncedFinancials.headlineUsd,
+      completeness: syncedCompleteness,
+      fetchedAt: new Date(result.fetchedAt)
+    });
+    const records = applyProviderContractGate([
       ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
-      ...result.records
-    ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+      ...syncedRecords
+    ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const registry = await readSourceRegistry(stateDir, rootPath);
-    const nextRegistry = addApprovedSource(registry, result.source);
+    const nextRegistry = addApprovedSource(registry, syncedSource);
     const headlineRecords = selectProviderFinancialHeadlineRecords(records);
     const summary = analyzeSpend(headlineRecords);
     const mappings = attributeUsageRecords(records);
@@ -2737,7 +2772,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     };
     const financialsByProvider = {
       ...trustedAccountingMap<unknown>(trustedPrior?.accounting, "financialsByProvider"),
-      [result.provider]: result.financials
+      [result.provider]: syncedFinancials
     };
     const checkedAtByProvider = {
       ...trustedAccountingMap<string>(trustedPrior?.accounting, "checkedAtByProvider"),
@@ -2763,10 +2798,10 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     await writeJson(join(stateDir, "provider-records.json"), {
       provider: result.provider,
       fetchedAt: result.fetchedAt,
-      completeness: result.completeness,
+      completeness: syncedCompleteness,
       coverage: result.coverage,
-      financials: result.financials,
-      sourceId: result.source.id,
+      financials: syncedFinancials,
+      sourceId: syncedSource.id,
       records,
       qa: result.qa,
       qaByProvider,
@@ -2805,7 +2840,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     await appendAuditEvent(stateDir, {
       timestamp: result.fetchedAt,
       action: "source_scanned",
-      sourceId: result.source.id,
+      sourceId: syncedSource.id,
       detail: `${args.provider} provider connector synced ${result.records.length} evidence records with ${result.coverage} coverage. Auth reference only; no raw secrets stored.`
     });
     await writeConnectedSpendTrustReceipt(
@@ -2817,17 +2852,17 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     return ok([
       "aibill sync-provider",
       `provider: ${result.provider}`,
-      `source: ${result.source.id}`,
-      `boundary approval: ${result.source.boundaryApproval}`,
-      `validation coverage: ${result.source.validationCoverage}`,
-      `financial evidence: ${result.source.financialEvidence}`,
+      `source: ${syncedSource.id}`,
+      `boundary approval: ${syncedSource.boundaryApproval}`,
+      `validation coverage: ${syncedSource.validationCoverage}`,
+      `financial evidence: ${syncedSource.financialEvidence}`,
       `coverage: ${result.coverage}`,
       `records fetched: ${result.records.length}`,
-      `headline basis: ${result.financials.headlineBasis}`,
-      `synced provider headline: ${formatOptionalUsd(result.financials.headlineUsd)}`,
+      `headline basis: ${syncedFinancials.headlineBasis}`,
+      `synced provider headline: ${formatOptionalUsd(syncedFinancials.headlineUsd)}`,
       `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
-      ...(result.financials.apiEquivalentEstimatedUsd !== null
-        ? [`API-equivalent estimate (kept separate): $${result.financials.apiEquivalentEstimatedUsd.toFixed(2)}`]
+      ...(syncedFinancials.apiEquivalentEstimatedUsd !== null
+        ? [`API-equivalent estimate (kept separate): $${syncedFinancials.apiEquivalentEstimatedUsd.toFixed(2)}`]
         : []),
       "auth: reference-only; raw secrets were not persisted or printed"
     ].join("\n"));
@@ -2955,7 +2990,10 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `demo package: ${artifactPaths.demoPackage}`,
       reportInput.dataMode === "sample"
         ? `DEMO SAMPLE · illustrative cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)} · not user data`
-        : `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
+        : reportInput.dataMode === "connected_provider" &&
+            !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
+          ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
+          : `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
       "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
@@ -3152,9 +3190,12 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     // A bundled sample remains sample even if a conflicting mode was written.
     // This guards report and Apply separately from the quickstart read path.
     const mode = isBundledSampleUsage(parsedRecords) ? "sample" : storedMode;
-    const records = mode === "sample" || mode === undefined
+    const parsedModeRecords = mode === "sample" || mode === undefined
       ? downgradeSampleUsageEvidence(parsedRecords)
       : parsedRecords;
+    const records = mode === "connected_provider"
+      ? applyProviderContractGate(parsedModeRecords)
+      : parsedModeRecords;
     unavailablePersistedLocalLogs = mode === "local_logs";
     const headlineRecords = mode === "connected_provider"
       ? selectProviderFinancialHeadlineRecords(records)
@@ -3753,14 +3794,14 @@ async function readSourceRegistry(stateDir: string, rootPath: string): Promise<S
           exactSpendContents,
           exactSourceRegistryContents
         );
-        if (trust.trusted) return registry;
+        if (trust.trusted) return applyProviderContractGateToSourceRegistry(registry);
       }
     } catch {
       // A source boundary remains usable as configuration, but its repository-
       // controlled validation/evidence claims are never promoted without the
       // matching external provider-sync receipt.
     }
-    return downgradeUntrustedSourceRegistryClaims(registry);
+    return applyProviderContractGateToSourceRegistry(downgradeUntrustedSourceRegistryClaims(registry));
   } catch {
     return createLocalFolderSourceRegistry(rootPath);
   }

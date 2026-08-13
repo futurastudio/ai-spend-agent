@@ -29,7 +29,18 @@ npm run check:public-boundary
 npm run check:adapters
 npm run check:source-fixtures
 npm run check:source-docs
+npm run check:provider-contracts
 ```
+
+Provider contracts are a versioned financial rulebook, not a claim that every
+declared provider surface is already implemented. Keep `endpoints` (the
+reviewed target contract) separate from `implementedEndpoints` (current
+connector coverage), update only from the linked official sources, and never
+auto-accept a documentation fingerprint change. Before any package release, a
+maintainer must dispatch CI on the exact candidate commit and obtain a green
+`Exact-ref provider release gate`, which runs the live read-only contract
+check. An unresolved drift issue blocks publication even when ordinary PR CI
+is green.
 
 ## Product and data rules
 

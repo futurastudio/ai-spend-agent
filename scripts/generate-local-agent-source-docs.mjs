@@ -302,7 +302,7 @@ async function checkGeneratedDocs(expected) {
   }
 
   for (const name of existing) {
-    if (!expected.has(name)) {
+    if (!expected.has(name) && await ownedByThisGenerator(name)) {
       problems.push(`unexpected ${join(SOURCE_DOCS_DIRECTORY, name)}`);
     }
   }
@@ -322,11 +322,18 @@ async function writeGeneratedDocs(expected) {
   const existing = await existingMarkdownFiles();
 
   for (const name of existing) {
-    if (!expected.has(name)) await rm(join(sourceDocsDirectory, name));
+    if (!expected.has(name) && await ownedByThisGenerator(name)) {
+      await rm(join(sourceDocsDirectory, name));
+    }
   }
   for (const [name, content] of expected) {
     await writeFile(join(sourceDocsDirectory, name), content, "utf8");
   }
 
   console.log(`Generated ${expected.size} source documentation files.`);
+}
+
+async function ownedByThisGenerator(name) {
+  const content = await readFile(join(sourceDocsDirectory, name), "utf8");
+  return content.startsWith(GENERATED_HEADER);
 }
