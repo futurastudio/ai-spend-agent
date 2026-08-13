@@ -1,6 +1,5 @@
-export const DOCS_UPDATED = "August 11, 2026";
-export const NPM_STABLE_VERSION = "0.7.3";
-export const MAIN_PREVIEW_VERSION = "0.8.0";
+export const DOCS_UPDATED = "August 13, 2026";
+export const NPM_STABLE_VERSION = "0.8.0";
 
 export const REPO_URL = "https://github.com/futurastudio/ai-spend-agent";
 export const ISSUE_URL = `${REPO_URL}/issues/new/choose`;
@@ -43,12 +42,12 @@ export const localSources = [
     id: "gemini-cli",
     name: "Gemini CLI",
     provider: "Google",
-    availability: `Merged preview in v${MAIN_PREVIEW_VERSION}; not on npm latest`,
+    availability: `Published experimental in v${NPM_STABLE_VERSION}`,
     validation: "fixture_verified",
     evidence: "estimated or missing",
-    surfaces: "Financial CLI, report, and MCP only",
+    surfaces: "Financial CLI, report, and MCP only; excluded from statusline, Glance, Context Health, Apply, plan/runway, and invocation evidence",
     summary:
-      "Experimental reader for supported chats JSON/JSONL token records. logs.json is detection-only and creates no financial row.",
+      "Experimental, fixture-verified reader for supported chats JSON/JSONL token records. logs.json is detection-only and creates no financial row.",
   },
 ] as const;
 

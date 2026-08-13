@@ -547,7 +547,7 @@ function quickstartNextSteps(
       : "npx aibill report              write a shareable Markdown + HTML report"
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
-  steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app");
+  steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com");
   return steps;
 }
 

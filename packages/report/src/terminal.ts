@@ -838,7 +838,7 @@ function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
   if (mode === "local-logs") {
     return [
       "npx aibill --group-by project  see which project has the most observed activity",
-      "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://ai-spend-agent.vercel.app"
+      "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com"
     ];
   }
   return [

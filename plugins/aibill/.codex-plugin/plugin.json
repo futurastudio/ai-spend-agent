@@ -6,7 +6,7 @@
     "name": "Futura Studio",
     "url": "https://github.com/futurastudio"
   },
-  "homepage": "https://ai-spend-agent.vercel.app",
+  "homepage": "https://asktilden.com",
   "repository": "https://github.com/futurastudio/ai-spend-agent",
   "license": "MIT",
   "keywords": [
@@ -31,7 +31,7 @@
       "Explicit provider sync",
       "MCP"
     ],
-    "websiteURL": "https://ai-spend-agent.vercel.app",
+    "websiteURL": "https://asktilden.com",
     "defaultPrompt": [
       "Check my current AI usage and Context Health.",
       "Explain where each aibill number came from.",
