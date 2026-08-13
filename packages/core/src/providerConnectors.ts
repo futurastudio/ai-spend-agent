@@ -1903,6 +1903,8 @@ function buildOpenAiUsageUrl(startTime: number, endTime?: number): string {
   url.searchParams.append("group_by", "user_id");
   url.searchParams.append("group_by", "api_key_id");
   url.searchParams.append("group_by", "model");
+  url.searchParams.append("group_by", "batch");
+  url.searchParams.append("group_by", "service_tier");
   if (endTime !== undefined) url.searchParams.set("end_time", String(endTime));
   return url.toString();
 }

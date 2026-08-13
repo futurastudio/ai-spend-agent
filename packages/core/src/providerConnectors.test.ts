@@ -1249,10 +1249,14 @@ describe("real provider connector implementations", () => {
 
     expect(calls[0].url).toContain("https://api.openai.com/v1/organization/costs");
     expect(calls[1].url).toContain("https://api.openai.com/v1/organization/usage/completions");
-    expect(calls[1].url).toContain("group_by=model");
-    expect(calls[1].url).toContain("group_by=user_id");
-    expect(calls[1].url).toContain("group_by=project_id");
-    expect(calls[1].url).toContain("group_by=api_key_id");
+    expect(new URL(calls[1].url).searchParams.getAll("group_by")).toEqual([
+      "project_id",
+      "user_id",
+      "api_key_id",
+      "model",
+      "batch",
+      "service_tier"
+    ]);
     expect(calls[0].url).toContain("group_by=project_id");
     expect(calls[0].url).toContain("group_by=line_item");
     expect(calls[0].url).toContain("group_by=api_key_id");
