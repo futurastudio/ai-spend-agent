@@ -51,12 +51,13 @@ cost alongside the local evidence.
 > download passes. Workspace, automatic enforcement, and ROI measurement are not
 > shipped.
 
-No supported agent evidence or detected agent installation? You get a full
-demo on sample data instead. A presence-only
-Gemini `logs.json` signal produces an honest empty state, never sample dollars.
-When you're ready,
-add official provider-reported cost with an OpenAI or Anthropic admin/owner
-key. Availability depends on the permissions of that provider account.
+No supported agent evidence? The default command returns an honest empty state
+with one diagnostic next step; it never substitutes sample dollars. Run
+`npx aibill --sample` only when you explicitly want the labeled illustrative
+demo. A presence-only Gemini `logs.json` signal likewise produces zero financial
+rows. When you're ready, `connect` sets up an OpenAI or Anthropic admin connector
+and prints the separate sync command required to fetch provider-reported cost.
+Availability depends on the permissions of that provider account.
 
 ![Terminal recording of npx aibill rendering the spend report on sample data](docs/assets/demo.gif)
 
@@ -77,7 +78,8 @@ terminal copy.*
 2. **Optional—add the Claude Code status line:** `npx aibill statusline
    install`. Bare init only prints this opt-in; it never changes Claude
    settings. Use `npx aibill statusline uninstall` to restore the prior value.
-3. **Open the complete private view:** `npx aibill`
+3. **Open the complete private view:** `npx aibill --full` (bare `npx aibill`
+   stays compact: trust, one number, one driver, one evidence gap, one action)
 4. **Get the current session decision:** `npx aibill context`
 5. **Draft one evidence-constrained action from real local evidence:**
    `npx aibill apply`. Inspect the candidate evidence, approve at most one
@@ -295,7 +297,7 @@ path and never stores, prints, or proxies provider credentials.
 
 | Command | What it does |
 | --- | --- |
-| _(no command)_ | Zero-key instant readout: your local agent logs if present, sample demo otherwise |
+| _(no command)_ | Zero-key compact receipt from supported local or trusted connected evidence; otherwise an honest no-evidence state (sample data is never implicit) |
 | `init [--path <dir>] [--statusline]` | On npm v0.8.0, detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
 | `statusline` | Render one plan-aware line from the private cache; no scan, provider call, or network |
 | `statusline refresh` | Explicitly run the foreground local refresh, then render the cache |

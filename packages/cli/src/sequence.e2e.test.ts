@@ -42,6 +42,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
   afterEach(() => {
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
+    delete process.env.AI_SPEND_GEMINI_LOGS_DIR;
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
     delete process.env.AI_SPEND_CODEX_AUTH;
@@ -57,7 +58,8 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     expect(initialized.stdout).not.toContain("demo sample");
 
     const first = await runCli(["--path", dir, "--no-color"]);
-    expect(first.stdout).toContain("DATA MODE: your local agent logs");
+    expect(first.stdout).toContain("LOCAL ESTIMATE");
+    expect(first.stdout).not.toContain("DATA MODE:");
     expect(first.stdout).toContain("$7.50");
 
     // Watch must re-read fresh, persist the TRUE mode, and stay compact.
@@ -71,7 +73,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
 
     // I1+I2: the next quickstart must still be truthful and agree on totals.
     const second = await runCli(["--path", dir, "--no-color"]);
-    expect(second.stdout).toContain("DATA MODE: your local agent logs");
+    expect(second.stdout).toContain("LOCAL ESTIMATE");
     expect(second.stdout).not.toContain("connected provider billing");
     expect(second.stdout).toContain("$7.50");
 
@@ -114,7 +116,7 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     }), "utf8");
 
     const result = await runCli(["--path", dir, "--no-color"]);
-    expect(result.stdout).toContain("DATA MODE: your local agent logs");
+    expect(result.stdout).toContain("LOCAL ESTIMATE");
     expect(result.stdout).not.toContain("connected provider billing");
     expect(result.stdout).not.toContain("$999");
 
@@ -170,5 +172,28 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     const result = await runCli(["--group-by", "--path", dir]);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("source|model|client|project|agent|user|workspace|apiKey");
+  });
+
+  it("empty bare → watch → report-card never introduces or persists sample data", async () => {
+    process.env.AI_SPEND_CLAUDE_LOGS_DIR = await mkdtemp(join(tmpdir(), "seq-empty-claude-"));
+    process.env.AI_SPEND_CODEX_LOGS_DIR = await mkdtemp(join(tmpdir(), "seq-empty-codex-"));
+    process.env.AI_SPEND_GEMINI_LOGS_DIR = await mkdtemp(join(tmpdir(), "seq-empty-gemini-"));
+    const dir = await mkdtemp(join(tmpdir(), "seq-empty-state-"));
+    const receiptPath = join(dir, "receipt.svg");
+
+    const bare = await runCli(["--path", dir, "--no-color"]);
+    const watch = await runCli(["watch", "--cycles", "1", "--path", dir, "--no-color"]);
+    const card = await runCli(["report-card", "--path", dir, "--out", receiptPath, "--no-color"]);
+
+    expect(bare.exitCode).toBe(0);
+    expect(bare.stdout).toContain("No sample data was substituted");
+    expect(bare.stdout).not.toContain("$87.00");
+    expect(watch.exitCode).toBe(1);
+    expect(watch.stderr).toContain("no zero total or sample activity was recorded");
+    expect(card.exitCode).toBe(1);
+    expect(card.stderr).toContain("No receipt was written");
+    const spend = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spend).toMatchObject({ mode: "local_logs", records: [] });
+    await expect(readFile(receiptPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

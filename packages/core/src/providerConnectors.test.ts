@@ -1769,14 +1769,51 @@ describe("real provider connector implementations", () => {
       boundaryApproval: "approved",
       validationCoverage: "live_verified",
       financialEvidence: "verified",
-      fieldsVerified: expect.arrayContaining(["organization costs", "project usage"]),
-      authMode: "oauth",
+      fieldsVerified: expect.arrayContaining(["organization costs", "completions usage by project, user, model, API key, and service tier"]),
+      authMode: "api_token_ref",
       tokenStorage: "local_reference_only",
       authReference: "env:OPENAI_ADMIN_KEY"
     });
     expect(source.scope).toContain("3 record(s); financial evidence: verified");
     expect(source.scope).toContain("$42.50");
+    expect(source.fieldsMissing).toEqual(expect.arrayContaining([
+      "non-completions usage families",
+      "ChatGPT/Codex workspace seats, credits, and final invoice settlement"
+    ]));
+    expect(source.fieldsMissing).not.toContain("OpenAI Admin API key reference");
     expect(JSON.stringify(source)).not.toContain(fakeToken);
+  });
+
+  it("preserves known permanent provider coverage gaps after successful sync", () => {
+    const cases = [
+      {
+        provider: "anthropic",
+        credential: "Anthropic Admin API key reference",
+        gaps: ["Messages Usage API detail", "Claude Enterprise Analytics and final invoice settlement"]
+      },
+      {
+        provider: "cursor",
+        credential: "Cursor team Admin API key reference",
+        gaps: ["filtered usage-event detail and aggregate reconciliation", "seat contract and final invoice settlement"]
+      },
+      {
+        provider: "github-copilot",
+        credential: "GitHub admin token reference and organization or enterprise slug",
+        gaps: ["AI-credit gross, discount, and net billing", "license invoice settlement"]
+      }
+    ] as const;
+
+    for (const fixture of cases) {
+      const source = createProviderConnection({
+        provider: fixture.provider,
+        authReference: `env:${fixture.provider.toUpperCase().replaceAll("-", "_")}_ADMIN_KEY`,
+        verifiedRecordCount: 2,
+        totalUsd: 12.5,
+        completeness: "verified"
+      });
+      expect(source.fieldsMissing, fixture.provider).toEqual(expect.arrayContaining([...fixture.gaps]));
+      expect(source.fieldsMissing, fixture.provider).not.toContain(fixture.credential);
+    }
   });
 
   it("keeps an unavailable provider headline missing instead of inventing $0.00", () => {
@@ -1790,6 +1827,12 @@ describe("real provider connector implementations", () => {
     });
 
     expect(source.financialEvidence).toBe("missing");
+    expect(source.fieldsMissing).toEqual(expect.arrayContaining([
+      "provider financial headline",
+      "non-completions usage families",
+      "ChatGPT/Codex workspace seats, credits, and final invoice settlement"
+    ]));
+    expect(source.fieldsMissing).not.toContain("OpenAI Admin API key reference");
     expect(source.scope).toContain("an unavailable financial headline");
     expect(source.scope).not.toContain("$0.00");
   });

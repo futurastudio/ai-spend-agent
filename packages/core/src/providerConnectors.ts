@@ -1900,16 +1900,33 @@ export function createProviderConnection(input: CreateProviderConnectionInput): 
   const source = createProviderConnectorStub(input.provider, "provider_api", input.fetchedAt);
   const total = input.totalUsd === null ? "an unavailable financial headline" : formatProviderUsd(input.totalUsd);
   const financialEvidence = input.completeness ?? "verified";
+  const fulfilledBySuccessfulSync = new Set(providerConnectionPrerequisiteFields[input.provider] ?? [
+    "approved account/API/export source"
+  ]);
+  const fieldsMissing = source.fieldsMissing.filter((field) => !fulfilledBySuccessfulSync.has(field));
+  if (financialEvidence === "missing" || input.totalUsd === null) {
+    fieldsMissing.push("provider financial headline");
+  }
   return {
     ...source,
     id: input.sourceId ?? source.id,
     validationCoverage: validationCoverageForCompletedProviderSync(input.provider),
     financialEvidence,
     authReference: input.authReference,
-    fieldsMissing: financialEvidence === "missing" ? ["provider financial headline"] : [],
+    // A successful request satisfies credentials/setup, not permanent product
+    // coverage gaps such as invoice settlement or unsupported usage families.
+    fieldsMissing: Array.from(new Set(fieldsMissing)),
     scope: `${source.scope} Last successful pull produced ${input.verifiedRecordCount} record(s); financial evidence: ${financialEvidence}; financial headline: ${total}.`
   };
 }
+
+const providerConnectionPrerequisiteFields: Record<string, readonly string[]> = {
+  openai: ["OpenAI Admin API key reference"],
+  anthropic: ["Anthropic Admin API key reference"],
+  cursor: ["Cursor team Admin API key reference"],
+  "github-copilot": ["GitHub admin token reference and organization or enterprise slug"],
+  codex: ["OpenAI Admin API key reference"]
+};
 
 function validationCoverageForCompletedProviderSync(provider: string): ApprovedSource["validationCoverage"] {
   if (provider === "openai" || provider === "anthropic") return "live_verified";

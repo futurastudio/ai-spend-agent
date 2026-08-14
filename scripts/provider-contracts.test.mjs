@@ -14,7 +14,7 @@ import {
 
 test("the public provider contract matrix is structurally complete", async () => {
   const contracts = await readProviderContracts();
-  assert.deepEqual(validateProviderContracts(contracts, new Date("2026-08-13T12:00:00.000Z")), []);
+  assert.deepEqual(validateProviderContracts(contracts, new Date("2026-08-14T12:00:00.000Z")), []);
   assert.deepEqual(new Set(contracts.contracts.map((entry) => entry.provider)), new Set(["openai", "anthropic", "google", "cursor", "github"]));
   assert.equal(contracts.contracts.find((entry) => entry.id === "cursor-admin")?.endpoints.includes("POST /teams/filtered-usage-events"), true);
   assert.equal(contracts.contracts.find((entry) => entry.id === "github-copilot")?.endpoints.includes("GET /organizations/{org}/settings/billing/ai_credit/usage"), true);
