@@ -857,9 +857,11 @@ describe("MCP analyst tools", () => {
     expect(text).toContain("window=2026-08-03T12:00:00.000Z through 2026-08-03T12:00:00.000Z");
     expect(text).toContain("confidence=verified");
     expect(text).toContain("record_ids=provider-call");
+    expect(text).toContain("Affected observed provider cost/value: $30.00");
     expect(text).toContain("not verified savings, final-invoice impact, or ROI");
     expect(text).toContain("do not mutate");
     expect(text).toContain("3 matched future workloads");
+    expect(text).not.toMatch(/\.\./u);
   });
 
   it("does not manufacture call-level cuts from connected billing buckets", async () => {
@@ -1975,8 +1977,10 @@ describe("MCP analyst tools", () => {
     expect(openai?.financialEvidenceNote).toContain("official provider-reported cost");
     expect(openai?.lastError).toBe("openai: a prior provider sync failed; rerun sync_provider_spend to inspect a current typed error.");
     expect(sourceStatusState.providers.openai?.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
-    expect(recommendations.recommendations.join("\n")).toContain("PARTIAL COVERAGE: openai");
-    expect(recommendations.recommendations.join("\n")).toContain("missing rows can change totals");
+    const recommendationText = recommendations.recommendations.join("\n");
+    expect(recommendationText).toContain("PARTIAL COVERAGE: openai");
+    expect(recommendationText).toContain("missing rows can change totals");
+    expect(recommendationText).not.toMatch(/\.\./u);
   });
 
   it("rejects a persisted provider coverage interval when either receipt bound is missing", async () => {

@@ -139,7 +139,9 @@ struct GlanceView: View {
           .foregroundStyle(.white.opacity(0.56))
         Spacer()
         Text(limit.map {
-          $0.freshness == "stale" ? "Stale report" : "\(GlanceFormatting.percent($0.remainingPercent)) left"
+          if $0.freshness == "stale" { return "Stale report" }
+          if GlanceFormatting.isReportedExhausted($0) { return "Exhausted" }
+          return "\(GlanceFormatting.percent($0.remainingPercent)) left"
         } ?? "Not reported")
           .fontWeight(.semibold)
           .foregroundStyle(limitColor(limit))
@@ -357,6 +359,9 @@ struct GlanceView: View {
 
   private func limitProjectionLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
     if limit.freshness == "stale" { return "Refresh agent limits" }
+    if GlanceFormatting.isReportedExhausted(limit) {
+      return GlanceFormatting.exhaustionLabel(limit)
+    }
     return "Local estimate · \(GlanceFormatting.exhaustionLabel(limit))"
   }
 

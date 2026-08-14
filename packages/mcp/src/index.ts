@@ -516,8 +516,8 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
     return [
       ...(partialCoverageWarning ? [partialCoverageWarning] : []),
       `[MODELED CANDIDATE; candidate=${candidate.id}; evidence=explicit call/invocation connected records; sources=${sources}; cost_basis=${costBasis}; connector_coverage=${partialCoverageWarning ? "partial" : "complete_or_not_reported"}; window=${observedEvidenceWindow(candidateRecords)}; confidence=${candidate.confidence}; records=${candidate.recordCount}; unit=${candidate.recordUnit}; record_ids=${candidate.recordIds.join(",")}] ${candidate.title}`,
-      `Hypothesis: ${candidate.action}`,
-      `Affected observed provider cost/value: $${candidate.affectedSpendUsd.toFixed(2)}; modeled monthly opportunity: $${candidate.estimatedMonthlySavingsUsd.toFixed(2)}; not verified savings, final-invoice impact, or ROI`,
+      `Hypothesis: ${candidate.action.replace(/[.!?]+$/u, "")}`,
+      `Affected observed provider cost/value: ${formatMcpUsd(candidate.affectedSpendUsd)}; modeled monthly opportunity: ${formatMcpUsd(candidate.estimatedMonthlySavingsUsd)}; not verified savings, final-invoice impact, or ROI`,
       "Inspect the source records and implementation surface read-only first; do not mutate files, routing, budgets, providers, policy, or production until the user approves one candidate",
       "After one approved reversible change, compare at least 3 matched future workloads for accepted outcomes, latency/rework, usage, and provider-reported cost; roll back on regression"
     ].join(". ");
@@ -568,7 +568,9 @@ function connectedPartialCoverageWarning(spendState: PersistedSpendState | undef
     .map(([provider]) => provider)
     .sort();
   if (partialProviders.length === 0) return undefined;
-  return `PARTIAL COVERAGE: ${partialProviders.join(", ")} did not return every requested page or source. Financial labels apply only to the returned rows; missing rows can change totals, attribution, and any modeled opportunity.`;
+  // This is a sentence fragment consumed by the recommendation sentence
+  // joiner, so it deliberately has no terminal punctuation.
+  return `PARTIAL COVERAGE: ${partialProviders.join(", ")} did not return every requested page or source. Financial labels apply only to the returned rows; missing rows can change totals, attribution, and any modeled opportunity`;
 }
 
 export async function syncProviderSpendTool(

@@ -596,6 +596,86 @@ describe("buildUsageGlance", () => {
     );
   });
 
+  it("treats a fresh 100%-used window as exhausted instead of a future projection", () => {
+    const calls: LocalAgentCall[] = [{
+      agent: "codex",
+      sessionId: "reported-exhausted",
+      project: "agent-finops",
+      model: "gpt-5.1-codex",
+      timestamp: "2026-07-28T17:55:00.000Z",
+      startedAt: "2026-07-28T17:30:00.000Z",
+      usage: usage(80_000, 8_000),
+      activity: activity("Testing exhausted runway truth", 4, 5),
+      rateLimits: {
+        observedAt: "2026-07-28T17:55:00.000Z",
+        windows: [{
+          kind: "five-hour",
+          name: "five-hour",
+          usedPercent: 100,
+          windowMinutes: 300,
+          resetsAt: "2026-07-28T20:00:00.000Z"
+        }]
+      }
+    }];
+
+    const snapshot = buildUsageGlance(calls, {
+      now: new Date("2026-07-28T18:00:00.000Z")
+    });
+
+    expect(snapshot.limits[0]).toMatchObject({
+      freshness: "current",
+      remainingPercent: 0,
+      projectedExhaustionAt: null,
+      projectedToExhaustBeforeReset: false
+    });
+    expect(snapshot.primaryAction).toMatchObject({
+      intent: "protect_runway",
+      label: "Checkpoint · agent-finops",
+      detail: "5-hour window is exhausted until reset",
+      confidence: "high"
+    });
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "5-hour window: exhausted (0% remaining); provider-reported reset=2026-07-28T20:00:00.000Z"
+    );
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("may exhaust");
+    expect(snapshot.primaryAction.agentPrompt).not.toContain(
+      "No transcript-reported plan window is currently projected"
+    );
+  });
+
+  it("does not turn a rounded near-limit percentage into a false exhausted claim", () => {
+    const snapshot = buildUsageGlance([{
+      agent: "codex",
+      sessionId: "near-limit",
+      project: "agent-finops",
+      model: "gpt-5.1-codex",
+      timestamp: "2026-07-28T17:55:00.000Z",
+      startedAt: "2026-07-28T17:30:00.000Z",
+      usage: usage(80_000, 8_000),
+      activity: activity("Testing near-limit truth", 4, 5),
+      rateLimits: {
+        observedAt: "2026-07-28T17:55:00.000Z",
+        windows: [{
+          kind: "five-hour",
+          name: "five-hour",
+          usedPercent: 99.96,
+          windowMinutes: 300,
+          resetsAt: "2026-07-28T20:00:00.000Z"
+        }]
+      }
+    }], {
+      now: new Date("2026-07-28T18:00:00.000Z")
+    });
+
+    expect(snapshot.limits[0]).toMatchObject({
+      usedPercent: 99.96,
+      remainingPercent: 0,
+      freshness: "current"
+    });
+    expect(snapshot.primaryAction.detail).not.toContain("is exhausted");
+    expect(snapshot.primaryAction.agentPrompt).not.toContain("exhausted (0% remaining)");
+  });
+
   it("uses the evidence-backed focus project when the latest session is only attributed to home", () => {
     const snapshot = buildUsageGlance([
       {

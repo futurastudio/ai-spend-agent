@@ -566,9 +566,10 @@ function projectExhaustion(
   ) {
     return { at: null, beforeReset: false };
   }
-  if (window.usedPercent >= 100) {
-    return { at: observedAt, beforeReset: observedMs >= now.getTime() };
-  }
+  // A current report at the limit is an observed exhausted state, not a
+  // forecast. Keep the projection empty so downstream copy cannot describe an
+  // already-exhausted window as something that merely "may" exhaust.
+  if (window.usedPercent >= 100) return { at: null, beforeReset: false };
   const remainingMs = elapsedMs * ((100 - window.usedPercent) / window.usedPercent);
   const exhaustionMs = observedMs + remainingMs;
   return exhaustionMs > now.getTime() && exhaustionMs < resetMs
@@ -783,6 +784,14 @@ function buildPrimaryAction(input: {
   );
   const focus = safeActionMetadata(input.focus?.summary, 120);
   const focalFile = safeActionMetadata(input.focus?.file, 100);
+  const generatedAtMs = Date.parse(input.generatedAt);
+  const exhaustedLimit = input.limits
+    .filter((limit) => (
+      limit.freshness === "current" &&
+      limit.usedPercent >= 100 &&
+      Date.parse(limit.resetsAt) > generatedAtMs
+    ))
+    .sort((left, right) => Date.parse(left.resetsAt) - Date.parse(right.resetsAt))[0];
   const urgentLimit = input.limits
     .filter((limit) => (
       limit.freshness === "current" &&
@@ -799,64 +808,74 @@ function buildPrimaryAction(input: {
   let instruction: string;
   let confidence: GlancePrimaryAction["confidence"] = input.sessionHealth.confidence;
 
-  switch (input.sessionHealth.recommendation) {
-  case "start_fresh":
-    intent = "start_fresh";
-    label = `Start fresh${projectSuffix}`;
-    detail = focus
-      ? `Carry “${focus}” into a clean session`
-      : "Carry only the concrete state you still need";
-    instruction = "Start a clean session and continue the observed focus after verifying the current repository state.";
-    break;
-  case "review_hooks":
-    intent = "review_context";
-    label = `Review context${projectSuffix}`;
-    detail = focus
-      ? `Protect “${focus}” from unnecessary hook context`
-      : "Inspect configured hooks before removing anything";
-    instruction = "Review installed hook sources that affect this work. Do not remove or edit configuration without explicit user approval.";
-    break;
-  case "trim_dead_context":
-    intent = "trim_context";
-    label = `Trim context${projectSuffix}`;
-    detail = focus
-      ? `Keep only context useful to “${focus}”`
-      : "Inspect unused loaded context before changing it";
-    instruction = "Identify loaded context that is unrelated to the observed focus. Recommend scoped changes, but do not remove anything without explicit user approval.";
-    break;
-  default:
-    if (urgentLimit) {
-      intent = "protect_runway";
-      label = `Checkpoint${projectSuffix}`;
-      detail = `${limitActionName(urgentLimit)} may exhaust before reset`;
-      instruction = "Create a concise checkpoint for the observed focus and prioritize the smallest verifiable next step before the reported plan window may be exhausted.";
-      confidence = "medium";
-    } else if (
-      focus &&
-      input.focus?.confidence !== "low" &&
-      input.currentSession?.status === "active"
-    ) {
-      intent = "continue_focus";
-      label = `Continue${projectSuffix}`;
-      detail = focus;
-      instruction = "Continue the observed focus with the smallest verifiable next step.";
-      confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
-    } else if (focus && input.focus?.confidence !== "low") {
-      intent = "resume_focus";
-      label = `Resume${projectSuffix}`;
-      detail = focus;
-      instruction = "Resume the observed focus after checking what changed since the last local activity.";
-      confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
-    } else {
-      intent = "inspect_current_work";
-      label = `Inspect current work${projectSuffix}`;
-      detail = "Verify the active task before making changes";
-      instruction = "Inspect the current repository and ask for the intended task if it cannot be established from local evidence.";
-      confidence = "low";
+  if (exhaustedLimit) {
+    intent = "protect_runway";
+    label = `Checkpoint${projectSuffix}`;
+    detail = `${limitActionName(exhaustedLimit)} is exhausted until reset`;
+    instruction = "Create a concise checkpoint for the observed focus and wait for the provider-reported reset before resuming work that requires this plan window.";
+    confidence = "high";
+  } else {
+    switch (input.sessionHealth.recommendation) {
+    case "start_fresh":
+      intent = "start_fresh";
+      label = `Start fresh${projectSuffix}`;
+      detail = focus
+        ? `Carry “${focus}” into a clean session`
+        : "Carry only the concrete state you still need";
+      instruction = "Start a clean session and continue the observed focus after verifying the current repository state.";
+      break;
+    case "review_hooks":
+      intent = "review_context";
+      label = `Review context${projectSuffix}`;
+      detail = focus
+        ? `Protect “${focus}” from unnecessary hook context`
+        : "Inspect configured hooks before removing anything";
+      instruction = "Review installed hook sources that affect this work. Do not remove or edit configuration without explicit user approval.";
+      break;
+    case "trim_dead_context":
+      intent = "trim_context";
+      label = `Trim context${projectSuffix}`;
+      detail = focus
+        ? `Keep only context useful to “${focus}”`
+        : "Inspect unused loaded context before changing it";
+      instruction = "Identify loaded context that is unrelated to the observed focus. Recommend scoped changes, but do not remove anything without explicit user approval.";
+      break;
+    default:
+      if (urgentLimit) {
+        intent = "protect_runway";
+        label = `Checkpoint${projectSuffix}`;
+        detail = `${limitActionName(urgentLimit)} may exhaust before reset`;
+        instruction = "Create a concise checkpoint for the observed focus and prioritize the smallest verifiable next step before the reported plan window may be exhausted.";
+        confidence = "medium";
+      } else if (
+        focus &&
+        input.focus?.confidence !== "low" &&
+        input.currentSession?.status === "active"
+      ) {
+        intent = "continue_focus";
+        label = `Continue${projectSuffix}`;
+        detail = focus;
+        instruction = "Continue the observed focus with the smallest verifiable next step.";
+        confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
+      } else if (focus && input.focus?.confidence !== "low") {
+        intent = "resume_focus";
+        label = `Resume${projectSuffix}`;
+        detail = focus;
+        instruction = "Resume the observed focus after checking what changed since the last local activity.";
+        confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
+      } else {
+        intent = "inspect_current_work";
+        label = `Inspect current work${projectSuffix}`;
+        detail = "Verify the active task before making changes";
+        instruction = "Inspect the current repository and ask for the intended task if it cannot be established from local evidence.";
+        confidence = "low";
+      }
     }
   }
 
-  const runway = urgentLimit
+  const runway = exhaustedLimit
+    ? `${limitActionName(exhaustedLimit)}: exhausted (0% remaining); provider-reported reset=${exhaustedLimit.resetsAt}; observed=${exhaustedLimit.observedAt}.`
+    : urgentLimit
     ? `${limitActionName(urgentLimit)}: ${roundPercent(urgentLimit.remainingPercent)}% remaining; locally projected exhaustion=${urgentLimit.projectedExhaustionAt ?? "unavailable"}; provider-reported reset=${urgentLimit.resetsAt}.`
     : input.limits.some((limit) => limit.freshness === "current")
       ? "No transcript-reported plan window is currently projected to exhaust before reset."

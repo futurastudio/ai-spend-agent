@@ -148,4 +148,46 @@ struct GlanceRefreshPresentationTests {
     #expect(GlanceFormatting.dollars(0.004) == "<$0.01")
     #expect(GlanceFormatting.dollars(nil) == "Unpriced")
   }
+
+  @Test("labels a fresh zero-remaining report as exhausted, not projected")
+  func exhaustedRunway() {
+    let limit = UsageGlanceSnapshot.Limit(
+      agent: "codex",
+      kind: "five-hour",
+      name: "five-hour",
+      usedPercent: 100,
+      remainingPercent: 0,
+      windowMinutes: 300,
+      observedAt: "2026-08-14T16:55:00.000Z",
+      resetsAt: "2026-08-14T20:00:00.000Z",
+      source: "transcript_reported",
+      freshness: "current",
+      projectedExhaustionAt: nil,
+      projectedToExhaustBeforeReset: false,
+      projectionConfidence: "estimated"
+    )
+    #expect(GlanceFormatting.isReportedExhausted(limit))
+    #expect(GlanceFormatting.exhaustionLabel(limit) == "At reported limit · checkpoint work")
+  }
+
+  @Test("does not call a rounded near-limit report exhausted")
+  func nearLimitIsNotExhausted() {
+    let limit = UsageGlanceSnapshot.Limit(
+      agent: "codex",
+      kind: "five-hour",
+      name: "five-hour",
+      usedPercent: 99.96,
+      remainingPercent: 0,
+      windowMinutes: 300,
+      observedAt: "2026-08-14T16:55:00.000Z",
+      resetsAt: "2026-08-14T20:00:00.000Z",
+      source: "transcript_reported",
+      freshness: "current",
+      projectedExhaustionAt: nil,
+      projectedToExhaustBeforeReset: false,
+      projectionConfidence: "estimated"
+    )
+    #expect(!GlanceFormatting.isReportedExhausted(limit))
+    #expect(GlanceFormatting.exhaustionLabel(limit) == "On pace to stay below cap")
+  }
 }
