@@ -12,7 +12,7 @@ notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
 
 Last updated: August 13, 2026.
 
-## Available now — npm v0.8.0
+## Available now — npm v0.8.1
 
 - Claude Code, Codex, and experimental Gemini CLI financial evidence in the CLI
   and explicit MCP/plugin,

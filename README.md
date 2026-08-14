@@ -16,7 +16,7 @@ Building a Node integration? The
 contract for usage-record validation, analysis, Receipt v0, pinned standards
 projections, and terminal rendering.
 
-> **Version boundary:** npm latest is `v0.8.0`. It reads supported Claude Code,
+> **Version boundary:** npm latest is `v0.8.1`. It reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
 > Context Health, plan/runway, invocation evidence, recommendations, and Apply.
@@ -69,7 +69,7 @@ terminal copy.*
 ## Get started
 
 1. **Initialize a private personal baseline:** run `npx aibill init` from a
-   project. npm v0.8.0 detects supported Claude Code, Codex, and experimental
+   project. npm v0.8.1 detects supported Claude Code, Codex, and experimental
    Gemini CLI financial evidence and backfills the last 30 days. It prints the
    first evidence-labeled
    receipt and stores only the Claude Code/Codex fields supported by the small
@@ -298,7 +298,7 @@ path and never stores, prints, or proxies provider credentials.
 | Command | What it does |
 | --- | --- |
 | _(no command)_ | Zero-key compact receipt from supported local or trusted connected evidence; otherwise an honest no-evidence state (sample data is never implicit) |
-| `init [--path <dir>] [--statusline]` | On npm v0.8.0, detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
+| `init [--path <dir>] [--statusline]` | On npm v0.8.1, detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
 | `statusline` | Render one plan-aware line from the private cache; no scan, provider call, or network |
 | `statusline refresh` | Explicitly run the foreground local refresh, then render the cache |
 | `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
@@ -362,7 +362,7 @@ The interfaces work best as one local loop:
 
 1. Run `npx aibill init` once to establish the private cross-agent cache, then
    use `npx aibill` for local Claude Code/Codex usage, attribution, plan
-   context, and API-equivalent value. npm v0.8.0 also reads supported
+   context, and API-equivalent value. npm v0.8.1 also reads supported
    experimental Gemini CLI financial evidence. Gemini
    does not enter the statusline, Glance, Context Health, or Apply activity
    surfaces.

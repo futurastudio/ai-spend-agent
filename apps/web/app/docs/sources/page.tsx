@@ -67,7 +67,7 @@ export default function SourcesDocsPage() {
           ))}
         </div>
         <DocsCallout title="Gemini experimental boundary" tone="preview">
-          Gemini CLI is published in npm v0.8.0 as an experimental, <code className="font-mono text-ink">fixture_verified</code>, financial-only reader. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing. Gemini is excluded from statusline, Glance, Context Health, Apply, plan, runway, and invocation evidence.
+          Gemini CLI is published in npm v0.8.1 as an experimental, <code className="font-mono text-ink">fixture_verified</code>, financial-only reader. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing. Gemini is excluded from statusline, Glance, Context Health, Apply, plan, runway, and invocation evidence.
         </DocsCallout>
       </DocsSection>
 

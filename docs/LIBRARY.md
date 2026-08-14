@@ -5,7 +5,7 @@ that need aibill's validation, analysis, and Receipt v0 semantics inside their
 own Node applications. `@agent-finops/report` can render the resulting summary
 with the same evidence labels as the CLI.
 
-This supported subset is published in **v0.8.0**. It remains a **0.x preview**,
+This supported subset is published in **v0.8.1**. It remains a **0.x preview**,
 not a promise that every name currently available
 from the root barrels is stable. The supported subset below is the contract we
 test from packed npm artifacts.

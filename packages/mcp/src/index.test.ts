@@ -2391,8 +2391,8 @@ describe("MCP protocol contract", () => {
     expect(serverCliOutput(["--help"])).toContain("Usage:\n  ai-spend-mcp");
     expect(serverCliOutput(["--help"])).toContain("invoking AI client");
     expect(serverCliOutput(["-h"])).toBe(serverCliOutput(["--help"]));
-    expect(serverCliOutput(["--version"])).toBe("0.8.0\n");
-    expect(serverCliOutput(["-v"])).toBe("0.8.0\n");
+    expect(serverCliOutput(["--version"])).toBe("0.8.1\n");
+    expect(serverCliOutput(["-v"])).toBe("0.8.1\n");
     expect(serverCliOutput([])).toBeNull();
     expect(serverCliOutput(["--unknown"])).toBeNull();
   });
@@ -2412,7 +2412,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.8.0" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.8.1" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",

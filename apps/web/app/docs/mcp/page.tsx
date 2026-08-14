@@ -49,7 +49,7 @@ claude mcp list`}</CodeBlock>
           Use <code className="font-mono text-ink">~/.cursor/mcp.json</code> for all Cursor projects or <code className="font-mono text-ink">.cursor/mcp.json</code> for one project. Other clients use the same command and arguments at their documented local stdio configuration path.
         </p>
         <DocsCallout title="Stable version boundary" tone="published">
-          npm latest v0.8.0 reads Claude Code and Codex local evidence plus experimental, <code className="font-mono text-ink">fixture_verified</code> Gemini CLI financial evidence. Gemini can appear in local financial sync and report results only; it does not feed <code className="font-mono text-ink">get_usage_glance</code>, <code className="font-mono text-ink">get_context_health</code>, recommendations, Apply, plan, runway, or invocation evidence.
+          npm latest v0.8.1 reads Claude Code and Codex local evidence plus experimental, <code className="font-mono text-ink">fixture_verified</code> Gemini CLI financial evidence. Gemini can appear in local financial sync and report results only; it does not feed <code className="font-mono text-ink">get_usage_glance</code>, <code className="font-mono text-ink">get_context_health</code>, recommendations, Apply, plan, runway, or invocation evidence.
         </DocsCallout>
       </DocsSection>
 

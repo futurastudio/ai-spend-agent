@@ -173,7 +173,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.8\.0$/);
+    expect(result.stdout).toMatch(/^0\.8\.1$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
