@@ -88,7 +88,8 @@ describe("generatePlainEnglishSummary", () => {
     const normalized = normalizeWhitespace(text);
 
     expect(normalized).toContain("OBSERVED VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
-    expect(text).toContain("Not priced");
+    expect(text).toContain("value unavailable · share unavailable");
+    expect(text).not.toContain("Not priced");
     expect(normalized).not.toContain("OBSERVED API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
   });
 
@@ -136,6 +137,7 @@ describe("generatePlainEnglishSummary", () => {
     expect(missingRow).toContain("missing");
     expect(missingRow).not.toContain("$0.00");
     expect(missingRow).not.toContain("0%");
+    expect(text).toContain("npx aibill --full");
   });
 
   it("includes ANSI escapes when color is forced on", async () => {
@@ -429,7 +431,8 @@ describe("generatePlainEnglishSummary", () => {
     });
 
     expect(normalizeWhitespace(text)).toContain("CONNECTED COST / VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
-    expect(text).toContain("Not priced");
+    expect(text).toContain("value unavailable · share unavailable");
+    expect(text).not.toContain("Not priced");
     expect(text).not.toContain("$0.00");
   });
 
@@ -614,5 +617,288 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).not.toContain("\u0007");
     expect(text).not.toContain("\u0000");
     expect(text).not.toContain("safe next\nFORGED-NEXT");
+  });
+
+  it("renders a compact decision receipt with one grounded action and one details CTA", async () => {
+    const records = await sample();
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "compact",
+      width: 72
+    });
+    const normalized = normalizeWhitespace(text);
+
+    expect(text).toContain("aibill · LOCAL ESTIMATE");
+    expect(text).toContain("~$87.00");
+    expect(text).toContain("API-equivalent value · not billed spend");
+    expect(text).toContain("Primary driver");
+    expect(text).toContain("Evidence");
+    expect(normalized).toMatch(/\d+ calls? · \$[\d.]+ API-equivalent value · (estimated|detected\/unverified)/u);
+    expect(text.match(/^  Next\s/gmu)).toHaveLength(1);
+    expect(text.match(/^  › npx aibill apply$/gmu)).toHaveLength(1);
+    expect(text.match(/npx aibill --full/gu)).toHaveLength(1);
+    expect(text).not.toContain("1 · DIAGNOSE");
+    expect(text).not.toContain("2 · RECOMMEND");
+    expect(text).not.toContain("┌");
+  });
+
+  it("keeps the compact sample boundary non-executable and gives one acquisition step", async () => {
+    const records = await sample();
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "demo",
+      view: "compact"
+    });
+
+    expect(text).toContain("DEMO SAMPLE");
+    expect(text).toContain("no user data · no action authorized");
+    expect(text).toContain("Read your own local evidence");
+    expect(text).toContain("npx aibill init");
+    expect(text).toContain("npx aibill --sample --full");
+    expect(text).not.toContain("npx aibill apply");
+  });
+
+  it("renders a compact no-price state as unavailable with one coverage diagnostic", () => {
+    const records: UsageRecord[] = [{
+      id: "gemini-missing-compact",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "google", confidence: "missing", observedFrom: "fixture" },
+      model: "gemini-future-unknown",
+      inputTokens: 100,
+      outputTokens: 10,
+      amountUsd: null,
+      costConfidence: "missing",
+      agentId: "gemini-cli",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "compact"
+    });
+    const normalized = normalizeWhitespace(text);
+
+    expect(normalized).toContain("Unavailable local activity found · cost/value missing");
+    expect(normalized).toContain("Primary activity gemini-cli · agent · cost/value unavailable");
+    expect(normalized).toContain("1 record missing cost");
+    expect(text).toContain("npx aibill doctor --sources");
+    expect(text).not.toContain("npx aibill apply");
+    expect(text).not.toContain("0%");
+    expect(text).not.toContain("$0.00");
+  });
+
+  it("does not overflow or render a fixed table in the narrow compact tier", async () => {
+    const records = await sample();
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "compact",
+      width: 40
+    });
+
+    for (const line of text.split("\n")) {
+      expect([...line].length, line).toBeLessThanOrEqual(40);
+    }
+    expect(text).toContain("PRIMARY DRIVER");
+    expect(text).toContain("DETAILS");
+    expect(text).toContain("npx aibill --full");
+    expect(text).not.toContain("┌");
+    expect(text).not.toContain("│");
+  });
+
+  it("degrades the full-audit table to a narrow list without overflowing", async () => {
+    const records = await sample();
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "full",
+      width: 54
+    });
+
+    for (const line of text.split("\n")) {
+      expect([...line].length, line).toBeLessThanOrEqual(54);
+    }
+    expect(text).toContain("1 · DIAGNOSE");
+    expect(text).not.toContain("┌");
+    expect(text).not.toContain("│");
+  });
+
+  it("keeps the default full table within 72 columns without truncating its evidence label", async () => {
+    const records = await sample();
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "demo",
+      view: "full",
+      width: 72
+    });
+
+    for (const line of text.split("\n")) {
+      expect([...line].length, line).toBeLessThanOrEqual(72);
+    }
+    expect(text).toContain("detected/unverified");
+    expect(text).not.toContain("detected/unverif…");
+  });
+
+  it("keeps provider-reported compact cost exact and untilded", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      costConfidence: "verified" as const,
+      source: { ...record.source, confidence: "verified" as const }
+    }));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "connected",
+      view: "compact"
+    });
+
+    expect(text).toContain("CONNECTED · PROVIDER-REPORTED");
+    expect(normalizeWhitespace(text)).toContain("$87.00 provider-reported cost");
+    expect(text).toContain("Primary driver");
+    expect(text).not.toContain("(unmapped) · agent");
+    expect(text).not.toContain("~$87.00");
+  });
+
+  it("never blends provider-reported cost with estimated value in compact or full views", () => {
+    const records: UsageRecord[] = [{
+      id: "openai-verified",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "openai-costs", name: "OpenAI costs", provider: "openai", confidence: "verified", observedFrom: "Costs API" },
+      model: "gpt-5.6",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 10,
+      costConfidence: "verified",
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    }, {
+      id: "anthropic-estimated",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "anthropic-usage", name: "Anthropic usage", provider: "anthropic", confidence: "estimated", observedFrom: "Usage API" },
+      model: "claude-sonnet-4-6",
+      inputTokens: 1_000,
+      outputTokens: 100,
+      amountUsd: 5,
+      costConfidence: "estimated",
+      providerCostType: "anthropic_claude_code_usage",
+      usageGranularity: "daily_aggregate"
+    }];
+
+    for (const view of ["compact", "full"] as const) {
+      const text = generatePlainEnglishSummary(analyzeSpend(records), {
+        records,
+        color: false,
+        mode: "connected",
+        view,
+        width: 120
+      });
+      const normalized = normalizeWhitespace(text);
+      expect(text).toContain("CONNECTED · MIXED EVIDENCE");
+      expect(normalized).toContain("$10.00 provider-reported");
+      expect(normalized).toContain("$5.00 API-equivalent/estimated");
+      expect(text).not.toContain("$15.00");
+    }
+  });
+
+  it("discloses a dominant unattributed project bucket instead of promoting a smaller named project", () => {
+    const records: UsageRecord[] = [{
+      id: "home-heavy",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model: "gpt-5-mini",
+      inputTokens: 10,
+      outputTokens: 2,
+      amountUsd: 81,
+      costConfidence: "estimated",
+      projectId: "(home)",
+      agentId: "codex",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }, {
+      id: "named-project",
+      timestamp: "2026-08-14T01:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model: "gpt-5-mini",
+      inputTokens: 10,
+      outputTokens: 2,
+      amountUsd: 19,
+      costConfidence: "estimated",
+      projectId: "agent-finops",
+      agentId: "codex",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "compact"
+    });
+
+    expect(normalizeWhitespace(text)).toContain("Primary activity Unattributed project · ~$81.00 API-equivalent value · 81% of priced evidence");
+    expect(text).not.toContain("Primary driver agent-finops · project");
+  });
+
+  it("uses a runnable diagnostic when connected evidence has no action candidate", () => {
+    const records: UsageRecord[] = [{
+      id: "quiet-connected-record",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "openai-costs", name: "OpenAI costs", provider: "openai", confidence: "verified", observedFrom: "Costs API" },
+      model: "gpt-5-mini",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 1,
+      costConfidence: "verified",
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "connected",
+      view: "compact"
+    });
+
+    expect(text).toContain("Inspect connected source coverage");
+    expect(normalizeWhitespace(text)).toContain("Primary driver openai-costs · source");
+    expect(text).toContain("npx aibill doctor --sources");
+    expect(text).not.toContain("npx aibill sync-provider");
+  });
+
+  it("does not advertise Apply or a shell pipe when no evidence candidate exists", () => {
+    const records: UsageRecord[] = [{
+      id: "quiet-local-record",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model: "gpt-5-mini",
+      inputTokens: 10,
+      outputTokens: 2,
+      amountUsd: 0.01,
+      costConfidence: "estimated",
+      agentId: "codex",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "full"
+    });
+
+    expect(text).not.toContain("3 · APPLY");
+    expect(text).not.toContain("npx aibill apply");
+    expect(text).toContain("3 · VERIFY");
+    expect(text).toContain("npx aibill connect openai");
+    expect(text).toContain("npx aibill connect anthropic");
+    expect(text).not.toContain("anthropic|openai");
   });
 });

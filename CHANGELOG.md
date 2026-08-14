@@ -5,6 +5,41 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.8.1 — 2026-08-14
+
+- Re-reviewed current OpenAI, Anthropic, and Cursor provider pages after the
+  release drift gate detected official-page changes; strengthened Anthropic
+  price markers and added published Claude Mythos 5, Opus 5, and Sonnet 5
+  API-equivalent pricing while unknown models continue to fail closed.
+- Prevented a freshly regenerated cache from presenting old transcript limit
+  percentages as live runway. Statusline and Glance now label old reports
+  stale, and past exhaustion projections cannot drive a current action.
+- Preserved positive fractional-cent evidence in summaries, watch state,
+  reports, statusline, MCP, and machine-readable policy drafts instead of
+  rounding a real value to zero.
+- Corrected each provider onboarding flow to name its own credential reference
+  and removed duplicated sentence punctuation from MCP recommendations.
+
+- Replaced the default terminal audit with a compact, responsive decision
+  receipt: explicit trust state, one primary figure, one driver, separated
+  evidence bases, one safe next action, and `--full` for the complete audit.
+- Removed implicit sample fallback from every normal entry point. Missing or
+  unreadable evidence now stays unavailable rather than becoming sample money,
+  `$0`, a percentage share, a completed scan, or an actionable Apply prompt.
+- Kept provider-reported cost, API-equivalent estimates, and unverified detected
+  value visibly separate. Dominant unattributed activity is disclosed instead
+  of promoting a smaller named project as the primary driver.
+- Made the CLI grammar fail closed for unknown flags, missing values,
+  unsupported provider connections, ignored time bounds, malformed external
+  labels, and unsupported main-receipt JSON requests.
+- Hardened provider readiness for Claude Code, Codex, Gemini CLI, OpenAI Admin,
+  Anthropic Admin, Cursor Admin, and GitHub Copilot. Authentication now removes
+  only the credential prerequisite it satisfies and preserves every known
+  financial, attribution, export, and invoice-coverage gap.
+- Refreshed the Aug 14 official provider-contract hashes and reran the complete
+  five-package, MCP, statusline, Glance, public-boundary, consumer-install, and
+  live contract-drift release gates.
+
 ## 0.8.0 — 2026-08-13
 
 - Corrected OpenAI organization usage normalization to treat reported input and

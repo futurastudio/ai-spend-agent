@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-08-13";
+export const PRICING_TABLE_AS_OF = "2026-08-14";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -45,6 +45,9 @@ type PricingRule = {
 const pricingRules: PricingRule[] = [
   // Anthropic
   { match: /^claude-fable-5/i, inputPerM: 10, outputPerM: 50 },
+  { match: /^claude-mythos-5/i, inputPerM: 10, outputPerM: 50 },
+  { match: /^claude-opus-5/i, inputPerM: 5, outputPerM: 25 },
+  { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
   { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },
   { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },

@@ -116,11 +116,14 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let agent: String
     let kind: String
     let name: String
+    /** Raw provider-reported percentage; optional only for old cached snapshots. */
+    let usedPercent: Double?
     let remainingPercent: Double
     let windowMinutes: Int
     let observedAt: String
     let resetsAt: String
     let source: String
+    let freshness: String?
     let projectedExhaustionAt: String?
     let projectedToExhaustBeforeReset: Bool
     let projectionConfidence: String
@@ -216,6 +219,9 @@ enum GlanceFormatting {
   }
 
   static func exhaustionLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
+    if isReportedExhausted(limit) {
+      return "At reported limit · checkpoint work"
+    }
     guard
       limit.projectedToExhaustBeforeReset,
       let value = limit.projectedExhaustionAt,
@@ -227,6 +233,10 @@ enum GlanceFormatting {
       return "May exhaust \(date.formatted(date: .omitted, time: .shortened))"
     }
     return "May exhaust \(date.formatted(.dateTime.weekday(.abbreviated).hour().minute()))"
+  }
+
+  static func isReportedExhausted(_ limit: UsageGlanceSnapshot.Limit) -> Bool {
+    limit.freshness == "current" && (limit.usedPercent ?? 0) >= 100
   }
 
   static func agentName(_ value: String) -> String {

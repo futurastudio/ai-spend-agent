@@ -84,7 +84,13 @@ try {
     cwd: installDir,
     encoding: "utf8"
   });
-  if (!help.includes("aibill") || !sample.includes("DATA MODE: demo sample")) {
+  if (
+    !help.includes("aibill") ||
+    !sample.includes("aibill · DEMO SAMPLE") ||
+    !sample.includes("Details") ||
+    !sample.includes("npx aibill --sample --full") ||
+    sample.includes("DATA MODE: demo sample")
+  ) {
     throw new Error("Packed CLI or alias did not produce the expected clean-install output.");
   }
   const mcpHelp = execFileSync(process.execPath, [mcpPath, "--help"], {

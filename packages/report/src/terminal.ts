@@ -1,6 +1,8 @@
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V5 · CLI-adapted slop: pass */
 import Table from "cli-table3";
 import pc from "picocolors";
 import {
+  analyzeSpend,
   computePlanChecks,
   generateCutList,
   buildRecommendedPlan,
@@ -70,12 +72,17 @@ export type PlainEnglishSummaryOptions = {
    */
   detectedPlans?: DetectedPlan[];
   /**
+   * "compact" renders one decision receipt: trust, headline, primary driver,
+   * coverage, one evidence-linked next step, and one details command.
    * "full" renders the complete diagnose→recommend→apply→verify readout.
    * "breakdown" is the focused drill-down for an explicit --group-by: the
    * headline, the requested table, its definition, and the data window —
    * without repeating the whole readout.
+   *
+   * Omitted remains equivalent to "full" for API compatibility. The CLI can
+   * deliberately select the compact default without changing library callers.
    */
-  view?: "full" | "breakdown";
+  view?: "compact" | "full" | "breakdown";
 };
 
 /**
@@ -116,18 +123,62 @@ function renderPlainEnglishSummary(
   const rawTotalUsd = options.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
   const hasHeadlineAmount = presentationBasis !== "connected_missing" &&
     presentationBasis !== "local_missing";
-  const rawSourceAmounts = rawBreakdownAmounts(options.records, "source");
-  const rawGroupAmounts = rawBreakdownAmounts(options.records, groupBy);
+  const verifiedRecords = options.records.filter((record) => (
+    record.costConfidence === "verified" && typeof record.amountUsd === "number"
+  ));
+  const estimatedRecords = options.records.filter((record) => (
+    record.costConfidence === "estimated" && typeof record.amountUsd === "number"
+  ));
+  const detectedRecords = options.records.filter((record) => (
+    record.costConfidence === "detected_unverified" && typeof record.amountUsd === "number"
+  ));
+  // Full and breakdown views also obey the no-blending rule. When connected
+  // evidence carries multiple accounting bases, the table and hero use one
+  // primary basis (provider-reported first), while the Evidence line discloses
+  // every other basis separately.
+  const fullRecords = presentationBasis === "connected_mixed"
+    ? verifiedRecords.length > 0
+      ? verifiedRecords
+      : estimatedRecords.length > 0
+        ? estimatedRecords
+        : detectedRecords
+    : options.records;
+  const fullPresentationBasis: FinancialPresentationBasis = presentationBasis === "connected_mixed"
+    ? verifiedRecords.length > 0
+      ? "provider_reported"
+      : estimatedRecords.length > 0
+        ? "connected_estimated"
+        : "connected_unverified"
+    : presentationBasis;
+  const fullSummary = presentationBasis === "connected_mixed" ? analyzeSpend(fullRecords) : summary;
+  const fullRawTotalUsd = fullRecords.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
+  const fullHasHeadlineAmount = fullPresentationBasis !== "connected_missing" &&
+    fullPresentationBasis !== "local_missing" && fullRecords.length > 0;
+  const rawSourceAmounts = rawBreakdownAmounts(fullRecords, "source");
+  const rawGroupAmounts = rawBreakdownAmounts(fullRecords, groupBy);
+
+  if (options.view === "compact") {
+    return renderCompactDecisionReceipt({
+      summary,
+      options,
+      c,
+      width,
+      presentationBasis,
+      rawTotalUsd,
+      hasHeadlineAmount,
+      cutList
+    });
+  }
 
   const lines: string[] = [];
 
   // --- Mode / trust, then headline ---------------------------------------
   lines.push("");
   lines.push(c.dim(rule(width)));
-  lines.push(modeTrustLine(options.mode, summary.confidence, options.providerCoverage, c));
+  lines.push(modeTrustLine(options.mode, summary.confidence, options.providerCoverage, presentationBasis, c));
   lines.push("");
   lines.push(
-    `  ${c.bold(headlineMetricLabel(presentationBasis))}  ${c.dim("evidence-labeled financial view")}`
+    `  ${c.bold(headlineMetricLabel(fullPresentationBasis))}  ${c.dim("evidence-labeled financial view")}`
   );
   // Local-log records are day-level session aggregates — calling them "calls"
   // overstates precision to the audience most likely to check.
@@ -136,13 +187,15 @@ function renderPlainEnglishSummary(
     : options.mode === "demo"
       ? "illustrative record"
       : "provider record";
-  const totalDescription = options.mode === "demo"
-    ? `combined illustrative evidence across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`
-    : `tracked across ${summary.recordCount} ${recordNoun}${summary.recordCount === 1 ? "" : "s"}`;
-  const headlineAmount = hasHeadlineAmount
-    ? formatBigUsd(summary.totalUsd, rawTotalUsd)
+  const totalDescription = presentationBasis === "connected_mixed"
+    ? `primary basis across ${fullSummary.recordCount} ${recordNoun}${fullSummary.recordCount === 1 ? "" : "s"}; other bases stay separate below`
+    : options.mode === "demo"
+      ? `combined illustrative evidence across ${fullSummary.recordCount} ${recordNoun}${fullSummary.recordCount === 1 ? "" : "s"}`
+      : `tracked across ${fullSummary.recordCount} ${recordNoun}${fullSummary.recordCount === 1 ? "" : "s"}`;
+  const headlineAmount = fullHasHeadlineAmount
+    ? formatBigUsd(fullSummary.totalUsd, fullRawTotalUsd)
     : "Unavailable";
-  lines.push(`  ${c.bold(evidenceAmount(headlineAmount, summary.confidence, c))}  ${c.dim(totalDescription)}`);
+  lines.push(`  ${c.bold(evidenceAmount(headlineAmount, fullSummary.confidence, c))}  ${c.dim(totalDescription)}`);
   lines.push(
     `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(`· evidence mix: ${coverageLine(summary, options.records)}`)}`
   );
@@ -151,27 +204,28 @@ function renderPlainEnglishSummary(
   // Focused drill-down: an explicit --group-by asks one question — render
   // just the answer (table + definition + data window), not the whole loop.
   if (options.view === "breakdown") {
-    const focusedEntries = breakdownFor(summary, groupBy);
-    lines.push(c.bold(`  ${evidenceBreakdownLabel(presentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
+    const focusedEntries = breakdownFor(fullSummary, groupBy);
+    lines.push(c.bold(`  ${evidenceBreakdownLabel(fullPresentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${dimensionFlags()})`));
     if (groupBy === "project" && options.mode === "local-logs") {
       lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
-    lines.push(`  ${c.dim(dataWindowLine(options.records))}`);
+    lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
     lines.push("");
     lines.push(indentBlock(renderBreakdownTable(
       focusedEntries,
-      summary.totalUsd,
+      fullSummary.totalUsd,
       c,
       useColor,
-      evidenceAmountColumnLabel(presentationBasis),
+      evidenceAmountColumnLabel(fullPresentationBasis),
       "#",
       groupBy === "project" && options.mode === "local-logs",
       rawGroupAmounts,
-      rawTotalUsd,
-      hasHeadlineAmount
+      fullRawTotalUsd,
+      fullHasHeadlineAmount,
+      width
     ), "  "));
     lines.push("");
-    lines.push(`  ${c.dim("run")} ${c.bold("npx aibill")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
+    lines.push(`  ${c.dim("run")} ${c.bold("npx aibill --full")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
     lines.push("");
     return renderTerminalLines(lines, width);
   }
@@ -188,15 +242,15 @@ function renderPlainEnglishSummary(
   // Basis-aware source bars: at-a-glance evidence without implying a mixed
   // sample total is one invoice or one homogeneous spend basis.
   const spendBars = renderSpendBars(
-    summary.bySource,
-    summary.totalUsd,
+    fullSummary.bySource,
+    fullSummary.totalUsd,
     c,
     rawSourceAmounts,
-    rawTotalUsd,
-    hasHeadlineAmount
+    fullRawTotalUsd,
+    fullHasHeadlineAmount
   );
   if (spendBars.length > 0) {
-    lines.push(c.bold(`  ${sourceBreakdownLabel(presentationBasis)}`) + c.dim("  (by source)"));
+    lines.push(c.bold(`  ${sourceBreakdownLabel(fullPresentationBasis)}`) + c.dim("  (by source)"));
     lines.push("");
     lines.push(...spendBars);
     lines.push("");
@@ -204,24 +258,25 @@ function renderPlainEnglishSummary(
 
   // Source attribution table. The plan comparison intentionally follows all
   // source evidence so a detected subscription can never redefine the money.
-  const entries = breakdownFor(summary, groupBy);
-  lines.push(c.bold(`  ${evidenceBreakdownLabel(presentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${groupBy})`));
+  const entries = breakdownFor(fullSummary, groupBy);
+  lines.push(c.bold(`  ${evidenceBreakdownLabel(fullPresentationBasis)} by ${groupByLabel(groupBy)}`) + c.dim(`  (--group-by ${groupBy})`));
   if (groupBy === "project" && options.mode === "local-logs") {
     lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
-  lines.push(`  ${c.dim(dataWindowLine(options.records))}`);
+  lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
   lines.push("");
   lines.push(indentBlock(renderBreakdownTable(
     entries,
-    summary.totalUsd,
+    fullSummary.totalUsd,
     c,
     useColor,
-    evidenceAmountColumnLabel(presentationBasis),
+    evidenceAmountColumnLabel(fullPresentationBasis),
     "#",
     groupBy === "project" && options.mode === "local-logs",
     rawGroupAmounts,
-    rawTotalUsd,
-    hasHeadlineAmount
+    fullRawTotalUsd,
+    fullHasHeadlineAmount,
+    width
   ), "  "));
   lines.push("");
   const topProject = summary.byProject[0];
@@ -368,6 +423,8 @@ function renderPlainEnglishSummary(
   // hypothesis was surfaced without turning absence of invocation into proof.
   lines.push(...renderContextEvidence(options.deadContext, c));
 
+  const hasActionCandidate = hasEvidenceActionCandidate(cutList, options.deadContext);
+  if (hasActionCandidate) {
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
   lines.push(sectionHeader(
     3,
@@ -399,24 +456,34 @@ function renderPlainEnglishSummary(
   lines.push("");
 
   // ══ 4 · VERIFY ══════════════════════════════════════════════════════════
-  lines.push(sectionHeader(4, "VERIFY", "prove the approved change worked before trusting it", c));
+  }
+
+  lines.push(sectionHeader(
+    hasActionCandidate ? 4 : 3,
+    "VERIFY",
+    hasActionCandidate
+      ? "prove the approved change worked before trusting it"
+      : "keep collecting evidence; no action candidate is being advertised",
+    c
+  ));
   lines.push("");
   lines.push(
     `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx aibill")} ${c.dim("after a few days and compare — or")} ${c.bold("npx aibill watch")} ${c.dim("to track deltas per cycle")}`
   );
   if (options.mode === "local-logs") {
-    lines.push(
-      `  ${c.cyan("›")} ${c.dim("these numbers are API-equivalent ESTIMATES from local logs — no account was connected or authorized")}`
+    lines.push(hasHeadlineAmount
+      ? `  ${c.cyan("›")} ${c.dim("priced local values are API-equivalent estimates — no account was connected or authorized")}`
+      : `  ${c.cyan("›")} ${c.dim("local activity was detected, but cost/value is unavailable — no account was connected or authorized")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("pay for API usage too? add official provider-reported cost:")} ${c.bold("npx aibill connect anthropic|openai")} ${c.dim("(org admin key)")}`
+      `  ${c.cyan("›")} ${c.dim("pay for API usage too? set up an admin connector, then run its printed sync command:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")}`
     );
   } else if (options.mode === "demo") {
     lines.push(
       `  ${c.cyan("›")} ${c.dim("these are illustrative SAMPLE API-equivalent estimates — no local logs or account data were used")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("want your own evidence? run without --sample, or add official provider-reported cost:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")} ${c.dim("(org admin/owner key)")}`
+      `  ${c.cyan("›")} ${c.dim("want your own evidence? run without --sample, or set up an admin connector and sync it:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")}`
     );
   } else {
     lines.push(
@@ -447,6 +514,343 @@ function renderPlainEnglishSummary(
   return renderTerminalLines(lines, width);
 }
 
+type CompactDecisionReceiptInput = {
+  summary: SpendSummary;
+  options: PlainEnglishSummaryOptions;
+  c: Colors;
+  width: number;
+  presentationBasis: FinancialPresentationBasis;
+  rawTotalUsd: number;
+  hasHeadlineAmount: boolean;
+  cutList: CutAction[];
+};
+
+/**
+ * The default CLI card should answer one decision, not reproduce the report.
+ * It deliberately has no table, spinner, carousel, or secondary CTA, so it
+ * remains readable at narrow widths and deterministic in copied output.
+ */
+function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): string {
+  const {
+    summary,
+    options,
+    c,
+    width,
+    presentationBasis,
+    rawTotalUsd,
+    hasHeadlineAmount,
+    cutList
+  } = input;
+  // A connected receipt can contain both provider-reported money and modeled
+  // value. Those are different accounting bases and must never be added into
+  // one hero number or one driver share. In the mixed case, lead with the
+  // provider-reported subset and keep every other basis separated in Evidence.
+  const providerReportedRecords = options.records.filter((record) => (
+    record.costConfidence === "verified" && typeof record.amountUsd === "number"
+  ));
+  const providerReportedRawTotal = providerReportedRecords.reduce(
+    (total, record) => total + (record.amountUsd ?? 0),
+    0
+  );
+  const isMixedConnected = presentationBasis === "connected_mixed";
+  const driverRecords = isMixedConnected ? providerReportedRecords : options.records;
+  const driverSummary = isMixedConnected ? analyzeSpend(driverRecords) : summary;
+  const driverRawTotal = isMixedConnected ? providerReportedRawTotal : rawTotalUsd;
+  const driverBasis: FinancialPresentationBasis = isMixedConnected
+    ? "provider_reported"
+    : presentationBasis;
+  const trust = compactTrust(
+    options.mode,
+    summary.confidence,
+    options.providerCoverage,
+    presentationBasis,
+    c
+  );
+  const headline = compactHeadline(
+    presentationBasis,
+    summary.totalUsd,
+    rawTotalUsd,
+    providerReportedRawTotal,
+    providerReportedRecords.length > 0
+  );
+  const driver = compactPrimaryDriver(
+    driverSummary,
+    driverRecords,
+    driverBasis,
+    driverRawTotal,
+    isMixedConnected ? providerReportedRecords.length > 0 : hasHeadlineAmount
+  );
+  const next = compactNextStep(options, cutList);
+  const detailsCommand = options.mode === "demo"
+    ? "npx aibill --sample --full"
+    : "npx aibill --full";
+  const lines: string[] = [
+    "",
+    `  ${c.bold("aibill")} ${c.dim("·")} ${trust.label}`,
+    `  ${c.dim(trust.note)}`,
+    "",
+    `  ${c.bold(evidenceAmount(headline.amount, summary.confidence, c))}`,
+    `  ${c.dim(headline.label)}`,
+    ""
+  ];
+
+  if (driver) {
+    lines.push(...compactLabeledLines(driver.kind, driver.value, width, c));
+  }
+  lines.push(...compactLabeledLines("Evidence", coverageLine(summary, options.records), width, c));
+  lines.push("");
+  lines.push(...compactLabeledLines("Next", c.bold(next.title), width, c));
+  lines.push(`  ${c.dim(next.evidence)}`);
+  lines.push(`  ${c.cyan("›")} ${c.bold(next.command)}`);
+  lines.push("");
+  lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
+  lines.push("");
+
+  return renderTerminalLines(lines, width);
+}
+
+function compactTrust(
+  mode: PlainEnglishSummaryOptions["mode"],
+  confidence: CostConfidence,
+  providerCoverage: PlainEnglishSummaryOptions["providerCoverage"],
+  basis: FinancialPresentationBasis,
+  c: Colors
+): { label: string; note: string } {
+  if (mode === "demo") {
+    return {
+      label: c.yellow(c.bold("DEMO SAMPLE")),
+      note: "illustrative only · no user data · no action authorized"
+    };
+  }
+  if (mode === "local-logs") {
+    return {
+      label: c.yellow(c.bold("LOCAL ESTIMATE")),
+      note: "private transcript evidence × published API rates · nothing uploaded"
+    };
+  }
+  if (mode === "connected" && providerCoverage === "partial") {
+    return {
+      label: c.yellow(c.bold("CONNECTED · PARTIAL")),
+      note: "available rows keep their labels · some requested evidence is missing"
+    };
+  }
+  if (mode === "connected" && basis === "connected_mixed") {
+    return {
+      label: c.yellow(c.bold("CONNECTED · MIXED EVIDENCE")),
+      note: "provider-reported cost and modeled value are shown separately"
+    };
+  }
+  if (mode === "connected" && confidence === "verified") {
+    return {
+      label: c.green(c.bold("CONNECTED · PROVIDER-REPORTED")),
+      note: "official provider evidence · reconcile against the final invoice"
+    };
+  }
+  if (mode === "connected") {
+    return {
+      label: c.yellow(c.bold(`CONNECTED · ${confidenceWord(confidence).toUpperCase()}`)),
+      note: "connected evidence · not fully provider-verified"
+    };
+  }
+  return {
+    label: c.yellow(c.bold("ESTIMATED EVIDENCE")),
+    note: "confirm the source before acting"
+  };
+}
+
+function compactHeadline(
+  basis: FinancialPresentationBasis,
+  totalUsd: number,
+  rawTotalUsd: number,
+  providerReportedRawTotal = 0,
+  hasProviderReportedAmount = false
+): { amount: string; label: string } {
+  const amount = formatBigUsd(totalUsd, rawTotalUsd);
+  switch (basis) {
+    case "provider_reported":
+      return { amount, label: "provider-reported cost" };
+    case "local_estimate":
+      return { amount: `~${amount}`, label: "API-equivalent value · not billed spend" };
+    case "connected_estimated":
+      return { amount: `~${amount}`, label: "connected estimated cost/value" };
+    case "connected_unverified":
+      return { amount: `~${amount}`, label: "connected detected/unverified cost/value" };
+    case "connected_mixed":
+      return hasProviderReportedAmount
+        ? {
+            amount: formatBigUsd(providerReportedRawTotal, providerReportedRawTotal),
+            label: "provider-reported cost · other evidence bases below"
+          }
+        : {
+            amount: "Unavailable",
+            label: "provider-reported cost · other evidence bases below"
+          };
+    case "connected_missing":
+      return { amount: "Unavailable", label: "connected cost/value · financial evidence missing" };
+    case "local_missing":
+      return { amount: "Unavailable", label: "local activity found · cost/value missing" };
+    default:
+      return { amount: `~${amount}`, label: "illustrative cost/value evidence" };
+  }
+}
+
+type CompactDriver = {
+  kind: "Primary driver" | "Primary activity";
+  value: string;
+};
+
+function compactPrimaryDriver(
+  summary: SpendSummary,
+  records: readonly UsageRecord[],
+  basis: FinancialPresentationBasis,
+  rawTotalUsd: number,
+  hasHeadlineAmount: boolean
+): CompactDriver | undefined {
+  // Project attribution is itself evidence. If the largest project bucket is
+  // home/unattributed, disclose that gap instead of promoting a smaller named
+  // project into a false "primary driver" claim.
+  const topProject = summary.byProject[0];
+  const connectedFinancialBasis = !["demo", "local_estimate", "local_missing"].includes(basis);
+  const fallbackChoices: Array<{ dimension: GroupByDimension; entry: SpendBreakdownEntry | undefined }> = connectedFinancialBasis
+    ? [
+        { dimension: "source", entry: summary.bySource[0] },
+        { dimension: "model", entry: summary.byModel[0] },
+        { dimension: "agent", entry: summary.byAgent[0] }
+      ]
+    : [
+        { dimension: "agent", entry: summary.byAgent[0] },
+        { dimension: "model", entry: summary.byModel[0] },
+        { dimension: "source", entry: summary.bySource[0] }
+      ];
+  const choices: Array<{ dimension: GroupByDimension; entry: SpendBreakdownEntry | undefined }> = topProject
+    ? [
+        { dimension: "project", entry: topProject },
+        ...fallbackChoices
+      ]
+    : fallbackChoices;
+  const choice = choices.find(({ entry }) => entry && !isPlaceholderBreakdownKey(entry.key)) ??
+    choices.find(({ entry }) => entry && entry.key.trim().length > 0);
+  if (!choice?.entry) return undefined;
+
+  const rawAmount = rawBreakdownAmounts(records, choice.dimension).get(choice.entry.key) ?? choice.entry.amountUsd;
+  const amountAvailable = hasHeadlineAmount && !(
+    choice.entry.confidence === "missing" && rawAmount === 0
+  );
+  const label = choice.dimension === "project" && isUnattributedProjectKey(choice.entry.key)
+    ? "Unattributed project"
+    : `${labelOf(choice.entry.key)} · ${groupByLabel(choice.dimension)}`;
+  if (!amountAvailable) {
+    return {
+      kind: "Primary activity",
+      value: `${label} · cost/value unavailable`
+    };
+  }
+
+  const prefix = basis === "local_estimate" ? "~" : "";
+  const financialLabel = basis === "provider_reported"
+    ? "provider-reported cost"
+    : basis === "local_estimate"
+      ? "API-equivalent value"
+      : "cost/value evidence";
+  const share = rawTotalUsd > 0
+    ? ` · ${formatPercent(rawAmount / rawTotalUsd)} of priced evidence`
+    : " · share unavailable";
+  return {
+    kind: choice.dimension === "project" && isUnattributedProjectKey(choice.entry.key)
+      ? "Primary activity"
+      : "Primary driver",
+    value: `${label} · ${prefix}${formatUsd(rawAmount)} ${financialLabel}${share}`
+  };
+}
+
+function isPlaceholderBreakdownKey(key: string): boolean {
+  return ["", "unmapped", "(unmapped)", "unknown", "(unknown)", "none"].includes(key.trim().toLowerCase());
+}
+
+type CompactNextStep = {
+  title: string;
+  evidence: string;
+  command: string;
+};
+
+function compactNextStep(
+  options: PlainEnglishSummaryOptions,
+  cutList: CutAction[]
+): CompactNextStep {
+  if (options.mode === "demo") {
+    return {
+      title: "Read your own local evidence",
+      evidence: "sample values are illustrative; no user change is authorized",
+      command: "npx aibill init"
+    };
+  }
+
+  const action = buildRecommendedPlan(cutList).recommended[0] ?? cutList[0];
+  if (action) {
+    const unit = action.recordUnit === "daily-aggregates"
+      ? `session-day aggregate${action.recordCount === 1 ? "" : "s"}`
+      : action.recordUnit === "tools"
+        ? `tool${action.recordCount === 1 ? "" : "s"}`
+        : `call${action.recordCount === 1 ? "" : "s"}`;
+    const value = options.mode === "local-logs"
+      ? `${formatUsd(action.affectedSpendUsd)} API-equivalent value`
+      : `${formatUsd(action.affectedSpendUsd)} evidence`;
+    return {
+      title: action.title,
+      evidence: `${action.recordCount} ${unit} · ${value} · ${confidenceWord(action.confidence)}`,
+      command: "npx aibill apply"
+    };
+  }
+
+  if (options.deadContext?.hasData && options.deadContext.deadCount > 0) {
+    const count = options.deadContext.deadCount;
+    return {
+      title: `Inspect ${count} context candidate${count === 1 ? "" : "s"} with no matching invocation`,
+      evidence: `${count} of ${options.deadContext.loadedCount} observable inventory items · candidate evidence, not removal proof`,
+      command: "npx aibill apply"
+    };
+  }
+
+  if (
+    options.records.length === 0 ||
+    options.records.every((record) => record.costConfidence === "missing" || typeof record.amountUsd !== "number")
+  ) {
+    return {
+      title: "Inspect source coverage",
+      evidence: "activity may exist, but no priced financial evidence is available",
+      command: "npx aibill doctor --sources"
+    };
+  }
+
+  if (options.mode === "connected") {
+    return {
+      title: "Inspect connected source coverage",
+      evidence: "no evidence-backed action candidate was found in this window",
+      command: "npx aibill doctor --sources"
+    };
+  }
+
+  return {
+    title: "Keep observing before changing anything",
+    evidence: "no evidence-backed action candidate was found in this window",
+    command: "npx aibill watch"
+  };
+}
+
+function compactLabeledLines(label: string, value: string, width: number, c: Colors): string[] {
+  if (width < 58) {
+    return [`  ${c.dim(label.toUpperCase())}`, `  ${value}`];
+  }
+  return [`  ${c.dim(label.padEnd(14))} ${value}`];
+}
+
+function hasEvidenceActionCandidate(
+  cutList: readonly CutAction[],
+  deadContext: DeadContextResult | undefined
+): boolean {
+  return cutList.length > 0 || Boolean(deadContext?.hasData && deadContext.deadCount > 0);
+}
+
 /** Numbered stage banner: `── 2 · RECOMMEND ──  blurb`. */
 function sectionHeader(step: number, name: string, blurb: string, c: Colors): string {
   return `  ${c.dim("──")} ${c.bold(c.cyan(`${step} · ${name}`))} ${c.dim("──")}  ${c.dim(blurb)}`;
@@ -456,6 +860,7 @@ function modeTrustLine(
   mode: PlainEnglishSummaryOptions["mode"],
   confidence: CostConfidence,
   providerCoverage: PlainEnglishSummaryOptions["providerCoverage"],
+  basis: FinancialPresentationBasis,
   c: Colors
 ): string {
   const prefix = c.dim("  MODE / TRUST");
@@ -467,6 +872,9 @@ function modeTrustLine(
   }
   if (mode === "connected" && providerCoverage === "partial") {
     return `${prefix}  ${c.yellow(c.bold("CONNECTED · PARTIAL COVERAGE"))}\n  ${c.dim("available rows keep their financial evidence labels; some requested data was not returned")}`;
+  }
+  if (mode === "connected" && basis === "connected_mixed") {
+    return `${prefix}  ${c.yellow(c.bold("CONNECTED · MIXED EVIDENCE"))}\n  ${c.dim("provider-reported cost and modeled value are never added together")}`;
   }
   if (mode === "connected" && confidence === "verified") {
     return `${prefix}  ${c.green(c.bold("CONNECTED · PROVIDER-REPORTED"))}\n  ${c.dim("reconcile against the final invoice")}`;
@@ -575,15 +983,40 @@ function renderBreakdownTable(
   labelUnattributedProject = false,
   rawAmounts: ReadonlyMap<string, number> = new Map(),
   rawTotal = total,
-  amountsAvailable = true
+  amountsAvailable = true,
+  maxWidth = 72
 ): string {
   if (entries.length === 0) {
     return c.dim("(no breakdown available for this dimension)");
   }
 
+  // Box tables are useful at normal terminal widths, but their fixed columns
+  // become horizontal noise on a narrow split pane. Degrade to a readable
+  // two-line list; the outer renderer will wrap its prose to the exact width.
+  if (maxWidth < 72) {
+    return entries.slice(0, 10).flatMap((entry) => {
+      const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
+      const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
+      const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
+      const entryAmountAvailable = amountsAvailable && !(
+        entry.confidence === "missing" && rawAmount === 0
+      );
+      const label = labelUnattributedProject && isUnattributedProjectKey(entry.key)
+        ? "Unattributed"
+        : labelOf(entry.key);
+      const evidence = entryAmountAvailable
+        ? `${formatUsd(displayAmount)} · ${formatPercent(share)}`
+        : "value unavailable · share unavailable";
+      return [
+        c.bold(label),
+        c.dim(`${evidence} · ${recordLabel} ${entry.recordCount} · ${confidenceWord(entry.confidence)}`)
+      ];
+    }).join("\n");
+  }
+
   const table = new Table({
     head: [c.bold(""), c.bold(amountLabel), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
-    colWidths: [18, 11, 14, 3, 18],
+    colWidths: [16, 11, 14, 3, 20],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
       ? { head: [], border: ["dim"], "padding-left": 0, "padding-right": 1 }
@@ -842,8 +1275,8 @@ function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
     ];
   }
   return [
-    "npx aibill connect openai    add official OpenAI-reported cost (org-owner admin key)",
-    "npx aibill connect anthropic add official Anthropic-reported cost (admin key)"
+    "npx aibill connect openai    set up OpenAI Admin; then run the printed sync command",
+    "npx aibill connect anthropic set up Anthropic Admin; then run the printed sync command"
   ];
 }
 
@@ -868,7 +1301,13 @@ function renderSpendBars(
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const label = labelOf(entry.key).slice(0, labelWidth).padEnd(labelWidth);
     const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
-    const amount = (amountsAvailable ? formatUsd(displayAmount) : "Not priced").padStart(10);
+    const entryAmountAvailable = amountsAvailable && !(
+      entry.confidence === "missing" && rawAmount === 0
+    );
+    if (!entryAmountAvailable) {
+      return `  ${c.dim(label)}  ${c.dim("value unavailable · share unavailable")}`;
+    }
+    const amount = formatUsd(displayAmount).padStart(10);
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
@@ -962,7 +1401,7 @@ function wrapProseLine(line: string, width: number): string[] {
         ? leading
         : `${leading}  `;
   const protectedText = text.replace(
-    /npx (?:aibill|ai-spend-agent)(?: (?:apply-artifact|apply|watch|connect|sync-provider|report-card|report|--group-by(?: [a-zA-Z]+)?))?/gu,
+    /npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
     (command) => command.replace(/ /gu, "\uE000")
   );
   const words = protectedText.split(/\s+/u);

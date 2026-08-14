@@ -50,6 +50,8 @@ export type GlanceLimit = {
   observedAt: string;
   resetsAt: string;
   source: "transcript_reported";
+  /** Old transcript evidence remains visible but is never presented as live runway. */
+  freshness: "current" | "stale";
   projectedExhaustionAt: string | null;
   projectedToExhaustBeforeReset: boolean;
   projectionConfidence: "estimated";
@@ -163,7 +165,7 @@ export type UsageGlanceSnapshot = {
     detectedAgents: Array<LocalAgentCall["agent"]>;
     rateLimitMetadata: Array<{
       agent: LocalAgentCall["agent"];
-      status: "reported" | "not_reported_by_transcript" | "not_seen";
+      status: "reported" | "stale" | "not_reported_by_transcript" | "not_seen";
       windowsReported: Array<LocalAgentRateLimitWindow["kind"]>;
     }>;
     providerConnectionRequired: ["cursor", "github-copilot"];
@@ -254,7 +256,7 @@ export function buildUsageGlance(
   const limitCalls = sanitizeStringMetadata(options.limitCalls ?? safeCalls)
     .filter((call) => localAgentFormatSupports(call.agent, "rateLimits"));
   const limits = latestLimits(limitCalls, now).map(({ agent, window, observedAt }) =>
-    toGlanceLimit(agent, window, observedAt)
+    toGlanceLimit(agent, window, observedAt, now)
   );
   const windowStart = now.getTime() - focusWindowDays * DAY_MS;
   const windowCalls = safeCalls.filter((call) => Date.parse(call.timestamp) >= windowStart);
@@ -278,7 +280,12 @@ export function buildUsageGlance(
   });
   const detectedAgents = (options.detectedAgents ?? uniqueAgents(safeCalls))
     .filter((agent) => localAgentFormatSupports(agent, "glance"));
-  const agentsWithLimits = new Set(limits.map((limit) => limit.agent));
+  const agentsWithCurrentLimits = new Set(
+    limits.filter((limit) => limit.freshness === "current").map((limit) => limit.agent)
+  );
+  const agentsWithStaleLimits = new Set(
+    limits.filter((limit) => limit.freshness === "stale").map((limit) => limit.agent)
+  );
   const limitAgents = uniqueAgents(limitCalls.filter((call) => call.rateLimits));
   const reportedWindows = (agent: LocalAgentCall["agent"]) => (
     [...new Set(
@@ -291,6 +298,7 @@ export function buildUsageGlance(
     "Session value is an API-equivalent estimate from transcript token counts, not an invoice or subscription charge.",
     "A detected monthly subscription changes the interpretation, not the token math: the API-equivalent amount is usage priced at list rates, not incremental spend or business outcome value.",
     "Exhaustion time is a pace projection; remaining percentage and reset time are provider-reported only when embedded in a transcript.",
+    "A five-hour percentage is current for at most five hours after observation; a weekly percentage is current for at most 24 hours. Older transcript evidence is labeled stale and never drives an action.",
     "Main focus is a local summary of observed human prompts and tool activity, not elapsed time or spend; raw prompts are not returned.",
     "The primary action combines Context Health, Main focus, and reported runway locally. It only provides a copyable handoff prompt and never runs an agent automatically.",
     "Claude Code transcripts do not report plan headroom. Missing limits remain unavailable instead of being inferred.",
@@ -307,7 +315,9 @@ export function buildUsageGlance(
       rateLimitMetadata: supportedFormats.map((descriptor) => ({
         agent: descriptor.id,
         status: descriptor.capabilities.rateLimits
-          ? agentsWithLimits.has(descriptor.id) ? "reported" as const : "not_seen" as const
+          ? agentsWithCurrentLimits.has(descriptor.id)
+            ? "reported" as const
+            : agentsWithStaleLimits.has(descriptor.id) ? "stale" as const : "not_seen" as const
           : "not_reported_by_transcript" as const,
         windowsReported: reportedWindows(descriptor.id)
       })),
@@ -514,9 +524,13 @@ function latestLimits(calls: LocalAgentCall[], now: Date): Array<{
 function toGlanceLimit(
   agent: LocalAgentCall["agent"],
   window: LocalAgentRateLimitWindow,
-  observedAt: string
+  observedAt: string,
+  now: Date
 ): GlanceLimit {
-  const projection = projectExhaustion(window, observedAt);
+  const freshness = limitEvidenceFreshness(window, observedAt, now);
+  const projection = freshness === "current"
+    ? projectExhaustion(window, observedAt, now)
+    : { at: null, beforeReset: false };
   return {
     agent,
     kind: window.kind,
@@ -527,6 +541,7 @@ function toGlanceLimit(
     observedAt,
     resetsAt: window.resetsAt,
     source: "transcript_reported",
+    freshness,
     projectedExhaustionAt: projection.at,
     projectedToExhaustBeforeReset: projection.beforeReset,
     projectionConfidence: "estimated"
@@ -535,7 +550,8 @@ function toGlanceLimit(
 
 function projectExhaustion(
   window: LocalAgentRateLimitWindow,
-  observedAt: string
+  observedAt: string,
+  now: Date
 ): { at: string | null; beforeReset: boolean } {
   const observedMs = Date.parse(observedAt);
   const resetMs = Date.parse(window.resetsAt);
@@ -550,14 +566,30 @@ function projectExhaustion(
   ) {
     return { at: null, beforeReset: false };
   }
-  if (window.usedPercent >= 100) {
-    return { at: observedAt, beforeReset: true };
-  }
+  // A current report at the limit is an observed exhausted state, not a
+  // forecast. Keep the projection empty so downstream copy cannot describe an
+  // already-exhausted window as something that merely "may" exhaust.
+  if (window.usedPercent >= 100) return { at: null, beforeReset: false };
   const remainingMs = elapsedMs * ((100 - window.usedPercent) / window.usedPercent);
   const exhaustionMs = observedMs + remainingMs;
-  return exhaustionMs < resetMs
+  return exhaustionMs > now.getTime() && exhaustionMs < resetMs
     ? { at: new Date(exhaustionMs).toISOString(), beforeReset: true }
     : { at: null, beforeReset: false };
+}
+
+function limitEvidenceFreshness(
+  window: LocalAgentRateLimitWindow,
+  observedAt: string,
+  now: Date
+): GlanceLimit["freshness"] {
+  const observedMs = Date.parse(observedAt);
+  const ageMs = now.getTime() - observedMs;
+  const windowMs = window.windowMinutes * 60_000;
+  const maximumAgeMs = Math.min(windowMs, DAY_MS);
+  return Number.isFinite(observedMs) && Number.isFinite(windowMs) && windowMs > 0 &&
+    ageMs >= 0 && ageMs <= maximumAgeMs
+    ? "current"
+    : "stale";
 }
 
 type FocusCandidate = {
@@ -752,8 +784,21 @@ function buildPrimaryAction(input: {
   );
   const focus = safeActionMetadata(input.focus?.summary, 120);
   const focalFile = safeActionMetadata(input.focus?.file, 100);
+  const generatedAtMs = Date.parse(input.generatedAt);
+  const exhaustedLimit = input.limits
+    .filter((limit) => (
+      limit.freshness === "current" &&
+      limit.usedPercent >= 100 &&
+      Date.parse(limit.resetsAt) > generatedAtMs
+    ))
+    .sort((left, right) => Date.parse(left.resetsAt) - Date.parse(right.resetsAt))[0];
   const urgentLimit = input.limits
-    .filter((limit) => limit.projectedToExhaustBeforeReset)
+    .filter((limit) => (
+      limit.freshness === "current" &&
+      limit.projectedToExhaustBeforeReset &&
+      limit.projectedExhaustionAt !== null &&
+      Date.parse(limit.projectedExhaustionAt) > Date.parse(input.generatedAt)
+    ))
     .sort((left, right) => left.remainingPercent - right.remainingPercent)[0];
   const projectSuffix = project ? ` · ${project}` : "";
 
@@ -763,68 +808,80 @@ function buildPrimaryAction(input: {
   let instruction: string;
   let confidence: GlancePrimaryAction["confidence"] = input.sessionHealth.confidence;
 
-  switch (input.sessionHealth.recommendation) {
-  case "start_fresh":
-    intent = "start_fresh";
-    label = `Start fresh${projectSuffix}`;
-    detail = focus
-      ? `Carry “${focus}” into a clean session`
-      : "Carry only the concrete state you still need";
-    instruction = "Start a clean session and continue the observed focus after verifying the current repository state.";
-    break;
-  case "review_hooks":
-    intent = "review_context";
-    label = `Review context${projectSuffix}`;
-    detail = focus
-      ? `Protect “${focus}” from unnecessary hook context`
-      : "Inspect configured hooks before removing anything";
-    instruction = "Review installed hook sources that affect this work. Do not remove or edit configuration without explicit user approval.";
-    break;
-  case "trim_dead_context":
-    intent = "trim_context";
-    label = `Trim context${projectSuffix}`;
-    detail = focus
-      ? `Keep only context useful to “${focus}”`
-      : "Inspect unused loaded context before changing it";
-    instruction = "Identify loaded context that is unrelated to the observed focus. Recommend scoped changes, but do not remove anything without explicit user approval.";
-    break;
-  default:
-    if (urgentLimit) {
-      intent = "protect_runway";
-      label = `Checkpoint${projectSuffix}`;
-      detail = `${limitActionName(urgentLimit)} may exhaust before reset`;
-      instruction = "Create a concise checkpoint for the observed focus and prioritize the smallest verifiable next step before the reported plan window may be exhausted.";
-      confidence = "medium";
-    } else if (
-      focus &&
-      input.focus?.confidence !== "low" &&
-      input.currentSession?.status === "active"
-    ) {
-      intent = "continue_focus";
-      label = `Continue${projectSuffix}`;
-      detail = focus;
-      instruction = "Continue the observed focus with the smallest verifiable next step.";
-      confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
-    } else if (focus && input.focus?.confidence !== "low") {
-      intent = "resume_focus";
-      label = `Resume${projectSuffix}`;
-      detail = focus;
-      instruction = "Resume the observed focus after checking what changed since the last local activity.";
-      confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
-    } else {
-      intent = "inspect_current_work";
-      label = `Inspect current work${projectSuffix}`;
-      detail = "Verify the active task before making changes";
-      instruction = "Inspect the current repository and ask for the intended task if it cannot be established from local evidence.";
-      confidence = "low";
+  if (exhaustedLimit) {
+    intent = "protect_runway";
+    label = `Checkpoint${projectSuffix}`;
+    detail = `${limitActionName(exhaustedLimit)} is exhausted until reset`;
+    instruction = "Create a concise checkpoint for the observed focus and wait for the provider-reported reset before resuming work that requires this plan window.";
+    confidence = "high";
+  } else {
+    switch (input.sessionHealth.recommendation) {
+    case "start_fresh":
+      intent = "start_fresh";
+      label = `Start fresh${projectSuffix}`;
+      detail = focus
+        ? `Carry “${focus}” into a clean session`
+        : "Carry only the concrete state you still need";
+      instruction = "Start a clean session and continue the observed focus after verifying the current repository state.";
+      break;
+    case "review_hooks":
+      intent = "review_context";
+      label = `Review context${projectSuffix}`;
+      detail = focus
+        ? `Protect “${focus}” from unnecessary hook context`
+        : "Inspect configured hooks before removing anything";
+      instruction = "Review installed hook sources that affect this work. Do not remove or edit configuration without explicit user approval.";
+      break;
+    case "trim_dead_context":
+      intent = "trim_context";
+      label = `Trim context${projectSuffix}`;
+      detail = focus
+        ? `Keep only context useful to “${focus}”`
+        : "Inspect unused loaded context before changing it";
+      instruction = "Identify loaded context that is unrelated to the observed focus. Recommend scoped changes, but do not remove anything without explicit user approval.";
+      break;
+    default:
+      if (urgentLimit) {
+        intent = "protect_runway";
+        label = `Checkpoint${projectSuffix}`;
+        detail = `${limitActionName(urgentLimit)} may exhaust before reset`;
+        instruction = "Create a concise checkpoint for the observed focus and prioritize the smallest verifiable next step before the reported plan window may be exhausted.";
+        confidence = "medium";
+      } else if (
+        focus &&
+        input.focus?.confidence !== "low" &&
+        input.currentSession?.status === "active"
+      ) {
+        intent = "continue_focus";
+        label = `Continue${projectSuffix}`;
+        detail = focus;
+        instruction = "Continue the observed focus with the smallest verifiable next step.";
+        confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
+      } else if (focus && input.focus?.confidence !== "low") {
+        intent = "resume_focus";
+        label = `Resume${projectSuffix}`;
+        detail = focus;
+        instruction = "Resume the observed focus after checking what changed since the last local activity.";
+        confidence = input.focus?.confidence ?? input.sessionHealth.confidence;
+      } else {
+        intent = "inspect_current_work";
+        label = `Inspect current work${projectSuffix}`;
+        detail = "Verify the active task before making changes";
+        instruction = "Inspect the current repository and ask for the intended task if it cannot be established from local evidence.";
+        confidence = "low";
+      }
     }
   }
 
-  const runway = urgentLimit
+  const runway = exhaustedLimit
+    ? `${limitActionName(exhaustedLimit)}: exhausted (0% remaining); provider-reported reset=${exhaustedLimit.resetsAt}; observed=${exhaustedLimit.observedAt}.`
+    : urgentLimit
     ? `${limitActionName(urgentLimit)}: ${roundPercent(urgentLimit.remainingPercent)}% remaining; locally projected exhaustion=${urgentLimit.projectedExhaustionAt ?? "unavailable"}; provider-reported reset=${urgentLimit.resetsAt}.`
-    : input.limits.length > 0
+    : input.limits.some((limit) => limit.freshness === "current")
       ? "No transcript-reported plan window is currently projected to exhaust before reset."
-      : "Not available; no plan window was reported in the local transcript.";
+      : input.limits.some((limit) => limit.freshness === "stale")
+        ? "Stale; the last transcript-reported plan window is too old to use as current runway. Refresh the agent limit before acting."
+        : "Not available; no plan window was reported in the local transcript.";
   const reportedTotalEvidence = input.currentSession?.reportedTotalTokens === undefined
     ? ""
     : `; provider-reported total tokens=${input.currentSession.reportedTotalTokens.toLocaleString("en-US")}; input/output breakdown unavailable`;

@@ -1312,6 +1312,8 @@ describe("board-style report generation", () => {
     expect(tinyHtml).toContain('<strong class="metric-value">&lt;$0.01</strong>');
     expect(tinyHtml).toContain("Estimated cost/value");
     expect(tinyHtml).toContain("&lt;$0.01");
+    expect(generatePolicyConfigDraftMarkdown(tinyInput))
+      .toContain("currentCostValueEvidenceUsd: 0.0075");
   });
 
   it("keeps persisted partial provider coverage explicit across all provider QA entries", () => {

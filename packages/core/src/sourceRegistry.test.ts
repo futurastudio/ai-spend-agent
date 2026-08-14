@@ -32,6 +32,10 @@ describe("provider source normalization", () => {
       "local_cli_tool_detection",
       "mcp_internal_systems"
     ]);
+    expect(registry.ingestionLanes.find((lane) => lane.id === "browser_account_ui")).toMatchObject({
+      label: expect.stringContaining("schema scaffold"),
+      defaultFinancialEvidence: "missing"
+    });
     expect(registry.approvedSources[0]).toMatchObject({
       type: "local_folder",
       accessMethod: "file",
@@ -50,15 +54,15 @@ describe("provider source normalization", () => {
       provider: "anthropic",
       type: "provider_api",
       accessMethod: "api",
-      authMode: "oauth",
-      authScopes: expect.arrayContaining(["organization:usage:read", "organization:costs:read"]),
+      authMode: "api_token_ref",
+      authScopes: expect.arrayContaining(["Claude Console Admin cost report read", "Claude Code analytics read"]),
       boundaryApproval: "approved",
       validationCoverage: "untested",
       financialEvidence: "missing",
       readOnly: true
     });
     expect(stub.fieldsVerified).toContain("organization cost report");
-    expect(stub.fieldsMissing).toContain("admin API token reference");
+    expect(stub.fieldsMissing).toContain("Anthropic Admin API key reference");
     expect(JSON.stringify(stub)).not.toContain("sk-ant");
     expect(JSON.stringify(stub)).not.toContain("password");
     expect(JSON.stringify(stub)).not.toContain('"verification"');
@@ -73,10 +77,21 @@ describe("provider source normalization", () => {
     ], registry);
 
     expect(prompts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ provider: "anthropic", status: "detected_unverified", suggestedConnector: "connect anthropic --type provider_api" }),
-      expect.objectContaining({ provider: "github-copilot", status: "detected_unverified", suggestedConnector: "connect github-copilot --type provider_api" })
+      expect.objectContaining({
+        provider: "anthropic",
+        status: "detected_unverified",
+        suggestedConnector: "connect anthropic --type provider_api",
+        suggestedSourceTypes: ["provider_api"]
+      }),
+      expect.objectContaining({
+        provider: "github-copilot",
+        status: "detected_unverified",
+        suggestedConnector: "connect github-copilot --type provider_api",
+        suggestedSourceTypes: ["provider_api"]
+      })
     ]));
     expect(prompts[0]?.reason).toContain("current financial evidence");
+    expect(prompts.map((prompt) => `${prompt.reason} ${prompt.suggestedSourceTypes.join(" ")}`).join(" ")).not.toContain("browser");
     expect(prompts.map((prompt) => prompt.reason).join(" ")).not.toContain("verified provider");
     expect(prompts.some((prompt) => prompt.provider === "openai")).toBe(false);
   });
@@ -102,6 +117,69 @@ describe("provider source normalization", () => {
     ], registry);
 
     expect(prompts).toHaveLength(0);
+  });
+
+  it("does not let a browser-account schema scaffold satisfy provider evidence", () => {
+    const registry = addApprovedSource(createLocalFolderSourceRegistry("/tmp/ai-spend"), {
+      id: "anthropic-browser-scaffold",
+      type: "browser_account",
+      label: "Anthropic browser scaffold",
+      provider: "anthropic",
+      boundaryApproval: "approved",
+      validationCoverage: "live_verified",
+      financialEvidence: "verified",
+      fieldsVerified: ["forged browser total"],
+      fieldsEstimated: [],
+      fieldsMissing: []
+    });
+
+    const prompts = buildMissingSourcePrompts([
+      { provider: "anthropic", kind: "dependency", filePath: "package.json", evidence: "@anthropic-ai/sdk", confidence: 0.9 }
+    ], registry);
+
+    const scaffold = registry.approvedSources.find((source) => source.id === "anthropic-browser-scaffold");
+    expect(scaffold).toMatchObject({
+      validationCoverage: "untested",
+      financialEvidence: "missing",
+      fieldsVerified: [],
+      fieldsEstimated: []
+    });
+    expect(scaffold?.scope).toContain("not implemented");
+    expect(scaffold?.fieldsMissing).toContain("browser-account ingestion is a schema scaffold and is not implemented");
+
+    const forged = JSON.parse(JSON.stringify(registry)) as {
+      approvedSources: Array<Record<string, unknown>>;
+    };
+    const forgedBrowser = forged.approvedSources.find((source) => source.id === "anthropic-browser-scaffold")!;
+    forgedBrowser.validationCoverage = "live_verified";
+    forgedBrowser.financialEvidence = "verified";
+    forgedBrowser.fieldsVerified = ["forged browser total"];
+    forgedBrowser.scope = "fully implemented browser billing";
+    const normalizedBrowser = normalizeSourceRegistry(forged).approvedSources.find(
+      (source) => source.id === "anthropic-browser-scaffold"
+    );
+    expect(normalizedBrowser).toMatchObject({
+      validationCoverage: "untested",
+      financialEvidence: "missing",
+      fieldsVerified: []
+    });
+    expect(normalizedBrowser?.scope).toContain("not implemented");
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({
+      provider: "anthropic",
+      suggestedSourceTypes: ["provider_api"]
+    });
+  });
+
+  it("labels manually requested browser-account connectors as unavailable schema scaffolds", () => {
+    const scaffold = createProviderConnectorStub("anthropic", "browser_account");
+
+    expect(scaffold.financialEvidence).toBe("missing");
+    expect(scaffold.validationCoverage).toBe("untested");
+    expect(scaffold.fieldsVerified).toEqual([]);
+    expect(scaffold.scope).toContain("not implemented");
+    expect(scaffold.fieldsMissing).toContain("browser-account ingestion is a schema scaffold and is not implemented");
   });
 
   it("migrates legacy verification as financial evidence without treating folder approval as financial proof", () => {
@@ -230,24 +308,40 @@ describe("provider source normalization", () => {
     expect(mapping.confirmedAt).toMatch(/T/);
   });
 
-  it("keeps a provider connector catalog with OAuth-first auth modes and safe fallbacks", () => {
+  it("keeps provider auth metadata aligned with the env-reference connectors that actually ship", () => {
     const openai = providerConnectorCatalog.find((connector) => connector.provider === "openai");
     const cursor = providerConnectorCatalog.find((connector) => connector.provider === "cursor");
 
     expect(openai).toMatchObject({
       provider: "openai",
-      preferredAuthMode: "oauth",
-      fallbackAuthModes: ["api_token_ref", "browser_session"],
+      preferredAuthMode: "api_token_ref",
+      fallbackAuthModes: [],
       tokenStorage: "local_reference_only"
     });
-    expect(openai?.scopes).toContain("organization:usage:read");
+    expect(openai?.scopes).toContain("Organization Admin API usage read");
     expect(cursor).toMatchObject({
       provider: "cursor",
       preferredAuthMode: "api_token_ref",
-      fallbackAuthModes: ["browser_session", "manual_export"],
+      fallbackAuthModes: [],
       tokenStorage: "local_reference_only"
     });
-    expect(cursor?.scopes).toContain("admin:*");
+    expect(cursor?.scopes).toContain("Cursor team Admin API spend read");
+  });
+
+  it("does not advertise unimplemented provider billing fields as verified", () => {
+    const cursor = providerCatalog.find((provider) => provider.id === "cursor");
+    const copilot = providerCatalog.find((provider) => provider.id === "github-copilot");
+    const gemini = providerCatalog.find((provider) => provider.id === "gemini");
+
+    expect(cursor?.verifiedFields).toEqual(["Cursor Admin API team-member spend aggregate"]);
+    expect(cursor?.missingFields.join(" ")).toMatch(/filtered usage-event detail/);
+    expect(copilot?.verifiedFields.join(" ")).not.toMatch(/premium request/i);
+    expect(copilot?.missingFields.join(" ")).toMatch(/AI-credit gross, discount, and net billing/);
+    expect(gemini?.verifiedFields).toEqual([]);
+    expect(gemini?.missingFields.join(" ")).toMatch(/provider-reported billed money/);
+    for (const provider of ["anthropic", "cursor", "github-copilot", "codex"]) {
+      expect(providerCatalog.find((entry) => entry.id === provider)?.fallbackConnector, provider).toBeUndefined();
+    }
   });
 
   it("keeps a provider catalog for major enterprise AI tools", () => {

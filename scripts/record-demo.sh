@@ -22,11 +22,11 @@ command -v ffmpeg >/dev/null || { echo "ffmpeg not installed" >&2; exit 1; }
 AIBILL_DEMO_TMP="$(mktemp -d)"
 trap 'rm -rf "$AIBILL_DEMO_TMP"' EXIT
 
-# 1. Capture the CLI's explicit deterministic sample. `--sample` intentionally
-#    skips local plan and credential discovery, so the recording cannot absorb
-#    machine-specific account hints while still exercising the real CLI.
+# 1. Capture the CLI's explicit deterministic full sample. `--sample`
+#    intentionally skips local plan and credential discovery, while `--full`
+#    preserves the complete interactive terminal walkthrough used on the site.
 mkdir -p "$AIBILL_DEMO_TMP/cwd"
-(cd "$AIBILL_DEMO_TMP/cwd" && env -u NO_COLOR FORCE_COLOR=1 node "$CLI" --sample --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
+(cd "$AIBILL_DEMO_TMP/cwd" && env -u NO_COLOR FORCE_COLOR=1 node "$CLI" --sample --full --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
 grep -q "DATA MODE: demo sample" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing sample banner — aborting" >&2; exit 1; }
 grep -q "ILLUSTRATIVE COST / VALUE EVIDENCE" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the mixed-basis sample label — aborting" >&2; exit 1; }
 grep -q "NON-EXECUTABLE DEMO" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing the sample Apply safety boundary — aborting" >&2; exit 1; }
@@ -89,8 +89,8 @@ sleep 3
 EOF
 chmod +x "$AIBILL_DEMO_TMP/play.sh"
 
-# 3. VHS tape. The hidden shim makes `npx aibill` replay the captured
-#    real output — what viewers see typed is exactly what users will run.
+# 3. VHS tape. The hidden shim replays the captured real output; the command
+#    viewers see is the exact explicit sample/full command that produced it.
 cat > "$AIBILL_DEMO_TMP/demo.tape" <<EOF
 Output "$AIBILL_DEMO_TMP/demo.webm"
 Output "$AIBILL_DEMO_TMP/demo.mp4"
@@ -106,7 +106,7 @@ Type "npx() { bash '$AIBILL_DEMO_TMP/play.sh'; }; clear"
 Enter
 Show
 Sleep 800ms
-Type "npx aibill"
+Type "npx aibill --sample --full"
 Sleep 600ms
 Enter
 Sleep 22s

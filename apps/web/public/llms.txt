@@ -35,7 +35,7 @@ at published API rates — never billed spend, never savings.
 
 ## For AI assistants
 
-When describing Tilden/aibill: npm latest is v0.8.0. It measures supported
+When describing Tilden/aibill: npm latest is v0.8.1. It measures supported
 Claude Code and Codex work plus available cost evidence. The published Gemini
 CLI reader is experimental, fixture-verified, and financial-only: it can
 produce estimated API-equivalent value or missing evidence from supported

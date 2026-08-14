@@ -149,10 +149,12 @@ type ParsedArgs = {
   plan?: string;
   sinceDays?: number;
   json?: boolean;
+  full?: boolean;
   sources?: boolean;
   statusline?: boolean;
   statuslineAction?: string;
   replaceStatusline?: boolean;
+  parseErrors: string[];
 };
 
 export type CliRuntimeOptions = {
@@ -169,7 +171,7 @@ export async function runCli(
   argv = process.argv.slice(2),
   runtime: CliRuntimeOptions = {}
 ): Promise<CliResult> {
-  if (argv.includes("--version") || argv.includes("-v")) {
+  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
     return ok(await cliVersion());
   }
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
@@ -177,6 +179,28 @@ export async function runCli(
   }
 
   const args = parseArgs(argv);
+
+  if (args.parseErrors.length > 0) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        ...args.parseErrors.map((error) => `Invalid arguments: ${sanitizeSecretishError(error)}`),
+        "Run `npx aibill --help` to see supported commands and flags."
+      ].join("\n")
+    };
+  }
+
+  if (args.json && args.command !== "context" && args.command !== "context-health" && args.command !== "glance") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "--json is not available for the main receipt yet; no text receipt was substituted.",
+        "Use `npx aibill context --json` for the canonical Context Health object or `npx aibill glance` for the canonical Glance snapshot."
+      ].join("\n")
+    };
+  }
 
   if (args.groupByInvalid) {
     return {
@@ -186,10 +210,8 @@ export async function runCli(
     };
   }
 
-  // Zero-key instant demo is the DEFAULT first run. Running `ai-spend-agent`
-  // with no subcommand (or `npx ai-spend-agent`), or with only flags such as
-  // `--group-by agent`, lands the wow immediately on sample / auto-detected
-  // local data — no credential required.
+  // Running with no subcommand reads only evidence available on this machine.
+  // Illustrative records are reachable only through an explicit --sample.
   if (!args.command || args.command.startsWith("--") || args.command === "quickstart" || args.command === "demo") {
     return quickstartCommand(args);
   }
@@ -265,7 +287,7 @@ export async function runCli(
   return {
     exitCode: 1,
     stdout: "",
-    stderr: `Unknown command: ${args.command}\n${helpText()}`
+    stderr: `Unknown command: ${sanitizeSecretishError(args.command)}\n${helpText()}`
   };
 }
 
@@ -282,7 +304,17 @@ type InstantReadData = {
 async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+  if (args.plan && !planOverrideFromFlag(args.plan)) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+    };
+  }
   const { records, mode, warnings, providerCoverage, codexInvocationFiles } = await loadInstantReadData(args);
+  if (records.length === 0) {
+    return noEvidenceResult("receipt", warnings, sinceDays);
+  }
   const summaryRecords = mode === "connected"
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
@@ -291,6 +323,7 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   // ("which project burns my plan"); demo/connected keep by-model.
   const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
   const color = args.noColor ? false : undefined;
+  const outputWidth = terminalOutputWidth();
 
   // Persona: --plan override wins; otherwise read the plans the coding agents
   // themselves persisted locally (read-only, whitelisted fields, no network).
@@ -305,7 +338,7 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+        stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
       };
     }
     detectedPlans = [override];
@@ -366,13 +399,18 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     nextSteps,
     deadContext,
     detectedPlans,
+    width: outputWidth,
     // An explicit --group-by is a drill-down question: answer with just the
     // table + window instead of repeating the whole readout.
-    view: args.groupBy ? "breakdown" : "full"
+    view: args.groupBy ? "breakdown" : args.full ? "full" : "compact"
   });
 
-  const header = [`  ${dataModeBanner(mode, summaryRecords)}`, ...warnings.map((warning) => `  ! ${warning}`)].join("\n");
-  return ok(`${header}\n${summaryText}`);
+  const detailedView = Boolean(args.groupBy || args.full);
+  const header = [
+    ...(detailedView ? wrapCliHeader(dataModeBanner(mode, summaryRecords), "  ", outputWidth) : []),
+    ...warnings.flatMap((warning) => wrapCliHeader(warning, "  ! ", outputWidth))
+  ].join("\n");
+  return ok(header ? `${header}\n${summaryText}` : summaryText);
 }
 
 async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
@@ -402,7 +440,7 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+        stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
       };
     }
     detectedPlans = [override];
@@ -539,7 +577,7 @@ function quickstartNextSteps(
   if (detected.length > 0) {
     const names = detected.map((credential) => `${credential.provider} (${credential.hint})`).join(", ");
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
-    steps.push(`npx aibill connect ${detected[0]!.provider}   add official provider-reported cost (ADMIN/owner key)`);
+    steps.push(`npx aibill connect ${detected[0]!.provider}   set up the admin connector, then sync provider-reported cost`);
   }
   steps.push(
     mode === "demo"
@@ -671,14 +709,21 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   }
 
   // Real local agent logs (Claude Code / Codex) beat any sample/legacy state.
-  const logs = await loadLocalAgentUsage({
-    // Env overrides keep tests (and unusual installs) isolated from $HOME.
-    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-    sinceIso: sinceIsoForDays(args.sinceDays ?? 30),
-    collectCodexInvocationEvidence: true
-  }).catch(() => undefined);
+  let logs: Awaited<ReturnType<typeof loadLocalAgentUsage>> | undefined;
+  try {
+    logs = await loadLocalAgentUsage({
+      // Env overrides keep tests (and unusual installs) isolated from $HOME.
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
+      sinceIso: sinceIsoForDays(args.sinceDays ?? 30),
+      collectCodexInvocationEvidence: true
+    });
+  } catch {
+    // A failed read is not the same as an honest empty scan. Keep the compact
+    // result useful without leaking a local path or raw parser exception.
+    warnings.push("Some local agent evidence could not be read; coverage is incomplete.");
+  }
   if (logs && logs.records.length > 0) {
     // Persisted local_logs state (written by report/apply-artifact) is the
     // same data source we just re-read — superseding it silently is correct,
@@ -709,13 +754,14 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     };
   }
 
-  // No real logs. Persisted sample/legacy state may still be shown, but only as
-  // DEMO (never as connected), with a warning when its origin is unknown.
+  // No real logs. Sample and legacy persisted state must never appear unless
+  // this invocation explicitly opted into --sample.
   if (persisted && persisted.records.length > 0 && persisted.mode !== "connected_provider" && persisted.mode !== "local_logs") {
-    if (persisted.mode === undefined) {
-      warnings.push("Persisted state in .ai-spend-agent/spend.json is from an older format with no data-mode tag — treating it as demo. Run `npx aibill reset`, then re-scan to refresh.");
-    }
-    return { records: persisted.records, mode: "demo", warnings };
+    warnings.push(
+      persisted.mode === "sample"
+        ? "Sample state exists but was not displayed because this run did not include --sample."
+        : "Legacy state with no trustworthy data-mode label was ignored. Run `npx aibill reset`, then collect fresh evidence."
+    );
   }
 
   if (persisted?.mode === "local_logs") {
@@ -724,9 +770,77 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     );
   }
 
-  // loadSampleUsageData resolves the bundled CSVs relative to the installed
-  // package, so this works from ANY directory (true zero-config).
-  return { records: await loadSampleUsageData(), mode: "demo", warnings };
+  return { records: [], mode: "local-logs", warnings };
+}
+
+function noEvidenceResult(
+  surface: "receipt" | "watch" | "report-card",
+  warnings: readonly string[],
+  sinceDays: number
+): CliResult {
+  const surfaceLine = surface === "watch"
+    ? "Watch has no financial baseline yet; no zero total or sample activity was recorded."
+    : surface === "report-card"
+      ? "No receipt was written because there is no supported financial evidence to summarize."
+      : `No supported AI usage evidence was found in the last ${sinceDays} days.`;
+  return {
+    exitCode: surface === "receipt" ? 0 : 1,
+    stdout: surface === "receipt"
+      ? [
+          "aibill · local only",
+          "",
+          surfaceLine,
+          "Looked for: Claude Code, Codex, and Gemini CLI local history.",
+          "Nothing was uploaded. No sample data was substituted.",
+          ...warnings.map((warning) => `! ${warning}`),
+          "",
+          "Next",
+          "  npx aibill doctor --sources       see the exact evidence gap and setup paths"
+        ].join("\n")
+      : "",
+    stderr: surface === "receipt"
+      ? ""
+      : [
+          surfaceLine,
+          "Run `npx aibill doctor --sources` to see the exact evidence gap.",
+          "Local evidence: use Claude Code, Codex, or Gemini CLI normally, then retry.",
+          "Provider billing: connect openai, anthropic, cursor, or github-copilot with an admin credential reference.",
+          "For illustrative output only, rerun this command with --sample."
+        ].join("\n")
+  };
+}
+
+function terminalOutputWidth(): number {
+  const envColumns = Number(process.env.COLUMNS);
+  const ttyColumns = process.stdout.columns;
+  const requested = Number.isFinite(envColumns) && envColumns > 0
+    ? envColumns
+    : Number.isFinite(ttyColumns) && (ttyColumns ?? 0) > 0
+      ? ttyColumns!
+      : 72;
+  return Math.max(40, Math.min(120, Math.floor(requested)));
+}
+
+function wrapCliHeader(text: string, prefix: string, width: number): string[] {
+  const available = Math.max(12, width - prefix.length);
+  const words = text.trim().split(/\s+/u);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+    if (`${current} ${word}`.length <= available) {
+      current += ` ${word}`;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+  }
+  if (current) lines.push(current);
+  const continuationPrefix = " ".repeat(prefix.length);
+  return lines.map((line, index) => `${index === 0 ? prefix : continuationPrefix}${line}`);
 }
 
 /** A one-line, unmissable banner telling the user which data they're seeing. */
@@ -796,8 +910,8 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
   if (geminiPresenceFound && !geminiFinancialFound) {
     warnings.push("Gemini CLI detected, but no supported chats JSON/JSONL financial evidence was found. No financial rows were created; logs.json is presence-only evidence. Need this coverage? +1 or contribute a synthetic fixture: https://github.com/futurastudio/ai-spend-agent/issues/new?template=provider_or_agent.yml");
   }
-  if (!hasLocalSource) warnings.push("no supported Claude Code, Codex, or Gemini CLI session evidence found — a first run here will show DEMO sample data");
-  if (providerRefs.length === 0) warnings.push("no provider admin keys detected — connect OpenAI/Anthropic to add official provider-reported cost (local logs stay API-equivalent estimates)");
+  if (!hasLocalSource) warnings.push("no supported Claude Code, Codex, or Gemini CLI session evidence found — the default receipt will remain empty; use --sample only for the labeled demo");
+  if (providerRefs.length === 0) warnings.push("no provider admin keys detected — set up and sync an OpenAI/Anthropic admin connector for provider-reported cost (local logs stay API-equivalent estimates)");
 
   const predictedMode = connectedStateTrusted
     ? "connected provider billing"
@@ -805,7 +919,7 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
       ? "your local agent logs (estimated at API-equivalent rates)"
       : geminiPresenceFound
         ? "local Gemini CLI presence only (financial evidence unavailable; no sample substituted)"
-      : "demo sample (illustrative)";
+      : "no supported evidence yet (no sample substituted)";
 
   const lines = [
     "aibill doctor",
@@ -1358,7 +1472,7 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
       "aibill reset",
       `path: ${rootPath}`,
       "nothing to clear (no persisted spend state found)",
-      "next run will re-read your real local agent logs (or demo sample if none)."
+      "next run will re-read your real local agent logs; no sample is substituted without --sample."
     ].join("\n"));
   }
   // Clear derived spend state so a prior `scan --sample` (or stale provider
@@ -1377,7 +1491,7 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
     "aibill reset",
     `path: ${rootPath}`,
     removed.length > 0 ? `cleared: ${removed.join(", ")}` : "nothing to clear (no persisted spend state found)",
-    "next run will re-read your real local agent logs (or demo sample if none)."
+    "next run will re-read your real local agent logs; no sample is substituted without --sample."
   ].join("\n"));
 }
 
@@ -1512,7 +1626,7 @@ async function initCommand(
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+        stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
       };
     }
     detectedPlanOverride = [override];
@@ -1745,7 +1859,7 @@ async function refreshStatuslineCommand(
       return {
         exitCode: 1,
         stdout: "",
-        stderr: `Unknown --plan "${args.plan}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
+        stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
       };
     }
     detectedPlanOverride = [override];
@@ -2175,7 +2289,7 @@ function initApiEquivalentWindowLines(snapshot: ActivitySnapshot): string[] {
         agent.jsonlValidationCoverage === "complete"
       );
     return [completeZero
-      ? "API-equivalent value: ~$0.00 1d · ~$0.00 7d · ~$0.00 30d (estimated value; not billed spend)"
+      ? "API-equivalent usage value: unavailable — no priced evidence was observed in readable local sources"
       : "API-equivalent usage value: unavailable — local source coverage is incomplete; no zero total was inferred"];
   }
   if (snapshot.mode === "unresolved" && snapshot.unresolved) {
@@ -2309,7 +2423,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
     const mappings = attributeUsageRecords(records);
     await writeLocalSpendState(stateDir, records, summary, mappings, "sample");
     lines.push(`sample records: ${records.length}`);
-    lines.push(`total spend: $${summary.totalUsd.toFixed(2)}`);
+    lines.push(`total spend: ${formatOptionalUsd(summary.totalUsd)}`);
     lines.push(`attribution mappings: ${mappings.length}`);
   }
 
@@ -2347,6 +2461,9 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
   while (unbounded || iteration < cycles) {
     const previous = await readOptionalJson<WatchSnapshot | null>(join(stateDir, "watch-latest.json"), null);
     const { summary, snapshot, records, mode } = await runWatchCycle(stateDir, args);
+    if (records.length === 0) {
+      return noEvidenceResult("watch", [], args.sinceDays ?? 30);
+    }
     const deltaHeadline = buildDeltaHeadline(previous, snapshot);
     // Watch's job is DELTAS: render the compact breakdown view per cycle, not
     // the whole diagnose→verify readout again (the quickstart owns that).
@@ -2355,6 +2472,7 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
       groupBy: args.groupBy ?? "model",
       color: args.noColor ? false : undefined,
       mode: mode === "sample" ? "demo" : mode === "connected_provider" ? "connected" : "local-logs",
+      width: terminalOutputWidth(),
       view: "breakdown"
     });
     const stamped = [
@@ -2425,8 +2543,8 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
         records = logs.records;
         mode = "local_logs";
       } else {
-        records = await loadSampleUsageData();
-        mode = "sample";
+        records = [];
+        mode = "local_logs";
       }
     }
   }
@@ -2460,7 +2578,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     sourceId: "watch",
     detail: snapshot.totalUsd === null
       ? `Watch cycle captured ${snapshot.recordCount} records with no priced financial evidence; total unavailable.`
-      : `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
+      : `Watch cycle captured ${snapshot.recordCount} records totaling ${formatOptionalUsd(snapshot.totalUsd)}.`
   });
 
   return { summary, snapshot, records: headlineRecords, mode };
@@ -2471,27 +2589,27 @@ function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapsh
     if (current.totalUsd === null) {
       return `First watch snapshot. Financial baseline is unavailable across ${current.recordCount} records; missing/null is not zero. Future priced cycles will establish a numeric baseline.`;
     }
-    return `First watch snapshot. Baseline AI spend is $${current.totalUsd.toFixed(2)} across ${current.recordCount} charges. Future cycles will report what changed.`;
+    return `First watch snapshot. Baseline AI spend is ${formatOptionalUsd(current.totalUsd)} across ${current.recordCount} charges. Future cycles will report what changed.`;
   }
 
   if (current.totalUsd === null) {
     return `Financial evidence is unavailable across ${current.recordCount} records; missing/null is not zero and no numeric delta was calculated.`;
   }
   if (previous.totalUsd === null) {
-    return `A priced financial baseline is now available at $${current.totalUsd.toFixed(2)} across ${current.recordCount} records. The prior snapshot was unavailable, so no numeric delta was calculated.`;
+    return `A priced financial baseline is now available at ${formatOptionalUsd(current.totalUsd)} across ${current.recordCount} records. The prior snapshot was unavailable, so no numeric delta was calculated.`;
   }
 
   const deltaUsd = roundMoneyCli(current.totalUsd - previous.totalUsd);
   const lines: string[] = [];
 
-  if (Math.abs(deltaUsd) < 0.01) {
-    lines.push(`No change since the last check: AI spend is holding at $${current.totalUsd.toFixed(2)}.`);
+  if (deltaUsd === 0) {
+    lines.push(`No change since the last check: AI spend is holding at ${formatOptionalUsd(current.totalUsd)}.`);
   } else {
     const direction = deltaUsd > 0 ? "UP" : "DOWN";
     const percent = previous.totalUsd > 0 ? Math.round((deltaUsd / previous.totalUsd) * 100) : 100;
     lines.push(
-      `Spend is ${direction} $${Math.abs(deltaUsd).toFixed(2)} (${Math.abs(percent)}%) since the last check — ` +
-        `from $${previous.totalUsd.toFixed(2)} to $${current.totalUsd.toFixed(2)}.`
+      `Spend is ${direction} ${formatOptionalUsd(Math.abs(deltaUsd))} (${Math.abs(percent)}%) since the last check — ` +
+        `from ${formatOptionalUsd(previous.totalUsd)} to ${formatOptionalUsd(current.totalUsd)}.`
     );
   }
 
@@ -2502,12 +2620,12 @@ function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapsh
     const before = previousModels.get(entry.key);
     if (before === undefined) {
       if (entry.amountUsd >= 1) {
-        anomalies.push(`New model "${entry.key}" appeared, already at $${entry.amountUsd.toFixed(2)}.`);
+        anomalies.push(`New model "${entry.key}" appeared, already at ${formatOptionalUsd(entry.amountUsd)}.`);
       }
       continue;
     }
     if (before > 0 && entry.amountUsd - before >= 5 && entry.amountUsd / before >= 1.5) {
-      anomalies.push(`"${entry.key}" jumped from $${before.toFixed(2)} to $${entry.amountUsd.toFixed(2)}.`);
+      anomalies.push(`"${entry.key}" jumped from ${formatOptionalUsd(before)} to ${formatOptionalUsd(entry.amountUsd)}.`);
     }
   }
 
@@ -2523,7 +2641,7 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 function roundMoneyCli(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Math.round(value * 10_000) / 10_000;
 }
 
 async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
@@ -2595,6 +2713,11 @@ const adminUpgradeProviders: Record<string, string> = {
   copilot: "requires a GitHub BILLING-ADMIN token (org/enterprise)"
 };
 
+const supportedAdminProviders = new Set(["openai", "anthropic", "cursor", "github-copilot"]);
+const providerAliases: Record<string, string> = {
+  copilot: "github-copilot"
+};
+
 const providerAdminEnvHint: Record<string, string> = {
   openai: "env:OPENAI_ADMIN_KEY",
   anthropic: "env:ANTHROPIC_ADMIN_KEY",
@@ -2603,10 +2726,21 @@ const providerAdminEnvHint: Record<string, string> = {
   copilot: "env:GITHUB_TOKEN"
 };
 
+function providerSyncSetupCommand(provider: string, adminRef: string): string {
+  if (provider === "cursor") {
+    return `npx aibill sync-provider --provider cursor --auth-reference ${adminRef} --account-id <team-label>`;
+  }
+  if (provider === "github-copilot") {
+    return `npx aibill sync-provider --provider github-copilot --auth-reference ${adminRef} --org <organization>`;
+  }
+  return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`;
+}
+
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
   const stateDir = join(rootPath, ".ai-spend-agent");
-  const provider = args.provider ?? "unknown";
+  const requestedProvider = (args.provider ?? "unknown").trim().toLowerCase();
+  const provider = providerAliases[requestedProvider] ?? requestedProvider;
   if (!provider || provider === "unknown") {
     return {
       exitCode: 1,
@@ -2622,6 +2756,20 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     };
   }
   const type = args.sourceType ?? "provider_api";
+  if (!supportedAdminProviders.has(provider) || type !== "provider_api") {
+    const reason = !supportedAdminProviders.has(provider)
+      ? `connect does not implement provider "${sanitizeSecretishError(requestedProvider)}".`
+      : `connect supports provider_api only; received "${sanitizeSecretishError(type)}".`;
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        reason,
+        "Supported admin connectors: openai, anthropic, cursor, github-copilot.",
+        "For an approved file/export boundary, use `npx aibill add-source` instead."
+      ].join("\n")
+    };
+  }
   const registry = await readSourceRegistry(stateDir, rootPath);
   const source = createProviderConnectorStub(provider, type);
   const nextRegistry = addApprovedSource(registry, source);
@@ -2650,7 +2798,7 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     `boundary approval: ${source.boundaryApproval}`,
     `validation coverage: ${source.validationCoverage}`,
     `financial evidence: ${source.financialEvidence}`,
-    "secrets: no raw secrets stored; we only reference a local env var such as env:OPENAI_ADMIN_KEY"
+    `secrets: no raw secrets stored; we only reference a local env var such as ${providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY"}`
   ];
 
   if (selfServeProviders.has(provider)) {
@@ -2668,17 +2816,17 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     lines.push(`auto-detected: a ${provider} key in ${detected.reference} (${detected.hint}) from ${describeOrigin(detected)}`);
     if (detected.isLikelyAdminKey) {
       const adminRef = providerAdminEnvHint[provider] ?? detected.reference;
-      lines.push(`next: npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+      lines.push(`next: ${providerSyncSetupCommand(provider, adminRef)}`);
     } else {
       const adminRef = providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY";
       lines.push(`this looks like a regular key — for COST data set an admin key in ${adminRef}, then:`);
-      lines.push(`  npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+      lines.push(`  ${providerSyncSetupCommand(provider, adminRef)}`);
     }
   } else {
     const adminRef = providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY";
     lines.push("");
     lines.push(`next: export an admin key reference, e.g. ${adminRef}, then run:`);
-    lines.push(`  npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`);
+    lines.push(`  ${providerSyncSetupCommand(provider, adminRef)}`);
   }
 
   lines.push(`missing: ${source.fieldsMissing.join(", ")}`);
@@ -2709,15 +2857,60 @@ function describeOrigin(credential: DetectedCredential): string {
 async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
   const stateDir = join(rootPath, ".ai-spend-agent");
-  if (!args.provider || !args.authReference || !args.startTime) {
+  const requestedProvider = (args.provider ?? "").trim().toLowerCase();
+  const provider = providerAliases[requestedProvider] ?? requestedProvider;
+  if (!provider) {
     return {
       exitCode: 1,
       stdout: "",
       stderr: [
-        "sync-provider requires --provider, --auth-reference env:NAME, and --start-time <unix seconds>.",
-        "example:",
-        "  npx aibill sync-provider --provider anthropic --auth-reference env:ANTHROPIC_ADMIN_KEY --start-time 1750000000"
+        "sync-provider requires --provider.",
+        "Supported admin connectors: openai, anthropic, cursor, github-copilot."
       ].join("\n")
+    };
+  }
+  if (!supportedAdminProviders.has(provider)) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `sync-provider does not implement provider "${sanitizeSecretishError(requestedProvider)}".`,
+        "Supported admin connectors: openai, anthropic, cursor, github-copilot."
+      ].join("\n")
+    };
+  }
+  if (!args.authReference) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `sync-provider ${provider} requires --auth-reference env:NAME; raw secrets are not accepted.`
+    };
+  }
+  const usesRequestedTimeBounds = provider === "openai" || provider === "anthropic";
+  if (usesRequestedTimeBounds && args.startTime === undefined) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `sync-provider ${provider} requires --start-time <unix seconds>; --end-time is optional.`,
+        `example: npx aibill sync-provider --provider ${provider} --auth-reference ${providerAdminEnvHint[provider]} --start-time 1750000000`
+      ].join("\n")
+    };
+  }
+  if (!usesRequestedTimeBounds && (args.startTime !== undefined || args.endTime !== undefined)) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: provider === "cursor"
+        ? "Cursor Admin spend is returned for the provider's current team subscription cycle; --start-time/--end-time are not accepted because the connector cannot enforce them."
+        : "GitHub Copilot returns its latest metrics-report window plus current seat data; --start-time/--end-time are not accepted because the connector cannot enforce them."
+    };
+  }
+  if (provider === "github-copilot" && Boolean(args.org) === Boolean(args.enterprise)) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "GitHub Copilot sync requires exactly one of --org <organization> or --enterprise <enterprise>."
     };
   }
 
@@ -2732,10 +2925,13 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       ? priorSpend
       : undefined;
     const result = await fetchProviderUsageRecords({
-      provider: args.provider,
-      sourceId: `${args.provider}-provider-api`,
+      provider,
+      sourceId: `${provider}-provider-api`,
       authReference: args.authReference,
-      startTime: args.startTime,
+      // Core keeps a single connector input contract. Non-time-bounded
+      // adapters ignore this sentinel and the CLI rejects user-supplied bounds
+      // above so no requested interval can be silently discarded.
+      startTime: usesRequestedTimeBounds ? args.startTime! : 0,
       endTime: args.endTime,
       org: args.org,
       enterprise: args.enterprise,
@@ -2858,17 +3054,22 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `financial evidence: ${syncedSource.financialEvidence}`,
       `coverage: ${result.coverage}`,
       `records fetched: ${result.records.length}`,
+      provider === "cursor"
+        ? "source window: current team subscription cycle returned by Cursor"
+        : provider === "github-copilot"
+          ? "source window: latest Copilot metrics-report window plus current seat data"
+          : `source window: requested from ${new Date(args.startTime! * 1_000).toISOString()}${args.endTime === undefined ? " through provider current time" : ` through ${new Date(args.endTime * 1_000).toISOString()}`}`,
       `headline basis: ${syncedFinancials.headlineBasis}`,
       `synced provider headline: ${formatOptionalUsd(syncedFinancials.headlineUsd)}`,
       `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
       ...(syncedFinancials.apiEquivalentEstimatedUsd !== null
-        ? [`API-equivalent estimate (kept separate): $${syncedFinancials.apiEquivalentEstimatedUsd.toFixed(2)}`]
+        ? [`API-equivalent estimate (kept separate): ${formatOptionalUsd(syncedFinancials.apiEquivalentEstimatedUsd)}`]
         : []),
       "auth: reference-only; raw secrets were not persisted or printed"
     ].join("\n"));
   } catch (error) {
     const sanitizedError = sanitizeSecretishError(error instanceof Error ? error.message : String(error), args.authReference);
-    await recordProviderSourceAttempt(stateDir, args.provider, new Date().toISOString(), sanitizedError).catch(() => {
+    await recordProviderSourceAttempt(stateDir, provider, new Date().toISOString(), sanitizedError).catch(() => {
       // Source-status state is diagnostic only. Do not hide the provider's
       // real error if derived-state persistence is unavailable.
     });
@@ -2989,11 +3190,11 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
       reportInput.dataMode === "sample"
-        ? `DEMO SAMPLE · illustrative cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)} · not user data`
+        ? `DEMO SAMPLE · illustrative cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)} · not user data`
         : reportInput.dataMode === "connected_provider" &&
             !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
-          : `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
+          : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
       "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
@@ -3007,7 +3208,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `Couldn't build a report: ${error instanceof Error ? error.message : String(error)}`
+      stderr: `Couldn't build a report: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
     };
   }
 }
@@ -3031,7 +3232,10 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
     // would reject a harmless receipt written from the user's home directory.
     // Output still goes through the safe-write/symlink checks below.
     const rootPath = args.sample ? resolve(args.path) : await resolveSafeScanRoot(args.path);
-    const { records, mode, providerCoverage } = await loadInstantReadData(args);
+    const { records, mode, providerCoverage, warnings } = await loadInstantReadData(args);
+    if (records.length === 0) {
+      return noEvidenceResult("report-card", warnings, args.sinceDays ?? 30);
+    }
 
     const headlineRecords = mode === "connected"
       ? selectProviderFinancialHeadlineRecords(records)
@@ -3077,7 +3281,7 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `Couldn't write the report card: ${error instanceof Error ? error.message : String(error)}`
+      stderr: `Couldn't write the report card: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
     };
   }
 }
@@ -3112,6 +3316,13 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
         codingPrompt.trimEnd()
       ].join("\n"));
     }
+    const noCandidateGuidance = codingPrompt.includes("NO SCOPED CHANGE CANDIDATE")
+      ? [
+          "",
+          "No scoped change is supported yet. Collect the missing source evidence instead of guessing:",
+          ...applyEvidenceAcquisitionLines(reportInput)
+        ]
+      : [];
     return ok([
       "aibill apply-artifact",
       `path: ${rootPath}`,
@@ -3120,6 +3331,7 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
       "safety: generated artifacts only; no external systems changed",
+      ...noCandidateGuidance,
       "",
       `──── copy everything below into Claude Code / Codex (also saved at ${artifactPaths.codingPrompt}) ────`,
       "",
@@ -3129,9 +3341,35 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `Couldn't build apply artifacts: ${error instanceof Error ? error.message : String(error)}`
+      stderr: [
+        `Couldn't build apply artifacts: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`,
+        "Collect evidence, then retry Apply:",
+        "- Claude Code / Codex / Gemini CLI: use the agent normally so supported local history exists.",
+        "- OpenAI / Anthropic / Cursor / GitHub Copilot: run `npx aibill connect <provider>` with an admin credential reference.",
+        "- Diagnose the exact gap: `npx aibill doctor --sources`.",
+        "- Demo only: `npx aibill apply --sample` (non-executable)."
+      ].join("\n")
     };
   }
+}
+
+function applyEvidenceAcquisitionLines(input: SpendReportInput): string[] {
+  const records = input.allRecords ?? input.providerRecords ?? [];
+  const providers = new Set(records.map((record) => record.source.provider));
+  const lines: string[] = [];
+  if (providers.has("anthropic") || providers.has("openai") || input.dataMode === "local_logs") {
+    lines.push("- Local coding agents: run `npx aibill context --json` after comparable Claude Code/Codex sessions to inspect action-capable context evidence.");
+  }
+  if (providers.has("gemini") || providers.has("gemini-cli")) {
+    lines.push("- Gemini CLI: current chat evidence is financial-only; unsupported context/action evidence remains missing.");
+  }
+  if (input.dataMode === "connected_provider") {
+    lines.push("- Provider billing: sync explicit call/invocation-level workload evidence; aggregate owner or spend rows do not authorize a change.");
+  }
+  if (lines.length === 0) {
+    lines.push("- Run `npx aibill doctor --sources` to see which local or provider evidence is missing.");
+  }
+  return lines;
 }
 
 async function buildExplicitSampleReportInput(rootPath: string): Promise<SpendReportInput> {
@@ -3281,7 +3519,8 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     }
     throw new Error(
       "no persisted spend state and no supported local-agent financial evidence found. " +
-        "Run `npx aibill` first (or `npx aibill scan --sample --path <dir>` for a demo-data report)."
+        "Use Claude Code, Codex, or Gemini CLI normally; connect an admin provider for billed cost; " +
+        "or run `npx aibill doctor --sources` to inspect the exact gap."
     );
   }
 
@@ -3456,7 +3695,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     command,
     sample: false,
-    path: process.cwd()
+    path: process.cwd(),
+    parseErrors: []
   };
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
@@ -3466,8 +3706,27 @@ function parseArgs(argv: string[]): ParsedArgs {
     rest.shift();
   }
 
+  const valueFlags = new Set([
+    "--plan", "--since-days", "--path", "--out",
+    "--source-path", "--type", "--provider", "--source-id", "--team",
+    "--person", "--client", "--project", "--agent", "--workflow",
+    "--evidence", "--confidence", "--label", "--auth-reference",
+    "--start-time", "--end-time", "--org", "--enterprise", "--account-id",
+    "--interval", "--cycles"
+  ]);
+  const numericValueFlags = new Set([
+    "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles"
+  ]);
+
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
+    const nextValue = rest[index + 1];
+    const nextLooksLikeFlag = nextValue?.startsWith("--") ||
+      (!numericValueFlags.has(arg) && nextValue?.startsWith("-"));
+    if (valueFlags.has(arg) && (nextValue === undefined || nextLooksLikeFlag)) {
+      parsed.parseErrors.push(`${arg} requires a value`);
+      continue;
+    }
     if (arg === "--sample") {
       parsed.sample = true;
       continue;
@@ -3478,6 +3737,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--json") {
       parsed.json = true;
+      continue;
+    }
+    if (arg === "--full") {
+      parsed.full = true;
       continue;
     }
     if (arg === "--sources") {
@@ -3559,6 +3822,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       const next = rest[index + 1];
       if (isSourceType(next)) {
         parsed.sourceType = next;
+        index += 1;
+      } else if (next) {
+        parsed.parseErrors.push(`--type received unsupported source type "${next}"`);
         index += 1;
       }
       continue;
@@ -3642,6 +3908,8 @@ function parseArgs(argv: string[]): ParsedArgs {
         // Reject NaN/out-of-range instead of rendering "NaN% confidence".
         if (Number.isFinite(value) && value >= 0 && value <= 1) {
           parsed.confidence = value;
+        } else {
+          parsed.parseErrors.push("--confidence must be a number between 0 and 1");
         }
         index += 1;
       }
@@ -3666,7 +3934,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--start-time") {
       const next = rest[index + 1];
       if (next) {
-        parsed.startTime = Number(next);
+        const value = Number(next);
+        if (Number.isFinite(value)) parsed.startTime = value;
+        else parsed.parseErrors.push("--start-time must be a finite Unix timestamp");
         index += 1;
       }
       continue;
@@ -3674,7 +3944,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--end-time") {
       const next = rest[index + 1];
       if (next) {
-        parsed.endTime = Number(next);
+        const value = Number(next);
+        if (Number.isFinite(value)) parsed.endTime = value;
+        else parsed.parseErrors.push("--end-time must be a finite Unix timestamp");
         index += 1;
       }
       continue;
@@ -3706,7 +3978,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--interval") {
       const next = rest[index + 1];
       if (next) {
-        parsed.interval = Number(next);
+        const value = Number(next);
+        if (Number.isFinite(value) && value > 0) parsed.interval = value;
+        else parsed.parseErrors.push("--interval must be a positive number of seconds");
         index += 1;
       }
       continue;
@@ -3714,11 +3988,18 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === "--cycles") {
       const next = rest[index + 1];
       if (next) {
-        parsed.cycles = Number(next);
+        const value = Number(next);
+        if (Number.isInteger(value) && value >= 0) parsed.cycles = value;
+        else parsed.parseErrors.push("--cycles must be a whole number of 0 or greater");
         index += 1;
       }
       continue;
     }
+    parsed.parseErrors.push(
+      arg.startsWith("-")
+        ? `unknown flag "${arg}"`
+        : `unexpected argument "${arg}"`
+    );
   }
   return parsed;
 }
@@ -3874,7 +4155,9 @@ function helpText(): string {
     "aibill — your AI cost and usage evidence in one private view",
     "",
     "Run with no command for an instant, zero-key local readout:",
-    "  npx aibill                           Show available AI cost/value evidence (sample or local data)",
+    "  npx aibill                           Show a compact receipt from available local/connected evidence",
+    "  npx aibill --full                    Show the complete diagnose → recommend → apply → verify audit",
+    "  npx aibill --sample                  Show the clearly labeled illustrative demo (never implicit)",
     "  npx aibill --group-by agent          Drill down by source|model|client|project|agent|user|workspace|apiKey",
     "  npx aibill --plan <id>               Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
     "",
@@ -3904,12 +4187,14 @@ function helpText(): string {
     "  scan [--path <dir>]     Scan a local workspace for AI usage signals",
     "  scan --sample           Include deterministic sample spend analysis",
     "  quickstart [--sample] [--since-days N] Plain-English local readout (default 30 days)",
+    "    [--full]            Render the complete audit; default is the compact receipt",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: project for local logs; model otherwise",
     "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",
     "    [--json]              Emit the same canonical Context Health object used by MCP and Glance",
+    "  Main receipt JSON is not published yet; unsupported --json requests fail instead of returning text.",
     "  apply [--sample] [--since-days N]  Print an evidence-constrained inspection/approval prompt + verification plans",
     "  apply-artifact          Same as `apply` (long form)",
     "",
@@ -3962,7 +4247,7 @@ export async function runMain(): Promise<void> {
   if (isInstantDemo && process.stdout.isTTY && !process.env.NO_COLOR) {
     try {
       const { default: yoctoSpinner } = await import("yocto-spinner");
-      spinner = yoctoSpinner({ text: "Analyzing your AI spend…" }).start();
+      spinner = yoctoSpinner({ text: "Reading local AI evidence…" }).start();
     } catch {
       // Spinner is optional; never block the wow on it.
     }

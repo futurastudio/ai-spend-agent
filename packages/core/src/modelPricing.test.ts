@@ -10,6 +10,14 @@ import {
 const usage = { inputTokens: 1_000_000, outputTokens: 100_000 };
 
 describe("model pricing coverage", () => {
+  it("uses current published prices for Claude 5 model IDs", () => {
+    expect(estimateTokenCostUsd("claude-fable-5", usage)).toBe(15);
+    expect(estimateTokenCostUsd("claude-mythos-5", usage)).toBe(15);
+    expect(estimateTokenCostUsd("claude-opus-5", usage)).toBe(7.5);
+    expect(estimateTokenCostUsd("claude-sonnet-5", usage)).toBe(3);
+    expect(estimateTokenCostUsd("claude-mythos-preview", usage)).toBeUndefined();
+  });
+
   it("prices the major non-Anthropic/OpenAI model families", () => {
     // Gemini Pro: the 1M-token prompt selects the >200k rate for all tokens.
     expect(estimateTokenCostUsd("gemini-2.5-pro", usage)).toBeCloseTo(4, 2);

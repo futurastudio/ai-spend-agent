@@ -154,9 +154,9 @@ export const ingestionLanes: IngestionLane[] = [
   },
   {
     id: "browser_account_ui",
-    label: "Browser Account UI",
+    label: "Browser Account UI (schema scaffold; ingestion unavailable)",
     sourceTypes: ["browser_account"],
-    defaultFinancialEvidence: "verified"
+    defaultFinancialEvidence: "missing"
   },
   {
     id: "local_cli_tool_detection",
@@ -174,58 +174,80 @@ export const ingestionLanes: IngestionLane[] = [
 
 export const supportedSourceTypes: SourceType[] = ingestionLanes.flatMap((lane) => lane.sourceTypes);
 
+const browserAccountScaffoldMissingField = "browser-account ingestion is a schema scaffold and is not implemented";
+
 export const providerCatalog: ProviderCatalogEntry[] = [
   {
     id: "openai",
     label: "OpenAI / Codex account usage",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["organization costs", "project usage", "model usage", "api key usage"],
-    missingFields: ["admin API token reference", "organization id"]
+    verifiedFields: ["organization costs", "completions usage by project, user, model, API key, and service tier"],
+    missingFields: [
+      "OpenAI Admin API key reference",
+      "non-completions usage families",
+      "ChatGPT/Codex workspace seats, credits, and final invoice settlement"
+    ]
   },
   {
     id: "anthropic",
     label: "Anthropic / Claude / Claude Code",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["organization cost report", "Claude Code usage", "workspace/user usage"],
-    missingFields: ["admin API token reference", "organization id"],
-    fallbackConnector: "browser_account"
+    verifiedFields: ["organization cost report", "Claude Code analytics by workspace and user"],
+    missingFields: [
+      "Anthropic Admin API key reference",
+      "Messages Usage API detail",
+      "Claude Enterprise Analytics and final invoice settlement"
+    ]
   },
   {
     id: "github-copilot",
     label: "GitHub Copilot",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["Copilot usage metrics", "seat usage", "premium request usage"],
-    missingFields: ["GitHub token reference", "organization or enterprise slug"],
-    fallbackConnector: "browser_account"
+    verifiedFields: ["Copilot usage metrics", "seat assignments and reported plan types"],
+    missingFields: [
+      "GitHub admin token reference and organization or enterprise slug",
+      "AI-credit gross, discount, and net billing",
+      "license invoice settlement"
+    ]
   },
   {
     id: "codex",
     label: "Codex / OpenAI coding tools",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["OpenAI project usage", "OpenAI costs", "tool/project attribution"],
-    missingFields: ["OpenAI admin API token reference", "project mapping"],
-    fallbackConnector: "browser_account"
+    verifiedFields: ["OpenAI organization costs", "OpenAI completions usage"],
+    missingFields: [
+      "OpenAI Admin API key reference",
+      "ChatGPT/Codex workspace seats, credits, and subscription billing",
+      "workspace-to-local-project mapping"
+    ]
   },
   {
     id: "cursor",
     label: "Cursor",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["Cursor Admin API spend", "team usage", "seat usage"],
-    missingFields: ["Cursor admin API key reference or approved browser account session"],
-    fallbackConnector: "browser_account"
+    verifiedFields: ["Cursor Admin API team-member spend aggregate"],
+    missingFields: [
+      "Cursor team Admin API key reference",
+      "filtered usage-event detail and aggregate reconciliation",
+      "seat contract and final invoice settlement"
+    ]
   },
   {
     id: "gemini",
     label: "Google Gemini",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["Google/Vertex billing export", "model usage"],
-    missingFields: ["approved billing export or API source"]
+    verifiedFields: [],
+    missingFields: [
+      "Google Cloud Billing export or approved billing API source",
+      "Gemini CLI authentication and billing mode",
+      "provider-reported billed money"
+    ]
   },
   {
     id: "langfuse",
@@ -280,35 +302,35 @@ export const providerCatalog: ProviderCatalogEntry[] = [
 export const providerConnectorCatalog: ProviderConnectorCatalogEntry[] = [
   {
     provider: "openai",
-    preferredAuthMode: "oauth",
-    fallbackAuthModes: ["api_token_ref", "browser_session"],
-    scopes: ["organization:usage:read", "organization:costs:read", "projects:read"],
+    preferredAuthMode: "api_token_ref",
+    fallbackAuthModes: [],
+    scopes: ["Organization Admin API usage read", "Organization Admin API costs read"],
     tokenStorage: "local_reference_only",
-    setupHint: "Prefer OAuth/admin consent for org usage and costs; fallback to a local keychain/token reference or dashboard export."
+    setupHint: "Use a local env reference to an OpenAI Organization Admin API key with usage and costs access; raw keys are never accepted on the command line."
   },
   {
     provider: "anthropic",
-    preferredAuthMode: "oauth",
-    fallbackAuthModes: ["api_token_ref", "browser_session"],
-    scopes: ["organization:usage:read", "organization:costs:read", "claude_code:usage:read"],
+    preferredAuthMode: "api_token_ref",
+    fallbackAuthModes: [],
+    scopes: ["Claude Console Admin cost report read", "Claude Code analytics read"],
     tokenStorage: "local_reference_only",
-    setupHint: "Prefer org/admin OAuth or admin API token reference for Claude cost and Claude Code usage reports."
+    setupHint: "Use a local env reference to a Claude Console organization Admin API key; Claude Enterprise Analytics requires a different key and is not implemented."
   },
   {
     provider: "github-copilot",
-    preferredAuthMode: "oauth",
-    fallbackAuthModes: ["api_token_ref", "browser_session"],
-    scopes: ["copilot:usage:read", "enterprise:read", "org:read"],
+    preferredAuthMode: "api_token_ref",
+    fallbackAuthModes: [],
+    scopes: ["fine-grained Administration: read", "organization or enterprise billing access"],
     tokenStorage: "local_reference_only",
-    setupHint: "Prefer GitHub App/OAuth read-only org or enterprise consent for Copilot seats and usage metrics."
+    setupHint: "Use a local env reference to a GitHub token with read-only organization or enterprise Copilot metrics and seat access; AI-credit billing is not implemented."
   },
   {
     provider: "cursor",
     preferredAuthMode: "api_token_ref",
-    fallbackAuthModes: ["browser_session", "manual_export"],
-    scopes: ["admin:*", "team:usage:read", "team:spend:read"],
+    fallbackAuthModes: [],
+    scopes: ["Cursor team Admin API spend read"],
     tokenStorage: "local_reference_only",
-    setupHint: "Use Cursor Admin API key reference for Enterprise team usage/spend when available; fallback to Browser Account UI or manual export."
+    setupHint: "Use a local env reference to a Cursor team Admin API key for the team spend aggregate; filtered usage-event and invoice reconciliation are not implemented."
   }
 ];
 
@@ -367,6 +389,7 @@ export function addApprovedSource(
   if (source.readOnly === false) {
     throw new Error("Approved source boundaries must remain read-only.");
   }
+  const browserScaffold = source.type === "browser_account";
   const nextSource: ApprovedSource = {
     id: source.id,
     type: source.type,
@@ -375,15 +398,17 @@ export function addApprovedSource(
     ...(source.provider ? { provider: source.provider } : {}),
     readOnly: true,
     approvedAt: timestamp,
-    scope: source.scope ?? defaultScopeForSource(source.type),
+    scope: browserScaffold ? defaultScopeForSource(source.type) : (source.scope ?? defaultScopeForSource(source.type)),
     lane: source.lane ?? laneForSourceType(source.type),
     accessMethod: source.accessMethod ?? accessMethodForSourceType(source.type),
     boundaryApproval: source.boundaryApproval ?? "approved",
-    validationCoverage: source.validationCoverage ?? "untested",
-    financialEvidence: source.type === "local_folder" ? "missing" : (source.financialEvidence ?? "missing"),
-    fieldsVerified: source.fieldsVerified ?? [],
-    fieldsEstimated: source.fieldsEstimated ?? [],
-    fieldsMissing: source.fieldsMissing ?? [],
+    validationCoverage: browserScaffold ? "untested" : (source.validationCoverage ?? "untested"),
+    financialEvidence: source.type === "local_folder" || browserScaffold ? "missing" : (source.financialEvidence ?? "missing"),
+    fieldsVerified: browserScaffold ? [] : (source.fieldsVerified ?? []),
+    fieldsEstimated: browserScaffold ? [] : (source.fieldsEstimated ?? []),
+    fieldsMissing: browserScaffold
+      ? Array.from(new Set([...(source.fieldsMissing ?? []), browserAccountScaffoldMissingField]))
+      : (source.fieldsMissing ?? []),
     authMode: source.authMode,
     authScopes: source.authScopes,
     tokenStorage: source.tokenStorage,
@@ -407,6 +432,7 @@ export function createProviderConnectorStub(
   const catalogEntry = providerCatalog.find((entry) => entry.id === provider);
   const connectorEntry = providerConnectorCatalog.find((entry) => entry.provider === provider);
   const id = slugifySourceId(`${provider}-${type}`);
+  const browserScaffold = type === "browser_account";
   return {
     id,
     type,
@@ -422,9 +448,14 @@ export function createProviderConnectorStub(
     // A successful provider result promotes this axis explicitly.
     validationCoverage: "untested",
     financialEvidence: "missing",
-    fieldsVerified: catalogEntry?.verifiedFields ?? [],
+    fieldsVerified: browserScaffold ? [] : (catalogEntry?.verifiedFields ?? []),
     fieldsEstimated: [],
-    fieldsMissing: catalogEntry?.missingFields ?? ["approved account/API/export source"],
+    fieldsMissing: browserScaffold
+      ? Array.from(new Set([
+          ...(catalogEntry?.missingFields ?? []),
+          browserAccountScaffoldMissingField
+        ]))
+      : (catalogEntry?.missingFields ?? ["approved account/API/export source"]),
     authMode: authModeForConnectorType(type, connectorEntry),
     authScopes: connectorEntry?.scopes ?? [],
     tokenStorage: tokenStorageForConnectorType(type, connectorEntry)
@@ -545,6 +576,7 @@ function normalizeApprovedSource(value: unknown): ApprovedSource {
     : isFinancialEvidence(value.verification)
       ? value.verification
       : "missing";
+  const browserScaffold = value.type === "browser_account";
   return {
     id: value.id,
     type: value.type,
@@ -553,17 +585,21 @@ function normalizeApprovedSource(value: unknown): ApprovedSource {
     ...(provider ? { provider } : {}),
     readOnly: true,
     approvedAt: value.approvedAt,
-    scope: value.scope,
+    scope: browserScaffold ? defaultScopeForSource(value.type) : value.scope,
     lane: value.lane,
     accessMethod: value.accessMethod,
     boundaryApproval: "approved",
-    validationCoverage: isValidationCoverage(value.validationCoverage)
+    validationCoverage: browserScaffold
+      ? "untested"
+      : isValidationCoverage(value.validationCoverage)
       ? value.validationCoverage
       : "untested",
-    financialEvidence: value.type === "local_folder" ? "missing" : migratedEvidence,
-    fieldsVerified: [...value.fieldsVerified],
-    fieldsEstimated: [...value.fieldsEstimated],
-    fieldsMissing: [...value.fieldsMissing],
+    financialEvidence: value.type === "local_folder" || browserScaffold ? "missing" : migratedEvidence,
+    fieldsVerified: browserScaffold ? [] : [...value.fieldsVerified],
+    fieldsEstimated: browserScaffold ? [] : [...value.fieldsEstimated],
+    fieldsMissing: browserScaffold
+      ? Array.from(new Set([...value.fieldsMissing, browserAccountScaffoldMissingField]))
+      : [...value.fieldsMissing],
     ...(authMode ? { authMode } : {}),
     ...(value.authScopes ? { authScopes: [...value.authScopes] } : {}),
     ...(tokenStorage ? { tokenStorage } : {}),
@@ -616,7 +652,7 @@ export function buildMissingSourcePrompts(signals: UsageSignal[], registry: Sour
     prompts.push({
       provider,
       status: "detected_unverified",
-      reason: `${provider} was detected locally, but no approved provider/API/browser/export boundary has current financial evidence. Connector validation is reported separately.`,
+      reason: `${provider} was detected locally, but no approved implemented source has current financial evidence. Connector validation is reported separately.`,
       detectedEvidence: detectedSignals.map((signal) => signal.evidence),
       suggestedConnector: `connect ${provider} --type ${preferredType}`,
       suggestedSourceTypes
@@ -667,7 +703,10 @@ function hasCurrentProviderFinancialEvidence(registry: SourceRegistry, provider:
     return source.boundaryApproval === "approved" &&
       source.validationCoverage !== "failed" &&
       source.financialEvidence !== "missing" &&
-      source.type !== "local_tool_detection";
+      source.type !== "local_tool_detection" &&
+      // browser_account is reserved in the schema but has no ingestion
+      // implementation. Repository state cannot promote the scaffold.
+      source.type !== "browser_account";
   });
 }
 
@@ -696,7 +735,7 @@ function defaultScopeForSource(type: SourceType): string {
     return "Read-only provider API/account usage source. Store token references only; no raw secrets. No billing changes. No cloud upload.";
   }
   if (type === "browser_account") {
-    return "Read-only Browser Account UI source. User logs in locally; agent never sees passwords; 2FA/CAPTCHA handoff; audit all page reads/downloads.";
+    return "Schema scaffold only. Browser-account ingestion is not implemented and cannot produce financial evidence or satisfy a missing-source prompt.";
   }
   if (type === "local_tool_detection") {
     return "Read-only local CLI/tool detection path. Detection is not official provider-reported cost; connect an account API or export to add that evidence.";

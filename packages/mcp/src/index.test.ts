@@ -857,9 +857,11 @@ describe("MCP analyst tools", () => {
     expect(text).toContain("window=2026-08-03T12:00:00.000Z through 2026-08-03T12:00:00.000Z");
     expect(text).toContain("confidence=verified");
     expect(text).toContain("record_ids=provider-call");
+    expect(text).toContain("Affected observed provider cost/value: $30.00");
     expect(text).toContain("not verified savings, final-invoice impact, or ROI");
     expect(text).toContain("do not mutate");
     expect(text).toContain("3 matched future workloads");
+    expect(text).not.toMatch(/\.\./u);
   });
 
   it("does not manufacture call-level cuts from connected billing buckets", async () => {
@@ -1007,8 +1009,11 @@ describe("MCP analyst tools", () => {
       freshness: { status: "fresh" }
     });
     expect(recommendations.source).toBe("spend_report");
-    expect(recommendations.recommendations.join("\n")).toContain("observed API-equivalent value");
-    expect(recommendations.recommendations.join("\n")).not.toMatch(/MODELED CANDIDATE|~\$.*\/mo/);
+    const recommendationText = recommendations.recommendations.join("\n");
+    expect(recommendationText).toContain("observed API-equivalent value");
+    expect(recommendationText).toContain("change. Inspect");
+    expect(recommendationText).not.toMatch(/\.\./u);
+    expect(recommendationText).not.toMatch(/MODELED CANDIDATE|~\$.*\/mo/);
     expect(glance).toMatchObject({
       dataMode: "local_transcripts",
       currentSession: {
@@ -1972,8 +1977,10 @@ describe("MCP analyst tools", () => {
     expect(openai?.financialEvidenceNote).toContain("official provider-reported cost");
     expect(openai?.lastError).toBe("openai: a prior provider sync failed; rerun sync_provider_spend to inspect a current typed error.");
     expect(sourceStatusState.providers.openai?.lastError).toMatch(/Stopped after 1 page|page cursor expired/);
-    expect(recommendations.recommendations.join("\n")).toContain("PARTIAL COVERAGE: openai");
-    expect(recommendations.recommendations.join("\n")).toContain("missing rows can change totals");
+    const recommendationText = recommendations.recommendations.join("\n");
+    expect(recommendationText).toContain("PARTIAL COVERAGE: openai");
+    expect(recommendationText).toContain("missing rows can change totals");
+    expect(recommendationText).not.toMatch(/\.\./u);
   });
 
   it("rejects a persisted provider coverage interval when either receipt bound is missing", async () => {
@@ -2391,8 +2398,8 @@ describe("MCP protocol contract", () => {
     expect(serverCliOutput(["--help"])).toContain("Usage:\n  ai-spend-mcp");
     expect(serverCliOutput(["--help"])).toContain("invoking AI client");
     expect(serverCliOutput(["-h"])).toBe(serverCliOutput(["--help"]));
-    expect(serverCliOutput(["--version"])).toBe("0.8.0\n");
-    expect(serverCliOutput(["-v"])).toBe("0.8.0\n");
+    expect(serverCliOutput(["--version"])).toBe("0.8.1\n");
+    expect(serverCliOutput(["-v"])).toBe("0.8.1\n");
     expect(serverCliOutput([])).toBeNull();
     expect(serverCliOutput(["--unknown"])).toBeNull();
   });
@@ -2412,7 +2419,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.8.0" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.8.1" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",

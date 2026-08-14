@@ -1183,8 +1183,8 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     `    canonicalCandidateId: ${yamlString(candidate?.id ?? "none")}`,
     `    recordIds: ${yamlString(candidate?.recordIds.join(",") ?? "none")}`,
     `  targetOwnership: ${yamlString(candidate ? connectedOwnerSummary(candidateRecords) : "unmapped")}`,
-    `  currentCostValueEvidenceUsd: ${financialAmountAvailable ? (candidate?.affectedSpendUsd ?? input.summary.totalUsd).toFixed(2) : "null"}`,
-    `  modeledOpportunityUsd: ${candidate ? candidate.estimatedMonthlySavingsUsd.toFixed(2) : "null"}`,
+    `  currentCostValueEvidenceUsd: ${financialAmountAvailable ? formatMachineUsd(candidate?.affectedSpendUsd ?? input.summary.totalUsd) : "null"}`,
+    `  modeledOpportunityUsd: ${candidate ? formatMachineUsd(candidate.estimatedMonthlySavingsUsd) : "null"}`,
     "  allowedApplyModes:",
     "    - coding_agent_prompt",
     "    - policy_draft",
@@ -2346,6 +2346,11 @@ function nextSourceLine(input: SpendReportInput): string {
 function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.01) return "<$0.01";
   return `$${amount.toFixed(2)}`;
+}
+
+function formatMachineUsd(amount: number): string {
+  const [whole, fraction = ""] = amount.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").split(".");
+  return `${whole}.${fraction.padEnd(2, "0")}`;
 }
 
 function formatPercent(ratio: number): string {

@@ -2,7 +2,7 @@
 
 # Provider financial contracts
 
-Contract schema v1; reviewed 2026-08-13.
+Contract schema v1; reviewed 2026-08-14.
 
 These contracts are the reviewed financial rulebook for each provider source. They do not imply that every declared surface is implemented, that a user's account was connected, or that an invoice reconciled. Implemented connector coverage is listed separately. Provider-reported cost, API-equivalent value, plan context, credits and final invoices remain separate.
 
@@ -39,9 +39,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
   - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `d845e13329e9c12b8eedc894cb599f8506970e839f471ae3825c98850e47bf07`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `c49f848e243dbea2d85389b9c431da60a697db95f032439af738381b39e6d179`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `5858003704ea61655e70cdce93c3f5fbc430ca8b0b118a5a7532802cb49e3632`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `e290ffacf5e3fd191f40a2bdd696712ad3f0949957d605469cc5d064b2801723`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `14615071e4264b69c4ed3bcf61652ede1006ed3456826055bd40dd4292df9ba1`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `84f1aba4d1161730e2bb8dc0422ae2f58204a1026372710462307836350b23e3`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `c898dd29531e486948729132d5a7c0c70abbe8b86154baa59d827f685e2b6e3d`
 
 ## Anthropic Platform Usage and Cost Admin API
 
@@ -69,7 +69,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Bedrock, Vertex and Foundry activity not returned by the named endpoints
 - Official sources:
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `d1c47363e9bbb9bcb57e2ed741962708f5f5807d827230f1a882979e34157fa1`; reviewed content `9f33f0aff45bfdd6cf8e111863e8c8032340d474972a179d34f5db99e2a4452d`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `f51408cdc70dd332e3932ab5ec1d856448ab038ea45ab36c80379b6ab18723b4`; reviewed content `f29a88363e375c271970e864245776cda9c3501af904436590c6d6c11257745d`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `8cebfc68863b106919c3074cb156c0ed5870699547863bd630b2826034c60b14`; reviewed content `ccc90699d5c589fcaf7b47e2d3b28cd84b9bfb6c9ec7ca97f3d02c131ed5d64c`
 
 ## Claude Enterprise Analytics
 
@@ -154,7 +154,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - A fixture-only connector is not live or invoice reconciliation
   - Seat contracts, tax, credits and final invoice adjustments
 - Official sources:
-  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `d941a941d6433e0a93c4d6ba0412d6da9ffa246155bd89602ca1fa5815d746be`; reviewed content `876d1db4f489e490e85762664831ed40e0815d243d25e4b645de8b21a4a1c5f2`
+  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `d941a941d6433e0a93c4d6ba0412d6da9ffa246155bd89602ca1fa5815d746be`; reviewed content `dfbc5ccf3711357d12dee60c1a4eb6bbfd969d85c666dbf801a8a8dc81dc158c`
   - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `be63febe7d7935b434e4e9dca93e474cedf9c632e31d90b08fb3ea57c5041bc7`; reviewed content `83abb8526e35d50071e83f0b97158826540c9c74f67084d837c57f3b1c15237a`
 
 ## GitHub Copilot AI-credit billing

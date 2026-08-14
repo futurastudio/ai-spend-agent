@@ -225,6 +225,7 @@ function combinedConfidence(confidences: CostConfidence[]): CostConfidence {
 }
 
 function formatUsd(value: number): string {
+  if (value > 0 && value < 0.01) return "<$0.01";
   return `$${value.toFixed(2)}`;
 }
 
@@ -254,5 +255,5 @@ function stableSuffix(value: string): string {
 }
 
 function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Math.round(value * 10_000) / 10_000;
 }
