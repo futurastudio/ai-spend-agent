@@ -1007,8 +1007,11 @@ describe("MCP analyst tools", () => {
       freshness: { status: "fresh" }
     });
     expect(recommendations.source).toBe("spend_report");
-    expect(recommendations.recommendations.join("\n")).toContain("observed API-equivalent value");
-    expect(recommendations.recommendations.join("\n")).not.toMatch(/MODELED CANDIDATE|~\$.*\/mo/);
+    const recommendationText = recommendations.recommendations.join("\n");
+    expect(recommendationText).toContain("observed API-equivalent value");
+    expect(recommendationText).toContain("change. Inspect");
+    expect(recommendationText).not.toMatch(/\.\./u);
+    expect(recommendationText).not.toMatch(/MODELED CANDIDATE|~\$.*\/mo/);
     expect(glance).toMatchObject({
       dataMode: "local_transcripts",
       currentSession: {

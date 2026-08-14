@@ -2649,6 +2649,8 @@ describe("minimal CLI vertical slice", () => {
     const cursorDir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connect-cursor-"));
     const cursor = await runCli(["connect", "cursor", "--path", cursorDir]);
     expect(cursor.exitCode).toBe(0);
+    expect(cursor.stdout).toContain("env:CURSOR_ADMIN_KEY");
+    expect(cursor.stdout).not.toContain("env:OPENAI_ADMIN_KEY");
     expect(cursor.stdout).toContain("--account-id <team-label>");
     expect(cursor.stdout).not.toContain("--start-time");
 
@@ -2656,8 +2658,27 @@ describe("minimal CLI vertical slice", () => {
     const copilot = await runCli(["connect", "copilot", "--path", copilotDir]);
     expect(copilot.exitCode).toBe(0);
     expect(copilot.stdout).toContain("provider: github-copilot");
+    expect(copilot.stdout).toContain("env:GITHUB_TOKEN");
+    expect(copilot.stdout).not.toContain("env:OPENAI_ADMIN_KEY");
     expect(copilot.stdout).toContain("--org <organization>");
     expect(copilot.stdout).not.toContain("--start-time");
+  });
+
+  it("prints the matching secret reference for every supported provider", async () => {
+    for (const [provider, expected, forbidden] of [
+      ["openai", "env:OPENAI_ADMIN_KEY", "env:ANTHROPIC_ADMIN_KEY"],
+      ["anthropic", "env:ANTHROPIC_ADMIN_KEY", "env:OPENAI_ADMIN_KEY"],
+      ["cursor", "env:CURSOR_ADMIN_KEY", "env:OPENAI_ADMIN_KEY"],
+      ["github-copilot", "env:GITHUB_TOKEN", "env:OPENAI_ADMIN_KEY"]
+    ] as const) {
+      const dir = await mkdtemp(join(tmpdir(), `ai-spend-cli-connect-${provider}-hint-`));
+      const result = await runCli(["connect", provider, "--path", dir]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        `secrets: no raw secrets stored; we only reference a local env var such as ${expected}`
+      );
+      expect(result.stdout).not.toContain(forbidden);
+    }
   });
 
   it("rejects unsupported syncs and provider-ignored time bounds before auth or state writes", async () => {
@@ -3343,6 +3364,72 @@ describe("minimal CLI vertical slice", () => {
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("Executive accountability brief");
     expect(html).toContain("aibill Evidence Report");
+  });
+
+  it("keeps a positive sub-cent total nonzero across report output and artifacts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-sub-cent-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      checkedAt: "2026-08-14T12:00:00.000Z",
+      records: [{
+        id: "codex-sub-cent-row",
+        timestamp: "2026-08-14T11:00:00.000Z",
+        source: {
+          id: "codex-local-agent-logs",
+          name: "Codex local agent logs",
+          provider: "openai",
+          confidence: "estimated",
+          observedFrom: "local transcript"
+        },
+        agentId: "codex",
+        model: "gpt-5.6-sol",
+        inputTokens: 1_000,
+        outputTokens: 50,
+        amountUsd: 0.0065,
+        costConfidence: "estimated",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "session"
+      }],
+      summary: { totalUsd: 0.0065 }
+    }, null, 2)}\n`;
+    await writeFile(join(stateDir, "spend.json"), spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const report = await runCli(["report", "--path", dir]);
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout).toContain("cost/value evidence total: <$0.01");
+    expect(report.stdout).not.toContain("cost/value evidence total: $0.00");
+    const markdown = await readFile(join(stateDir, "report.md"), "utf8");
+    const html = await readFile(join(stateDir, "report.html"), "utf8");
+    const verifyPlan = await readFile(join(stateDir, "ai-spend-verify-plan.md"), "utf8");
+    const demoPackage = await readFile(join(stateDir, "demo-package.md"), "utf8");
+    expect(markdown).toContain("Connected estimated cost/value: <$0.01");
+    expect(markdown).not.toContain("Connected estimated cost/value: $0.00");
+    expect(html).toContain("&lt;$0.01");
+    expect(verifyPlan).toContain("Available cost/value evidence: <$0.01");
+    expect(demoPackage).toContain("The agent found <$0.01 of labeled cost/value evidence");
+
+    const watch = await runCli(["watch", "--cycles", "1", "--path", dir]);
+    expect(watch.exitCode).toBe(0);
+    expect(watch.stdout).toContain("Baseline AI spend is <$0.01");
+    expect(watch.stdout).not.toContain("Baseline AI spend is $0.00");
+    const latest = JSON.parse(await readFile(join(stateDir, "watch-latest.json"), "utf8"));
+    const audit = await readFile(join(stateDir, "audit-log.json"), "utf8");
+    expect(latest.totalUsd).toBe(0.0065);
+    expect(latest.byModel).toContainEqual(expect.objectContaining({ amountUsd: 0.0065 }));
+    expect(audit).toContain("totaling <$0.01");
+    expect(audit).not.toContain("totaling $0.00");
+
+    const nextSpendRaw = spendRaw.replaceAll("0.0065", "0.0085");
+    await writeFile(join(stateDir, "spend.json"), nextSpendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, nextSpendRaw);
+    const nextWatch = await runCli(["watch", "--cycles", "1", "--path", dir]);
+    expect(nextWatch.exitCode).toBe(0);
+    expect(nextWatch.stdout).toContain("Spend is UP <$0.01");
+    expect(nextWatch.stdout).toContain("from <$0.01 to <$0.01");
+    expect(nextWatch.stdout).not.toContain("No change since the last check");
   });
 
   it("refuses a symlinked custom report output", async () => {

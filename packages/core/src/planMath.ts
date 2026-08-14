@@ -111,9 +111,9 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       const savingsVsApi = roundMoney(monthly - detectedKnown.monthlyUsd);
       effectiveSavings = savingsVsApi > 0 ? savingsVsApi : undefined;
       headline =
-        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — compared with ${detectedKnown.name} ` +
+        `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — compared with ${detectedKnown.name} ` +
         `($${detectedKnown.monthlyUsd}/mo; label detected locally): ~${valueMultiple}× the plan price in API-equivalent usage` +
-        (effectiveSavings ? `, a ~$${effectiveSavings.toFixed(2)}/mo value difference to investigate.` : `.`);
+        (effectiveSavings ? `, a ~${formatUsd(effectiveSavings)}/mo value difference to investigate.` : `.`);
       if (monthly > detectedKnown.coversUpToUsd) {
         const nextTier = subscriptionPlans.find(
           (plan) => plan.agent === agent && plan.coversUpToUsd > detectedKnown.coversUpToUsd
@@ -132,7 +132,7 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       // Detected a plan we can't price (e.g. an unrecognized tier): state the
       // fact, then fall back to suggestion math without pretending certainty.
       headline =
-        `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — compared with ${detected.planLabel} ` +
+        `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — compared with ${detected.planLabel} ` +
         `(label detected locally; price not in our table)` +
         (suggested ? `; reference listed plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
     } else {
@@ -140,11 +140,11 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
       effectiveSavings = covered ? savings : undefined;
       if (!suggested) {
-        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}).`;
+        headline = `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}).`;
       } else if (covered) {
-        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — ${suggested.name} is a $${suggested.monthlyUsd}/mo reference point. That is ~${valueMultiple}× the plan price in API-equivalent usage, a ~$${savings.toFixed(2)}/mo value difference to investigate; it does not prove plan coverage.`;
+        headline = `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — ${suggested.name} is a $${suggested.monthlyUsd}/mo reference point. That is ~${valueMultiple}× the plan price in API-equivalent usage, a ~${formatUsd(savings)}/mo value difference to investigate; it does not prove plan coverage.`;
       } else {
-        headline = `${agent}: ~$${monthly.toFixed(2)}/mo at API rates (${basis}) — below the $${suggested.monthlyUsd}/mo price of ${suggested.name}; compare account benefits and provider-reported charges before changing plans.`;
+        headline = `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — below the $${suggested.monthlyUsd}/mo price of ${suggested.name}; compare account benefits and provider-reported charges before changing plans.`;
       }
     }
 
@@ -164,5 +164,10 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
 }
 
 function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Math.round(value * 10_000) / 10_000;
+}
+
+function formatUsd(value: number): string {
+  if (value > 0 && value < 0.01) return "<$0.01";
+  return `$${value.toFixed(2)}`;
 }

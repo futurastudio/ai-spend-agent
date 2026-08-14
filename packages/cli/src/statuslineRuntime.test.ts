@@ -210,6 +210,37 @@ describe("standalone status-line renderer", () => {
     expect(line).not.toMatch(/% left/);
   });
 
+  it("labels old transcript percentages as stale even when the cache was just refreshed", () => {
+    const value = snapshot("subscription");
+    value.subscription!.agents[0]!.limits = [{
+      kind: "weekly",
+      usedPercent: 25,
+      remainingPercent: 75,
+      observedAt: "2026-08-05T18:00:00.000Z",
+      resetsAt: "2026-08-16T18:00:00.000Z",
+      source: "transcript_reported"
+    }];
+    const line = renderStatusline(ok(value), { now: NOW, columns: 140, timeZone: "UTC" });
+    expect(line).toContain("subscription detected · runway stale");
+    expect(line).toContain("updated 12s");
+    expect(line).not.toContain("75%");
+  });
+
+  it("rejects future limit observations as stale instead of treating them as live runway", () => {
+    const value = snapshot("subscription");
+    value.subscription!.agents[0]!.limits = [{
+      kind: "five-hour",
+      usedPercent: 71,
+      remainingPercent: 29,
+      observedAt: "2026-08-09T18:00:13.000Z",
+      resetsAt: "2026-08-09T20:00:00.000Z",
+      source: "transcript_reported"
+    }];
+    const line = renderStatusline(ok(value), { now: NOW, columns: 140, timeZone: "UTC" });
+    expect(line).toContain("runway stale");
+    expect(line).not.toContain("29%");
+  });
+
   it("renders five-hour-only and weekly-only runway without inventing the other window", () => {
     const fiveHour = snapshot("subscription");
     fiveHour.subscription!.agents[0]!.limits = [fiveHour.subscription!.agents[0]!.limits[0]!];
@@ -370,6 +401,17 @@ describe("standalone status-line renderer", () => {
     expectEveryMultiSubscriptionFigureAttributed(codexFirst);
   });
 
+  it("preserves a positive sub-cent value in attributed multi-agent output", () => {
+    const value = dualSubscriptionSnapshot();
+    value.subscription!.agents.find(({ agent }) => agent === "codex")!
+      .apiEquivalent.sevenDays = apiWindow(0.001);
+    const line = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+
+    expect(line).toContain("codex ~<$0.01 7d value");
+    expect(line).not.toContain("codex ~$0.00 7d value");
+    expectEveryMultiSubscriptionFigureAttributed(line);
+  });
+
   it("shows both labeled windows when compact width permits and keeps only the most urgent when it does not", () => {
     const value = dualSubscriptionSnapshot();
     expect(renderStatusline(ok(value), { now: NOW, columns: 79, timeZone: "UTC" })).toBe(
@@ -472,6 +514,40 @@ describe("standalone status-line renderer", () => {
     expect(line).toContain("claude ~$99.00 7d value");
     expect(line).toContain("codex ~$8.50 7d value");
     expectEveryMultiSubscriptionFigureAttributed(line);
+  });
+
+  it("labels a stale subscribed agent without rendering its old percentage", () => {
+    const value = dualSubscriptionSnapshot();
+    const codex = value.subscription!.agents.find(({ agent }) => agent === "codex")!;
+    codex.limits[0]!.observedAt = "2026-08-05T18:00:00.000Z";
+    codex.limits[0]!.resetsAt = "2026-08-16T18:00:00.000Z";
+    const line = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+    expect(line).toContain("claude week 37% ↻Sat");
+    expect(line).toContain("codex runway stale");
+    expect(line).not.toContain("codex week 100%");
+    expectEveryMultiSubscriptionFigureAttributed(line);
+  });
+
+  it("keeps stale-agent labeling in mixed mode and across narrow degradation", () => {
+    const value = dualSubscriptionSnapshot("mixed");
+    const codex = value.subscription!.agents.find(({ agent }) => agent === "codex")!;
+    codex.limits[0]!.observedAt = "2026-08-05T18:00:00.000Z";
+    codex.limits[0]!.resetsAt = "2026-08-16T18:00:00.000Z";
+    const wide = renderStatusline(ok(value), { now: NOW, columns: 240, timeZone: "UTC" });
+    expect(wide).toContain("codex runway stale");
+    expect(wide).not.toContain("codex week 100%");
+
+    for (const agent of value.subscription!.agents) {
+      for (const limit of agent.limits) {
+        limit.observedAt = "2026-08-05T18:00:00.000Z";
+        limit.resetsAt = "2026-08-16T18:00:00.000Z";
+      }
+    }
+    for (const columns of [79, 50, 49, 36]) {
+      const line = renderStatusline(ok(value), { now: NOW, columns, timeZone: "UTC" });
+      expect(line).not.toMatch(/\d+(?:\.\d+)?%/);
+      if (line.includes("runway")) expect(line).toContain("runway stale");
+    }
   });
 
   it("reports missing runway when neither subscribed agent has an active window", () => {

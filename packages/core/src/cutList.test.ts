@@ -69,6 +69,21 @@ describe("generateCutList", () => {
     });
   });
 
+  it("keeps positive sub-cent evidence distinct from zero in observed-only actions", () => {
+    const actions = generateCutList([
+      record({
+        id: "tiny-context",
+        inputTokens: 180_000,
+        amountUsd: 0.0045,
+        operation: "research"
+      })
+    ]);
+    expect(actions.find((action) => action.kind === "context_trim")).toMatchObject({
+      affectedSpendUsd: 0.0045,
+      impactBasis: "observed_value_no_counterfactual"
+    });
+  });
+
   it("never turns unpriced or non-action-capable local evidence into a $0 recommendation", () => {
     const unpricedClaude: UsageRecord = {
       ...record({

@@ -121,6 +121,7 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let observedAt: String
     let resetsAt: String
     let source: String
+    let freshness: String?
     let projectedExhaustionAt: String?
     let projectedToExhaustBeforeReset: Bool
     let projectionConfidence: String

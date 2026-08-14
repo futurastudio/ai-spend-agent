@@ -7,6 +7,19 @@ historical untagged exception.
 
 ## 0.8.1 — 2026-08-14
 
+- Re-reviewed current OpenAI, Anthropic, and Cursor provider pages after the
+  release drift gate detected official-page changes; strengthened Anthropic
+  price markers and added published Claude Mythos 5, Opus 5, and Sonnet 5
+  API-equivalent pricing while unknown models continue to fail closed.
+- Prevented a freshly regenerated cache from presenting old transcript limit
+  percentages as live runway. Statusline and Glance now label old reports
+  stale, and past exhaustion projections cannot drive a current action.
+- Preserved positive fractional-cent evidence in summaries, watch state,
+  reports, statusline, MCP, and machine-readable policy drafts instead of
+  rounding a real value to zero.
+- Corrected each provider onboarding flow to name its own credential reference
+  and removed duplicated sentence punctuation from MCP recommendations.
+
 - Replaced the default terminal audit with a compact, responsive decision
   receipt: explicit trust state, one primary figure, one driver, separated
   evidence bases, one safe next action, and `--full` for the complete audit.

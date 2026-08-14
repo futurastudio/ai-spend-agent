@@ -2423,7 +2423,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
     const mappings = attributeUsageRecords(records);
     await writeLocalSpendState(stateDir, records, summary, mappings, "sample");
     lines.push(`sample records: ${records.length}`);
-    lines.push(`total spend: $${summary.totalUsd.toFixed(2)}`);
+    lines.push(`total spend: ${formatOptionalUsd(summary.totalUsd)}`);
     lines.push(`attribution mappings: ${mappings.length}`);
   }
 
@@ -2578,7 +2578,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     sourceId: "watch",
     detail: snapshot.totalUsd === null
       ? `Watch cycle captured ${snapshot.recordCount} records with no priced financial evidence; total unavailable.`
-      : `Watch cycle captured ${snapshot.recordCount} records totaling $${snapshot.totalUsd.toFixed(2)}.`
+      : `Watch cycle captured ${snapshot.recordCount} records totaling ${formatOptionalUsd(snapshot.totalUsd)}.`
   });
 
   return { summary, snapshot, records: headlineRecords, mode };
@@ -2589,27 +2589,27 @@ function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapsh
     if (current.totalUsd === null) {
       return `First watch snapshot. Financial baseline is unavailable across ${current.recordCount} records; missing/null is not zero. Future priced cycles will establish a numeric baseline.`;
     }
-    return `First watch snapshot. Baseline AI spend is $${current.totalUsd.toFixed(2)} across ${current.recordCount} charges. Future cycles will report what changed.`;
+    return `First watch snapshot. Baseline AI spend is ${formatOptionalUsd(current.totalUsd)} across ${current.recordCount} charges. Future cycles will report what changed.`;
   }
 
   if (current.totalUsd === null) {
     return `Financial evidence is unavailable across ${current.recordCount} records; missing/null is not zero and no numeric delta was calculated.`;
   }
   if (previous.totalUsd === null) {
-    return `A priced financial baseline is now available at $${current.totalUsd.toFixed(2)} across ${current.recordCount} records. The prior snapshot was unavailable, so no numeric delta was calculated.`;
+    return `A priced financial baseline is now available at ${formatOptionalUsd(current.totalUsd)} across ${current.recordCount} records. The prior snapshot was unavailable, so no numeric delta was calculated.`;
   }
 
   const deltaUsd = roundMoneyCli(current.totalUsd - previous.totalUsd);
   const lines: string[] = [];
 
-  if (Math.abs(deltaUsd) < 0.01) {
-    lines.push(`No change since the last check: AI spend is holding at $${current.totalUsd.toFixed(2)}.`);
+  if (deltaUsd === 0) {
+    lines.push(`No change since the last check: AI spend is holding at ${formatOptionalUsd(current.totalUsd)}.`);
   } else {
     const direction = deltaUsd > 0 ? "UP" : "DOWN";
     const percent = previous.totalUsd > 0 ? Math.round((deltaUsd / previous.totalUsd) * 100) : 100;
     lines.push(
-      `Spend is ${direction} $${Math.abs(deltaUsd).toFixed(2)} (${Math.abs(percent)}%) since the last check — ` +
-        `from $${previous.totalUsd.toFixed(2)} to $${current.totalUsd.toFixed(2)}.`
+      `Spend is ${direction} ${formatOptionalUsd(Math.abs(deltaUsd))} (${Math.abs(percent)}%) since the last check — ` +
+        `from ${formatOptionalUsd(previous.totalUsd)} to ${formatOptionalUsd(current.totalUsd)}.`
     );
   }
 
@@ -2620,12 +2620,12 @@ function buildDeltaHeadline(previous: WatchSnapshot | null, current: WatchSnapsh
     const before = previousModels.get(entry.key);
     if (before === undefined) {
       if (entry.amountUsd >= 1) {
-        anomalies.push(`New model "${entry.key}" appeared, already at $${entry.amountUsd.toFixed(2)}.`);
+        anomalies.push(`New model "${entry.key}" appeared, already at ${formatOptionalUsd(entry.amountUsd)}.`);
       }
       continue;
     }
     if (before > 0 && entry.amountUsd - before >= 5 && entry.amountUsd / before >= 1.5) {
-      anomalies.push(`"${entry.key}" jumped from $${before.toFixed(2)} to $${entry.amountUsd.toFixed(2)}.`);
+      anomalies.push(`"${entry.key}" jumped from ${formatOptionalUsd(before)} to ${formatOptionalUsd(entry.amountUsd)}.`);
     }
   }
 
@@ -2641,7 +2641,7 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 function roundMoneyCli(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Math.round(value * 10_000) / 10_000;
 }
 
 async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
@@ -2798,7 +2798,7 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     `boundary approval: ${source.boundaryApproval}`,
     `validation coverage: ${source.validationCoverage}`,
     `financial evidence: ${source.financialEvidence}`,
-    "secrets: no raw secrets stored; we only reference a local env var such as env:OPENAI_ADMIN_KEY"
+    `secrets: no raw secrets stored; we only reference a local env var such as ${providerAdminEnvHint[provider] ?? "env:YOUR_ADMIN_KEY"}`
   ];
 
   if (selfServeProviders.has(provider)) {
@@ -3063,7 +3063,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `synced provider headline: ${formatOptionalUsd(syncedFinancials.headlineUsd)}`,
       `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
       ...(syncedFinancials.apiEquivalentEstimatedUsd !== null
-        ? [`API-equivalent estimate (kept separate): $${syncedFinancials.apiEquivalentEstimatedUsd.toFixed(2)}`]
+        ? [`API-equivalent estimate (kept separate): ${formatOptionalUsd(syncedFinancials.apiEquivalentEstimatedUsd)}`]
         : []),
       "auth: reference-only; raw secrets were not persisted or printed"
     ].join("\n"));
@@ -3190,11 +3190,11 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       `verification plan: ${artifactPaths.verificationPlan}`,
       `demo package: ${artifactPaths.demoPackage}`,
       reportInput.dataMode === "sample"
-        ? `DEMO SAMPLE · illustrative cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)} · not user data`
+        ? `DEMO SAMPLE · illustrative cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)} · not user data`
         : reportInput.dataMode === "connected_provider" &&
             !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
-          : `cost/value evidence total: $${reportInput.summary.totalUsd.toFixed(2)}`,
+          : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
       "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",

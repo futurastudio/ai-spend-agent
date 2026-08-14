@@ -412,5 +412,7 @@ function roundRatio(value: number): number {
 }
 
 function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
+  // Persist fractional-cent evidence instead of turning a real positive amount
+  // into numeric zero. Presentation layers decide whether to show `<$0.01`.
+  return Math.round(value * 10_000) / 10_000;
 }

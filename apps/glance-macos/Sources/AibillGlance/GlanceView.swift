@@ -138,7 +138,9 @@ struct GlanceView: View {
         Text(title)
           .foregroundStyle(.white.opacity(0.56))
         Spacer()
-        Text(limit.map { "\(GlanceFormatting.percent($0.remainingPercent)) left" } ?? "Not reported")
+        Text(limit.map {
+          $0.freshness == "stale" ? "Stale report" : "\(GlanceFormatting.percent($0.remainingPercent)) left"
+        } ?? "Not reported")
           .fontWeight(.semibold)
           .foregroundStyle(limitColor(limit))
       }
@@ -318,6 +320,7 @@ struct GlanceView: View {
 
   private func limitColor(_ limit: UsageGlanceSnapshot.Limit?) -> Color {
     guard let limit else { return .white.opacity(0.28) }
+    if limit.freshness == "stale" { return .white.opacity(0.42) }
     return limit.remainingPercent < 35 ? .orange : Color(red: 0.37, green: 0.95, blue: 0.67)
   }
 
@@ -353,11 +356,15 @@ struct GlanceView: View {
   }
 
   private func limitProjectionLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
-    "Local estimate · \(GlanceFormatting.exhaustionLabel(limit))"
+    if limit.freshness == "stale" { return "Refresh agent limits" }
+    return "Local estimate · \(GlanceFormatting.exhaustionLabel(limit))"
   }
 
   private func limitReportedLabel(_ limit: UsageGlanceSnapshot.Limit) -> String {
-    "\(GlanceFormatting.agentName(limit.agent)) reported · \(GlanceFormatting.resetLabel(limit.resetsAt))"
+    if limit.freshness == "stale" {
+      return "\(GlanceFormatting.agentName(limit.agent)) · old transcript evidence"
+    }
+    return "\(GlanceFormatting.agentName(limit.agent)) reported · \(GlanceFormatting.resetLabel(limit.resetsAt))"
   }
 
   private func missingLimitMessage(_ kind: String) -> (primary: String, secondary: String) {
@@ -432,6 +439,9 @@ struct GlanceView: View {
   ) -> String {
     guard let limit else {
       return "No \(kind) percentage was present in the local transcript, so Glance does not infer one."
+    }
+    if limit.freshness == "stale" {
+      return "\(GlanceFormatting.agentName(limit.agent)) reported this percentage in an older local transcript. Glance keeps it visible as stale evidence but does not use it as current runway or to recommend an action."
     }
     return "\(GlanceFormatting.agentName(limit.agent)) reported the remaining percentage and reset time in its local transcript. The exhaustion time is a separate local pace estimate."
   }

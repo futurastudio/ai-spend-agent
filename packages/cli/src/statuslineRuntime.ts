@@ -18,6 +18,11 @@ const CACHE_MAX_BYTES = 64 * 1_024;
 const DEFAULT_COLUMNS = 100;
 const MAX_COLUMNS = 240;
 const STALE_AFTER_MS = 5 * 60 * 1_000;
+// A freshly regenerated cache does not make an old transcript percentage current.
+// Five-hour evidence expires with that window; weekly evidence must have been
+// observed within the last day before it can be presented as live runway.
+const FIVE_HOUR_LIMIT_FRESHNESS_MS = 5 * 60 * 60 * 1_000;
+const WEEKLY_LIMIT_FRESHNESS_MS = 24 * 60 * 60 * 1_000;
 const STDIN_MAX_BYTES = 64 * 1_024;
 const STDIN_DRAIN_TIMEOUT_MS = 25;
 const guardedOutputs = new WeakSet<object>();
@@ -409,7 +414,9 @@ function renderSubscription(
     ? [...limits].sort((left, right) => limitKindOrder(left.kind) - limitKindOrder(right.kind))
     : [...limits].sort(compareUrgency).slice(0, 1);
   const segments = ordered.map((limit) => formatLimit(limit, now, timeZone));
-  if (limits.length === 0) segments.push("subscription detected", "runway not reported");
+  if (limits.length === 0) {
+    segments.push("subscription detected", missingRunwaySegment(snapshot, now));
+  }
   const value = agent.apiEquivalent.sevenDays;
   if (value.amountUsd !== null && value.financialEvidence === "estimated") {
     segments.push(`~${formatUsd(value.amountUsd)} 7d value`);
@@ -437,7 +444,9 @@ function renderMixed(
     ? [...limits].sort((left, right) => limitKindOrder(left.kind) - limitKindOrder(right.kind))
     : [...limits].sort(compareUrgency).slice(0, 1);
   const segments = selectedLimits.map((limit) => formatLimit(limit, now, timeZone));
-  if (limits.length === 0 && tier !== "minimal") segments.push("runway not reported");
+  if (limits.length === 0 && tier !== "minimal") {
+    segments.push(missingRunwaySegment(snapshot, now));
+  }
 
   appendMeteredSevenDaySegment(snapshot, segments);
   const value = agent?.apiEquivalent.sevenDays;
@@ -462,8 +471,11 @@ function renderMultiSubscriptionSegments(
   const segments = selected.map(({ agent, limit }) => tier === "full"
     ? formatAttributedLimit(agent, limit, now, timeZone)
     : formatAttributedLimitCompact(agent, limit));
-  if (entries.length === 0 && tier !== "minimal") {
-    segments.push("subscription detected", "runway not reported");
+  const staleRunway = staleRunwaySegments(snapshot, now);
+  if (staleRunway.length > 0 && tier !== "minimal") {
+    segments.push(...staleRunway);
+  } else if (entries.length === 0 && tier !== "minimal") {
+    segments.push("subscription detected", missingRunwaySegment(snapshot, now));
   }
 
   const agents = orderedSubscriptionAgents(snapshot, now);
@@ -587,7 +599,39 @@ function latestLimitObservation(agent: SubscriptionAgent, now: Date): number {
 }
 
 function activeLimits(agent: SubscriptionAgent, now: Date): ReportedLimit[] {
-  return agent.limits.filter((limit) => Date.parse(limit.resetsAt) > now.getTime());
+  return agent.limits.filter((limit) => (
+    Date.parse(limit.resetsAt) > now.getTime() && isFreshLimitEvidence(limit, now)
+  ));
+}
+
+function staleActiveLimits(agent: SubscriptionAgent, now: Date): ReportedLimit[] {
+  return agent.limits.filter((limit) => (
+    Date.parse(limit.resetsAt) > now.getTime() && !isFreshLimitEvidence(limit, now)
+  ));
+}
+
+function isFreshLimitEvidence(limit: ReportedLimit, now: Date): boolean {
+  const observedMs = Date.parse(limit.observedAt);
+  const ageMs = now.getTime() - observedMs;
+  const maximumAgeMs = limit.kind === "five-hour"
+    ? FIVE_HOUR_LIMIT_FRESHNESS_MS
+    : WEEKLY_LIMIT_FRESHNESS_MS;
+  return Number.isFinite(observedMs) && ageMs >= 0 && ageMs <= maximumAgeMs;
+}
+
+function hasStaleLimitEvidence(snapshot: StatuslineSnapshot, now: Date): boolean {
+  return (snapshot.subscription?.agents ?? [])
+    .some((agent) => staleActiveLimits(agent, now).length > 0);
+}
+
+function missingRunwaySegment(snapshot: StatuslineSnapshot, now: Date): string {
+  return hasStaleLimitEvidence(snapshot, now) ? "runway stale" : "runway not reported";
+}
+
+function staleRunwaySegments(snapshot: StatuslineSnapshot, now: Date): string[] {
+  return orderedSubscriptionAgents(snapshot, now)
+    .filter((agent) => activeLimits(agent, now).length === 0 && staleActiveLimits(agent, now).length > 0)
+    .map((agent) => `${subscriptionAgentLabel(agent)} runway stale`);
 }
 
 function compareUrgency(left: ReportedLimit, right: ReportedLimit): number {
@@ -699,6 +743,7 @@ function formatAge(rawAgeMs: number): string {
 }
 
 function formatUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) return "<$0.01";
   if (amount >= 1_000_000_000) return `$${compactNumber(amount / 1_000_000_000)}b`;
   if (amount >= 1_000_000) return `$${compactNumber(amount / 1_000_000)}m`;
   if (amount >= 1_000) return `$${compactNumber(amount / 1_000)}k`;
@@ -782,7 +827,9 @@ function assembleMixedLine(
 ): string {
   const agent = selectSubscriptionAgent(snapshot, now);
   const urgent = agent ? [...activeLimits(agent, now)].sort(compareUrgency)[0] : undefined;
-  const runway = urgent ? formatLimitCompact(urgent) : "runway n/r";
+  const runway = urgent
+    ? formatLimitCompact(urgent)
+    : hasStaleLimitEvidence(snapshot, now) ? "runway stale" : "runway n/r";
   const runwayWithReset = urgent
     ? `${runway} ↻${formatReset(urgent, now, timeZone)}`
     : runway;
@@ -854,7 +901,10 @@ function assembleMultiSubscriptionLine(
   const pressure = agents
     .filter((agent) => agent.pressure === "extra_usage_credits_exhausted")
     .map((agent) => `${subscriptionAgentLabel(agent)} plan pressure`);
-  const noRunway = entries.length === 0 ? ["subscription detected", "runway not reported"] : [];
+  const staleRunway = staleRunwaySegments(snapshot, now);
+  const noRunway = entries.length === 0 && staleRunway.length === 0
+    ? ["subscription detected", "runway not reported"]
+    : staleRunway;
   const urgent = compactPrimary[0];
   const urgentValue = agents[0] ? formatAttributedValue(agents[0], true) : undefined;
   const candidates: string[][] = [];
@@ -878,9 +928,10 @@ function assembleMultiSubscriptionLine(
       [urgent]
     );
   } else {
+    const compactRunway = hasStaleLimitEvidence(snapshot, now) ? "runway stale" : "runway n/r";
     candidates.push(
-      ["aibill", "runway n/r", freshness],
-      ["runway n/r", freshness],
+      ["aibill", compactRunway, freshness],
+      [compactRunway, freshness],
       ["aibill", ...noRunway, ...compactValues, freshness],
       ["aibill", ...compactValues, freshness],
       ["aibill", "subscription detected", freshness],
@@ -907,7 +958,10 @@ function assembleMultiSubscriptionMixedLine(
   const compactPrimary = primary.map(({ agent, limit }) =>
     formatAttributedLimitCompact(agent, limit));
   const compactValues = agents.flatMap((agent) => formatAttributedValue(agent, true) ?? []);
-  const noRunway = entries.length === 0 ? ["subscription detected", "runway not reported"] : [];
+  const staleRunway = staleRunwaySegments(snapshot, now);
+  const noRunway = entries.length === 0 && staleRunway.length === 0
+    ? ["subscription detected", "runway not reported"]
+    : staleRunway;
   const urgent = compactPrimary[0];
   const urgentValue = agents[0] ? formatAttributedValue(agents[0], true) : undefined;
   const meteredBilled = snapshot.metered?.providerBilled.sevenDays;
@@ -920,6 +974,7 @@ function assembleMultiSubscriptionMixedLine(
       ? `metered ~${formatUsd(meteredEstimated.amountUsd)}/7d`
       : "metered n/r";
   const shortFreshness = compactFreshness(freshness);
+  const compactRunway = hasStaleLimitEvidence(snapshot, now) ? "runway stale" : "runway n/r";
   const candidates: string[][] = [];
 
   if (tier === "full") candidates.push(["aibill", ...fullSegments, freshness]);
@@ -942,9 +997,9 @@ function assembleMultiSubscriptionMixedLine(
     candidates.push(
       ["aibill", "mix", ...noRunway, metered, freshness],
       ["aibill", ...noRunway, freshness],
-      ["aibill", "mix", "runway n/r", metered, shortFreshness],
-      ["mix", "runway n/r", metered, shortFreshness],
-      ["mix", "runway n/r", shortFreshness]
+      ["aibill", "mix", compactRunway, metered, shortFreshness],
+      ["mix", compactRunway, metered, shortFreshness],
+      ["mix", compactRunway, shortFreshness]
     );
   }
   candidates.push(["mix", metered, shortFreshness], ["mix", metered], ["mix"]);

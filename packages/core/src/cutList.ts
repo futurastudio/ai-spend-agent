@@ -456,5 +456,5 @@ function stableSuffix(value: string): string {
 }
 
 function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
+  return Math.round(value * 10_000) / 10_000;
 }

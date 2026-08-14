@@ -236,7 +236,7 @@ describe("buildUsageGlance", () => {
         source: "local_calculation",
         basis: "transcript_tokens_at_public_api_rates",
         confidence: "estimated",
-        pricingAsOf: "2026-08-13"
+        pricingAsOf: "2026-08-14"
       },
       plan: {
         source: "local_agent_account_metadata",
@@ -510,6 +510,89 @@ describe("buildUsageGlance", () => {
     );
     expect(snapshot.primaryAction.agentPrompt).toContain(
       "provider-reported reset=2026-07-28T20:00:00.000Z"
+    );
+  });
+
+  it("keeps old transcript runway visible as stale evidence without driving an action", () => {
+    const calls: LocalAgentCall[] = [{
+      agent: "codex",
+      sessionId: "stale-runway",
+      project: "agent-finops",
+      model: "gpt-5.1-codex",
+      timestamp: "2026-08-14T17:55:00.000Z",
+      startedAt: "2026-08-14T17:30:00.000Z",
+      usage: usage(80_000, 8_000),
+      activity: activity("Testing stale runway", 4, 5),
+      rateLimits: {
+        observedAt: "2026-08-10T12:20:00.000Z",
+        windows: [{
+          kind: "weekly",
+          name: "weekly",
+          usedPercent: 25,
+          windowMinutes: 10_080,
+          resetsAt: "2026-08-17T12:20:00.000Z"
+        }]
+      }
+    }];
+
+    const snapshot = buildUsageGlance(calls, {
+      now: new Date("2026-08-14T18:00:00.000Z")
+    });
+
+    expect(snapshot.limits).toEqual([
+      expect.objectContaining({
+        kind: "weekly",
+        remainingPercent: 75,
+        freshness: "stale",
+        projectedExhaustionAt: null,
+        projectedToExhaustBeforeReset: false
+      })
+    ]);
+    expect(snapshot.coverage.rateLimitMetadata).toContainEqual(expect.objectContaining({
+      agent: "codex",
+      status: "stale",
+      windowsReported: ["weekly"]
+    }));
+    expect(snapshot.primaryAction.intent).not.toBe("protect_runway");
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "Stale; the last transcript-reported plan window is too old to use as current runway"
+    );
+  });
+
+  it("never turns an already-past exhaustion projection into a current warning", () => {
+    const calls: LocalAgentCall[] = [{
+      agent: "codex",
+      sessionId: "past-projection",
+      project: "agent-finops",
+      model: "gpt-5.1-codex",
+      timestamp: "2026-07-28T17:55:00.000Z",
+      startedAt: "2026-07-28T17:30:00.000Z",
+      usage: usage(80_000, 8_000),
+      activity: activity("Testing projection truth", 4, 5),
+      rateLimits: {
+        observedAt: "2026-07-28T17:00:00.000Z",
+        windows: [{
+          kind: "five-hour",
+          name: "five-hour",
+          usedPercent: 90,
+          windowMinutes: 300,
+          resetsAt: "2026-07-28T20:00:00.000Z"
+        }]
+      }
+    }];
+
+    const snapshot = buildUsageGlance(calls, {
+      now: new Date("2026-07-28T18:00:00.000Z")
+    });
+
+    expect(snapshot.limits[0]).toMatchObject({
+      freshness: "current",
+      projectedExhaustionAt: null,
+      projectedToExhaustBeforeReset: false
+    });
+    expect(snapshot.primaryAction.intent).not.toBe("protect_runway");
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "No transcript-reported plan window is currently projected to exhaust before reset"
     );
   });
 

@@ -462,9 +462,9 @@ export async function recommendCutsTool(input: RegistryPathInput): Promise<{
           ? candidate.recordUnit.replace(/s$/, "")
           : candidate.recordUnit;
         return [
-          `${candidate.title}: ${candidate.recordCount} ${unit} carry $${candidate.affectedSpendUsd.toFixed(2)} of observed API-equivalent value in this window`,
+          `${candidate.title}: ${candidate.recordCount} ${unit} carry ${formatMcpUsd(candidate.affectedSpendUsd)} of observed API-equivalent value in this window`,
           "reduction and cash savings are unproven",
-          candidate.action,
+          candidate.action.replace(/[.!?]+$/u, ""),
           "Inspect read-only evidence first; use `npx aibill apply` for explicit approval, rollback, and matched future-session verification."
         ].join(". ");
       });
@@ -1900,6 +1900,11 @@ function canonicalBoundaryFields(type: ApprovedSource["type"]): string[] {
     return ["approved account/API/export source"];
   }
   return [];
+}
+
+function formatMcpUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) return "<$0.01";
+  return `$${amount.toFixed(2)}`;
 }
 
 function canonicalSourceLabel(

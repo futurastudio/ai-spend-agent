@@ -60,7 +60,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6",
-          "contentSha256": "6629cbcd985b6ca7792d84a14670f96af0a7a3085ddf7c110b1423e9534a47b0"
+          "contentSha256": "14615071e4264b69c4ed3bcf61652ede1006ed3456826055bd40dd4292df9ba1"
         },
         {
           "kind": "pricing",
@@ -72,7 +72,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877",
-          "contentSha256": "473c7e44e046e25c47e5c0c94d80e1795b35b1456bb613263c02f61a9d8f345a"
+          "contentSha256": "84f1aba4d1161730e2bb8dc0422ae2f58204a1026372710462307836350b23e3"
         },
         {
           "kind": "pricing",
@@ -84,7 +84,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53",
-          "contentSha256": "ff92743b0116e9819e64a6742a32a8d366570fb038a98cc369b2c9c060bc7a63"
+          "contentSha256": "c898dd29531e486948729132d5a7c0c70abbe8b86154baa59d827f685e2b6e3d"
         }
       ]
     },
@@ -139,10 +139,14 @@
           "requiredMarkers": [
             "Input Tokens",
             "Output Tokens",
-            "Prompt caching"
+            "Prompt caching",
+            "Claude Fable 5 $10 / MTok $12.50 / MTok $20 / MTok $1 / MTok $50 / MTok",
+            "Claude Mythos 5 ( limited availability ) $10 / MTok $12.50 / MTok $20 / MTok $1 / MTok $50 / MTok",
+            "Claude Opus 5 $5 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok $25 / MTok",
+            "Claude Sonnet 5 $2 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok $10 / MTok"
           ],
-          "semanticSha256": "f51408cdc70dd332e3932ab5ec1d856448ab038ea45ab36c80379b6ab18723b4",
-          "contentSha256": "f29a88363e375c271970e864245776cda9c3501af904436590c6d6c11257745d"
+          "semanticSha256": "8cebfc68863b106919c3074cb156c0ed5870699547863bd630b2826034c60b14",
+          "contentSha256": "ccc90699d5c589fcaf7b47e2d3b28cd84b9bfb6c9ec7ca97f3d02c131ed5d64c"
         }
       ]
     },
@@ -306,7 +310,7 @@
             "reconcile event-level costs"
           ],
           "semanticSha256": "d941a941d6433e0a93c4d6ba0412d6da9ffa246155bd89602ca1fa5815d746be",
-          "contentSha256": "876d1db4f489e490e85762664831ed40e0815d243d25e4b645de8b21a4a1c5f2"
+          "contentSha256": "dfbc5ccf3711357d12dee60c1a4eb6bbfd969d85c666dbf801a8a8dc81dc158c"
         },
         {
           "kind": "pricing",

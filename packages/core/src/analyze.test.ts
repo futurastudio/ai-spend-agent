@@ -134,8 +134,8 @@ describe("spend analysis", () => {
       usageGranularity: "daily_aggregate"
     }]);
 
-    expect(summary.totalUsd).toBe(0.01);
-    expect(summary.byProject[0]).toMatchObject({ key: "mcp-project", amountUsd: 0.01 });
+    expect(summary.totalUsd).toBe(0.0075);
+    expect(summary.byProject[0]).toMatchObject({ key: "mcp-project", amountUsd: 0.0075 });
     expect(summary.workflowWatch).toEqual([]);
     expect(summary.recommendations).toEqual([]);
     expect(summary.insights).toEqual([]);

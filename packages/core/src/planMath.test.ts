@@ -114,6 +114,13 @@ describe("computePlanChecks", () => {
     expect(checks[0]!.headline).toContain("compare account benefits");
   });
 
+  it("keeps a positive sub-cent projection distinct from zero", () => {
+    const checks = computePlanChecks([localLogRecord({ amountUsd: 0.0001 })]);
+    expect(checks[0]!.apiEquivalentMonthlyUsd).toBe(0.003);
+    expect(checks[0]!.headline).toContain("~<$0.01/mo at API rates");
+    expect(checks[0]!.headline).not.toContain("~$0.00/mo");
+  });
+
   it("separates agents and ignores non-log records", () => {
     const checks = computePlanChecks([
       localLogRecord({ id: "a", agentId: "claude-code", amountUsd: 20 }),
