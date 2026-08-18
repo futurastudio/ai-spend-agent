@@ -22,7 +22,8 @@ import {
   runStartSitting,
   shortSittingHint,
   type FlowIo,
-  type PlanDraftStore
+  type PlanDraftStore,
+  type SuggestedPlanAnswer
 } from "./improveFlow.js";
 import {
   analyzeSpend,
@@ -34,8 +35,10 @@ import {
   aibillCommandV0,
   aibillImproveCommandV0,
   decodeAgentDraftTokenV1,
+  IMPROVE_USER_SAFETY_LINE_V1,
   looksLikeAgentDraftToken,
   screenAgentDraftSentence,
+  type AgentDraftV1,
   attributeUsageRecords,
   buildUsageGlance,
   buildActivitySnapshot,
@@ -4307,23 +4310,145 @@ async function guardExactProjectRoot(
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Agent-draft screening copy (AGENT_NATIVE_LOOP_DESIGN.md §5, A1-A11)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A1 · plan banner, printed once before step 1 when at least one
+ * agent-drafted sentence survived screening. The final line IS the shared
+ * `userSafetyLine` constant, rendered verbatim and unwrapped (n1) so QA 25
+ * can assert byte-identity across the CLI banner, `agentLoop`, and
+ * `draft_improve_command`.
+ */
+const agentDraftPlanBanner = [
+  "Your agent helped draft this plan. Nothing is approved yet: review each",
+  "sentence, press Enter to accept it or type your own, and only the APPROVE",
+  "you type at the end authorizes anything.",
+  IMPROVE_USER_SAFETY_LINE_V1
+].join("\n");
+
+/** A4 · whole-draft set-asides. */
+const agentDraftUnreadableNotice = [
+  "Your agent's draft could not be read (not a valid ab1 draft token).",
+  "Continuing with aibill's own suggestions. Ask your agent to call",
+  "draft_improve_command again and hand you the exact command it returns."
+].join("\n");
+const agentDraftStaleNotice = [
+  "Your agent's draft was made for a different test or an older revision of",
+  "this one, so it was set aside. Ask your agent to re-read",
+  "get_token_reduction_test and draft again."
+].join("\n");
+const agentDraftNoTestNotice = [
+  "There is no frozen baseline yet, so a drafted plan cannot attach to a test.",
+  "Finish the two start questions first; then ask your agent to draft against",
+  "the new test id."
+].join("\n");
+
+/** A5 · --draft while a plan awaits its record. */
+const agentDraftAfterApprovalNotice = [
+  "A plan is already approved and waiting for its result, so the draft was",
+  "not used. Record what happened below."
+].join("\n");
+
+/** A7 · record flags with no approved plan. */
+const recordFlagsNoApprovalNotice = [
+  "No plan is approved yet, so --record-applied-at/--record-canary were not",
+  "used. Approve a plan first."
+].join("\n");
+
+/** A7 · applied-at prefill set aside (reason = exact time-classifier copy). */
+function recordTimeSetAsideNotice(reason: string): string {
+  return [
+    `Your agent's applied-at time was set aside: ${reason}`,
+    "Answer the question yourself below."
+  ].join("\n");
+}
+
+/** A8 · non-interactive run with any draft/record flag. */
+const agentFlagsNonInteractiveNote = [
+  "Agent drafts and record values only pre-fill the interactive flow; nothing",
+  "was recorded. Run this command in an interactive terminal."
+].join("\n");
+
+/** A10 · verify-flag confusion on improve. */
+const verifyFlagConfusionNote = [
+  "Note: --applied-at/--canary belong to the advanced verify commands. With",
+  "improve, use --record-applied-at and --record-canary."
+].join("\n");
+
+/** A9 · demo variant banner (binding is checked only in a real run). */
+const demoDraftBanner = [
+  "DEMO: your agent's draft is used for practice only. Draft binding to a real",
+  "test id and revision is checked only in a real run. Nothing is recorded."
+].join("\n");
+
+type ScreenedAgentDraft = {
+  /** Surviving sentences, each carrying agent provenance (B1). */
+  answers: {
+    change?: SuggestedPlanAnswer;
+    rollback?: SuggestedPlanAnswer;
+    canary?: SuggestedPlanAnswer;
+  };
+  /** A3 lines for set-aside fields, in field order; secrets never echoed. */
+  setAsideNotices: string[];
+  survivors: number;
+};
+
+/**
+ * Screen a decoded draft with the SAME shared core path the MCP composition
+ * preview uses (`screenAgentDraftSentence`), field by field. A rejected
+ * field falls back to aibill's own suggestion — and to aibill's label; a
+ * surviving field carries `provenance: "agent"` so only genuinely
+ * agent-authored words ever render `Drafted with your agent` (B1, QA 17).
+ */
+function screenAgentDraftSentences(draft: AgentDraftV1): ScreenedAgentDraft {
+  const answers: ScreenedAgentDraft["answers"] = {};
+  const setAsideNotices: string[] = [];
+  let survivors = 0;
+  for (const field of ["change", "rollback", "canary"] as const) {
+    const verdict = screenAgentDraftSentence(draft[field]);
+    if (verdict.ok) {
+      answers[field] = { value: verdict.value, provenance: "agent" };
+      survivors += 1;
+    } else {
+      // A3 · the reason is the classifier's exact reprompt message; the
+      // credential path's message never contains the rejected text.
+      setAsideNotices.push([
+        `Your agent's ${field} draft was set aside: ${verdict.reason}`,
+        "aibill's own suggestion is shown for that step instead, labeled Suggested."
+      ].join("\n"));
+    }
+  }
+  return { answers, setAsideNotices, survivors };
+}
+
 /**
  * `improve --sample`: the full guided questionnaire against synthetic
  * evidence so a new user can practice every step safely. Fail-closed by
  * construction: this function never receives a draft store or persistence
  * path — no experiment, ownership, approval, draft, or file is written.
+ * With `--draft` (A9) the demo decodes and screens the token exactly like a
+ * real run — practicing the screening is the point — but skips the binding
+ * check, because there is no real test to bind to.
  */
-async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+async function demoImproveCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
   const demoNext = {
     reason: "run the real flow from inside one exact project",
     command: improveRuntimeCommand
   };
+  const hasAgentFlags = args.agentDraftToken !== undefined ||
+    args.recordAppliedAt !== undefined || args.recordCanary !== undefined;
   const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
   if (!runtime.interactive || !guidedIo) {
     return ok(renderCleanExit({
       lines: [
         "aibill improve · DEMO · synthetic sample — practice run, nothing is recorded",
-        "Demo sample data can never start a token test."
+        "Demo sample data can never start a token test.",
+        ...(hasAgentFlags ? [agentFlagsNonInteractiveNote] : [])
       ],
       next: {
         reason: "practice the guided token test safely in an interactive terminal",
@@ -4337,6 +4462,33 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
     demo: true
   };
   guidedIo.write("Demo sample data can never start a token test.");
+  // A9 · decode + screen exactly like a real run; binding is not checked.
+  const demoDraft = args.agentDraftToken !== undefined
+    ? decodeAgentDraftTokenV1(args.agentDraftToken)
+    : undefined;
+  let demoSuggestedAnswers: ScreenedAgentDraft["answers"] = {
+    change: {
+      value: "Start with only the files and instructions this task needs.",
+      provenance: "aibill"
+    },
+    rollback: { value: "Restore the prior session workflow.", provenance: "aibill" },
+    canary: {
+      value: "The project tests pass and the requested output is accepted.",
+      provenance: "aibill"
+    }
+  };
+  const demoDraftNotices: string[] = [];
+  if (demoDraft !== undefined) {
+    guidedIo.write(demoDraftBanner);
+    if (!demoDraft.ok) {
+      demoDraftNotices.push(agentDraftUnreadableNotice);
+    } else {
+      const screened = screenAgentDraftSentences(demoDraft.draft);
+      if (screened.survivors > 0) demoDraftNotices.push(agentDraftPlanBanner);
+      demoDraftNotices.push(...screened.setAsideNotices);
+      demoSuggestedAnswers = { ...demoSuggestedAnswers, ...screened.answers };
+    }
+  }
   const demoComplete = (firstLine: string): CliResult => ok(renderCleanExit({
     lines: [
       firstLine,
@@ -4353,6 +4505,9 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
   if (start.action !== "start") {
     return demoComplete("DEMO ENDED · nothing was created or stored");
   }
+  if (demoDraftNotices.length > 0) {
+    guidedIo.write(demoDraftNotices.join("\n\n"));
+  }
   const plan = await runPlanSitting(guidedIo, {
     header,
     experimentId: "DEMO-tre_v0_0000000000000000",
@@ -4360,11 +4515,7 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
     sanitize: (value) => value,
     nowIso: () => new Date().toISOString(),
     approveExtraLine: "This is a practice approval. It is not recorded and creates no claim.",
-    suggestedAnswers: {
-      change: "Start with only the files and instructions this task needs.",
-      rollback: "Restore the prior session workflow.",
-      canary: "The project tests pass and the requested output is accepted."
-    }
+    suggestedAnswers: demoSuggestedAnswers
   });
   return demoComplete(plan.action === "approved"
     ? "DEMO COMPLETE · nothing was created or stored"
@@ -4435,24 +4586,53 @@ function createPlanDraftStore(rootPath: string): PlanDraftStore {
   };
 }
 
+/**
+ * The approved-plan agent handoff (§2e): symmetric with the record leg. The
+ * record command placeholder line lives INSIDE the quoted agent text, not in
+ * a NEXT COMMAND block, so the one-command exit contract is untouched.
+ */
 function improveAgentInstruction(changeSentence: string): string {
   return [
     `"Execute only the pre-approved reversible plan: ${changeSentence}`,
-    "Make no other optimization, preserve the approved rollback, run the",
-    "approved canary, and report the exact UTC ISO-8601 time the change was",
-    'applied plus whether that exact canary passed or failed."'
+    "Make no other optimization, preserve the approved rollback, and run the",
+    "approved canary. Then report the exact UTC ISO-8601 time the change was",
+    "applied and whether that exact canary passed or failed — if the canary has",
+    "not run, say so instead. Give the user this one command with the time",
+    "filled in:",
+    `  ${actionRuntimeCommand("improve --record-applied-at <time> --record-canary <passed|failed>")}`,
+    "That command only pre-fills the applied-at question; the user types the",
+    'canary answer themselves in their terminal."'
   ].join("\n");
 }
+
+/**
+ * m12c: the record-backedOut re-show restates the FINDING label — the exact
+ * approved sentence is unrecoverable by design (hash-only persistence) — and
+ * must say so under the quoted text.
+ */
+const improveAgentInstructionHashCaveat = [
+  "(aibill keeps only hashes of your approved sentences; the plan above",
+  "restates the finding, not your exact approved wording.)"
+].join("\n");
 
 async function improveCommand(
   args: ParsedArgs,
   runtime: CliRuntimeOptions
 ): Promise<CliResult> {
   if (args.sample) {
-    return demoImproveCommand(runtime);
+    return demoImproveCommand(args, runtime);
   }
   const rootGuard = await guardExactProjectRoot("improve", args.path);
   if (rootGuard) return rootGuard;
+  // §2c dispatch inputs. Decoding never throws; every set-aside prints one
+  // notice and CONTINUES — a bad draft never ends the run (P0B principle 2).
+  let agentDraft = args.agentDraftToken !== undefined
+    ? decodeAgentDraftTokenV1(args.agentDraftToken)
+    : undefined;
+  const hasRecordFlags =
+    args.recordAppliedAt !== undefined || args.recordCanary !== undefined;
+  const hasAgentFlags = agentDraft !== undefined || hasRecordFlags;
+  let recordFlagsNoticed = false;
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const rootPath = resolve(args.path);
@@ -4532,8 +4712,13 @@ async function improveCommand(
 
     const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
     if (!runtime.interactive || !guidedIo) {
+      // A8 · drafts and record values are prefills for the interactive flow
+      // only; the read-only render must say nothing was recorded.
+      const readOnlyNote =
+        "No experiment, approval, or project state changed. The private local evidence cache may refresh. Run this command in an interactive terminal to start or record a test." +
+        (hasAgentFlags ? `\n${agentFlagsNonInteractiveNote}` : "");
       return ok(renderImproveExperience(model, {
-        note: "No experiment, approval, or project state changed. The private local evidence cache may refresh. Run this command in an interactive terminal to start or record a test.",
+        note: readOnlyNote,
         ...(improveProjectLine ? { projectLine: improveProjectLine } : {})
       }));
     }
@@ -4541,7 +4726,31 @@ async function improveCommand(
     const experimentTag = (id?: string): string =>
       id ? `test ${id.slice(0, 15)}` : "test: none yet";
 
+    // A10 · the verify flags do not belong to improve; say so and ignore.
+    if (args.appliedAt !== undefined || args.canary !== undefined) {
+      guidedIo.write(verifyFlagConfusionNote);
+    }
+    // Phases past plan/record (collecting, rollback, terminal): the flags
+    // have no question to pre-fill; say so once instead of failing.
+    if (hasAgentFlags &&
+        model.phase !== "start" && model.phase !== "awaiting_intervention") {
+      guidedIo.write(
+        "The current step needs no draft or record values, so they were not used."
+      );
+    }
+
     if (model.phase === "start" && !preferred) {
+      // §2c dispatch 2: a plan draft cannot bind before the freeze — the
+      // experimentId is created at freeze. The draft is set aside NOW; after
+      // the freeze the plan sitting uses aibill's own suggestions.
+      if (agentDraft !== undefined) {
+        guidedIo.write(agentDraftNoTestNotice);
+        agentDraft = undefined;
+      }
+      if (hasRecordFlags && !recordFlagsNoticed) {
+        guidedIo.write(recordFlagsNoApprovalNotice);
+        recordFlagsNoticed = true;
+      }
       const start = await runStartSitting(guidedIo, {
         header: { commandTitle, experimentLabel: experimentTag() },
         findingLabel: model.oneChange.label,
@@ -4617,6 +4826,53 @@ async function improveCommand(
             }
           : undefined;
         const draftStore = createPlanDraftStore(rootPath);
+        // §2c dispatch 3: record flags cannot apply before an approval.
+        if (hasRecordFlags && !recordFlagsNoticed) {
+          guidedIo.write(recordFlagsNoApprovalNotice);
+          recordFlagsNoticed = true;
+        }
+        // The machine drafts; the human approves. aibill already knows the
+        // change it found — never make the user re-type a worse version.
+        // Every fallback field carries aibill's OWN provenance so it can
+        // never render under the agent label (B1).
+        const aibillSuggestions: NonNullable<
+          Parameters<typeof runPlanSitting>[1]["suggestedAnswers"]
+        > = {
+          change: {
+            value: model.oneChange.label.endsWith(".")
+              ? model.oneChange.label
+              : `${model.oneChange.label}.`,
+            provenance: "aibill"
+          },
+          rollback: {
+            value: "Restore the prior session workflow.",
+            provenance: "aibill"
+          },
+          canary: {
+            value: "The project tests pass and the requested output is accepted.",
+            provenance: "aibill"
+          }
+        };
+        let suggestedAnswers = aibillSuggestions;
+        const draftNotices: string[] = [];
+        if (agentDraft !== undefined) {
+          if (!agentDraft.ok) {
+            draftNotices.push(agentDraftUnreadableNotice);
+          } else if (agentDraft.draft.experimentId !== preferred.id ||
+              agentDraft.draft.revisionId !== preferred.revisionId) {
+            // Stale revision, wrong test, or a token replayed from another
+            // project — the id simply does not match this project's test.
+            draftNotices.push(agentDraftStaleNotice);
+          } else {
+            const screened = screenAgentDraftSentences(agentDraft.draft);
+            if (screened.survivors > 0) draftNotices.push(agentDraftPlanBanner);
+            draftNotices.push(...screened.setAsideNotices);
+            suggestedAnswers = { ...aibillSuggestions, ...screened.answers };
+          }
+        }
+        if (draftNotices.length > 0) {
+          guidedIo.write(draftNotices.join("\n\n"));
+        }
         const plan = await runPlanSitting(guidedIo, {
           header,
           experimentId: preferred.id,
@@ -4625,15 +4881,7 @@ async function improveCommand(
           draftStore,
           sanitize: sanitizeLocalActivityText,
           nowIso: () => new Date().toISOString(),
-          // The machine drafts; the human approves. aibill already knows the
-          // change it found — never make the user re-type a worse version.
-          suggestedAnswers: {
-            change: model.oneChange.label.endsWith(".")
-              ? model.oneChange.label
-              : `${model.oneChange.label}.`,
-            rollback: "Restore the prior session workflow.",
-            canary: "The project tests pass and the requested output is accepted."
-          }
+          suggestedAnswers
         });
         const rerunNext = { reason: "run this again to continue the plan", command: improveRuntimeCommand };
         if (plan.action === "cancelled" || plan.action === "backedOut") {
@@ -4743,10 +4991,41 @@ async function improveCommand(
       const approvedByLine = accountabilityState.ownership
         ? `Approved ${approvedPlan.approvedAt} by ${accountabilityState.ownership.displayLabels.humanOwner} (${accountabilityState.ownership.approverRole.roleLabel})`
         : `Approved ${approvedPlan.approvedAt}`;
+      // §2c dispatch 4: a plan is pre-approved — the draft (if any) is set
+      // aside (A5); the applied-at prefill is pre-screened with the FULL
+      // time classifier (approvedAtIso context) so before-approval/future
+      // values are set aside honestly NOW instead of at Enter (A7); the
+      // canary report NEVER prefills — claim line only, typed p/f/n (M6).
+      const recordNotices: string[] = [];
+      if (agentDraft !== undefined) {
+        recordNotices.push(agentDraftAfterApprovalNotice);
+      }
+      let suggestedRecord: { appliedAtIso: string } | undefined;
+      if (args.recordAppliedAt !== undefined) {
+        const timeVerdict = classifyGuidedAnswer("time", args.recordAppliedAt, {
+          approvedAtIso: approvedPlan.approvedAt
+        });
+        if (timeVerdict.outcome === "accept") {
+          suggestedRecord = { appliedAtIso: args.recordAppliedAt };
+        } else {
+          recordNotices.push(recordTimeSetAsideNotice(
+            timeVerdict.outcome === "reject"
+              ? timeVerdict.message
+              : "the time could not be read"
+          ));
+        }
+      }
+      if (recordNotices.length > 0) {
+        guidedIo.write(recordNotices.join("\n\n"));
+      }
       const record = await runRecordSitting(guidedIo, {
         header,
         approvedAtIso: approvedPlan.approvedAt,
-        approvedByLine
+        approvedByLine,
+        ...(suggestedRecord !== undefined ? { suggested: suggestedRecord } : {}),
+        ...(args.recordCanary !== undefined
+          ? { agentCanaryReport: args.recordCanary }
+          : {})
       });
       if (record.action === "cancelled") {
         return ok(renderCleanExit({
@@ -4758,9 +5037,14 @@ async function improveCommand(
         }));
       }
       if (record.action === "backedOut") {
+        // m12c: this path restates the FINDING label, not the approved
+        // sentence (hash-only persistence) — the caveat says so, indented
+        // inside the quoted block by renderForYourAgent.
         return ok(renderCleanExit({
           lines: [`${experimentTag(preferred.id)} · waiting for the applied change`],
-          extraBlocks: [renderForYourAgent(improveAgentInstruction(model.oneChange.label))],
+          extraBlocks: [renderForYourAgent(
+            `${improveAgentInstruction(model.oneChange.label)}\n${improveAgentInstructionHashCaveat}`
+          )],
           next: { reason: "after the agent reports back, run exactly this", command: improveRuntimeCommand }
         }));
       }

@@ -24,7 +24,9 @@ const TOKEN_PREFIX = "ab1.";
 export const MAX_AGENT_DRAFT_TOKEN_CHARS = 20_000;
 const TOKEN_SHAPE = /^ab1\.[A-Za-z0-9_-]{16,}$/;
 const EXPERIMENT_ID_SHAPE = /^tre_v0_[a-f0-9]{64}$/;
-const REVISION_ID_SHAPE = /^[A-Za-z0-9_-]{1,64}$/;
+// The design sketched {1,64}, but real revision ids are `trev_v0_<64hex>`
+// (72 chars, actionVerification.ts L124) — widened to 128, same charset.
+const REVISION_ID_SHAPE = /^[A-Za-z0-9_-]{1,128}$/;
 /** Single-line plain text: no C0/C1 controls (same refine the MCP schema uses). */
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/;
 const MAX_SENTENCE_CHARS = 1_000;
