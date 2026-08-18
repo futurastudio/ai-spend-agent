@@ -144,7 +144,7 @@ if (
   tokenomics.target.status !== "not_published" ||
   !groupByDimensions.includes("project") ||
   !terminal.includes("LOCAL ESTIMATE") ||
-  !terminal.includes("OBSERVED API-EQUIVALENT VALUE") ||
+  !terminal.includes("API-EQUIVALENT VALUE") ||
   !terminal.includes("not billed spend") ||
   !terminal.includes("estimated") ||
   terminal.includes("PROVIDER-REPORTED COST") ||
