@@ -1,6 +1,6 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "aibill MCP server: Claude Code/Codex attribution, runway, and Context Health, plus experimental Gemini CLI financial evidence.",
   "keywords": [
     "mcp",
@@ -48,7 +48,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.8.1",
+    "@agent-finops/core": "0.9.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },
