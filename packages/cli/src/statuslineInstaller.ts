@@ -409,6 +409,31 @@ export async function installClaudeStatusline(options: InstallStatuslineOptions)
   }
 }
 
+/**
+ * C-lane §2.1 (QA-12c): a cache-refreshing CLI run re-copies the CURRENT
+ * compiled runtime over our own previously installed runner — an update of an
+ * install the user already consented to. Without an ownership receipt there
+ * is no aibill install, and nothing is created or touched.
+ */
+export async function refreshOwnedStatuslineRunner(
+  options: InstallStatuslineOptions
+): Promise<"refreshed" | "unchanged" | "not-installed"> {
+  const platform = options.platform ?? normalizePlatform(hostPlatform());
+  const paths = {
+    ...resolveStatuslinePaths(options.homeDir, options.cwd, platform, { programFilesDir: options.programFilesDir }),
+    ...options.pathOverrides
+  };
+  let receiptRead: ReceiptRead | undefined;
+  try {
+    receiptRead = await readReceiptIfPresent(paths, platform);
+  } catch {
+    return "not-installed";
+  }
+  if (!receiptRead) return "not-installed";
+  const result = await installClaudeStatusline(options);
+  return result.action === "unchanged" ? "unchanged" : "refreshed";
+}
+
 export async function uninstallClaudeStatusline(options: UninstallStatuslineOptions): Promise<StatuslineUninstallResult> {
   const platform = options.platform ?? normalizePlatform(hostPlatform());
   const paths = {

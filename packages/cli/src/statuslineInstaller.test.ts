@@ -7,6 +7,7 @@ import {
   buildAibillStatusLineSetting,
   installClaudeStatusline,
   manualStatuslineConfigSnippet,
+  refreshOwnedStatuslineRunner,
   resolveStatuslinePaths,
   uninstallClaudeStatusline
 } from "./statuslineInstaller.js";
@@ -789,5 +790,55 @@ describe("statusline path and config behavior", () => {
         statusLine: buildAibillStatusLineSetting(platform)
       });
     }
+  });
+});
+
+/**
+ * C-lane §2.1 (QA-12c): a cache-refreshing CLI run re-copies OUR OWN
+ * previously installed runner — never creating an install the user did not
+ * ask for.
+ */
+describe("refreshOwnedStatuslineRunner", () => {
+  it("re-copies an owned installed runner when the packaged runtime changed", async () => {
+    const test = await fixture();
+    await writeSettings(test, {});
+    await installClaudeStatusline({
+      homeDir: test.homeDir,
+      cwd: test.cwd,
+      runnerContents: "#!/usr/bin/env node\nconsole.log('v1 runner');\n",
+      now: new Date("2026-08-10T15:00:00.000Z")
+    });
+    const runnerPath = join(test.homeDir, ".aibill", "bin", "statusline.mjs");
+    expect(await readFile(runnerPath, "utf8")).toContain("v1 runner");
+
+    const refreshed = await refreshOwnedStatuslineRunner({
+      homeDir: test.homeDir,
+      cwd: test.cwd,
+      runnerContents: "#!/usr/bin/env node\nconsole.log('v2 runner');\n",
+      now: new Date("2026-08-17T15:00:00.000Z")
+    });
+    expect(refreshed).toBe("refreshed");
+    expect(await readFile(runnerPath, "utf8")).toContain("v2 runner");
+
+    const unchanged = await refreshOwnedStatuslineRunner({
+      homeDir: test.homeDir,
+      cwd: test.cwd,
+      runnerContents: "#!/usr/bin/env node\nconsole.log('v2 runner');\n"
+    });
+    expect(unchanged).toBe("unchanged");
+  });
+
+  it("does nothing without an ownership receipt — no consent, no install", async () => {
+    const test = await fixture();
+    await writeSettings(test, {});
+    const result = await refreshOwnedStatuslineRunner({
+      homeDir: test.homeDir,
+      cwd: test.cwd,
+      runnerContents: "#!/usr/bin/env node\nconsole.log('uninvited');\n"
+    });
+    expect(result).toBe("not-installed");
+    await expect(readFile(join(test.homeDir, ".aibill", "bin", "statusline.mjs"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(test.settingsPath, "utf8"))).toEqual({});
   });
 });

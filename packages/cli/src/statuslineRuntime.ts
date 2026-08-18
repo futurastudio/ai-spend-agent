@@ -13,7 +13,11 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const CACHE_FILE_NAME = "statusline-v1.json";
+// C-lane §2.1: the runtime prefers the v2 cache and falls back to a v1 cache
+// (rendering without committed/provider segments) so an upgraded runner keeps
+// working against an older writer and vice versa.
+const CACHE_FILE_NAME = "statusline-v2.json";
+const LEGACY_CACHE_FILE_NAME = "statusline-v1.json";
 const CACHE_MAX_BYTES = 64 * 1_024;
 const DEFAULT_COLUMNS = 100;
 const MAX_COLUMNS = 240;
@@ -62,14 +66,30 @@ type SubscriptionAgent = {
   agent: "claude-code" | "codex";
   billing: "subscription";
   planId: string | null;
+  /** v2 only: detected-plan list price; absent on a v1 cache. */
+  committedUsdPerMonth?: number | null;
   apiEquivalent: RollingWindows<ApiEquivalentWindow>;
   limits: ReportedLimit[];
   pressure: "extra_usage_credits_exhausted" | null;
 };
 
+type ProviderSubscription = {
+  provider: string;
+  billing: "subscription";
+  planLabel: string | null;
+  committedUsdPerMonth: number | null;
+  billed30d: BilledWindow;
+};
+
+type CommittedTotal = {
+  amountUsd: number | null;
+  pricedSubs: number;
+  totalSubs: number;
+};
+
 export type StatuslineSnapshot = {
   kind: "aibill.activity_snapshot";
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   currency: "USD";
   asOf: string;
   generatedAt: string;
@@ -103,6 +123,10 @@ export type StatuslineSnapshot = {
     alertEligible: true;
     recordCount: number;
   } | null;
+  /** v2 only: provider-billed subscriptions with no local agent (cursor). */
+  providers?: ProviderSubscription[] | null;
+  /** v2 only: committed $/mo across every detected subscription. */
+  committedTotal?: CommittedTotal;
   coverage: unknown;
   networkUploaded: false;
 };
@@ -180,55 +204,64 @@ export async function readStatuslineCache(
       }
     }
 
-    const cachePath = join(canonicalDirectory, CACHE_FILE_NAME);
-    let cacheInfo;
-    try {
-      cacheInfo = await lstat(cachePath);
-    } catch (error) {
-      return isNodeError(error, "ENOENT") ? { status: "missing" } : { status: "error" };
-    }
-    if (cacheInfo.isSymbolicLink() || !cacheInfo.isFile() ||
-        !hasPrivatePermissions(cacheInfo.mode) || cacheInfo.size > CACHE_MAX_BYTES) {
-      return { status: "error" };
-    }
-
-    let handle;
-    try {
-      handle = await open(cachePath, constants.O_RDONLY | noFollowFlag());
-      const openedInfo = await handle.stat();
-      if (!openedInfo.isFile() || openedInfo.dev !== cacheInfo.dev ||
-          openedInfo.ino !== cacheInfo.ino || !hasPrivatePermissions(openedInfo.mode) ||
-          openedInfo.size > CACHE_MAX_BYTES) {
-        return { status: "error" };
-      }
-      const buffer = Buffer.allocUnsafe(CACHE_MAX_BYTES + 1);
-      let bytesRead = 0;
-      while (bytesRead < buffer.length) {
-        const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-        if (result.bytesRead === 0) break;
-        bytesRead += result.bytesRead;
-      }
-      if (bytesRead > CACHE_MAX_BYTES) return { status: "error" };
-      const afterReadInfo = await handle.stat();
-      if (afterReadInfo.dev !== openedInfo.dev || afterReadInfo.ino !== openedInfo.ino ||
-          afterReadInfo.size !== openedInfo.size || afterReadInfo.mtimeMs !== openedInfo.mtimeMs ||
-          afterReadInfo.ctimeMs !== openedInfo.ctimeMs ||
-          !hasPrivatePermissions(afterReadInfo.mode)) {
-        return { status: "error" };
-      }
-      let raw: unknown;
-      try {
-        raw = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
-      } catch {
-        return { status: "error" };
-      }
-      const snapshot = parseSnapshot(raw);
-      return snapshot ? { status: "ok", snapshot } : { status: "error" };
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    // Prefer the v2 cache; fall back to a v1 cache from an older writer so
+    // the fleet keeps rendering during the deprecation window (QA-12).
+    const primary = await readStatuslineCacheFile(join(canonicalDirectory, CACHE_FILE_NAME));
+    if (primary.status !== "missing") return primary;
+    return await readStatuslineCacheFile(join(canonicalDirectory, LEGACY_CACHE_FILE_NAME));
   } catch (error) {
     return isNodeError(error, "ENOENT") ? { status: "missing" } : { status: "error" };
+  }
+}
+
+async function readStatuslineCacheFile(cachePath: string): Promise<StatuslineCacheResult> {
+  let cacheInfo;
+  try {
+    cacheInfo = await lstat(cachePath);
+  } catch (error) {
+    return isNodeError(error, "ENOENT") ? { status: "missing" } : { status: "error" };
+  }
+  if (cacheInfo.isSymbolicLink() || !cacheInfo.isFile() ||
+      !hasPrivatePermissions(cacheInfo.mode) || cacheInfo.size > CACHE_MAX_BYTES) {
+    return { status: "error" };
+  }
+
+  let handle;
+  try {
+    handle = await open(cachePath, constants.O_RDONLY | noFollowFlag());
+    const openedInfo = await handle.stat();
+    if (!openedInfo.isFile() || openedInfo.dev !== cacheInfo.dev ||
+        openedInfo.ino !== cacheInfo.ino || !hasPrivatePermissions(openedInfo.mode) ||
+        openedInfo.size > CACHE_MAX_BYTES) {
+      return { status: "error" };
+    }
+    const buffer = Buffer.allocUnsafe(CACHE_MAX_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    if (bytesRead > CACHE_MAX_BYTES) return { status: "error" };
+    const afterReadInfo = await handle.stat();
+    if (afterReadInfo.dev !== openedInfo.dev || afterReadInfo.ino !== openedInfo.ino ||
+        afterReadInfo.size !== openedInfo.size || afterReadInfo.mtimeMs !== openedInfo.mtimeMs ||
+        afterReadInfo.ctimeMs !== openedInfo.ctimeMs ||
+        !hasPrivatePermissions(afterReadInfo.mode)) {
+      return { status: "error" };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
+    } catch {
+      return { status: "error" };
+    }
+    const snapshot = parseSnapshot(raw);
+    return snapshot ? { status: "ok", snapshot } : { status: "error" };
+  } catch (error) {
+    return isNodeError(error, "ENOENT") ? { status: "missing" } : { status: "error" };
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -286,8 +319,19 @@ export function renderStatusline(
     }
     return assembleOverageLine(segments, overage, freshness, columns);
   }
-  if (snapshot.mode === "subscription" && hasMultipleSubscribedAgents(snapshot)) {
-    return assembleMultiSubscriptionLine(snapshot, freshness, tier, columns, now, options.timeZone);
+  if (snapshot.mode === "subscription") {
+    // C-lane §2.3: a v2 snapshot renders the greedy committed-total ladder
+    // whenever MORE THAN ONE subscription row exists — local agents AND
+    // provider subscriptions both count (QA finding M4: counting only local
+    // agents let a single-agent user with a cursor row bypass the ladder).
+    // A v1 cache keeps today's line exactly (fleet back-compat, QA-12a), and
+    // a single sub with no providers keeps today's line too (QA-7).
+    if (snapshot.committedTotal !== undefined && snapshot.committedTotal.totalSubs > 1) {
+      return assembleCommittedLadderLine(snapshot, freshness, columns, now, options.timeZone);
+    }
+    if (hasMultipleSubscribedAgents(snapshot)) {
+      return assembleMultiSubscriptionLine(snapshot, freshness, tier, columns, now, options.timeZone);
+    }
   }
   if (snapshot.mode === "mixed") {
     if (hasMultipleSubscribedAgents(snapshot)) {
@@ -941,6 +985,128 @@ function assembleMultiSubscriptionLine(
   return firstFittingLine(candidates, columns);
 }
 
+/**
+ * C-lane §2.3: the greedy width ladder for v2 multi-subscription snapshots.
+ * Candidates in order, first that fits wins — no column range is wasted.
+ * Marker discipline: `~` appears iff basis = api_equivalent; `billed` iff
+ * verified; `committed` keeps its full word until the `subs` alias tier; a
+ * partial committed sum is printed `(n/m priced)` at the wide tiers and
+ * DROPPED below them, never bare. The last resort is "aibill" (clipped) —
+ * truncated money segments are forbidden.
+ */
+function assembleCommittedLadderLine(
+  snapshot: StatuslineSnapshot,
+  freshness: string,
+  columns: number,
+  now: Date,
+  timeZone?: string
+): string {
+  const agents = orderedSubscriptionAgents(snapshot, now);
+  const fullSegments: string[] = [];
+  const noResetSegments: string[] = [];
+  for (const agent of agents) {
+    const urgent = [...activeLimits(agent, now)].sort(compareUrgency)[0];
+    const value = agent.apiEquivalent.sevenDays;
+    const valuePart = value.amountUsd !== null && value.financialEvidence === "estimated"
+      ? ` ${formatApproxSevenDay(value.amountUsd)}`
+      : "";
+    if (urgent) {
+      const core = `${limitKindShort(urgent.kind)} ${formatPercent(urgent.remainingPercent)}%`;
+      fullSegments.push(
+        `${subscriptionAgentLabel(agent)} ${core} ↻${formatReset(urgent, now, timeZone).replace(":00", "")}${valuePart}`
+      );
+      noResetSegments.push(`${subscriptionAgentLabel(agent)} ${core}${valuePart}`);
+    } else if (valuePart) {
+      fullSegments.push(`${subscriptionAgentLabel(agent)}${valuePart}`);
+      noResetSegments.push(`${subscriptionAgentLabel(agent)}${valuePart}`);
+    }
+    // A sub with no fresh runway and no value still counts in the committed
+    // total; the expansion itemizes it (§2.2).
+  }
+  const stale = staleRunwaySegments(snapshot, now);
+  const pressure = agents
+    .filter((agent) => agent.pressure === "extra_usage_credits_exhausted")
+    .map((agent) => `${subscriptionAgentLabel(agent)} plan pressure`);
+  // Renderer-side lock (double lock with the writer): only verified provider
+  // dollars may become a billed segment.
+  const billed = (snapshot.providers ?? [])
+    .filter((provider) => provider.billed30d.financialEvidence === "verified" &&
+      provider.billed30d.amountUsd !== null)
+    .map((provider) => `${provider.provider} ${formatBilledUsd(provider.billed30d.amountUsd!)}/30d billed`);
+  const committed = snapshot.committedTotal;
+  const committedFull = committed && committed.amountUsd !== null
+    ? committed.pricedSubs < committed.totalSubs
+      ? `committed ${formatCommittedMonthly(committed.amountUsd)} (${committed.pricedSubs}/${committed.totalSubs} priced)`
+      : `committed ${formatCommittedMonthly(committed.amountUsd)}`
+    : undefined;
+  // The sanctioned narrow alias (§1.2). A partially priced sum never rides
+  // the alias tiers — it is dropped rather than printed bare (QA-5).
+  const subsAlias = committed && committed.amountUsd !== null &&
+      committed.pricedSubs === committed.totalSubs
+    ? `subs ${formatCommittedMonthly(committed.amountUsd)}`
+    : undefined;
+  const shortFreshness = compactFreshness(freshness);
+  const urgentSegment = noResetSegments[0];
+  const urgentAgent = agents.find((agent) => activeLimits(agent, now).length > 0);
+  const urgentLimit = urgentAgent
+    ? [...activeLimits(urgentAgent, now)].sort(compareUrgency)[0]
+    : undefined;
+  const urgentRunwayOnly = urgentAgent && urgentLimit
+    ? `${subscriptionAgentLabel(urgentAgent)} ${limitKindShort(urgentLimit.kind)} ${formatPercent(urgentLimit.remainingPercent)}%`
+    : undefined;
+  const noRunwayNote = fullSegments.length === 0 && stale.length === 0
+    ? ["subscription detected", missingRunwaySegment(snapshot, now)]
+    : [];
+
+  const candidates: string[][] = [];
+  const push = (parts: Array<string | undefined>) => {
+    const filtered = parts.filter((part): part is string => Boolean(part));
+    if (filtered.length > 0) candidates.push(filtered);
+  };
+  // L1: everything, full words, reset times.
+  push(["aibill", ...noRunwayNote, ...fullSegments, ...stale, ...pressure, ...billed, committedFull, freshness]);
+  // L2: drop reset times, compact freshness.
+  push(["aibill", ...noRunwayNote, ...noResetSegments, ...stale, ...pressure, ...billed, committedFull, shortFreshness]);
+  // committed → subs alias (before the billed segment drops).
+  push(["aibill", ...noResetSegments, ...billed, subsAlias, shortFreshness]);
+  // L3: billed provider segment dropped (least perishable money).
+  push(["aibill", ...noResetSegments, subsAlias, shortFreshness]);
+  // L4: most urgent sub + its value + total.
+  push(["aibill", urgentSegment, subsAlias, shortFreshness]);
+  // L5: drop freshness.
+  push(["aibill", urgentSegment, subsAlias]);
+  // L6: urgent runway + total.
+  push([urgentRunwayOnly, subsAlias]);
+  // L7: fresh runway beats total — running out mid-session is the emergency.
+  if (urgentRunwayOnly) push([urgentRunwayOnly]);
+  // L8: no fresh runway at this width (or it does not fit): the total wins.
+  if (subsAlias) push([subsAlias]);
+  // L9: last resort — never a truncated money segment.
+  push(["aibill"]);
+  return firstFittingLine(candidates, columns);
+}
+
+/** `~$96/7d`: API-equivalent, estimated, never billed (whole dollars). */
+function formatApproxSevenDay(amountUsd: number): string {
+  const rounded = Math.round(amountUsd);
+  if (rounded === 0 && amountUsd > 0) return `~${formatUsd(amountUsd)}/7d`;
+  return `~${formatWholeUsd(rounded)}/7d`;
+}
+
+/** `$320/mo`: a committed list price is a fact about price, never `~`. */
+function formatCommittedMonthly(amountUsd: number): string {
+  return `${formatWholeUsd(Math.round(amountUsd))}/mo`;
+}
+
+/** Whole-dollar form for estimated/committed statusline money (never billed). */
+function formatWholeUsd(amountUsd: number): string {
+  return amountUsd >= 1_000 ? formatUsd(amountUsd) : `$${amountUsd}`;
+}
+
+function limitKindShort(kind: ReportedLimit["kind"]): string {
+  return kind === "five-hour" ? "5h" : "wk";
+}
+
 function assembleMultiSubscriptionMixedLine(
   snapshot: StatuslineSnapshot,
   fullSegments: string[],
@@ -1093,20 +1259,44 @@ function validTimeZone(value: string | undefined): value is string {
 }
 
 function parseSnapshot(raw: unknown): StatuslineSnapshot | undefined {
-  if (!isRecord(raw) || !hasExactKeys(raw, [
+  if (!isRecord(raw)) return undefined;
+  const version = raw.schemaVersion === 1 ? 1 : raw.schemaVersion === 2 ? 2 : undefined;
+  if (version === undefined) return undefined;
+  const baseKeys = [
     "kind", "schemaVersion", "currency", "asOf", "generatedAt", "lastAttemptAt",
     "lastSuccessAt", "refresh", "mode", "subscription", "metered", "unresolved",
     "overage", "coverage", "networkUploaded"
-  ])) return undefined;
-  if (raw.kind !== "aibill.activity_snapshot" || raw.schemaVersion !== 1 ||
+  ];
+  if (!hasExactKeys(raw, version === 1 ? baseKeys : [...baseKeys, "providers", "committedTotal"])) {
+    return undefined;
+  }
+  if (raw.kind !== "aibill.activity_snapshot" ||
       raw.currency !== "USD" || raw.networkUploaded !== false ||
       !isIso(raw.asOf) || !isIso(raw.generatedAt) || !isIso(raw.lastAttemptAt) ||
       !(raw.lastSuccessAt === null || isIso(raw.lastSuccessAt)) ||
       !isRefresh(raw.refresh) || !isMode(raw.mode) || !isCoverage(raw.coverage) ||
-      !(raw.subscription === null || isSubscription(raw.subscription)) ||
+      !(raw.subscription === null || isSubscription(raw.subscription, version)) ||
       !(raw.metered === null || isMetered(raw.metered)) ||
       !(raw.unresolved === null || isUnresolved(raw.unresolved)) ||
       !(raw.overage === null || isOverage(raw.overage))) return undefined;
+  if (version === 2 &&
+      (!(raw.providers === null || isProviderSubscriptions(raw.providers)) ||
+       !isCommittedTotal(raw.committedTotal))) {
+    return undefined;
+  }
+  if (version === 2) {
+    const committedTotal = raw.committedTotal as CommittedTotal;
+    const subscriptionCount = isRecord(raw.subscription) && Array.isArray(raw.subscription.agents)
+      ? raw.subscription.agents.length
+      : 0;
+    const providerCount = Array.isArray(raw.providers) ? raw.providers.length : 0;
+    if (committedTotal.totalSubs !== subscriptionCount + providerCount) return undefined;
+    if ((raw.mode === "empty" || raw.mode === "error") &&
+        (raw.providers !== null || committedTotal.amountUsd !== null ||
+         committedTotal.totalSubs !== 0)) {
+      return undefined;
+    }
+  }
 
   const snapshot = raw as StatuslineSnapshot;
   if (snapshot.mode === "metered" && (!snapshot.metered || snapshot.subscription)) return undefined;
@@ -1164,19 +1354,50 @@ function isRefresh(value: unknown): boolean {
         .includes(String(value.errorCode));
 }
 
-function isSubscription(value: unknown): boolean {
+function isSubscription(value: unknown, version: 1 | 2): boolean {
   return isRecord(value) && hasExactKeys(value, ["agents"]) && Array.isArray(value.agents) &&
-    value.agents.length >= 1 && value.agents.length <= 2 && value.agents.every(isSubscriptionAgent) &&
+    value.agents.length >= 1 && value.agents.length <= 2 &&
+    value.agents.every((agent) => isSubscriptionAgent(agent, version)) &&
     uniqueAgents(value.agents);
 }
 
-function isSubscriptionAgent(value: unknown): boolean {
-  return isRecord(value) && hasExactKeys(value, [
-    "agent", "billing", "planId", "apiEquivalent", "limits", "pressure"
-  ]) && isAgent(value.agent) && value.billing === "subscription" && isPlanId(value.planId) &&
+function isSubscriptionAgent(value: unknown, version: 1 | 2): boolean {
+  const keys = version === 1
+    ? ["agent", "billing", "planId", "apiEquivalent", "limits", "pressure"]
+    : ["agent", "billing", "planId", "committedUsdPerMonth", "apiEquivalent", "limits", "pressure"];
+  return isRecord(value) && hasExactKeys(value, keys) &&
+    isAgent(value.agent) && value.billing === "subscription" && isPlanId(value.planId) &&
+    (version === 1 || nullableUsd(value.committedUsdPerMonth)) &&
     isApiWindows(value.apiEquivalent) && Array.isArray(value.limits) && value.limits.length <= 2 &&
     value.limits.every(isLimit) && new Set(value.limits.map((limit) => (limit as Record<string, unknown>).kind)).size === value.limits.length &&
     (value.pressure === null || value.pressure === "extra_usage_credits_exhausted");
+}
+
+function isProviderSubscriptions(value: unknown): boolean {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 5 &&
+    value.every(isProviderSubscription) && uniqueValues(value, "provider");
+}
+
+function isProviderSubscription(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, [
+    "provider", "billing", "planLabel", "committedUsdPerMonth", "billed30d"
+  ]) && typeof value.provider === "string" && value.provider.length > 0 &&
+    value.provider.length <= 32 && /^[a-z][a-z0-9-]*$/.test(value.provider) &&
+    value.billing === "subscription" &&
+    (value.planLabel === null || (typeof value.planLabel === "string" &&
+      value.planLabel.length > 0 && value.planLabel.length <= 64)) &&
+    nullableUsd(value.committedUsdPerMonth) && isBilledWindow(value.billed30d);
+}
+
+function isCommittedTotal(value: unknown): boolean {
+  if (!isRecord(value) || !hasExactKeys(value, ["amountUsd", "pricedSubs", "totalSubs"])) {
+    return false;
+  }
+  if (!nullableUsd(value.amountUsd) || !isCount(value.pricedSubs) || !isCount(value.totalSubs)) {
+    return false;
+  }
+  if (Number(value.pricedSubs) > Number(value.totalSubs)) return false;
+  return (value.amountUsd === null) === (value.pricedSubs === 0);
 }
 
 function isLimit(value: unknown): boolean {

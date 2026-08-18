@@ -85,8 +85,9 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
     expect(html).not.toContain("Board-ready");
 
     const apply = await runCli(["apply", "--path", dir]);
-    expect(apply.stdout).toContain("reviewing a draft aibill optimization plan");
-    expect(apply.stdout).toContain("not a guaranteed-savings instruction");
+    expect(apply.stdout).toContain("NO SCOPED CHANGE CANDIDATE");
+    expect(apply.stdout).toContain("did not find one action candidate");
+    expect(apply.stdout).toContain("Do not invent a token-cutting change");
     expect(apply.stdout).not.toContain("unmapped-client");
     expect(apply.stdout).not.toContain("Margin at risk");
   }, 15_000);
@@ -157,8 +158,9 @@ describe("command-sequence invariants (fixture logs, shared state)", () => {
 
     const apply = await runCli(["apply", "--path", dir]);
     expect(apply.exitCode).toBe(0);
-    expect(apply.stdout).toContain("reviewing a draft aibill optimization plan");
-    expect(apply.stdout).toContain("not a guaranteed-savings instruction");
+    expect(apply.stdout).toContain("NO SCOPED CHANGE CANDIDATE");
+    expect(apply.stdout).toContain("did not find one action candidate");
+    expect(apply.stdout).toContain("Do not invent a token-cutting change");
     expect(apply.stdout).not.toContain("unmapped-client");
     expect(apply.stdout).not.toContain("Margin at risk");
 
