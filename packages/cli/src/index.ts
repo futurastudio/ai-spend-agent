@@ -33,6 +33,9 @@ import {
   buildTokenReductionBaselineV0,
   aibillCommandV0,
   aibillImproveCommandV0,
+  decodeAgentDraftTokenV1,
+  looksLikeAgentDraftToken,
+  screenAgentDraftSentence,
   attributeUsageRecords,
   buildUsageGlance,
   buildActivitySnapshot,
@@ -254,6 +257,12 @@ type ParsedArgs = {
   quality?: "held" | "regressed" | "missing";
   approvedAt?: string;
   appliedAt?: string;
+  /** Raw ab1.… token from draft_improve_command (improve only; prefill only). */
+  agentDraftToken?: string;
+  /** Strict UTC Z-form time prefill for the record sitting (improve only). */
+  recordAppliedAt?: string;
+  /** The agent's REPORTED canary result — a claim line, never a prefill. */
+  recordCanary?: "passed" | "failed";
   changeDigest?: string;
   rollbackDigest?: string;
   canaryDigest?: string;
@@ -6547,11 +6556,23 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--start-time", "--end-time", "--org", "--enterprise", "--account-id",
     "--interval", "--cycles", "--canary", "--quality", "--change-digest",
     "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
-    "--pr", "--business-outcome"
+    "--pr", "--business-outcome",
+    "--draft", "--record-applied-at", "--record-canary"
   ]);
   const numericValueFlags = new Set([
     "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles", "--pr"
   ]);
+  // A repeated --draft/--record-* flag means the pasted line was assembled
+  // from two commands: a parse error, never a silent last-wins (§2b, m11).
+  const seenOnceOnlyFlags = new Set<string>();
+  const onceOnly = (flag: string): boolean => {
+    if (seenOnceOnlyFlags.has(flag)) {
+      parsed.parseErrors.push(`${flag} may appear once`);
+      return false;
+    }
+    seenOnceOnlyFlags.add(flag);
+    return true;
+  };
 
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -6617,6 +6638,52 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (next) {
         if (arg === "--approved-at") parsed.approvedAt = next;
         else parsed.appliedAt = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--draft") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--draft")) {
+          if (looksLikeAgentDraftToken(next)) {
+            parsed.agentDraftToken = next;
+          } else {
+            parsed.parseErrors.push(
+              "--draft must be the single ab1.… token from draft_improve_command; do not hand-build or quote it"
+            );
+          }
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--record-applied-at") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--record-applied-at")) {
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z$/.test(next)) {
+            parsed.recordAppliedAt = next;
+          } else {
+            parsed.parseErrors.push(
+              "--record-applied-at must be a UTC Z time, e.g. 2026-08-18T09:12:00Z"
+            );
+          }
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--record-canary") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--record-canary")) {
+          if (next === "passed" || next === "failed") {
+            parsed.recordCanary = next;
+          } else {
+            parsed.parseErrors.push("--record-canary must be passed or failed");
+          }
+        }
         index += 1;
       }
       continue;
@@ -6909,9 +6976,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
+    // A11 (copy polish on the existing unknown-flag rejection): quoted
+    // per-sentence draft flags never existed — point at the one-token design.
+    const draftFlagHint =
+      arg === "--draft-change" || arg === "--draft-rollback" || arg === "--draft-canary"
+        ? " — agent drafts travel as one --draft token from draft_improve_command, not as quoted sentences"
+        : "";
     parsed.parseErrors.push(
       arg.startsWith("-")
-        ? `unknown flag "${arg}"`
+        ? `unknown flag "${arg}"${draftFlagHint}`
         : `unexpected argument "${arg}"`
     );
   }

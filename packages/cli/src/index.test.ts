@@ -230,6 +230,53 @@ describe("zero-key evidence-first receipt", () => {
     expect(swallowedShortFlag.stderr).toContain('unknown flag "-x"');
   });
 
+  it("rejects malformed, quoted, and duplicated agent-draft flags at parse (QA 3, 11, 20, A11)", async () => {
+    const badCharset = await runCli(["improve", "--draft", "ab1.has.dots+and=equals"]);
+    expect(badCharset.exitCode).toBe(1);
+    expect(badCharset.stderr).toContain(
+      "--draft must be the single ab1.… token from draft_improve_command"
+    );
+
+    const oversized = await runCli(["improve", "--draft", `ab1.${"A".repeat(20_000)}`]);
+    expect(oversized.exitCode).toBe(1);
+    expect(oversized.stderr).toContain("--draft must be the single ab1.… token");
+
+    const duplicated = await runCli([
+      "improve", "--draft", `ab1.${"A".repeat(24)}`, "--draft", `ab1.${"B".repeat(24)}`
+    ]);
+    expect(duplicated.exitCode).toBe(1);
+    expect(duplicated.stderr).toContain("--draft may appear once");
+
+    const offsetTime = await runCli([
+      "improve", "--record-applied-at", "2026-08-18T09:12:00+02:00"
+    ]);
+    expect(offsetTime.exitCode).toBe(1);
+    expect(offsetTime.stderr).toContain(
+      "--record-applied-at must be a UTC Z time, e.g. 2026-08-18T09:12:00Z"
+    );
+
+    const duplicatedTime = await runCli([
+      "improve",
+      "--record-applied-at", "2026-08-18T09:12:00Z",
+      "--record-applied-at", "2026-08-18T09:13:00Z"
+    ]);
+    expect(duplicatedTime.exitCode).toBe(1);
+    expect(duplicatedTime.stderr).toContain("--record-applied-at may appear once");
+
+    const badCanary = await runCli(["improve", "--record-canary", "maybe"]);
+    expect(badCanary.exitCode).toBe(1);
+    expect(badCanary.stderr).toContain("--record-canary must be passed or failed");
+
+    const quotedSentenceFlag = await runCli([
+      "improve", "--draft-change", "Start with fewer files."
+    ]);
+    expect(quotedSentenceFlag.exitCode).toBe(1);
+    expect(quotedSentenceFlag.stderr).toContain('unknown flag "--draft-change"');
+    expect(quotedSentenceFlag.stderr).toContain(
+      "agent drafts travel as one --draft token from draft_improve_command, not as quoted sentences"
+    );
+  });
+
   it("sanitizes hostile unknown arguments", async () => {
     const result = await runCli([`--bad\u001b[31m-sk-${"x".repeat(24)}`]);
 
