@@ -172,25 +172,61 @@ function stripEnvPrefixes(tokens: string[]): string[] {
   return tokens.slice(index);
 }
 
+/**
+ * §2f rule 2 (AGENT_NATIVE_LOOP_DESIGN.md): a pipe straight into an
+ * interpreter, spaced or not — `|sh`, `curl …|bash`, `|python3 -c …`.
+ */
+const pipeToInterpreterPattern =
+  /\|\s*(?:sh|bash|zsh|fish|dash|node|python3?|perl|ruby|pwsh)\b/i;
+
+/** §2f rule 4: free-standing multi-letter short flag (` -rf`), corroboration only. */
+const multiLetterShortFlagPattern = /(?:^|\s)-[A-Za-z]{2,}(?=\s|$)/;
+
 function looksLikeShellCommand(answer: string): boolean {
   if (/^[$%#>] ?/.test(answer)) return true;
   if (/&&|\|\||`|\$\(|>>|<<|2>&1| \| | > | < /.test(answer)) return true;
+  if (pipeToInterpreterPattern.test(answer)) return true;
   if (/(?:^|\s)--[A-Za-z][\w-]*/.test(answer)) return true;
   if (/(?:^|\s)-[A-Za-z](?=\s|$)/.test(answer)) return true;
   // PowerShell Verb-Noun cmdlet shape (Get-ChildItem, Remove-Item …).
   if (/^[A-Z][a-z]+-[A-Z][A-Za-z]+(?:\s|$)/.test(answer)) return true;
-  const tokens = stripEnvPrefixes(answer.split(/\s+/).filter(Boolean));
+  // §2f rule 1: strip any leading run of whitespace/quote/chain sigils
+  // before first-token analysis (covers `"; rm …`, `'; …`, `| sh`, `& …`
+  // fragments). If the strip removed a `;`, `|`, or `&`, the text STARTS
+  // like a command chain — that is a reject on its own. A plain leading
+  // quotation mark followed by words strips harmlessly and never rejects.
+  const leadingSigils = /^[\s"'`;|&]+/.exec(answer)?.[0] ?? "";
+  if (/[;|&]/.test(leadingSigils)) return true;
+  const body = answer.slice(leadingSigils.length);
+  const tokens = stripEnvPrefixes(body.split(/\s+/).filter(Boolean));
+  // Second signals, shared by first-token ambiguity and §2f rule 3: a
+  // path-like token, a file extension, or a multi-letter short flag
+  // (`rm -rf …` — rule 4; needs whitespace before the `-`, so hyphenated
+  // words like `well-known` or `re-use` can never match).
+  const hasPathToken = tokens.some((token) =>
+    /^(?:\/|\.\/|\.\.\/|~\/)/.test(token) || token.includes("/"));
+  const hasExtension = pathExtensionPattern.test(body);
+  const hasShortFlag = multiLetterShortFlagPattern.test(body);
   const first = stripQuotes(tokens[0] ?? "").toLowerCase();
   if (unambiguousBinaries.has(first)) return true;
   if (ambiguousVerbs.has(first)) {
     // Ambiguous English verbs reject only with a second signal: a path-like
-    // token, a file extension, or a terse all-lowercase fragment that reads
-    // like a command line rather than a sentence.
-    const hasPathToken = tokens.some((token) =>
-      /^(?:\/|\.\/|\.\.\/|~\/)/.test(token) || token.includes("/"));
-    const hasExtension = pathExtensionPattern.test(answer);
-    const terseLowercase = tokens.length <= 2 && answer === answer.toLowerCase();
-    return hasPathToken || hasExtension || terseLowercase;
+    // token, a file extension, a corroborating flag, or a terse
+    // all-lowercase fragment that reads like a command line, not a sentence.
+    const terseLowercase = tokens.length <= 2 && body === body.toLowerCase();
+    if (hasPathToken || hasExtension || hasShortFlag || terseLowercase) return true;
+  }
+  // §2f rule 3: `;` chained command starts. A `;` followed by an unambiguous
+  // binary rejects outright; followed by an ambiguous verb it rejects only
+  // with a second signal — English semicolons ("…workflow; keep the earlier
+  // settings", "…change; go back to the prior flow") survive.
+  for (const chained of body.matchAll(/;\s*([^\s;|&]+)/g)) {
+    const chainedFirst = stripQuotes(chained[1]!).toLowerCase();
+    if (unambiguousBinaries.has(chainedFirst)) return true;
+    if (ambiguousVerbs.has(chainedFirst) &&
+        (hasPathToken || hasExtension || hasShortFlag)) {
+      return true;
+    }
   }
   return false;
 }
