@@ -11,7 +11,7 @@
  * with copy, not a crash.
  */
 
-import { classifyGuidedAnswer } from "./guidedAnswer.js";
+import { classifyGuidedAnswer, looksLikeCredential } from "./guidedAnswer.js";
 import { sanitizeLocalActivityText } from "./localAgentLogs.js";
 
 /** `ab1` = aibill draft v1; `.` is outside base64url so the prefix is unambiguous. */
@@ -195,10 +195,19 @@ export type AgentDraftSentenceVerdict =
  * rejections never echo the text.
  */
 export function screenAgentDraftSentence(sentence: string): AgentDraftSentenceVerdict {
-  // Sanitize FIRST (§2c): a credential-shaped fragment is dropped before it
-  // can reach classification output, so no rejection reason can echo it. An
-  // over-long sentence is rejected by the classifier's own length rule, with
-  // its own copy — never silently truncated.
+  // A credential anywhere in the RAW draft sets the whole field aside (the
+  // never-echoed A3 fallback path). Sanitizing it away and accepting the
+  // mutated remainder would record a sentence nobody wrote under the
+  // "Drafted with your agent" label (impl QA m-1).
+  if (looksLikeCredential(sentence)) {
+    return {
+      ok: false,
+      reason: "That draft contains something credential-shaped. aibill never stores credentials — the draft was set aside."
+    };
+  }
+  // Sanitize before classification so no rejection reason can echo raw
+  // fragments. An over-long sentence is rejected by the classifier's own
+  // length rule, with its own copy — never silently truncated.
   const sanitized = sanitizeLocalActivityText(sentence).trim();
   const verdict = classifyGuidedAnswer("prose", sanitized);
   if (verdict.outcome === "accept") {

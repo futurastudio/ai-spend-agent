@@ -114,7 +114,7 @@ const reservedVocabulary = new Set([
 const extraCredentialPattern =
   /(authorization\s*:\s*(?:bearer|basic)\s+\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[ _-]?key|token|password|secret)\s*[:=]\s*\S+)/i;
 
-function looksLikeCredential(answer: string): boolean {
+export function looksLikeCredential(answer: string): boolean {
   return isCredentialLike(answer) || extraCredentialPattern.test(answer);
 }
 

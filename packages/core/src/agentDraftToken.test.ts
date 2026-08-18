@@ -195,6 +195,16 @@ describe("agent draft token codec", () => {
 });
 
 describe("screenAgentDraftSentence", () => {
+  it("sets aside a raw draft containing a credential — never sanitize-and-accept (impl QA m-1)", () => {
+    const secret = "sk-abc12345678901234567890";
+    const verdict = screenAgentDraftSentence(`Rotate ${secret} before the next task starts`);
+    expect(verdict.ok).toBe(false);
+    if (!verdict.ok) {
+      expect(verdict.reason).toContain("set aside");
+      expect(verdict.reason).not.toContain(secret);
+    }
+  });
+
   it("accepts plain prose and NFC-normalizes it", () => {
     const verdict = screenAgentDraftSentence("Restore the prior session workflow.");
     expect(verdict).toEqual({ ok: true, value: "Restore the prior session workflow." });
