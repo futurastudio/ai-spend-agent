@@ -36,3 +36,32 @@ export function aibillImproveCommandV0(
     delivery
   );
 }
+
+/** Published semver shape a composed pin must have (charset-safe by regex). */
+const pinnableVersionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Version-pinned command for machine-composed lines (M4c): a command an AI
+ * client relays to a human must be reproducible and must not silently
+ * resolve to a different release, so `draft_improve_command` pins to the
+ * composing package's own version (`npx aibill@<version> …`). A version
+ * that is not a plain semver falls back to the unpinned published command
+ * rather than composing an unrunnable line. In source-preview builds the
+ * checkout command needs no pin.
+ *
+ * Release gate (n2): the coordinated release must also prove the pinned
+ * version EXISTS on the public registry and supports the composed flags —
+ * the packed-install gate described on AIBILL_IMPROVE_DELIVERY_V0 is the
+ * natural home for that check; QA 24 asserts only that the pin is present.
+ */
+export function aibillPinnedCommandV0(
+  args: string,
+  version: string,
+  delivery: AibillImproveDeliveryV0 = AIBILL_IMPROVE_DELIVERY_V0
+): string {
+  const commandArgs = args.trim();
+  if (delivery === "source_preview" || !pinnableVersionPattern.test(version)) {
+    return aibillCommandV0(commandArgs, delivery);
+  }
+  return `npx aibill@${version}${commandArgs.length > 0 ? ` ${commandArgs}` : ""}`;
+}

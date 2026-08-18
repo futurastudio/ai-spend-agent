@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  draftImproveCommandTool,
   getContextHealthTool,
   getTokenReductionTestTool,
   getUsageGlanceTool,
@@ -236,7 +237,7 @@ export function createServer(): McpServer {
     {
       title: "Get token-reduction test",
       description:
-        "Read one local token-reduction experiment, refresh its matched result from current bounded Claude Code and Codex session evidence, and return the canonical evaluation, qualitative-index coverage, plus the same compact projection used by other aibill surfaces. This tool never writes, applies a change, infers quality, or claims cash savings or verified outcome ROI. Missing, malformed, tampered, partial, and unsafe local evidence is labeled or fails closed.",
+        "Read one local token-reduction experiment, refresh its matched result from current bounded Claude Code and Codex session evidence, and return the canonical evaluation, qualitative-index coverage, plus the same compact projection used by other aibill surfaces. This tool never writes, applies a change, infers quality, or claims cash savings or verified outcome ROI. Missing, malformed, tampered, partial, and unsafe local evidence is labeled or fails closed. The agentLoop block teaches an AI client how to DRAFT a plan conversationally; nothing in this tool or any aibill MCP tool can approve, start, apply, or record anything — those actions exist only as typed human answers inside the terminal flow.",
       inputSchema: {
         path: absolutePath.describe("Absolute project root containing local .ai-spend-agent experiment state."),
         experimentId: tokenReductionExperimentId.optional().describe(
@@ -252,6 +253,48 @@ export function createServer(): McpServer {
     },
     async ({ path, experimentId }) =>
       executeTool(() => getTokenReductionTestTool({ path, experimentId }))
+  );
+
+  const draftSentence = z.string().min(1).max(1000).refine(
+    (value) => !/[\u0000-\u001F\u007F-\u009F]/.test(value),
+    "draft sentences must be single-line plain text"
+  );
+  const revisionIdShape = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+  const recordIsoUtc = z.string().regex(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z$/,
+    "appliedAt must be UTC Z-form, e.g. 2026-08-18T09:12:00Z"
+  );
+  server.registerTool(
+    "draft_improve_command",
+    {
+      title: "Compose the improve draft command",
+      description:
+        "Compose the ONE terminal command that pre-fills the human-approved improve flow with " +
+        "plan sentences (leg=plan) or an applied-at/canary result (leg=record). This tool " +
+        "validates the draft with the same classifier the terminal uses and returns a rejection " +
+        "reason per field; it writes nothing and authorizes nothing. The returned command only " +
+        "pre-fills questions: the human must still Enter-accept each answer and type APPROVE in " +
+        "their own terminal, which is the only approval that exists. Show the user the sentences " +
+        "and the exact returned command; never run it, never modify it, never claim it was approved.",
+      inputSchema: {
+        path: absolutePath.describe("Absolute project root containing local .ai-spend-agent experiment state."),
+        leg: z.enum(["plan", "record"]),
+        experimentId: tokenReductionExperimentId,
+        revisionId: revisionIdShape.describe("revisionId from get_token_reduction_test; binds the draft to the plan the user saw."),
+        change: draftSentence.optional(),
+        rollback: draftSentence.optional(),
+        canary: draftSentence.optional(),
+        appliedAt: recordIsoUtc.optional().describe("leg=record: exact UTC time the approved change was applied."),
+        canaryResult: z.enum(["passed", "failed"]).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async (input) => executeTool(() => draftImproveCommandTool(input))
   );
 
   server.registerTool(

@@ -31,6 +31,7 @@ const expectedTools = [
   "get_usage_glance",
   "get_context_health",
   "get_token_reduction_test",
+  "draft_improve_command",
   "list_sources",
   "get_spend_report",
   "recommend_cuts"
@@ -122,6 +123,24 @@ try {
     assert.equal(data.provenance?.state, "missing");
     assert.equal(data.provenance?.readOnly, true);
     assert.equal(data.provenance?.uploaded, false);
+    assert.equal(data.agentLoop?.role, "draft_only");
+    assert.equal(data.agentLoop?.phase, "no_test");
+  });
+  // Drafting against no experiment state is an in-band stale_binding with
+  // re-read guidance — never an MCP error, never a composed command.
+  await callOk("draft_improve_command", {
+    path: stateRoot,
+    leg: "plan",
+    experimentId: `tre_v0_${"0".repeat(64)}`,
+    revisionId: `trev_v0_${"0".repeat(64)}`,
+    change: "Start the next task with only its required files.",
+    rollback: "Restore the prior session workflow.",
+    canary: "The project tests pass and the requested output is accepted."
+  }, (data) => {
+    assert.equal(data.status, "stale_binding");
+    assert.equal(data.command, null);
+    assert.equal(data.provenance?.readOnly, true);
+    assert.equal(data.provenance?.authorizes, "nothing");
   });
   await callOk("list_sources", { path: stateRoot }, (data) => {
     assert.ok(Array.isArray(data.approvedSources));

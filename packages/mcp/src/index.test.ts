@@ -2591,10 +2591,18 @@ describe("MCP protocol contract", () => {
       "get_usage_glance",
       "get_context_health",
       "get_token_reduction_test",
+      "draft_improve_command",
       "list_sources",
       "get_spend_report",
       "recommend_cuts"
     ]);
+    expect(tools.tools.find((tool) => tool.name === "draft_improve_command")?.annotations)
+      .toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
     expect(tools.tools.find((tool) => tool.name === "sync_provider_spend")?.annotations).toMatchObject({
       destructiveHint: false,
       openWorldHint: true
