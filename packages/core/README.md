@@ -41,9 +41,11 @@ keep provenance and confidence labels truthful: reserve `verified` for
 official provider-reported financial evidence, keep modeled/local value
 `estimated` or `missing`, and leave unvalidated adapters `untested`.
 
-This is the open foundation for aibill's financial-accountability mission. It
-does not yet implement company-wide ownership, accepted outcomes, approvals,
-invoice reconciliation, or ROI.
+This is the open foundation for aibill's financial-accountability mission. The
+unreleased source preview includes contracts for locally confirmed ownership,
+local self-attested approvals, and opt-in accepted GitHub outcomes. Those are
+not company-wide identity, RBAC, approval routing, invoice reconciliation, or
+verified business ROI; the public npm v0.8.1 package predates this preview.
 
 Local API-equivalent estimates, subscription context, and official
 provider-reported cost are separate concepts and must not be added together.

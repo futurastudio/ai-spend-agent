@@ -1,4 +1,6 @@
 import { lstat, mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +17,7 @@ import {
 } from "./scanGuard.js";
 
 const fakeHome = "/Users/testuser";
+const execFileAsync = promisify(execFile);
 
 describe("shared unsafe-scan-root guard (CLI + MCP)", () => {
   it("refuses the filesystem root", () => {
@@ -93,5 +96,69 @@ describe("shared unsafe-scan-root guard (CLI + MCP)", () => {
     expect(await readSafeStateText(stateDir, "spend.json")).toBe('{"safe":true}\n');
     const info = await lstat(join(stateDir, "spend.json"));
     expect(info.mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses permissive state directories on reads and privately migrates them only on an explicit write", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ai-spend-state-permissions-"));
+    const stateDir = join(root, ".ai-spend-agent");
+    await mkdir(stateDir, { mode: 0o755 });
+
+    await expect(resolveSafeStateDirectory(root)).rejects.toThrow(
+      /permissions expose private state metadata/u
+    );
+    await expect(resolveSafeStateDirectory(root, { create: true })).resolves.toBe(
+      await realpath(stateDir)
+    );
+    expect((await lstat(stateDir)).mode & 0o777).toBe(0o700);
+  });
+
+  it("bounds attacker-authored state before allocating or parsing it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ai-spend-state-bounded-"));
+    const stateDir = await resolveSafeStateDirectory(root, { create: true });
+    await writeFile(join(stateDir, "large.json"), "12345", { mode: 0o600 });
+
+    await expect(readSafeStateText(stateDir, "large.json", { maxBytes: 4 }))
+      .rejects.toThrow(/exceeds 4 bytes/u);
+    expect(await readSafeStateText(stateDir, "large.json", { maxBytes: 5 })).toBe("12345");
+  });
+
+  it("keeps a newly created private state directory out of git status", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ai-spend-state-git-ignore-"));
+    await execFileAsync("git", ["init", "--quiet", root]);
+    const stateDir = await resolveSafeStateDirectory(root, { create: true });
+    await writeSafeStateText(stateDir, "project-accountability.json", '{"private":true}\n');
+
+    const { stdout } = await execFileAsync("git", ["-C", root, "status", "--porcelain"]);
+    expect(stdout).toBe("");
+    expect(await readFile(join(stateDir, ".gitignore"), "utf8")).toBe("*\n");
+    expect((await lstat(join(stateDir, ".gitignore"))).mode & 0o777).toBe(0o600);
+  });
+
+  it.each(["", "*\n!spend.json\n"])(
+    "rejects a repository-authored unsafe state ignore marker: %j",
+    async (marker) => {
+      const root = await mkdtemp(join(tmpdir(), "ai-spend-state-hostile-ignore-"));
+      await execFileAsync("git", ["init", "--quiet", root]);
+      const stateDir = join(root, ".ai-spend-agent");
+      await mkdir(stateDir, { mode: 0o700 });
+      await writeFile(join(stateDir, ".gitignore"), marker, { mode: 0o600 });
+
+      await expect(resolveSafeStateDirectory(root, { create: true }))
+        .rejects.toThrow(/exact private aibill marker|private aibill marker/u);
+      expect(await readFile(join(stateDir, ".gitignore"), "utf8")).toBe(marker);
+    }
+  );
+
+  it("rejects state that is already tracked even when its marker looks private", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ai-spend-state-tracked-"));
+    await execFileAsync("git", ["init", "--quiet", root]);
+    const stateDir = join(root, ".ai-spend-agent");
+    await mkdir(stateDir, { mode: 0o700 });
+    await writeFile(join(stateDir, ".gitignore"), "*\n", { mode: 0o600 });
+    await writeFile(join(stateDir, "spend.json"), '{"private":true}\n', { mode: 0o600 });
+    await execFileAsync("git", ["-C", root, "add", "-f", ".ai-spend-agent/spend.json"]);
+
+    await expect(resolveSafeStateDirectory(root, { create: true }))
+      .rejects.toThrow(/already tracked by Git/u);
   });
 });

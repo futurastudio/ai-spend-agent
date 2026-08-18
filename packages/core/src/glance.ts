@@ -18,6 +18,8 @@ import {
   localAgentFormatDescriptors,
   localAgentFormatSupports
 } from "./localAgentFormats/registry.js";
+import type { ActionVerificationProjectionV0 } from "./actionPlanner.js";
+import { aibillImproveCommandV0 } from "./runtimeCommands.js";
 
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -151,6 +153,12 @@ export type GlanceProvenance = {
     execution: "copy_prompt";
     automaticExecution: false;
   };
+  tokenExperiment: {
+    source: "canonical_action_verification_projection" | "not_available";
+    calculation: "core_experiment_evaluator";
+    cohort: "matched_local_sessions";
+    automaticExecution: false;
+  };
   network: {
     uploaded: false;
   };
@@ -161,6 +169,12 @@ export type UsageGlanceSnapshot = {
   generatedAt: string;
   coverage: {
     filesParsed: number;
+    qualitative: {
+      status: "complete" | "partial" | "unknown";
+      selectedFiles: number;
+      readCompletely: number;
+      skippedForBudget: number;
+    };
     supportedTranscriptAgents: Array<LocalAgentCall["agent"]>;
     detectedAgents: Array<LocalAgentCall["agent"]>;
     rateLimitMetadata: Array<{
@@ -176,8 +190,17 @@ export type UsageGlanceSnapshot = {
   limits: GlanceLimit[];
   focus: GlanceFocus | null;
   anomaly: GlanceAnomaly | null;
-  sessionHealth: ContextHealthResult;
+  sessionHealth: ContextHealthResult & {
+    /** Same bounded qualitative-coverage contract returned by the CLI context view. */
+    qualitativeCoverage: UsageGlanceSnapshot["coverage"]["qualitative"];
+  };
   primaryAction: GlancePrimaryAction;
+  /**
+   * Compact, canonical read projection of one locally persisted token test.
+   * The experiment evaluator owns every count, percentage, and evidence label;
+   * Glance only carries this projection and never recalculates it.
+   */
+  tokenExperiment?: ActionVerificationProjectionV0;
   caveats: string[];
 };
 
@@ -186,6 +209,8 @@ export type BuildUsageGlanceOptions = {
   activeWithinMinutes?: number;
   focusWindowDays?: number;
   filesParsed?: number;
+  /** Bounded qualitative/action coverage. Partial evidence cannot drive a global focus/action. */
+  qualitativeCoverage?: UsageGlanceSnapshot["coverage"]["qualitative"];
   detectedAgents?: Array<LocalAgentCall["agent"]>;
   /** Locally detected or explicitly declared subscription/API billing modes. */
   detectedPlans?: DetectedPlan[];
@@ -193,6 +218,8 @@ export type BuildUsageGlanceOptions = {
   limitCalls?: LocalAgentCall[];
   /** Canonical result shared with CLI/MCP. Falls back to session-only health. */
   contextHealth?: ContextHealthResult;
+  /** Must come from buildActionVerificationProjectionV0; Glance never evaluates it. */
+  actionVerificationProjection?: ActionVerificationProjectionV0;
 };
 
 type SessionGroup = {
@@ -267,17 +294,39 @@ export function buildUsageGlance(
   const focusSessions = latest?.project && !isGenericProject(latest.project)
     ? windowSessions.filter((session) => session.project === latest.project)
     : windowSessions;
-  const focus = buildMainFocus(focusSessions, focusWindowDays, now);
-  const sessionHealth = suppliedContextHealth ?? buildContextHealth({ calls: safeCalls, now });
-  const anomaly = anomalyFromContextHealth(sessionHealth);
-  const primaryAction = buildPrimaryAction({
-    currentSession,
-    focus,
-    limits,
-    sessionHealth,
-    generatedAt: now.toISOString(),
-    filesParsed: options.filesParsed ?? 0
-  });
+  const qualitativeCoverage = options.qualitativeCoverage ?? {
+    status: "complete" as const,
+    selectedFiles: options.filesParsed ?? 0,
+    readCompletely: options.filesParsed ?? 0,
+    skippedForBudget: 0
+  };
+  const qualitativeComplete = qualitativeCoverage.status === "complete";
+  const focus = qualitativeComplete
+    ? buildMainFocus(focusSessions, focusWindowDays, now)
+    : null;
+  const baseSessionHealth = suppliedContextHealth ?? buildContextHealth({ calls: safeCalls, now });
+  const sessionHealth = {
+    ...baseSessionHealth,
+    qualitativeCoverage
+  };
+  const anomaly = qualitativeComplete ? anomalyFromContextHealth(sessionHealth) : null;
+  const primaryAction = qualitativeComplete
+    ? buildPrimaryAction({
+        currentSession,
+        focus,
+        limits,
+        sessionHealth,
+        generatedAt: now.toISOString(),
+        filesParsed: options.filesParsed ?? 0
+      })
+    : buildCoverageLimitedPrimaryAction({
+        currentSession,
+        sessionHealth,
+        coverage: qualitativeCoverage
+      });
+  const tokenExperiment = sanitizeActionVerificationProjection(
+    options.actionVerificationProjection
+  );
   const detectedAgents = (options.detectedAgents ?? uniqueAgents(safeCalls))
     .filter((agent) => localAgentFormatSupports(agent, "glance"));
   const agentsWithCurrentLimits = new Set(
@@ -301,8 +350,12 @@ export function buildUsageGlance(
     "A five-hour percentage is current for at most five hours after observation; a weekly percentage is current for at most 24 hours. Older transcript evidence is labeled stale and never drives an action.",
     "Main focus is a local summary of observed human prompts and tool activity, not elapsed time or spend; raw prompts are not returned.",
     "The primary action combines Context Health, Main focus, and reported runway locally. It only provides a copyable handoff prompt and never runs an agent automatically.",
+    "A token-test percentage compares matched local session cohorts guarded by explicit quality evidence; it is not certified savings, verified outcome ROI, or a provider bill.",
     "Claude Code transcripts do not report plan headroom. Missing limits remain unavailable instead of being inferred.",
-    "Cursor and GitHub Copilot require their provider connections because their local chat stores are not treated as authoritative billing transcripts."
+    "Cursor and GitHub Copilot require their provider connections because their local chat stores are not treated as authoritative billing transcripts.",
+    ...(qualitativeComplete ? [] : [
+      "Main focus, anomaly, and context-change handoff are unavailable because the bounded qualitative index is incomplete; no global driver was inferred from a selected subset."
+    ])
   ];
 
   return {
@@ -310,6 +363,7 @@ export function buildUsageGlance(
     generatedAt: now.toISOString(),
     coverage: {
       filesParsed: options.filesParsed ?? 0,
+      qualitative: qualitativeCoverage,
       supportedTranscriptAgents: supportedFormats.map((descriptor) => descriptor.id),
       detectedAgents,
       rateLimitMetadata: supportedFormats.map((descriptor) => ({
@@ -367,6 +421,14 @@ export function buildUsageGlance(
         execution: "copy_prompt",
         automaticExecution: false
       },
+      tokenExperiment: {
+        source: tokenExperiment
+          ? "canonical_action_verification_projection"
+          : "not_available",
+        calculation: "core_experiment_evaluator",
+        cohort: "matched_local_sessions",
+        automaticExecution: false
+      },
       network: {
         uploaded: false
       }
@@ -378,8 +440,128 @@ export function buildUsageGlance(
     anomaly,
     sessionHealth,
     primaryAction,
+    ...(tokenExperiment ? { tokenExperiment } : {}),
     caveats
   };
+}
+
+function buildCoverageLimitedPrimaryAction(input: {
+  currentSession: GlanceSession | null;
+  sessionHealth: ContextHealthResult;
+  coverage: UsageGlanceSnapshot["coverage"]["qualitative"];
+}): GlancePrimaryAction {
+  const project = safeActionMetadata(input.currentSession?.project, 80);
+  const status = input.coverage.status === "partial" ? "partial" : "not available";
+  return {
+    kind: "session_handoff",
+    intent: "inspect_current_work",
+    label: project ? `Refresh evidence · ${project}` : "Refresh evidence",
+    detail: `Main focus unavailable · qualitative index ${status}`,
+    ...(project ? { project } : {}),
+    agentPrompt: [
+      "aibill's bounded qualitative evidence is incomplete.",
+      "Do not infer a global main focus, waste cause, or context change from the selected subset.",
+      `Run \`${aibillImproveCommandV0()}\` from the exact project root to refresh the private index, then review the new evidence before editing.`
+    ].join("\n"),
+    source: "context_health_focus_and_reported_runway",
+    confidence: "low",
+    execution: "copy_prompt",
+    requiresUserConfirmation: true,
+    evidenceWindowDays: input.sessionHealth.deadContext.windowDays
+  };
+}
+
+const actionVerificationStates = new Set<ActionVerificationProjectionV0["state"]>([
+  "collect_baseline",
+  "approve_one_change",
+  "collect_post_change",
+  "review_measured_result",
+  "rollback",
+  "resolve_evidence",
+  "rolled_back",
+  "cancelled"
+]);
+const actionVerificationTones = new Set<ActionVerificationProjectionV0["tone"]>([
+  "neutral",
+  "attention",
+  "positive",
+  "negative"
+]);
+const actionVerificationEvidenceLabels = new Set<ActionVerificationProjectionV0["evidenceLabel"]>([
+  "calculated",
+  "missing"
+]);
+const actionVerificationQualityLabels = new Set<ActionVerificationProjectionV0["qualityLabel"]>([
+  "held",
+  "regressed",
+  "insufficient"
+]);
+const actionVerificationQualityEvidence = new Set<ActionVerificationProjectionV0["qualityEvidence"]>([
+  "verified",
+  "observed",
+  "user_declared",
+  "missing"
+]);
+const experimentIdPattern = /^tre_v0_[a-f0-9]{64}$/;
+const findingIdPattern = /^wf_v0_[a-f0-9]{64}$/;
+const candidateKeyPattern = /^wfc_v0_[a-f0-9]{64}$/;
+
+/**
+ * Treat the optional adapter input as untrusted at runtime. A malformed or
+ * internally inconsistent projection is omitted instead of becoming a stale
+ * or invented Glance claim. This function deliberately does not derive any
+ * experiment result.
+ */
+function sanitizeActionVerificationProjection(
+  input: ActionVerificationProjectionV0 | undefined
+): ActionVerificationProjectionV0 | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const safe = sanitizeStringMetadata(input);
+  if (
+    safe.schemaVersion !== 0 ||
+    !experimentIdPattern.test(safe.experimentId) ||
+    !findingIdPattern.test(safe.findingId) ||
+    !candidateKeyPattern.test(safe.candidateKey) ||
+    !actionVerificationStates.has(safe.state) ||
+    !actionVerificationTones.has(safe.tone) ||
+    !actionVerificationEvidenceLabels.has(safe.evidenceLabel) ||
+    !actionVerificationQualityLabels.has(safe.qualityLabel) ||
+    !actionVerificationQualityEvidence.has(safe.qualityEvidence) ||
+    !isSafeExperimentCount(safe.baselineSessions) ||
+    !isSafeExperimentCount(safe.postChangeSessions) ||
+    !isSafeExperimentCount(safe.minimumSessions) ||
+    safe.minimumSessions < 1 ||
+    (safe.reductionPercent !== null && (
+      !Number.isFinite(safe.reductionPercent) ||
+      safe.reductionPercent > 100 ||
+      safe.reductionPercent < -1_000_000
+    ))
+  ) {
+    return undefined;
+  }
+
+  const measured = safe.state === "review_measured_result";
+  const claimQualityEvidence =
+    safe.qualityEvidence === "verified" ||
+    safe.qualityEvidence === "observed" ||
+    safe.qualityEvidence === "user_declared";
+  if (safe.reductionPercent !== null) {
+    const claimEvidenceIsComplete =
+      safe.evidenceLabel === "calculated" &&
+      safe.qualityLabel === "held" &&
+      claimQualityEvidence;
+    const signMatchesState =
+      (measured && safe.reductionPercent >= 0) ||
+      (safe.state === "rollback" && safe.reductionPercent < 0);
+    if (!claimEvidenceIsComplete || !signMatchesState) return undefined;
+  } else if (measured) {
+    return undefined;
+  }
+  return safe;
+}
+
+function isSafeExperimentCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function toGlancePlan(

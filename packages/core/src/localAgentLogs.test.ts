@@ -1,13 +1,17 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   aggregateCalls,
   dedupeCumulativeSessionCalls,
+  hasCompleteQualitativeCoverage,
+  hasExactSelectedQualitativeEvidence,
   latestObservedWorkingDirectory,
   loadLocalAgentFinancialUsage,
   loadLocalAgentUsage,
+  type LocalAgentQualitativeIndexKey,
+  type LocalAgentQualitativeIndexValue,
   parseClaudeCodeTranscript,
   parseCodexRollout
 } from "./localAgentLogs.js";
@@ -81,6 +85,78 @@ describe("parseClaudeCodeTranscript", () => {
       cacheWrite5mTokens: 0,
       cacheWrite1hTokens: 500
     });
+    expect(calls[0]!.tokenComponentEvidence).toEqual({
+      inputTokens: "observed",
+      outputTokens: "observed",
+      cacheReadTokens: "observed",
+      cacheWriteTokens: "observed",
+      thoughtTokens: "not_separately_reported",
+      toolTokens: "not_separately_reported",
+      calculatedTotalTokens: "calculated_complete",
+      reportedTotalTokens: "not_reported"
+    });
+  });
+
+  it("distinguishes a provider total from a partial calculated Claude component total", () => {
+    const [withoutTotal] = parseClaudeCodeTranscript(claudeLine({}, {
+      cache_read_input_tokens: undefined,
+      cache_creation_input_tokens: undefined,
+      cache_creation: undefined
+    }));
+    expect(withoutTotal).toMatchObject({
+      tokenComponentEvidence: {
+        cacheReadTokens: "not_separately_reported",
+        cacheWriteTokens: "not_separately_reported",
+        calculatedTotalTokens: "calculated_partial",
+        reportedTotalTokens: "not_reported"
+      }
+    });
+    expect(withoutTotal?.reportedTotalTokens).toBeUndefined();
+
+    const [withTotal] = parseClaudeCodeTranscript(claudeLine({}, {
+      total_tokens: 1_800
+    }));
+    expect(withTotal).toMatchObject({
+      reportedTotalTokens: 1_800,
+      tokenComponentEvidence: {
+        calculatedTotalTokens: "calculated_complete",
+        reportedTotalTokens: "provider_reported"
+      }
+    });
+  });
+
+  it("retains Claude host version and requires the final explicit turn marker", () => {
+    const completed = [
+      claudeLine({ version: "2.1.170" }),
+      JSON.stringify({
+        type: "system",
+        subtype: "turn_duration",
+        timestamp: "2026-06-08T10:00:01.000Z",
+        sessionId: "sess-1",
+        durationMs: 1_000,
+        version: "2.1.170"
+      })
+    ].join("\n");
+
+    expect(parseClaudeCodeTranscript(completed)[0]).toMatchObject({
+      sourceVersion: "2.1.170",
+      completion: {
+        status: "completed",
+        evidence: "claude_turn_duration",
+        observedAt: "2026-06-08T10:00:01.000Z"
+      }
+    });
+
+    const resumed = [
+      completed,
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-06-08T10:00:02.000Z",
+        sessionId: "sess-1",
+        message: { content: "A later task remains in progress." }
+      })
+    ].join("\n");
+    expect(parseClaudeCodeTranscript(resumed)[0]?.completion).toBeUndefined();
   });
 
   it("keeps incomplete Claude usage as unpriced partial evidence instead of coercing it to zero", () => {
@@ -319,6 +395,174 @@ describe("parseClaudeCodeTranscript", () => {
   });
 });
 
+describe("Claude Code subagent transcript identity", () => {
+  const subagentPath =
+    "/Users/testuser/.claude/projects/-Users-testuser-agent-finops/sess-1/subagents/agent-abc123.jsonl";
+
+  it("gives subagent transcript calls their own run identity from line-level agentId", () => {
+    const content = [
+      claudeLine({ isSidechain: true, agentId: "abc123" }),
+      claudeLine({
+        isSidechain: true,
+        agentId: "abc123",
+        timestamp: "2026-06-08T10:01:00.000Z",
+        requestId: "req-sub-2",
+        message: {
+          id: "msg-sub-2",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 10, output_tokens: 20 }
+        }
+      })
+    ].join("\n");
+
+    const calls = parseClaudeCodeTranscript(content, subagentPath);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      // The host writes the parent's sessionId on every subagent line; the
+      // sessionId itself is deliberately untouched (financial identity).
+      expect(call.sessionId).toBe("sess-1");
+      expect(call.subagentId).toBe("abc123");
+      expect(call.activity?.isSubagent).toBe(true);
+    }
+  });
+
+  it("treats line-level agentId as subagent evidence even without path or sidechain markers", () => {
+    const calls = parseClaudeCodeTranscript(claudeLine({ agentId: "zed999" }));
+    expect(calls[0]?.subagentId).toBe("zed999");
+    expect(calls[0]?.activity?.isSubagent).toBe(true);
+  });
+
+  it("falls back to the subagents/ file name when lines omit agentId, and never invents one elsewhere", () => {
+    const withoutAgentId = parseClaudeCodeTranscript(
+      claudeLine({ isSidechain: true }),
+      subagentPath
+    );
+    expect(withoutAgentId[0]?.subagentId).toBe("agent-abc123");
+
+    const parentFile = parseClaudeCodeTranscript(
+      claudeLine(),
+      "/Users/testuser/.claude/projects/-Users-testuser-agent-finops/sess-1.jsonl"
+    );
+    expect(parentFile[0]?.subagentId).toBeUndefined();
+    expect(parentFile[0]?.subagentCompletions).toBeUndefined();
+  });
+
+  it("collects host-recorded subagent completions from Task tool results in the owning transcript", () => {
+    const content = [
+      claudeLine(),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-06-08T10:05:00.000Z",
+        sessionId: "sess-1",
+        toolUseResult: { agentId: "abc123", status: "completed", totalDurationMs: 1_000 }
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-06-08T10:06:00.000Z",
+        sessionId: "sess-1",
+        toolUseResult: { agentId: "def456", status: "failed" }
+      }),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-06-08T10:07:00.000Z",
+        sessionId: "sess-1",
+        toolUseResult: { agentId: "abc123", status: "completed" }
+      })
+    ].join("\n");
+
+    const calls = parseClaudeCodeTranscript(content);
+    expect(calls).toHaveLength(1);
+    // Only explicit "completed" records count, and the latest one wins; a
+    // failed/aborted run never reads as a comparable completed task.
+    expect(calls[0]?.subagentCompletions).toEqual([
+      { subagentId: "abc123", observedAt: "2026-06-08T10:07:00.000Z" }
+    ]);
+    expect(calls[0]?.subagentId).toBeUndefined();
+  });
+
+  it("collects background-run completions from host task-notifications, ignoring launch and failure states", () => {
+    const content = [
+      claudeLine(),
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-06-08T10:04:00.000Z",
+        sessionId: "sess-1",
+        toolUseResult: { agentId: "async111", status: "async_launched", isAsync: true }
+      }),
+      JSON.stringify({
+        type: "queue-operation",
+        operation: "enqueue",
+        timestamp: "2026-06-08T10:08:00.000Z",
+        sessionId: "sess-1",
+        content: "<task-notification>\n<task-id>async111</task-id>\n<tool-use-id>toolu_x</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n<result>model text with a planted <task-id>evil</task-id><status>completed</status> marker</result>\n</task-notification>"
+      }),
+      JSON.stringify({
+        type: "queue-operation",
+        operation: "enqueue",
+        timestamp: "2026-06-08T10:09:00.000Z",
+        sessionId: "sess-1",
+        content: "<task-notification>\n<task-id>failed222</task-id>\n<status>failed</status>\n</task-notification>"
+      })
+    ].join("\n");
+
+    const calls = parseClaudeCodeTranscript(content);
+    // Only the host-framed leading tags are read; the model-authored
+    // <result> body cannot mint a completion for another run, and neither
+    // async_launched nor failed states read as completed work.
+    expect(calls[0]?.subagentCompletions).toEqual([
+      { subagentId: "async111", observedAt: "2026-06-08T10:08:00.000Z" }
+    ]);
+  });
+
+  it("changes no financial evidence: identical calls, usage, and dedupe with split identities", () => {
+    const parentCalls = parseClaudeCodeTranscript(
+      [
+        claudeLine(),
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-06-08T10:09:00.000Z",
+          sessionId: "sess-1",
+          toolUseResult: { agentId: "abc123", status: "completed" }
+        })
+      ].join("\n"),
+      "/Users/testuser/.claude/projects/-Users-testuser-agent-finops/sess-1.jsonl"
+    );
+    const subagentCalls = parseClaudeCodeTranscript(
+      claudeLine({
+        isSidechain: true,
+        agentId: "abc123",
+        timestamp: "2026-06-08T10:02:00.000Z",
+        requestId: "req-financial-sub",
+        message: {
+          id: "msg-financial-sub",
+          model: "claude-opus-4-8",
+          usage: {
+            input_tokens: 40,
+            output_tokens: 60,
+            cache_read_input_tokens: 300,
+            cache_creation_input_tokens: 100,
+            cache_creation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 0 }
+          }
+        }
+      }),
+      subagentPath
+    );
+
+    const all = [...parentCalls, ...subagentCalls];
+    const deduplicated = dedupeCumulativeSessionCalls(all);
+    // The shared sessionId still keys turn-level dedupe by agent:session:call,
+    // so the added run identity removes and merges nothing.
+    expect(deduplicated).toHaveLength(all.length);
+    const totalOf = (calls: typeof all) => calls.reduce((sum, call) =>
+      sum + call.usage.inputTokens + call.usage.outputTokens +
+      (call.usage.cacheReadTokens ?? 0) +
+      (call.usage.cacheWrite5mTokens ?? 0) +
+      (call.usage.cacheWrite1hTokens ?? 0), 0);
+    expect(totalOf(deduplicated)).toBe(totalOf(all));
+    expect(totalOf(deduplicated)).toBe(100 + 200 + 1_000 + 0 + 500 + 40 + 60 + 300 + 100 + 0);
+  });
+});
+
 describe("parseCodexRollout", () => {
   const rollout = [
     JSON.stringify({ type: "session_meta", payload: { id: "codex-sess", cwd: "/Users/testuser/pitcht-com", timestamp: "2026-06-01T17:25:37.000Z" } }),
@@ -402,6 +646,60 @@ describe("parseCodexRollout", () => {
         }
       ]
     });
+  });
+
+  it("retains Codex host version and requires a matching final task completion", () => {
+    const completed = [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "codex-completed",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-06-01T17:25:37.000Z",
+          cli_version: "0.136.0-alpha.2"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.1-codex" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T17:26:00.000Z",
+        payload: { type: "task_started", turn_id: "turn-1" }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T17:30:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T17:30:01.000Z",
+        payload: { type: "task_complete", turn_id: "turn-1" }
+      })
+    ].join("\n");
+
+    expect(parseCodexRollout(completed)[0]).toMatchObject({
+      sourceVersion: "0.136.0-alpha.2",
+      completion: {
+        status: "completed",
+        evidence: "codex_task_complete",
+        observedAt: "2026-06-01T17:30:01.000Z"
+      }
+    });
+
+    const nextTaskStarted = [
+      completed,
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T17:31:00.000Z",
+        payload: { type: "task_started", turn_id: "turn-2" }
+      })
+    ].join("\n");
+    expect(parseCodexRollout(nextTaskStarted)[0]?.completion).toBeUndefined();
   });
 
   it("collects identical privacy-safe invocation evidence during the usage parse", () => {
@@ -1496,6 +1794,430 @@ describe("loadLocalAgentUsage diagnostics", () => {
       code: "directory_unreadable",
       severity: "error"
     }));
+  });
+});
+
+describe("Claude native response identity across transcript files", () => {
+  async function fixtureDirectories(prefix: string): Promise<{
+    claudeProjectsDir: string;
+    codexSessionsDir: string;
+    geminiSessionsDir: string;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), prefix));
+    const directories = {
+      claudeProjectsDir: join(root, "claude"),
+      codexSessionsDir: join(root, "codex"),
+      geminiSessionsDir: join(root, "gemini")
+    };
+    await Promise.all(Object.values(directories).map((directory) => mkdir(directory)));
+    return directories;
+  }
+
+  for (const [name, load] of [
+    ["qualitative", loadLocalAgentUsage],
+    ["financial", loadLocalAgentFinancialUsage]
+  ] as const) {
+    it(`${name} path deduplicates a copied native session response without exposing provider ids`, async () => {
+      const directories = await fixtureDirectories(`aibill-claude-${name}-copy-`);
+      const response = claudeLine();
+      await writeFile(join(directories.claudeProjectsDir, "original.jsonl"), response, "utf8");
+      await writeFile(join(directories.claudeProjectsDir, "checkpoint.jsonl"), response, "utf8");
+
+      const result = await load(directories);
+      const calls = result.calls.filter((call) => call.agent === "claude-code");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.callId).toMatch(/^callref_[a-f0-9]{64}$/);
+      expect(calls[0]?.callId).not.toContain("msg-1");
+      expect(calls[0]?.callId).not.toContain("req-1");
+      expect(result.records.find((record) => record.agentId === "claude-code")).toMatchObject({
+        quantity: 1,
+        costConfidence: "estimated"
+      });
+    });
+
+    it(`${name} path fails conflicting copies of one native response closed`, async () => {
+      const directories = await fixtureDirectories(`aibill-claude-${name}-conflict-`);
+      const original = claudeLine({}, { input_tokens: 100, output_tokens: 20 });
+      const conflicting = claudeLine({}, { input_tokens: 900, output_tokens: 200 });
+      await writeFile(join(directories.claudeProjectsDir, "original.jsonl"), original, "utf8");
+      await writeFile(join(directories.claudeProjectsDir, "checkpoint.jsonl"), conflicting, "utf8");
+
+      const result = await load(directories);
+      const calls = result.calls.filter((call) => call.agent === "claude-code");
+      expect(calls).toEqual([expect.objectContaining({
+        callId: expect.stringMatching(/^callref_[a-f0-9]{64}$/),
+        model: "conflicting-local-evidence",
+        usageSupport: "unsupported_token_shape",
+        usage: { inputTokens: 0, outputTokens: 0 }
+      })]);
+      expect(result.records.find((record) => record.agentId === "claude-code")).toMatchObject({
+        amountUsd: null,
+        costConfidence: "missing",
+        quantity: 1
+      });
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({
+        agent: "claude-code",
+        code: "unsupported_token_shape",
+        severity: "warning",
+        count: 1
+      }));
+    });
+  }
+});
+
+describe("bounded qualitative local-agent scans", () => {
+  it("preserves complete small-file results while exposing explicit coverage", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-complete-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    await writeFile(join(claudeDir, "session.jsonl"), claudeLine(), "utf8");
+    await writeFile(join(codexDir, "rollout-session.jsonl"), [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "bounded-codex",
+          cwd: "/Users/testuser/agent-finops",
+          timestamp: "2026-08-15T10:00:00.000Z"
+        }
+      }),
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-15T10:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1_000,
+              cached_input_tokens: 700,
+              output_tokens: 100
+            }
+          }
+        }
+      })
+    ].join("\n"), "utf8");
+
+    const directories = {
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      collectCodexInvocationEvidence: true
+    };
+    const legacy = await loadLocalAgentUsage(directories);
+    const bounded = await loadLocalAgentUsage({
+      ...directories,
+      qualitativeScan: { maxFileBytes: 64 * 1024, maxSourceBytes: 128 * 1024 }
+    });
+
+    expect(bounded.calls).toEqual(legacy.calls);
+    expect(bounded.records).toEqual(legacy.records);
+    expect(bounded.codexInvocationFiles).toEqual(legacy.codexInvocationFiles);
+    expect(bounded.diagnostics).toEqual(legacy.diagnostics);
+    expect(hasCompleteQualitativeCoverage(bounded)).toBe(true);
+    expect(hasCompleteQualitativeCoverage(legacy)).toBe(false);
+    expect(bounded.sourceScans).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        agent: "claude-code",
+        qualitativeCoverage: "complete",
+        qualitativeFilesEligible: 1,
+        qualitativeFilesSkippedForBudget: 0,
+        qualitativeBytesEligible: expect.any(Number),
+        qualitativeBytesRead: expect.any(Number)
+      }),
+      expect.objectContaining({
+        agent: "codex",
+        qualitativeCoverage: "complete",
+        qualitativeFilesEligible: 1,
+        qualitativeFilesSkippedForBudget: 0
+      })
+    ]));
+  });
+
+  it("reuses a file-identity-bound warm index without rereading transcript bytes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-index-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    const indexedPath = join(claudeDir, "session.jsonl");
+    await writeFile(indexedPath, claudeLine({
+      sessionId: "indexed-session"
+    }), "utf8");
+    const entries = new Map<string, LocalAgentQualitativeIndexValue>();
+    const index = {
+      read: async (key: Readonly<LocalAgentQualitativeIndexKey>) => entries.get(JSON.stringify(key)),
+      write: async (
+        key: Readonly<LocalAgentQualitativeIndexKey>,
+        value: Readonly<LocalAgentQualitativeIndexValue>
+      ) => {
+        entries.set(JSON.stringify(key), structuredClone(value) as LocalAgentQualitativeIndexValue);
+      }
+    };
+    const options = {
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      qualitativeScan: { maxFileBytes: 64 * 1024, maxSourceBytes: 128 * 1024 },
+      qualitativeIndex: index
+    };
+
+    const cold = await loadLocalAgentUsage(options);
+    const warm = await loadLocalAgentUsage(options);
+    const coldScan = cold.sourceScans.find((scan) => scan.agent === "claude-code");
+    const warmScan = warm.sourceScans.find((scan) => scan.agent === "claude-code");
+
+    expect(warm.calls).toEqual(cold.calls);
+    expect(warm.records).toEqual(cold.records);
+    expect(coldScan).toMatchObject({
+      qualitativeIndexHits: 0,
+      qualitativeBytesRead: expect.any(Number),
+      qualitativeBytesReused: 0
+    });
+    expect(coldScan?.qualitativeBytesRead).toBeGreaterThan(0);
+    expect(warmScan).toMatchObject({
+      qualitativeIndexHits: 1,
+      qualitativeBytesRead: 0,
+      qualitativeBytesReused: expect.any(Number),
+      qualitativeFilesReadCompletely: 1,
+      qualitativeCoverage: "complete"
+    });
+    expect(warmScan?.qualitativeBytesReused).toBeGreaterThan(0);
+    expect(hasExactSelectedQualitativeEvidence(warm)).toBe(true);
+
+    await writeFile(indexedPath, claudeLine({
+      sessionId: "changed-session",
+      requestId: "changed-request-with-different-size"
+    }), "utf8");
+    const changed = await loadLocalAgentUsage(options);
+    const changedScan = changed.sourceScans.find((scan) => scan.agent === "claude-code");
+    expect(changed.calls[0]?.sessionId).toBe("changed-session");
+    expect(changedScan).toMatchObject({
+      qualitativeIndexHits: 0,
+      qualitativeBytesReused: 0,
+      qualitativeBytesRead: expect.any(Number)
+    });
+    expect(changedScan?.qualitativeBytesRead).toBeGreaterThan(0);
+  });
+
+  it("fails closed when a selected transcript path is swapped to a same-size symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-symlink-swap-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    const selectedPath = join(claudeDir, "session.jsonl");
+    const outsidePath = join(root, "outside.jsonl");
+    const selectedContent = claudeLine({
+      sessionId: "safe-session",
+      cwd: join(root, "safe")
+    });
+    const outsideContent = claudeLine({
+      sessionId: "evil-session",
+      cwd: join(root, "evil")
+    });
+    expect(Buffer.byteLength(outsideContent)).toBe(Buffer.byteLength(selectedContent));
+    await writeFile(selectedPath, selectedContent, "utf8");
+    await writeFile(outsidePath, outsideContent, "utf8");
+
+    let swapped = false;
+    const index = {
+      read: async () => {
+        if (!swapped) {
+          swapped = true;
+          await unlink(selectedPath);
+          await symlink(outsidePath, selectedPath);
+        }
+        return undefined;
+      },
+      write: async () => {}
+    };
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      qualitativeScan: { maxFileBytes: 64 * 1024, maxSourceBytes: 128 * 1024 },
+      qualitativeIndex: index
+    });
+
+    expect(swapped).toBe(true);
+    expect(result.calls).toEqual([]);
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code"))
+      .toMatchObject({
+        qualitativeCoverage: "partial",
+        qualitativeFilesSelected: 1,
+        qualitativeFilesReadCompletely: 0,
+        filesParsed: 0,
+        unreadableFiles: 1
+      });
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      agent: "claude-code",
+      code: "file_unreadable",
+      severity: "error"
+    }));
+    expect(hasCompleteQualitativeCoverage(result)).toBe(false);
+    expect(hasExactSelectedQualitativeEvidence(result)).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("evil-session");
+  });
+
+  it("omits an oversized file as a whole and labels the source partial", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-partial-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    const smallPath = join(claudeDir, "small.jsonl");
+    const largePath = join(claudeDir, "large.jsonl");
+    const privateOversizedPrompt = "private-oversized-prompt-".repeat(200);
+    await writeFile(smallPath, claudeLine({
+      sessionId: "small-session",
+      requestId: "small-request",
+      message: {
+        id: "small-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 10, output_tokens: 5 }
+      }
+    }), "utf8");
+    await writeFile(largePath, [
+      JSON.stringify({
+        type: "user",
+        sessionId: "large-session",
+        message: { content: privateOversizedPrompt }
+      }),
+      claudeLine({
+        sessionId: "large-session",
+        requestId: "large-request",
+        message: {
+          id: "large-message",
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 99_999, output_tokens: 99_999 }
+        }
+      })
+    ].join("\n"), "utf8");
+    await utimes(smallPath, new Date("2026-08-15T10:00:00.000Z"), new Date("2026-08-15T10:00:00.000Z"));
+    await utimes(largePath, new Date("2026-08-15T11:00:00.000Z"), new Date("2026-08-15T11:00:00.000Z"));
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      qualitativeScan: { maxFileBytes: 1_024, maxSourceBytes: 4_096 }
+    });
+
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]?.sessionId).toBe("small-session");
+    expect(result.calls[0]?.usage.inputTokens).toBe(10);
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code"))
+      .toMatchObject({
+        qualitativeCoverage: "partial",
+        qualitativeFilesEligible: 2,
+        qualitativeFilesSkippedForBudget: 1,
+        filesParsed: 1
+      });
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      agent: "claude-code",
+      code: "qualitative_scan_incomplete",
+      severity: "warning",
+      count: 1
+    }));
+    expect(hasCompleteQualitativeCoverage(result)).toBe(false);
+    expect(hasExactSelectedQualitativeEvidence(result)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(privateOversizedPrompt);
+    expect(JSON.stringify(result)).not.toContain("large-message");
+  });
+
+  it("spends the per-source budget on the newest complete files deterministically", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-newest-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    const fixture = (sessionId: string, ordinal: number) => claudeLine({
+      timestamp: `2026-08-15T1${ordinal}:00:00.000Z`,
+      sessionId,
+      requestId: `request-${ordinal}`,
+      message: {
+        id: `message-${ordinal}`,
+        model: "claude-opus-4-8",
+        usage: { input_tokens: ordinal, output_tokens: 1 }
+      }
+    });
+    const names = ["oldest", "middle", "newest"];
+    const paths = names.map((name) => join(claudeDir, `${name}.jsonl`));
+    for (let index = 0; index < paths.length; index += 1) {
+      await writeFile(paths[index]!, fixture(names[index]!, index + 1), "utf8");
+      const modifiedAt = new Date(`2026-08-15T1${index}:00:00.000Z`);
+      await utimes(paths[index]!, modifiedAt, modifiedAt);
+    }
+    const bytes = Buffer.byteLength(fixture("middle", 2), "utf8") +
+      Buffer.byteLength(fixture("newest", 3), "utf8");
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      qualitativeScan: { maxFileBytes: 4_096, maxSourceBytes: bytes }
+    });
+
+    expect(result.calls.map((call) => call.sessionId).sort()).toEqual(["middle", "newest"]);
+    expect(result.calls.some((call) => call.sessionId === "oldest")).toBe(false);
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code"))
+      .toMatchObject({
+        qualitativeCoverage: "partial",
+        qualitativeFilesEligible: 3,
+        qualitativeFilesSkippedForBudget: 1,
+        filesParsed: 2
+      });
+  });
+
+  it("skips files proven older than the requested window without making coverage partial", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aibill-qualitative-window-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    const geminiDir = join(root, "gemini");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await mkdir(geminiDir);
+    const oldPath = join(claudeDir, "old.jsonl");
+    await writeFile(oldPath, claudeLine(), "utf8");
+    await utimes(oldPath, new Date("2026-08-01T00:00:00.000Z"), new Date("2026-08-01T00:00:00.000Z"));
+
+    const result = await loadLocalAgentUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: geminiDir,
+      // A future boundary proves all filesystem metadata predates the window,
+      // including ctime/birthtime on this newly-created fixture.
+      sinceIso: "2100-08-02T00:00:00.000Z",
+      qualitativeScan: { maxFileBytes: 1_024, maxSourceBytes: 4_096 }
+    });
+
+    expect(result.calls).toEqual([]);
+    expect(result.sourceScans.find((scan) => scan.agent === "claude-code"))
+      .toMatchObject({
+        qualitativeCoverage: "complete",
+        qualitativeFilesEligible: 0,
+        qualitativeFilesSkippedForBudget: 0,
+        filesSkippedBeforeWindow: 1
+      });
+    expect(hasCompleteQualitativeCoverage(result)).toBe(true);
+  });
+
+  it("rejects invalid byte limits before scanning", async () => {
+    await expect(loadLocalAgentUsage({
+      qualitativeScan: { maxFileBytes: 0, maxSourceBytes: 1 }
+    })).rejects.toThrow("maxFileBytes must be a positive safe integer byte limit");
   });
 });
 

@@ -1,8 +1,9 @@
-import { createReadStream } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { lstat, open, readdir, readFile, stat, type FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 import {
   canPriceTokenUsageAtScope,
   estimateTokenCostUsd,
@@ -13,7 +14,13 @@ import {
 } from "./modelPricing.js";
 import type { UsageRecord } from "./schema.js";
 import { redactSecrets } from "./discovery.js";
-import type { ParsedInvocationFile } from "./toolInvocations.js";
+import {
+  createCodexInvocationCollector,
+  isCodexInvocationCollectorSnapshot,
+  type CodexInvocationCollectorSnapshot,
+  type ParsedInvocationFile,
+  type ParsedInvocationWindowProof
+} from "./toolInvocations.js";
 import {
   localAgentFormatDescriptor,
   localAgentFormatDescriptors,
@@ -68,6 +75,11 @@ export type LocalAgentCall = {
    */
   workingDirectory?: string;
   /**
+   * Stable privacy-safe identity for `workingDirectory`. Warm indexes retain
+   * this opaque reference while deliberately omitting the absolute path.
+   */
+  workingDirectoryRef?: string;
+  /**
    * Numeric-only usage for the latest observed model turn. Codex reports this
    * separately from cumulative `total_token_usage`; Claude assistant-message
    * usage is already turn-scoped. Context Health uses this field so a long
@@ -84,8 +96,21 @@ export type LocalAgentCall = {
   usageSupport?: "complete" | "unsupported_token_shape";
   /** Provider-reported total retained when component fields are unavailable. */
   reportedTotalTokens?: number;
+  /**
+   * Parser evidence for whether each disjoint token component was actually
+   * present in the source. Numeric zeroes alone cannot distinguish a reported
+   * zero from a field that the parser had to omit/default.
+   */
+  tokenComponentEvidence?: LocalAgentTokenComponentEvidence;
   /** Optional parser/source version when the evolving session format reports it. */
   sourceVersion?: string;
+  /**
+   * Explicit host completion evidence for the current session snapshot. This proves only that the
+   * latest observed Claude turn or Codex task reached its host completion
+   * marker; it does not claim that a resumable transcript is permanently
+   * closed.
+   */
+  completion?: LocalAgentCompletionEvidence;
   /** Raw Gemini token split retained for evidence/debugging, never prompt content. */
   geminiTokenEvidence?: {
     input?: number;
@@ -98,6 +123,24 @@ export type LocalAgentCall = {
   };
   usage: TokenUsage;
   sessionId?: string;
+  /**
+   * Distinct subagent-run identity when the host shares one `sessionId`
+   * across transcript files. Claude Code stores each subagent transcript
+   * under `<sessionId>/subagents/agent-<agentId>.jsonl` with the parent's
+   * `sessionId` on every line; without this identity a parent session and
+   * all of its subagent runs would collapse into one untruthful session row.
+   * Codex subagent rollouts carry their own sessionId and never set this.
+   */
+  subagentId?: string;
+  /**
+   * Host-recorded completions of subagent runs owned by this session, taken
+   * from the parent transcript's Task tool results (`toolUseResult.agentId`
+   * with `status: "completed"`). Subagent transcript files carry no
+   * completion marker of their own, so this is the only explicit completion
+   * evidence for a subagent run. Attached to one call per session; the
+   * session-vitals join reads it across transcript files.
+   */
+  subagentCompletions?: LocalAgentSubagentCompletion[];
   /** Provider-reported plan windows embedded in the transcript, when present. */
   rateLimits?: LocalAgentRateLimitSnapshot;
   /**
@@ -105,6 +148,30 @@ export type LocalAgentCall = {
    * Raw prompt text never leaves the parser or enters the Glance snapshot.
    */
   activity?: LocalAgentActivity;
+};
+
+export type LocalAgentTokenComponentEvidence = {
+  inputTokens: "observed";
+  outputTokens: "observed";
+  cacheReadTokens: "observed" | "not_separately_reported";
+  cacheWriteTokens: "observed" | "partial" | "not_separately_reported";
+  thoughtTokens: "observed" | "not_separately_reported";
+  toolTokens: "observed" | "not_separately_reported";
+  /** Complete means the parser can form a disjoint source-faithful total. */
+  calculatedTotalTokens: "calculated_complete" | "calculated_partial";
+  reportedTotalTokens: "provider_reported" | "not_reported";
+};
+
+export type LocalAgentCompletionEvidence = {
+  status: "completed";
+  evidence: "claude_turn_duration" | "codex_task_complete";
+  observedAt: string;
+};
+
+/** One host-recorded subagent completion (see LocalAgentCall.subagentCompletions). */
+export type LocalAgentSubagentCompletion = {
+  subagentId: string;
+  observedAt: string;
 };
 
 /**
@@ -182,7 +249,254 @@ export type LocalAgentLogOptions = {
   sinceIso?: string;
   /** Collect privacy-safe Codex invocation summaries during the same JSON pass. */
   collectCodexInvocationEvidence?: boolean;
+  /**
+   * Optional fail-closed limits for qualitative/action reads. The financial
+   * loader has its own proof-based fast path; these limits protect the richer
+   * prompt/tool/activity pass from multi-gigabyte transcript histories.
+   *
+   * Files are considered newest-first within each source. A file is parsed
+   * only when it fits both limits in full. Skipped files never contribute
+   * calls, findings, invocation evidence, or zero-valued placeholders, and
+   * the returned source scan is explicitly marked partial.
+   */
+  qualitativeScan?: LocalAgentQualitativeScanPolicy;
+  /**
+   * Optional trusted private index backing warm qualitative scans. The adapter
+   * owns storage permissions/validation; keys contain a path hash and file
+   * identity, never a raw local path or transcript content.
+   */
+  qualitativeIndex?: LocalAgentQualitativeIndexAdapter;
+  /**
+   * Optional per-file cache for financial parse results. Unchanged files skip
+   * their full financial re-read; the newest file per source always parses
+   * fresh so the active session's evidence (including its raw working
+   * directory for context inference) is never served stale from a cache.
+   */
+  financialIndex?: LocalAgentFinancialIndexAdapter;
+  /**
+   * Optional ownership section of the private project index. When present,
+   * budget-skipped Codex files receive a bounded first-line header probe whose
+   * proven/unknown attribution is persisted and feeds the per-project coverage
+   * ledger. Claude transcripts get no header shortcut: their cwd is per-entry
+   * and can change mid-file.
+   */
+  ownershipIndex?: LocalAgentOwnershipIndexAdapter;
+  /**
+   * Optional checkpoint section of the private project index. When present
+   * together with `qualitativeIndex`, oversized Codex rollouts are parsed in
+   * bounded resumable slices instead of being skipped outright: each run
+   * advances at least one slice, and the file joins the index (and the
+   * per-project ledger) once its stream completes. Absent, oversized files
+   * keep today's skip-plus-header-pass behavior.
+   */
+  streamCheckpoints?: LocalAgentStreamCheckpointAdapter;
+  /**
+   * Requested project ref (`avref_…`) for the per-project coverage ledger.
+   * Only files proven to belong to a DIFFERENT ref are excluded from the
+   * blocking set; a file proven to belong to this exact ref keeps blocking
+   * until indexed — it is the oversized relevant transcript. Absent or
+   * malformed refs disable proven-foreign exclusion entirely (fail closed).
+   */
+  coverageProjectRef?: string;
 };
+
+export type LocalAgentQualitativeScanPolicy = {
+  /** Maximum UTF-8 bytes allowed for one qualitative transcript file. */
+  maxFileBytes: number;
+  /** Maximum UTF-8 bytes parsed per registered source in one scan. */
+  maxSourceBytes: number;
+  /**
+   * Byte allowance for the checkpointed streaming pass over oversized Codex
+   * rollouts in one run (default 512 MiB, roughly 4-5 s at measured
+   * throughput). Deliberately byte-metered rather than wall-clock so runs
+   * and tests are deterministic; the first scheduled file always advances by
+   * at least one complete line even at a smaller remaining allowance, which
+   * guarantees convergence.
+   */
+  maxStreamedBytesPerRun?: number;
+};
+
+export type LocalAgentQualitativeIndexKey = {
+  schemaVersion: 1;
+  parserVersion: typeof localAgentQualitativeParserVersion;
+  agent: LocalAgentFormatId;
+  /** SHA-256 of the normalized private path; the path itself is never stored. */
+  pathHash: string;
+  /** Opaque stat identity including ctime so in-place edits invalidate a hit. */
+  fileIdentity: string;
+  sinceIso: string | null;
+  collectInvocationEvidence: boolean;
+};
+
+export type LocalAgentQualitativeIndexValue = {
+  calls: LocalAgentCall[];
+  invocationFile?: ParsedInvocationFile;
+  /** Exact narrowing proof for cached aggregated invocation evidence. */
+  invocationWindowProof?: ParsedInvocationWindowProof;
+  diagnostics: Array<{
+    code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
+    count: number;
+  }>;
+};
+
+export type LocalAgentQualitativeIndexAdapter = {
+  read: (
+    key: Readonly<LocalAgentQualitativeIndexKey>
+  ) => Promise<LocalAgentQualitativeIndexValue | undefined>;
+  write: (
+    key: Readonly<LocalAgentQualitativeIndexKey>,
+    value: Readonly<LocalAgentQualitativeIndexValue>
+  ) => Promise<void>;
+};
+
+export type LocalAgentFinancialIndexKey = {
+  schemaVersion: 2;
+  section: "financial";
+  agent: LocalAgentFormatId;
+  pathHash: string;
+  fileIdentity: string;
+  financialParserVersion: number;
+};
+
+/**
+ * Per-file cache for financial parse results. The stored value reuses the
+ * privacy-reduced qualitative value contract (calls + parse diagnostics; no
+ * invocation evidence). An entry's existence means the file had financial
+ * content under this exact identity and parser version.
+ */
+export type LocalAgentFinancialIndexAdapter = {
+  read: (
+    key: Readonly<LocalAgentFinancialIndexKey>
+  ) => Promise<LocalAgentQualitativeIndexValue | undefined>;
+  write: (
+    key: Readonly<LocalAgentFinancialIndexKey>,
+    value: Readonly<LocalAgentQualitativeIndexValue>
+  ) => Promise<void>;
+};
+
+/**
+ * Ownership evidence for one transcript file in the private project index.
+ * "unknown" is a first-class state: ownership is never guessed from hashes,
+ * basenames, or absence. Structurally identical to the project-index store's
+ * ownership document (the loader cannot import the store without a cycle).
+ */
+export type LocalAgentOwnershipRecord = {
+  /** Body-derived ownership; header-only records stay "unknown". */
+  status: "resolved" | "no_calls" | "unknown";
+  /** Ownership binds to one exact file identity; rotation supersedes it. */
+  fileIdentity: string;
+  /** Distinct `avref_…` refs observed in parsed calls (empty until parsed). */
+  projectRefs: string[];
+  /**
+   * Bounded Codex header-pass attribution. "proven" is asserted only when the
+   * header cwd would short-circuit `dominantCodexCwd` exactly as a full parse
+   * would; every other header stays "unknown" and is never assumed foreign.
+   */
+  headerAttribution?: {
+    status: "proven" | "unknown";
+    projectRef?: string;
+    /**
+     * Subagent marker from the same bounded header read — reused to order
+     * the streaming schedule without re-probing. A scheduling hint only,
+     * never ownership evidence.
+     */
+    isSubagent?: boolean;
+  };
+};
+
+/**
+ * Ownership section of the private project index. `createProjectIndexAdapters`
+ * satisfies this structurally; the adapter owns storage validation and
+ * rotation-superseding semantics.
+ */
+export type LocalAgentOwnershipIndexAdapter = {
+  readOwnership: (
+    agent: LocalAgentFormatId,
+    pathHash: string
+  ) => Promise<LocalAgentOwnershipRecord | undefined>;
+  writeOwnership: (
+    agent: LocalAgentFormatId,
+    pathHash: string,
+    ownership: Readonly<LocalAgentOwnershipRecord>
+  ) => Promise<void>;
+};
+
+/**
+ * Resumable stream checkpoint for one oversized transcript (design section
+ * e). The identity pin is deliberately append-tolerant (dev/ino/birthtime
+ * survive appends); truncation, rotation, edits inside the 64 KiB prefix
+ * probe window, and parser contract changes all fail the resume proof and
+ * force a restart. Documented residual (QA-confirmed): an in-place edit of
+ * bytes BEFORE the probe window on the same inode is indistinguishable from
+ * untouched history and resumes — the same local trust extended to the
+ * source files themselves (design section e). The reducer/collector payloads
+ * are opaque to the store and re-validated by the loader on every resume
+ * (fail closed: invalid state is discarded, never partially reused).
+ */
+export type LocalAgentStreamCheckpointRecord = {
+  /** Append-tolerant identity pin for the checkpointed inode. */
+  pin: { dev: number; ino: number; birthtimeMs: number };
+  parserVersion: number;
+  collectInvocationEvidence: boolean;
+  /** Window the stream's invocation collector was created with. */
+  sinceIso: string | null;
+  /** Bytes consumed through the end of the last complete line. */
+  offset: number;
+  /** Content proof over the up-to-64 KiB immediately before `offset`. */
+  prefixProbe: { bytes: number; sha256: string };
+  /** Privacy-reduced Codex reducer state; raw paths and prompt text never appear. */
+  reducerState: unknown;
+  /** Invocation collector snapshot when evidence collection was requested. */
+  collectorState?: unknown;
+};
+
+/**
+ * Checkpoint section of the private project index; structurally satisfied by
+ * `createProjectIndexAdapters`.
+ */
+export type LocalAgentStreamCheckpointAdapter = {
+  readStreamCheckpoint: (
+    agent: LocalAgentFormatId,
+    pathHash: string
+  ) => Promise<LocalAgentStreamCheckpointRecord | undefined>;
+  writeStreamCheckpoint: (
+    agent: LocalAgentFormatId,
+    pathHash: string,
+    checkpoint: Readonly<LocalAgentStreamCheckpointRecord>
+  ) => Promise<void>;
+  deleteStreamCheckpoint: (
+    agent: LocalAgentFormatId,
+    pathHash: string
+  ) => Promise<void>;
+};
+
+export const localAgentFinancialParserVersion = 1;
+
+/**
+ * Qualitative parser contract version. Bumped to 2 with the checkpointed
+ * streaming path (A4b): entries and checkpoints written by the pre-streaming
+ * parser are never reinterpreted — a version mismatch is a miss (entries) or
+ * a discard (checkpoints), and the store schema pins this exact literal so
+ * both sides fail closed together. Bumped to 4 when Claude Code subagent
+ * transcripts gained their own session identity (`subagentId`) and
+ * cross-file completion evidence (`subagentCompletions`, from both Task tool
+ * results and background task-notifications): entries persisted by the
+ * collapsing parser must re-parse rather than silently keep merging subagent
+ * runs into their parent session.
+ */
+export const localAgentQualitativeParserVersion = 4;
+
+/**
+ * Conservative launch defaults for action-capable qualitative evidence.
+ * Callers must still inspect `qualitativeCoverage` before deriving a finding:
+ * the limits protect responsiveness; they do not turn a partial scan into a
+ * representative sample.
+ */
+export const SAFE_QUALITATIVE_SCAN_POLICY: Readonly<LocalAgentQualitativeScanPolicy> =
+  Object.freeze({
+    maxFileBytes: 64 * 1024 * 1024,
+    maxSourceBytes: 256 * 1024 * 1024
+  });
 
 /**
  * Options accepted by the financial-only loader. Invocation collection is
@@ -191,7 +505,11 @@ export type LocalAgentLogOptions = {
  */
 export type LocalAgentFinancialLogOptions = Omit<
   LocalAgentLogOptions,
-  "collectCodexInvocationEvidence"
+  | "collectCodexInvocationEvidence"
+  | "qualitativeScan"
+  | "qualitativeIndex"
+  | "ownershipIndex"
+  | "coverageProjectRef"
 >;
 
 export type LocalAgentLogDiagnosticCode =
@@ -200,7 +518,9 @@ export type LocalAgentLogDiagnosticCode =
   | "file_unreadable"
   | "malformed_jsonl"
   | "malformed_session_file"
-  | "unsupported_token_shape";
+  | "unsupported_token_shape"
+  | "qualitative_scan_incomplete"
+  | "qualitative_index_error";
 
 export type LocalAgentLogDiagnostic = {
   agent: LocalAgentCall["agent"];
@@ -234,6 +554,62 @@ export type LocalAgentSourceScan = {
   nonFinancialBytesPrefiltered?: number;
   /** Whether JSON syntax was checked for every line or financial events only. */
   jsonlValidationCoverage?: "complete" | "financial_events_only";
+  /**
+   * Coverage for an explicitly bounded qualitative/action scan. Omitted for
+   * the legacy unbounded loader and for the financial-only loader.
+   */
+  qualitativeCoverage?: "complete" | "partial";
+  /** Files inside the requested time window considered by the bounded scan. */
+  qualitativeFilesEligible?: number;
+  /** Eligible files omitted because a configured byte limit would be crossed. */
+  qualitativeFilesSkippedForBudget?: number;
+  /** Eligible files selected for a complete bounded read. */
+  qualitativeFilesSelected?: number;
+  /** Selected files that were read and parsed completely. */
+  qualitativeFilesReadCompletely?: number;
+  /** Eligible files whose evidence is present in the private index (hit or fresh parse). */
+  qualitativeFilesIndexed?: number;
+  /**
+   * Eligible files proven by a bounded header pass to belong to a project
+   * other than the requested `coverageProjectRef`. Always zero when no ref
+   * was requested: proven ownership never unblocks an unnamed project.
+   */
+  qualitativeFilesForeignProven?: number;
+  /**
+   * Eligible files that still block the requested project: not indexed and
+   * not proven foreign. A file proven to belong to the requested project
+   * itself stays in this count until indexed — it is exactly the oversized
+   * relevant transcript that must be parsed, never excluded.
+   */
+  qualitativeFilesOwnershipUnknown?: number;
+  /**
+   * Per-project qualitative coverage for the requested project. "indexing"
+   * whenever any eligible file's ownership is unknown, any scan-level failure
+   * occurred, or a file proven to belong to the requested project is not yet
+   * indexed — the honest no-claim state while the index converges.
+   */
+  qualitativeProjectCoverage?: "complete" | "indexing";
+  /** Sum of eligible regular-file sizes observed before reading. */
+  qualitativeBytesEligible?: number;
+  /** Sum of metadata sizes reserved for selected complete-file reads. */
+  qualitativeBytesSelected?: number;
+  /** Bytes actually accepted into full-file qualitative parsing. */
+  qualitativeBytesRead?: number;
+  /** Selected bytes reused from a trusted warm index instead of reread. */
+  qualitativeBytesReused?: number;
+  /** Bytes consumed by the checkpointed streaming pass this run. */
+  qualitativeBytesStreamed?: number;
+  /** Oversized files with an in-progress (unconverged) stream this run. */
+  qualitativeFilesStreaming?: number;
+  qualitativeIndexHits?: number;
+  /** Index read/write failures; source parsing falls back to disk. */
+  qualitativeIndexErrors?: number;
+  /**
+   * Emitted calls always come from complete files, even when global source
+   * coverage is partial. This lets cohort experiments use exact selected
+   * evidence while global/main-driver claims remain gated on coverage.
+   */
+  qualitativeSelectedEvidence?: "complete_files_only";
 };
 
 export type LocalAgentLogResult = {
@@ -250,6 +626,42 @@ export type LocalAgentLogResult = {
   /** Present only when requested; contains counts/basenames, never raw text. */
   codexInvocationFiles?: ParsedInvocationFile[];
 };
+
+/**
+ * True only when every requested source was scanned under an explicit bounded
+ * policy without omitting an eligible file. Legacy unbounded results return
+ * false so an action caller cannot accidentally treat unknown coverage as a
+ * complete launch-safe scan.
+ */
+export function hasCompleteQualitativeCoverage(
+  result: Pick<LocalAgentLogResult, "sourceScans">,
+  agents: readonly LocalAgentFormatId[] = ["claude-code", "codex"]
+): boolean {
+  return agents.every((agent) => (
+    result.sourceScans.find((scan) => scan.agent === agent)?.qualitativeCoverage === "complete"
+  ));
+}
+
+/**
+ * Whether a bounded result contains exact calls from at least one completely
+ * parsed selected file for every requested source. This is deliberately
+ * weaker than global coverage: it can support a clearly scoped experiment,
+ * never a claim about the source's overall/main driver.
+ */
+export function hasExactSelectedQualitativeEvidence(
+  result: Pick<LocalAgentLogResult, "calls" | "sourceScans">,
+  agents?: readonly LocalAgentFormatId[]
+): boolean {
+  const requested = agents ?? [...new Set(result.calls
+    .filter((call) => localAgentFormatDescriptor(call.agent)?.capabilities.actionPlanning)
+    .map((call) => call.agent))];
+  return requested.length > 0 && requested.every((agent) => {
+    const scan = result.sourceScans.find((entry) => entry.agent === agent);
+    return scan?.qualitativeSelectedEvidence === "complete_files_only" &&
+      (scan.qualitativeFilesReadCompletely ?? 0) > 0 &&
+      result.calls.some((call) => call.agent === agent);
+  });
+}
 
 type TranscriptParseDiagnostic = {
   code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
@@ -318,7 +730,7 @@ function stableTurnEvidenceFingerprint(call: LocalAgentCall): string {
     timestamp: call.timestamp,
     model: call.model,
     project: call.project ?? null,
-    workingDirectory: call.workingDirectory ?? null,
+    workingDirectoryRef: stableWorkingDirectoryRef(call),
     usageSupport: call.usageSupport ?? null,
     reportedTotalTokens: call.reportedTotalTokens ?? null,
     usage: {
@@ -332,6 +744,28 @@ function stableTurnEvidenceFingerprint(call: LocalAgentCall): string {
     },
     geminiTokenEvidence: call.geminiTokenEvidence ?? null
   });
+}
+
+function stableWorkingDirectoryRef(call: LocalAgentCall): string | null {
+  const supplied = call.workingDirectoryRef;
+  const derived = call.workingDirectory
+    ? derivedWorkingDirectoryRef(call.workingDirectory)
+    : undefined;
+  if (supplied && derived && supplied !== derived) return "conflicting-working-directory";
+  return supplied ?? derived ?? null;
+}
+
+/**
+ * The one NUL-separated avref derivation for working directories. Every
+ * consumer — stable call refs, the financial probe re-attach, and header-pass
+ * attribution — must produce byte-identical refs for the same directory.
+ */
+function derivedWorkingDirectoryRef(workingDirectory: string): string {
+  return `avref_${createHash("sha256")
+    .update("project-working-directory")
+    .update("\u0000")
+    .update(workingDirectory)
+    .digest("hex")}`;
 }
 
 function isStableTurnConflict(call: LocalAgentCall): boolean {
@@ -377,6 +811,7 @@ type ParsedClaudeFinancialUsage = {
   latestTurnUsage?: LocalAgentTurnUsage;
   usageSupport?: "unsupported_token_shape";
   reportedTotalTokens?: number;
+  tokenComponentEvidence?: LocalAgentTokenComponentEvidence;
 };
 
 function parseClaudeFinancialUsage(
@@ -415,9 +850,37 @@ function parseClaudeFinancialUsage(
     cacheWrite1hTokens: write1hField.value ?? 0
   };
   if (componentsSupported) {
+    const cacheWriteEvidence = writeTotalField.value !== undefined ||
+        (write5mField.value !== undefined && write1hField.value !== undefined)
+      ? "observed" as const
+      : write5mField.value !== undefined || write1hField.value !== undefined
+        ? "partial" as const
+        : "not_separately_reported" as const;
+    const cacheReadEvidence = cacheReadField.value === undefined
+      ? "not_separately_reported" as const
+      : "observed" as const;
+    const componentTotalComplete = cacheReadEvidence === "observed" &&
+      cacheWriteEvidence === "observed";
     return {
       usage,
-      latestTurnUsage: toTurnUsage(usage, "assistant_message_usage")
+      latestTurnUsage: toTurnUsage(usage, "assistant_message_usage"),
+      ...(reportedTotalField.value !== undefined
+        ? { reportedTotalTokens: reportedTotalField.value }
+        : {}),
+      tokenComponentEvidence: {
+        inputTokens: "observed",
+        outputTokens: "observed",
+        cacheReadTokens: cacheReadEvidence,
+        cacheWriteTokens: cacheWriteEvidence,
+        thoughtTokens: "not_separately_reported",
+        toolTokens: "not_separately_reported",
+        calculatedTotalTokens: componentTotalComplete
+          ? "calculated_complete"
+          : "calculated_partial",
+        reportedTotalTokens: reportedTotalField.value === undefined
+          ? "not_reported"
+          : "provider_reported"
+      }
     };
   }
   onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
@@ -447,6 +910,7 @@ type ParsedCodexCumulativeUsage = {
   usage: TokenUsage;
   supported: boolean;
   reportedTotalTokens?: number;
+  tokenComponentEvidence?: LocalAgentTokenComponentEvidence;
 };
 
 function parseCodexCumulativeUsage(
@@ -512,7 +976,28 @@ function parseCodexCumulativeUsage(
       cacheReadTokens: cached
     },
     supported: currentSupported && baselineSupported && monotonic,
-    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {})
+    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
+    ...(currentSupported && baselineSupported && monotonic
+      ? {
+          tokenComponentEvidence: {
+            inputTokens: "observed" as const,
+            outputTokens: "observed" as const,
+            cacheReadTokens: currentCachedField.value === undefined
+              ? "not_separately_reported" as const
+              : "observed" as const,
+            cacheWriteTokens: "not_separately_reported" as const,
+            thoughtTokens: "not_separately_reported" as const,
+            toolTokens: "not_separately_reported" as const,
+            // Codex input_tokens already contains cached input; subtracting
+            // the optional cache split and adding it back preserves the full
+            // observed input+output total even when the split is unavailable.
+            calculatedTotalTokens: "calculated_complete" as const,
+            reportedTotalTokens: reportedTotalTokens === undefined
+              ? "not_reported" as const
+              : "provider_reported" as const
+          }
+        }
+      : {})
   };
 }
 
@@ -565,8 +1050,20 @@ export function parseClaudeCodeTranscript(
   let lastPrompt: string | undefined;
   let latestActivityKey: string | undefined;
   let isSubagent = filePath.split(sep).includes("subagents");
+  // Claude Code writes the parent's sessionId on every subagent line, so the
+  // line-level `agentId` (mirrored in the `subagents/agent-<id>.jsonl` file
+  // name) is the only truthful per-run identity for a subagent transcript.
+  const fileSubagentId = subagentTranscriptFileId(filePath);
+  const observedEntryAgentIds = new Set<string>();
+  const subagentCompletionsBySession = new Map<string, Map<string, string>>();
   let parentSessionId: string | undefined;
   let malformedLines = 0;
+  let entryOrdinal = 0;
+  let latestUnscopedWorkOrdinal = -1;
+  const latestWorkOrdinalBySession = new Map<string, number>();
+  const completionBySession = new Map<string, LocalAgentCompletionEvidence & {
+    ordinal: number;
+  }>();
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     let entry: unknown;
@@ -577,6 +1074,25 @@ export function parseClaudeCodeTranscript(
       continue;
     }
     if (!isRecord(entry)) continue;
+    entryOrdinal += 1;
+    const entrySessionId = stringOf(entry.sessionId);
+    if (entry.type === "user" || entry.type === "assistant") {
+      if (entrySessionId) latestWorkOrdinalBySession.set(entrySessionId, entryOrdinal);
+      else latestUnscopedWorkOrdinal = entryOrdinal;
+    }
+    const durationMs = numberOf(entry.durationMs);
+    if (entry.type === "system" && entry.subtype === "turn_duration" &&
+        entrySessionId && Number.isSafeInteger(durationMs) && durationMs! >= 0) {
+      const observedAt = toIso(stringOf(entry.timestamp));
+      if (observedAt) {
+        completionBySession.set(entrySessionId, {
+          status: "completed",
+          evidence: "claude_turn_duration",
+          observedAt,
+          ordinal: entryOrdinal
+        });
+      }
+    }
     if (entry.type === "ai-title") {
       title = stringOf(entry.aiTitle) ?? title;
     }
@@ -584,7 +1100,42 @@ export function parseClaudeCodeTranscript(
       lastPrompt = stringOf(entry.lastPrompt) ?? lastPrompt;
     }
     if (entry.isSidechain === true) isSubagent = true;
+    const entryAgentId = stringOf(entry.agentId);
+    if (entryAgentId) {
+      // Line-level agentId only appears on sidechain lines; it is subagent
+      // evidence even when the sidechain flag or path marker is missing.
+      isSubagent = true;
+      observedEntryAgentIds.add(entryAgentId);
+    }
     parentSessionId = stringOf(entry.parentSessionId) ?? parentSessionId;
+    // The host records each finished subagent run in the owning transcript:
+    // synchronous runs as a Task tool result, background runs as a
+    // task-notification queue operation. Subagent files carry no completion
+    // marker of their own, so these are the explicit completion evidence for
+    // those runs. Only an explicit "completed" status counts; failed, killed,
+    // or merely launched runs never read as comparable completed tasks.
+    if (entrySessionId) {
+      const toolUseResult = isRecord(entry.toolUseResult) ? entry.toolUseResult : undefined;
+      let completedSubagentId = toolUseResult && toolUseResult.status === "completed"
+        ? stringOf(toolUseResult.agentId)
+        : undefined;
+      if (!completedSubagentId && entry.type === "queue-operation") {
+        const notification = parseTaskNotification(stringOf(entry.content));
+        if (notification?.status === "completed") completedSubagentId = notification.taskId;
+      }
+      const completionObservedAt = completedSubagentId
+        ? toIso(stringOf(entry.timestamp))
+        : undefined;
+      if (completedSubagentId && completionObservedAt) {
+        const bySubagent = subagentCompletionsBySession.get(entrySessionId) ??
+          new Map<string, string>();
+        const prior = bySubagent.get(completedSubagentId);
+        if (!prior || Date.parse(completionObservedAt) > Date.parse(prior)) {
+          bySubagent.set(completedSubagentId, completionObservedAt);
+        }
+        subagentCompletionsBySession.set(entrySessionId, bySubagent);
+      }
+    }
 
     const message = isRecord(entry.message) ? entry.message : undefined;
     if (entry.type === "user" && message) {
@@ -598,9 +1149,9 @@ export function parseClaudeCodeTranscript(
     // "<synthetic>" marks Claude Code internal placeholder messages, not API calls.
     if (stringOf(message.model) === "<synthetic>") continue;
     // Streaming/retries can write the same API response on multiple lines.
-    const dedupeKey = `${stringOf(message.id) ?? ""}:${stringOf(entry.requestId) ?? ""}`;
-    if (dedupeKey !== ":" && seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
+    const nativeResponse = claudeNativeResponseIdentity(message, entry);
+    if (nativeResponse && seen.has(nativeResponse.localDedupeKey)) continue;
+    if (nativeResponse) seen.add(nativeResponse.localDedupeKey);
     const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
     if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) {
       // These prompts led to a call outside the selected evidence window. Do
@@ -614,11 +1165,14 @@ export function parseClaudeCodeTranscript(
     const sessionId = stringOf(entry.sessionId);
     const call: LocalAgentCall = {
       agent: "claude-code",
+      ...(nativeResponse ? { callId: nativeResponse.callId } : {}),
       model: stringOf(message.model) ?? "claude-code",
       timestamp,
       project,
       workingDirectory,
       sessionId,
+      ...(entryAgentId ? { subagentId: entryAgentId } : {}),
+      ...(stringOf(entry.version) ? { sourceVersion: stringOf(entry.version) } : {}),
       ...(parsedUsage.latestTurnUsage
         ? { latestTurnUsage: parsedUsage.latestTurnUsage }
         : {}),
@@ -626,6 +1180,9 @@ export function parseClaudeCodeTranscript(
       ...(parsedUsage.usageSupport ? { usageSupport: parsedUsage.usageSupport } : {}),
       ...(parsedUsage.reportedTotalTokens !== undefined
         ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+        : {}),
+      ...(parsedUsage.tokenComponentEvidence
+        ? { tokenComponentEvidence: parsedUsage.tokenComponentEvidence }
         : {}),
       usage: parsedUsage.usage
     };
@@ -646,6 +1203,29 @@ export function parseClaudeCodeTranscript(
     }
     activityEvidence.set(activityKey, evidence);
     latestActivityKey = activityKey;
+  }
+  // One subagent transcript is one run: calls whose lines omitted agentId
+  // still belong to the file's single run identity (content agentId when one
+  // was observed, else the `subagents/` file name). Never invented for
+  // parent transcripts.
+  const defaultSubagentId = observedEntryAgentIds.size === 1
+    ? [...observedEntryAgentIds][0]
+    : fileSubagentId;
+  if (isSubagent && defaultSubagentId) {
+    for (const call of calls) call.subagentId ??= defaultSubagentId;
+  }
+  for (const [completionSessionId, bySubagent] of subagentCompletionsBySession) {
+    let target: LocalAgentCall | undefined;
+    for (let index = calls.length - 1; index >= 0; index -= 1) {
+      if (calls[index]!.sessionId === completionSessionId) {
+        target = calls[index];
+        break;
+      }
+    }
+    if (!target) continue;
+    target.subagentCompletions = [...bySubagent.entries()]
+      .sort((left, right) => left[0].localeCompare(right[0]))
+      .map(([subagentId, observedAt]) => ({ subagentId, observedAt }));
   }
   const fallbackPrompt = lastPrompt && isHumanPrompt(lastPrompt) ? lastPrompt : undefined;
   const activities = new Map<string, LocalAgentActivity>();
@@ -673,6 +1253,18 @@ export function parseClaudeCodeTranscript(
     call.activity = activities.get(
       localActivityScopeKey(call.sessionId, call.workingDirectory, call.project)
     );
+    const completion = call.sessionId
+      ? completionBySession.get(call.sessionId)
+      : undefined;
+    const latestWorkOrdinal = call.sessionId
+      ? latestWorkOrdinalBySession.get(call.sessionId) ?? -1
+      : -1;
+    if (completion && completion.ordinal >= latestWorkOrdinal &&
+        completion.ordinal >= latestUnscopedWorkOrdinal &&
+        Date.parse(completion.observedAt) >= Date.parse(call.timestamp)) {
+      const { ordinal: _ordinal, ...evidence } = completion;
+      call.completion = evidence;
+    }
   }
   if (malformedLines > 0) {
     onDiagnostic?.({ code: "malformed_jsonl", count: malformedLines });
@@ -680,139 +1272,238 @@ export function parseClaudeCodeTranscript(
   return calls;
 }
 
-/** Parse one Codex rollout file (JSONL event stream). Exported for tests. */
-export function parseCodexRollout(
-  content: string,
-  onEntry?: (entry: Record<string, unknown>) => void,
-  onDiagnostic?: TranscriptParseDiagnosticHandler
-): LocalAgentCall[] {
-  let model: string | undefined;
-  let rootCwd: string | undefined;
-  const toolWorkdirs = new Map<string, number>();
-  let sessionId: string | undefined;
-  let rootSessionMetaSeen = false;
-  let startedAt: string | undefined;
-  let rootStartedAtMs: number | undefined;
-  let rootTaskStarted = false;
-  let inheritedUsageBaseline: Record<string, unknown> | undefined;
-  let lastActivityAt: string | undefined;
-  let lastTotal: Record<string, unknown> | undefined;
-  let lastTurn: Record<string, unknown> | undefined;
-  let lastRateLimits: LocalAgentRateLimitSnapshot | undefined;
-  const prompts: string[] = [];
-  const fileCounts = new Map<string, number>();
-  let toolCallCount = 0;
-  let isSubagent = false;
-  let parentSessionId: string | undefined;
-  let malformedLines = 0;
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      malformedLines += 1;
-      continue;
-    }
-    if (!isRecord(entry)) continue;
-    onEntry?.(entry);
-    const payload = isRecord(entry.payload) ? entry.payload : undefined;
-    if (entry.type === "session_meta" && payload && !rootSessionMetaSeen) {
-      // A forked/subagent rollout can embed the parent transcript, including
-      // many later session_meta records. The first metadata record belongs to
-      // this rollout file; later records are nested/history evidence and must
-      // never replace the financial session identity or root cwd.
-      rootSessionMetaSeen = true;
-      sessionId = stringOf(payload.id);
-      rootCwd = stringOf(payload.cwd);
-      startedAt = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp));
-      rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
-      isSubagent = stringOf(payload.thread_source) === "subagent" || isRecord(payload.source) && "subagent" in payload.source;
-      parentSessionId = stringOf(payload.parent_thread_id);
-    }
-    if (entry.type === "turn_context" && payload) {
-      model = stringOf(payload.model) ?? model;
-      rootCwd ??= stringOf(payload.cwd);
-    }
-    if (
-      isSubagent &&
-      !rootTaskStarted &&
-      payload?.type === "task_started" &&
-      isRootSpecificTaskStart(payload.started_at, rootStartedAtMs)
-    ) {
-      // Forked Codex rollouts copy the parent's complete event history after
-      // the child's root session_meta. The cumulative counter immediately
-      // before the child's first task is the inherited baseline, not child
-      // usage. Reset qualitative evidence at the same boundary so parent
-      // prompts/files cannot become the child's focus.
-      inheritedUsageBaseline = lastTotal;
-      lastTotal = undefined;
-      rootTaskStarted = true;
-      prompts.length = 0;
-      fileCounts.clear();
-      toolWorkdirs.clear();
-      toolCallCount = 0;
-      model = undefined;
-      lastTurn = undefined;
-      lastRateLimits = undefined;
-      lastActivityAt = toIso(stringOf(entry.timestamp)) ?? startedAt;
-    }
-    if (payload?.type === "function_call" || payload?.type === "custom_tool_call") {
-      toolCallCount += 1;
-      const args = jsonRecord(stringOf(payload.arguments));
-      const workdir = stringOf(args?.workdir) ?? stringOf(args?.cwd);
-      if (workdir && isAbsolute(workdir)) {
-        const normalized = resolve(workdir);
-        toolWorkdirs.set(normalized, (toolWorkdirs.get(normalized) ?? 0) + 1);
-      }
-      // Current Codex Desktop records the orchestration wrapper as a custom
-      // `exec` call whose input is JavaScript containing nested tool calls.
-      // Extract only quoted absolute workdir/cwd values; never evaluate it.
-      if (payload.type === "custom_tool_call" && stringOf(payload.name) === "exec") {
-        collectEmbeddedToolWorkdirs(stringOf(payload.input), toolWorkdirs);
-      }
-      collectToolFiles(args, fileCounts);
-      collectPatchFiles(
-        stringOf(args?.patch) ?? stringOf(args?.input) ?? stringOf(payload.input),
-        fileCounts
-      );
-    }
-    if (payload?.type === "message" && payload.role === "user") {
-      for (const prompt of textValues(payload.content)) {
-        if (isHumanPrompt(prompt)) prompts.push(prompt);
-      }
-    }
-    if (entry.type === "event_msg" && payload?.type === "token_count") {
-      const eventTimestamp = toIso(stringOf(entry.timestamp)) ?? lastActivityAt ?? startedAt;
-      const info = isRecord(payload.info) ? payload.info : undefined;
-      const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
-      const turn = info && isRecord(info.last_token_usage) ? info.last_token_usage : undefined;
-      if (total) {
-        lastTotal = total;
-        lastActivityAt = eventTimestamp;
-      }
-      if (turn) {
-        lastTurn = turn;
-        lastActivityAt = eventTimestamp;
-      }
-      const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
-      if (rateLimits) {
-        lastRateLimits = rateLimits;
-      }
+/**
+ * Explicit per-line reducer state for one Codex rollout (design section e).
+ * The whole-file parser and the checkpointed streaming path share this exact
+ * reducer, so their outputs are identical by construction. The `restored*`
+ * fields exist only for streams resumed from a privacy-reduced checkpoint;
+ * they are never populated on the whole-file path.
+ */
+type CodexRolloutParserState = {
+  model?: string;
+  rootCwd?: string;
+  /** Privacy-reduced root-cwd decision restored from a stream checkpoint. */
+  restoredRootCwd?: RestoredCodexRootCwd;
+  toolWorkdirs: Map<string, number>;
+  /** Hashed cross-run workdir tally restored from a stream checkpoint. */
+  restoredWorkdirs?: RestoredCodexWorkdirTally[];
+  sessionId?: string;
+  sourceVersion?: string;
+  rootSessionMetaSeen: boolean;
+  startedAt?: string;
+  rootStartedAtMs?: number;
+  rootTaskStarted: boolean;
+  inheritedUsageBaseline?: Record<string, unknown>;
+  lastActivityAt?: string;
+  lastTotal?: Record<string, unknown>;
+  lastTurn?: Record<string, unknown>;
+  lastRateLimits?: LocalAgentRateLimitSnapshot;
+  prompts: string[];
+  /** Sanitized prompt survivors dropped from a checkpoint beyond the last 12. */
+  restoredPromptOverflow: number;
+  fileCounts: Map<string, number>;
+  toolCallCount: number;
+  isSubagent: boolean;
+  parentSessionId?: string;
+  pendingTaskTurnId?: string;
+  completedTask?: LocalAgentCompletionEvidence;
+  malformedLines: number;
+};
+
+/**
+ * Root session cwd carried across runs without its raw path. `shortCircuits`
+ * records the exact `dominantCodexCwd` short-circuit outcome computed on the
+ * raw cwd before it was dropped; the resolved ref/project reproduce the
+ * emitted call fields byte-for-byte when the session cwd wins.
+ */
+type RestoredCodexRootCwd = {
+  /** Whether any session cwd was observed before the checkpoint. */
+  present: boolean;
+  shortCircuits: boolean;
+  resolvedRef?: string;
+  resolvedProject?: string;
+};
+
+/**
+ * One observed tool workdir carried across runs as hashes plus the metadata
+ * `dominantCodexCwd` needs: subtree rollup via ancestor refs, depth, basename
+ * and home-exclusion. The raw path never touches disk (req 1); the final
+ * full-path localeCompare tie-break is therefore unreachable for restored
+ * entries — divergence is possible only on exact score+depth ties that span
+ * a checkpoint boundary, and is pinned by fixtures (QA cases 27/28).
+ */
+type RestoredCodexWorkdirTally = {
+  ref: string;
+  ancestorRefs: string[];
+  depth: number;
+  base: string;
+  isHome: boolean;
+  count: number;
+};
+
+function createCodexRolloutParserState(): CodexRolloutParserState {
+  return {
+    toolWorkdirs: new Map<string, number>(),
+    rootSessionMetaSeen: false,
+    rootTaskStarted: false,
+    prompts: [],
+    restoredPromptOverflow: 0,
+    fileCounts: new Map<string, number>(),
+    toolCallCount: 0,
+    isSubagent: false,
+    malformedLines: 0
+  };
+}
+
+/** One line of the shared Codex rollout reducer (blank/malformed included). */
+function consumeCodexRolloutLine(
+  state: CodexRolloutParserState,
+  line: string,
+  onEntry?: (entry: Record<string, unknown>) => void
+): void {
+  if (!line.trim()) return;
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    state.malformedLines += 1;
+    return;
+  }
+  if (!isRecord(entry)) return;
+  onEntry?.(entry);
+  const payload = isRecord(entry.payload) ? entry.payload : undefined;
+  if (entry.type === "session_meta" && payload && !state.rootSessionMetaSeen) {
+    // A forked/subagent rollout can embed the parent transcript, including
+    // many later session_meta records. The first metadata record belongs to
+    // this rollout file; later records are nested/history evidence and must
+    // never replace the financial session identity or root cwd.
+    state.rootSessionMetaSeen = true;
+    state.sessionId = stringOf(payload.id);
+    state.sourceVersion = stringOf(payload.cli_version);
+    state.rootCwd = stringOf(payload.cwd);
+    state.startedAt = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp));
+    state.rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
+    state.isSubagent = stringOf(payload.thread_source) === "subagent" ||
+      isRecord(payload.source) && "subagent" in payload.source;
+    state.parentSessionId = stringOf(payload.parent_thread_id);
+  }
+  if (entry.type === "turn_context" && payload) {
+    state.model = stringOf(payload.model) ?? state.model;
+    // The restored checkpoint already carries the session cwd decision when
+    // one was observed; the turn_context fallback applies only when neither
+    // a raw nor a restored session cwd exists (same ??= semantics).
+    if (state.rootCwd === undefined && !state.restoredRootCwd?.present) {
+      state.rootCwd = stringOf(payload.cwd);
     }
   }
+  if (
+    state.isSubagent &&
+    !state.rootTaskStarted &&
+    payload?.type === "task_started" &&
+    isRootSpecificTaskStart(payload.started_at, state.rootStartedAtMs)
+  ) {
+    // Forked Codex rollouts copy the parent's complete event history after
+    // the child's root session_meta. The cumulative counter immediately
+    // before the child's first task is the inherited baseline, not child
+    // usage. Reset qualitative evidence at the same boundary so parent
+    // prompts/files cannot become the child's focus. Restored checkpoint
+    // evidence predating the boundary is parent history too and resets with
+    // it (the raw session cwd deliberately survives, exactly as rootCwd).
+    state.inheritedUsageBaseline = state.lastTotal;
+    state.lastTotal = undefined;
+    state.rootTaskStarted = true;
+    state.prompts.length = 0;
+    state.restoredPromptOverflow = 0;
+    state.fileCounts.clear();
+    state.toolWorkdirs.clear();
+    state.restoredWorkdirs = undefined;
+    state.toolCallCount = 0;
+    state.model = undefined;
+    state.lastTurn = undefined;
+    state.lastRateLimits = undefined;
+    state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
+  }
+  if (payload?.type === "task_started" && (!state.isSubagent || state.rootTaskStarted)) {
+    state.pendingTaskTurnId = stringOf(payload.turn_id);
+    state.completedTask = undefined;
+  }
+  if (entry.type === "event_msg" && payload?.type === "task_complete") {
+    const completedTurnId = stringOf(payload.turn_id);
+    const observedAt = toIso(stringOf(entry.timestamp));
+    if (state.pendingTaskTurnId && completedTurnId === state.pendingTaskTurnId && observedAt) {
+      state.completedTask = {
+        status: "completed",
+        evidence: "codex_task_complete",
+        observedAt
+      };
+      state.pendingTaskTurnId = undefined;
+    } else {
+      state.completedTask = undefined;
+      state.pendingTaskTurnId = undefined;
+    }
+  }
+  if (payload?.type === "function_call" || payload?.type === "custom_tool_call") {
+    state.toolCallCount += 1;
+    const args = jsonRecord(stringOf(payload.arguments));
+    const workdir = stringOf(args?.workdir) ?? stringOf(args?.cwd);
+    if (workdir && isAbsolute(workdir)) {
+      const normalized = resolve(workdir);
+      state.toolWorkdirs.set(normalized, (state.toolWorkdirs.get(normalized) ?? 0) + 1);
+    }
+    // Current Codex Desktop records the orchestration wrapper as a custom
+    // `exec` call whose input is JavaScript containing nested tool calls.
+    // Extract only quoted absolute workdir/cwd values; never evaluate it.
+    if (payload.type === "custom_tool_call" && stringOf(payload.name) === "exec") {
+      collectEmbeddedToolWorkdirs(stringOf(payload.input), state.toolWorkdirs);
+    }
+    collectToolFiles(args, state.fileCounts);
+    collectPatchFiles(
+      stringOf(args?.patch) ?? stringOf(args?.input) ?? stringOf(payload.input),
+      state.fileCounts
+    );
+  }
+  if (payload?.type === "message" && payload.role === "user") {
+    for (const prompt of textValues(payload.content)) {
+      if (isHumanPrompt(prompt)) state.prompts.push(prompt);
+    }
+  }
+  if (entry.type === "event_msg" && payload?.type === "token_count") {
+    const eventTimestamp = toIso(stringOf(entry.timestamp)) ?? state.lastActivityAt ?? state.startedAt;
+    const info = isRecord(payload.info) ? payload.info : undefined;
+    const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
+    const turn = info && isRecord(info.last_token_usage) ? info.last_token_usage : undefined;
+    if (total) {
+      state.lastTotal = total;
+      state.lastActivityAt = eventTimestamp;
+    }
+    if (turn) {
+      state.lastTurn = turn;
+      state.lastActivityAt = eventTimestamp;
+    }
+    const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
+    if (rateLimits) {
+      state.lastRateLimits = rateLimits;
+    }
+  }
+}
+
+/** Terminal step of the shared Codex rollout reducer. */
+function finishCodexRolloutParse(
+  state: CodexRolloutParserState,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
+): LocalAgentCall[] {
   // A fork without a recognized root-task boundary is ambiguous: older Codex
   // formats may contain only inherited parent history. Omitting that child is
   // safer than charging the parent cumulative counter again. Likewise, a
   // recognized boundary with no later total_token_usage is not a financial
   // call yet.
-  if (malformedLines > 0) {
-    onDiagnostic?.({ code: "malformed_jsonl", count: malformedLines });
+  if (state.malformedLines > 0) {
+    onDiagnostic?.({ code: "malformed_jsonl", count: state.malformedLines });
   }
-  if (!lastTotal || isSubagent && !rootTaskStarted) return [];
-  const parsedUsage = parseCodexCumulativeUsage(lastTotal, inheritedUsageBaseline);
-  const parsedTurn = lastTurn
-    ? parseCodexTurnUsage(lastTurn)
+  if (!state.lastTotal || state.isSubagent && !state.rootTaskStarted) return [];
+  const parsedUsage = parseCodexCumulativeUsage(state.lastTotal, state.inheritedUsageBaseline);
+  const parsedTurn = state.lastTurn
+    ? parseCodexTurnUsage(state.lastTurn)
     : { supported: true as const };
   const usageSupport = parsedUsage.supported && parsedTurn.supported
     ? "complete" as const
@@ -820,25 +1511,47 @@ export function parseCodexRollout(
   if (usageSupport === "unsupported_token_shape") {
     onDiagnostic?.({ code: "unsupported_token_shape", count: 1 });
   }
-  const workingDirectory = absoluteWorkingDirectory(dominantCodexCwd(rootCwd, toolWorkdirs));
-  const project = projectFromCwd(workingDirectory);
+  const hasRestoredEvidence = state.restoredRootCwd !== undefined ||
+    (state.restoredWorkdirs !== undefined && state.restoredWorkdirs.length > 0);
+  let workingDirectory: string | undefined;
+  let workingDirectoryRef: string | undefined;
+  let project: string | undefined;
+  if (!hasRestoredEvidence) {
+    workingDirectory = absoluteWorkingDirectory(dominantCodexCwd(state.rootCwd, state.toolWorkdirs));
+    project = projectFromCwd(workingDirectory);
+  } else {
+    const dominant = resolveStreamedDominantCwd(state);
+    workingDirectory = dominant.workingDirectory;
+    workingDirectoryRef = dominant.workingDirectoryRef;
+    project = dominant.project;
+  }
   const activity = buildLocalAgentActivity({
-    prompts,
-    files: fileCounts,
-    toolCallCount,
+    prompts: state.prompts,
+    files: state.fileCounts,
+    toolCallCount: state.toolCallCount,
     project,
-    isSubagent,
-    parentSessionId
+    isSubagent: state.isSubagent,
+    parentSessionId: state.parentSessionId,
+    ...(state.restoredPromptOverflow > 0
+      ? { priorPromptCount: state.restoredPromptOverflow }
+      : {})
   });
   return [{
     agent: "codex",
-    model: model ?? "codex",
-    timestamp: lastActivityAt ?? startedAt ?? new Date(0).toISOString(),
-    startedAt,
+    model: state.model ?? "codex",
+    timestamp: state.lastActivityAt ?? state.startedAt ?? new Date(0).toISOString(),
+    startedAt: state.startedAt,
     project,
     workingDirectory,
-    sessionId,
-    rateLimits: lastRateLimits,
+    ...(workingDirectoryRef ? { workingDirectoryRef } : {}),
+    sessionId: state.sessionId,
+    ...(state.sourceVersion ? { sourceVersion: state.sourceVersion } : {}),
+    ...(state.completedTask && !state.pendingTaskTurnId &&
+        Date.parse(state.completedTask.observedAt) >=
+          Date.parse(state.lastActivityAt ?? state.startedAt ?? "")
+      ? { completion: state.completedTask }
+      : {}),
+    rateLimits: state.lastRateLimits,
     activity,
     ...(usageSupport === "complete" && parsedTurn.usage
       ? { latestTurnUsage: parsedTurn.usage }
@@ -848,8 +1561,156 @@ export function parseCodexRollout(
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
       : {}),
+    ...(usageSupport === "complete" && parsedUsage.tokenComponentEvidence
+      ? { tokenComponentEvidence: parsedUsage.tokenComponentEvidence }
+      : {}),
     usage: parsedUsage.usage
   }];
+}
+
+/**
+ * `dominantCodexCwd` over evidence that partially crossed a checkpoint
+ * boundary as hashes. Scores and depths reproduce the raw computation
+ * exactly (ancestor refs encode the descendant relation over resolved
+ * paths); only the terminal tie-break degrades from full-path localeCompare
+ * to basename-then-ref order when a restored entry is involved — the
+ * documented QA 27/28 divergence. A winner restored from hashes yields a
+ * ref-only working directory, matching warm cache-hit call shape.
+ */
+function resolveStreamedDominantCwd(state: CodexRolloutParserState): {
+  workingDirectory?: string;
+  workingDirectoryRef?: string;
+  project?: string;
+} {
+  if (state.rootCwd !== undefined) {
+    const sessionProject = projectFromCwd(state.rootCwd);
+    if (sessionProject && sessionProject !== "(home)") {
+      const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
+      return { workingDirectory, project: projectFromCwd(workingDirectory) };
+    }
+  } else if (state.restoredRootCwd?.present && state.restoredRootCwd.shortCircuits) {
+    return {
+      ...(state.restoredRootCwd.resolvedRef
+        ? { workingDirectoryRef: state.restoredRootCwd.resolvedRef }
+        : {}),
+      ...(state.restoredRootCwd.resolvedProject
+        ? { project: state.restoredRootCwd.resolvedProject }
+        : {})
+    };
+  }
+  const merged = mergeCodexWorkdirTallies(state);
+  if (merged.length === 0) {
+    if (state.rootCwd !== undefined) {
+      const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
+      return { workingDirectory, project: projectFromCwd(workingDirectory) };
+    }
+    if (state.restoredRootCwd?.present) {
+      return {
+        ...(state.restoredRootCwd.resolvedRef
+          ? { workingDirectoryRef: state.restoredRootCwd.resolvedRef }
+          : {}),
+        ...(state.restoredRootCwd.resolvedProject
+          ? { project: state.restoredRootCwd.resolvedProject }
+          : {})
+      };
+    }
+    return {};
+  }
+  const scored = merged.map((candidate) => ({
+    candidate,
+    score: merged.reduce((total, entry) => (
+      entry.ref === candidate.ref || entry.ancestorRefs.includes(candidate.ref)
+        ? total + entry.count
+        : total
+    ), 0)
+  }));
+  scored.sort((left, right) => (
+    right.score - left.score ||
+    left.candidate.depth - right.candidate.depth ||
+    (left.candidate.rawPath !== undefined && right.candidate.rawPath !== undefined
+      ? left.candidate.rawPath.localeCompare(right.candidate.rawPath)
+      : left.candidate.base.localeCompare(right.candidate.base) ||
+        left.candidate.ref.localeCompare(right.candidate.ref))
+  ));
+  const winner = scored[0]!.candidate;
+  if (winner.rawPath !== undefined) {
+    return { workingDirectory: winner.rawPath, project: projectFromCwd(winner.rawPath) };
+  }
+  return {
+    workingDirectoryRef: winner.ref,
+    ...(winner.base.length > 0 ? { project: winner.base } : {})
+  };
+}
+
+type MergedCodexWorkdirTally = RestoredCodexWorkdirTally & { rawPath?: string };
+
+/** Merge restored hashed workdir tallies with this slice's raw observations. */
+function mergeCodexWorkdirTallies(state: CodexRolloutParserState): MergedCodexWorkdirTally[] {
+  const home = resolve(homedir());
+  const byRef = new Map<string, MergedCodexWorkdirTally>();
+  for (const restored of state.restoredWorkdirs ?? []) {
+    if (restored.isHome) continue;
+    const existing = byRef.get(restored.ref);
+    if (existing) existing.count += restored.count;
+    else byRef.set(restored.ref, { ...restored, ancestorRefs: [...restored.ancestorRefs] });
+  }
+  for (const [rawPath, count] of state.toolWorkdirs) {
+    if (resolve(rawPath) === home) continue;
+    const tally = hashedWorkdirTally(rawPath, count, home);
+    const existing = byRef.get(tally.ref);
+    if (existing) {
+      existing.count += count;
+      existing.rawPath = rawPath;
+    } else {
+      byRef.set(tally.ref, { ...tally, rawPath });
+    }
+  }
+  return [...byRef.values()];
+}
+
+/** Hashed tally row for one observed (already resolved) tool workdir. */
+function hashedWorkdirTally(
+  path: string,
+  count: number,
+  home: string
+): RestoredCodexWorkdirTally {
+  return {
+    ref: derivedWorkingDirectoryRef(path),
+    ancestorRefs: properAncestorPaths(path).map(derivedWorkingDirectoryRef),
+    depth: path.split(sep).length,
+    base: basename(path),
+    isHome: resolve(path) === home,
+    count
+  };
+}
+
+/**
+ * Proper ancestors of a normalized absolute path, excluding the filesystem
+ * root: `dominantCodexCwd`'s descendant test (`startsWith(candidate + sep)`)
+ * never matches the bare root, so the root must not appear as an ancestor.
+ */
+function properAncestorPaths(path: string): string[] {
+  const ancestors: string[] = [];
+  const segments = path.split(sep).filter(Boolean);
+  let current = "";
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    current += `${sep}${segments[index]!}`;
+    ancestors.push(current);
+  }
+  return ancestors;
+}
+
+/** Parse one Codex rollout file (JSONL event stream). Exported for tests. */
+export function parseCodexRollout(
+  content: string,
+  onEntry?: (entry: Record<string, unknown>) => void,
+  onDiagnostic?: TranscriptParseDiagnosticHandler
+): LocalAgentCall[] {
+  const state = createCodexRolloutParserState();
+  for (const line of content.split("\n")) {
+    consumeCodexRolloutLine(state, line, onEntry);
+  }
+  return finishCodexRolloutParse(state, onDiagnostic);
 }
 
 function collectEmbeddedToolWorkdirs(
@@ -926,6 +1787,24 @@ export async function loadLocalAgentUsage(options: LocalAgentLogOptions = {}): P
 }
 
 /**
+ * Read only formats whose registry contract supports action planning.
+ *
+ * The launch action loop currently has truthful session/completion semantics
+ * for Claude Code and Codex. Keeping this entrypoint registry-driven avoids an
+ * unnecessary Gemini history walk and prevents presence-only/experimental
+ * formats from silently entering a matched token experiment.
+ */
+export async function loadLocalAgentActionEvidence(
+  options: LocalAgentLogOptions = {}
+): Promise<LocalAgentLogResult> {
+  const runtimes = await localAgentFormatRuntimes();
+  return loadLocalAgentUsageWithFormats(
+    runtimes.filter((runtime) => runtime.descriptor.capabilities.actionPlanning),
+    options
+  );
+}
+
+/**
  * Registry-driven ingestion engine. Exported from this module for registry
  * contract tests and format modules, but intentionally omitted from the
  * package-root API.
@@ -935,6 +1814,9 @@ export async function loadLocalAgentUsageWithFormats(
   options: LocalAgentLogOptions = {}
 ): Promise<LocalAgentLogResult> {
   validateLocalAgentFormatDescriptors(registry.map((entry) => entry.descriptor));
+  const qualitativePolicy = options.qualitativeScan
+    ? validateQualitativeScanPolicy(options.qualitativeScan)
+    : undefined;
   const home = homedir();
   const calls: LocalAgentCall[] = [];
   const codexInvocationFiles = options.collectCodexInvocationEvidence
@@ -945,35 +1827,155 @@ export async function loadLocalAgentUsageWithFormats(
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
   const diagnostics: LocalAgentLogDiagnostic[] = [];
   const sourceScans: LocalAgentSourceScan[] = [];
+  // One bounded header-pass budget per run. A malformed coverage ref is
+  // dropped rather than compared: proven files then keep blocking (fail
+  // closed) instead of reading as foreign to a garbage project.
+  const headerPass: CodexHeaderPassState | undefined = options.ownershipIndex
+    ? {
+        ownershipIndex: options.ownershipIndex,
+        ...(options.coverageProjectRef &&
+          /^avref_[a-f0-9]{64}$/.test(options.coverageProjectRef)
+          ? { coverageProjectRef: options.coverageProjectRef }
+          : {}),
+        probesRemaining: codexHeaderProbesPerScan
+      }
+    : undefined;
 
   for (const runtime of registry) {
     const { descriptor } = runtime;
     const scan = emptySourceScan(descriptor.id);
+    if (qualitativePolicy) initializeQualitativeCoverage(scan);
     sourceScans.push(scan);
     const root = localAgentFormatRoot(descriptor, options, home);
-    for (const file of await listFormatCandidateFiles(root, descriptor, scan, diagnostics)) {
+    const discoveredFiles = await listFormatCandidateFiles(root, descriptor, scan, diagnostics);
+    const files: BoundedQualitativeFile[] = qualitativePolicy
+      ? await selectBoundedQualitativeFiles(
+          discoveredFiles,
+          descriptor,
+          sinceMs,
+          qualitativePolicy,
+          // Must match the loop's per-file derivation exactly (key alignment).
+          Boolean(options.collectCodexInvocationEvidence) && descriptor.id === "codex" &&
+            descriptor.capabilities.invocationEvidence,
+          scan,
+          diagnostics,
+          options.qualitativeIndex,
+          headerPass,
+          options.streamCheckpoints
+        )
+      : discoveredFiles.map((filePath) => ({ filePath }));
+    for (const selected of files) {
+      const file = selected.filePath;
       if (!matchesLocalAgentFormatFile(descriptor, file)) continue;
-      let content: string;
-      try {
-        content = await readFile(file, "utf8");
-      } catch (error) {
-        recordUnreadableFile(descriptor.id, scan, diagnostics, error);
-        continue;
-      }
-      if (!content) continue;
-      filesParsed += 1;
-      scan.filesParsed += 1;
       const collectInvocationEvidence = Boolean(codexInvocationFiles) &&
         descriptor.id === "codex" && descriptor.capabilities.invocationEvidence;
-      const parsed = runtime.parseFull({
-        content,
-        filePath: file,
-        sinceMs,
-        collectInvocationEvidence,
-        onDiagnostic: (diagnostic) => {
-          recordParseDiagnostic(descriptor.id, scan, diagnostics, diagnostic);
+      let indexed: LocalAgentQualitativeIndexValue | undefined;
+      if (qualitativePolicy && selected.streamedValue) {
+        // A checkpointed stream completed this run; its index entry is
+        // already persisted. Consume the value like a fresh complete read.
+        indexed = selected.streamedValue;
+        scan.qualitativeFilesReadCompletely =
+          (scan.qualitativeFilesReadCompletely ?? 0) + 1;
+      } else if (qualitativePolicy && options.qualitativeIndex && selected.indexKey) {
+        try {
+          const candidate = await options.qualitativeIndex.read(selected.indexKey);
+          if (candidate && await qualitativeIndexKeyStillCurrent(file, selected.indexKey)) {
+            if (isQualitativeIndexValue(candidate, descriptor, collectInvocationEvidence)) {
+              indexed = candidate;
+              scan.qualitativeIndexHits = (scan.qualitativeIndexHits ?? 0) + 1;
+              scan.qualitativeBytesReused =
+                (scan.qualitativeBytesReused ?? 0) + (selected.fileSize ?? 0);
+              scan.qualitativeFilesReadCompletely =
+                (scan.qualitativeFilesReadCompletely ?? 0) + 1;
+            } else {
+              scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+            }
+          }
+          // A candidate whose file identity moved on mid-scan is a benign
+          // change, not an index failure; the fresh-read path fails it closed.
+        } catch {
+          if (!selected.probeErrored) {
+            scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+          }
         }
-      });
+      }
+      // A file admitted only because a validated selection-time hit exempted
+      // it from the byte budget must never fall through to an unbudgeted
+      // fresh read when the loop probe misses (concurrent GC, transient FS
+      // error). Fail closed: record the skip, coverage stays "indexing", and
+      // the next scan re-probes.
+      if (!indexed && selected.budgetExempt) {
+        recordQualitativeBudgetSkip(scan);
+        continue;
+      }
+
+      let parsed: LocalAgentQualitativeIndexValue;
+      if (indexed) {
+        parsed = indexed;
+      } else {
+        let content: string;
+        try {
+          if (qualitativePolicy) {
+            const bounded = await readBoundedUtf8File(
+              file,
+              selected.maxReadBytes!,
+              selected.indexKey!.fileIdentity
+            );
+            content = bounded.content;
+            scan.qualitativeBytesRead = (scan.qualitativeBytesRead ?? 0) + bounded.bytesRead;
+            scan.qualitativeFilesReadCompletely =
+              (scan.qualitativeFilesReadCompletely ?? 0) + 1;
+          } else {
+            content = await readFile(file, "utf8");
+          }
+        } catch (error) {
+          if (qualitativePolicy && error instanceof QualitativeReadLimitError) {
+            recordQualitativeBudgetSkip(scan);
+            continue;
+          }
+          recordUnreadableFile(descriptor.id, scan, diagnostics, error);
+          if (qualitativePolicy) scan.qualitativeCoverage = "partial";
+          continue;
+        }
+        if (!content) continue;
+        const fileDiagnostics: TranscriptParseDiagnostic[] = [];
+        const fresh = runtime.parseFull({
+          content,
+          filePath: file,
+          sinceMs,
+          collectInvocationEvidence,
+          onDiagnostic: (diagnostic) => fileDiagnostics.push(diagnostic)
+        });
+        parsed = {
+          calls: fresh.calls,
+          ...(fresh.invocationFile ? { invocationFile: fresh.invocationFile } : {}),
+          ...(fresh.invocationWindowProof
+            ? { invocationWindowProof: fresh.invocationWindowProof }
+            : {}),
+          diagnostics: fileDiagnostics
+        };
+        // Never persist a registry ownership violation, even through a
+        // caller-supplied adapter. Preserve the legacy fail-fast contract.
+        assertFormatCallOwnership(descriptor, parsed.calls);
+        assertInvocationOwnership(descriptor, parsed.invocationFile, collectInvocationEvidence);
+        if (qualitativePolicy && options.qualitativeIndex && selected.indexKey) {
+          try {
+            await options.qualitativeIndex.write(selected.indexKey, parsed);
+          } catch {
+            // One broken store document should read as one failure: the
+            // selection probe already counted it when it errored there.
+            if (!selected.probeErrored) {
+              scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+            }
+          }
+        }
+      }
+
+      filesParsed += 1;
+      scan.filesParsed += 1;
+      for (const diagnostic of parsed.diagnostics) {
+        recordParseDiagnostic(descriptor.id, scan, diagnostics, diagnostic);
+      }
       assertFormatCallOwnership(descriptor, parsed.calls);
       assertInvocationOwnership(descriptor, parsed.invocationFile, collectInvocationEvidence);
       calls.push(...parsed.calls);
@@ -981,6 +1983,7 @@ export async function loadLocalAgentUsageWithFormats(
         codexInvocationFiles.push(parsed.invocationFile);
       }
     }
+    if (qualitativePolicy) finishQualitativeCoverage(scan, diagnostics);
   }
 
   const normalizedCalls = dedupeCumulativeSessionCalls(calls, (agent) => {
@@ -1023,6 +2026,7 @@ type CodexFinancialStreamState = {
   model?: string;
   rootCwd?: string;
   sessionId?: string;
+  sourceVersion?: string;
   rootSessionMetaSeen: boolean;
   startedAt?: string;
   rootStartedAtMs?: number;
@@ -1066,8 +2070,75 @@ export async function loadLocalAgentFinancialUsageWithFormats(
     const scan = financialSourceScan(descriptor);
     const calls: LocalAgentCall[] = [];
     const root = localAgentFormatRoot(descriptor, options, home);
-    for (const file of await listFormatCandidateFiles(root, descriptor, scan, diagnostics)) {
-      if (!matchesLocalAgentFormatFile(descriptor, file)) continue;
+    const candidateFiles = (await listFormatCandidateFiles(root, descriptor, scan, diagnostics))
+      .filter((file) => matchesLocalAgentFormatFile(descriptor, file));
+
+    // Per-file financial cache (req 5's financial half). The newest file per
+    // source always parses fresh: the active session's evidence — including
+    // its raw working directory for downstream context inference — must never
+    // come from a privacy-reduced cache entry.
+    const financialKeys = new Map<string, LocalAgentFinancialIndexKey>();
+    let newestFile: string | undefined;
+    if (options.financialIndex) {
+      let newestRecency = Number.NEGATIVE_INFINITY;
+      for (const file of candidateFiles) {
+        const metadata = await lstat(file).catch(() => undefined);
+        if (!metadata || !metadata.isFile() || metadata.isSymbolicLink()) continue;
+        financialKeys.set(file, {
+          schemaVersion: 2,
+          section: "financial",
+          agent: descriptor.id,
+          pathHash: createHash("sha256").update(resolve(file)).digest("hex"),
+          fileIdentity: qualitativeFileIdentity(metadata),
+          financialParserVersion: localAgentFinancialParserVersion
+        });
+        const recency = Math.max(metadata.mtimeMs, metadata.ctimeMs, metadata.birthtimeMs);
+        if (recency > newestRecency) {
+          newestRecency = recency;
+          newestFile = file;
+        }
+      }
+    }
+
+    for (const file of candidateFiles) {
+      const financialKey = financialKeys.get(file);
+      // Any newest file may reuse its cache when its identity is
+      // byte-unchanged — cached evidence is then exact. Codex additionally
+      // recovers its root working directory from the bounded session_meta
+      // first line; Claude reuse serves refs only and context inference
+      // falls back to the requested project path. An actively growing
+      // session changes identity and always parses fresh.
+      if (options.financialIndex && financialKey) {
+        try {
+          const cached = await options.financialIndex.read(financialKey);
+          if (cached && file === newestFile &&
+              !await financialIdentityStillCurrent(file, financialKey)) {
+            throw new Error("stale newest identity");
+          }
+          if (cached) {
+            if (file === newestFile && descriptor.id === "codex") {
+              await attachProbedRootCwd(
+                file,
+                cached.calls as LocalAgentCall[],
+                financialKey.fileIdentity
+              );
+            }
+            const cachedCalls = cached.calls as LocalAgentCall[];
+            assertFormatCallOwnership(descriptor, cachedCalls);
+            scan.filesParsed += 1;
+            for (const diagnostic of cached.diagnostics) {
+              recordParseDiagnostic(descriptor.id, scan, diagnostics, diagnostic);
+            }
+            calls.push(...cachedCalls);
+            continue;
+          }
+        } catch {
+          // A failing cache never blocks the authoritative fresh parse.
+        }
+      }
+      const diagnosticsBefore = diagnostics.length;
+      const unreadableBefore = scan.unreadableFiles;
+      const filesParsedBefore = scan.filesParsed;
       const parsedCalls = await runtime.parseFinancialFile({
         filePath: file,
         sinceMs,
@@ -1077,6 +2148,26 @@ export async function loadLocalAgentFinancialUsageWithFormats(
       assertFormatCallOwnership(descriptor, parsedCalls);
       assertFinancialSourceOwnership(descriptor, scan, diagnostics);
       calls.push(...parsedCalls);
+      // Cache only clean, content-bearing parses under the identity captured
+      // BEFORE the read: a file that changed mid-parse fails the next
+      // identity check instead of serving mixed evidence.
+      if (options.financialIndex && financialKey &&
+          scan.filesParsed === filesParsedBefore + 1 &&
+          scan.unreadableFiles === unreadableBefore) {
+        const parseDiagnostics = diagnostics.slice(diagnosticsBefore)
+          .filter((entry) => (
+            entry.code === "malformed_jsonl" ||
+            entry.code === "malformed_session_file" ||
+            entry.code === "unsupported_token_shape"
+          ))
+          .map((entry) => ({ code: entry.code as
+            "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape",
+            count: entry.count }));
+        await options.financialIndex.write(financialKey, {
+          calls: parsedCalls,
+          diagnostics: parseDiagnostics
+        }).catch(() => undefined);
+      }
     }
     return { calls, scan, diagnostics };
   }));
@@ -1107,6 +2198,155 @@ export async function loadLocalAgentFinancialUsageWithFormats(
   };
 }
 
+/** Whether a financial cache key still matches the file's on-disk identity. */
+async function financialIdentityStillCurrent(
+  filePath: string,
+  key: LocalAgentFinancialIndexKey
+): Promise<boolean> {
+  const metadata = await lstat(filePath).catch(() => undefined);
+  if (!metadata || !metadata.isFile() || metadata.isSymbolicLink()) return false;
+  return qualitativeFileIdentity(metadata) === key.fileIdentity;
+}
+
+/**
+ * Recover the newest Codex rollout's root working directory from its bounded
+ * session_meta first line and re-attach it to cached calls whose privacy-
+ * reduced ref matches. Reads at most 256 KiB; never guesses on mismatch.
+ */
+async function attachProbedRootCwd(
+  filePath: string,
+  calls: LocalAgentCall[],
+  expectedIdentity?: string
+): Promise<void> {
+  const header = await probeCodexRolloutHeader(filePath, expectedIdentity);
+  const cwd = header?.cwd;
+  if (!cwd) return;
+  const ref = derivedWorkingDirectoryRef(cwd);
+  for (const call of calls) {
+    if (call.workingDirectoryRef === ref && !call.workingDirectory) {
+      call.workingDirectory = cwd;
+    }
+  }
+}
+
+type CodexRolloutHeader = {
+  /** Absolute session cwd from the root session_meta record, when present. */
+  cwd?: string;
+  /** Subagent/fork lineage markers: scheduling hints only, never ownership. */
+  isSubagent: boolean;
+  parentSessionId?: string;
+  forkedFromId?: string;
+};
+
+const codexHeaderProbeBytes = 256 * 1024;
+
+/**
+ * Bounded Codex rollout header probe (design section c). Opens the exact
+ * inode (O_NOFOLLOW), binds both boundary stats to `expectedIdentity` when
+ * one is supplied, reads at most the first 256 KiB, and abstractly parses
+ * only the first complete line as a root `session_meta` record. Every
+ * failure — oversized first line, non-session_meta first line, malformed
+ * JSON, identity drift mid-probe — returns undefined: unknown, never an
+ * error and never a guess. The raw cwd never escapes its callers beyond
+ * deriving an avref or re-attaching evidence that already carried the
+ * byte-identical ref.
+ */
+async function probeCodexRolloutHeader(
+  filePath: string,
+  expectedIdentity?: string
+): Promise<CodexRolloutHeader | undefined> {
+  let firstLine: Buffer | undefined;
+  try {
+    const handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() ||
+          expectedIdentity !== undefined &&
+            qualitativeFileIdentity(before) !== expectedIdentity) {
+        return undefined;
+      }
+      const probe = Buffer.allocUnsafe(codexHeaderProbeBytes);
+      let bytesRead = 0;
+      let sawEof = false;
+      while (bytesRead < probe.length) {
+        const read = await handle.read(probe, bytesRead, probe.length - bytesRead, bytesRead);
+        if (read.bytesRead === 0) {
+          sawEof = true;
+          break;
+        }
+        bytesRead += read.bytesRead;
+        if (probe.subarray(0, bytesRead).includes(0x0a)) break;
+      }
+      const window = probe.subarray(0, bytesRead);
+      const newlineAt = window.indexOf(0x0a);
+      if (newlineAt > 0) {
+        firstLine = Buffer.from(window.subarray(0, newlineAt));
+      } else if (newlineAt === -1 && sawEof && bytesRead > 0) {
+        // EOF inside the window: the whole file is one complete first line.
+        firstLine = Buffer.from(window);
+      }
+      const after = await handle.stat();
+      if (!after.isFile() ||
+          expectedIdentity !== undefined &&
+            qualitativeFileIdentity(after) !== expectedIdentity) {
+        return undefined;
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  } catch {
+    return undefined;
+  }
+  if (!firstLine) return undefined;
+  let record: unknown;
+  try {
+    record = JSON.parse(firstLine.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(record) || record.type !== "session_meta" || !isRecord(record.payload)) {
+    return undefined;
+  }
+  const payload = record.payload;
+  const cwd = stringOf(payload.cwd);
+  const parentSessionId = stringOf(payload.parent_thread_id);
+  const forkedFromId = stringOf(payload.forked_from_id);
+  return {
+    ...(cwd && isAbsolute(cwd) ? { cwd } : {}),
+    isSubagent: stringOf(payload.thread_source) === "subagent" ||
+      isRecord(payload.source) && "subagent" in payload.source,
+    ...(parentSessionId ? { parentSessionId } : {}),
+    ...(forkedFromId ? { forkedFromId } : {})
+  };
+}
+
+/**
+ * MINOR-5 attribution parity: "proven" requires exactly the condition under
+ * which `dominantCodexCwd` short-circuits to the session cwd — an absolute
+ * path whose `projectFromCwd` label is a real project (not "(home)"; cwd "/"
+ * has an empty basename and falls through to body evidence, QA case 36). A
+ * full parse of such a rollout is guaranteed to emit this same directory as
+ * its only call's working directory, so the derived ref matches byte-for-
+ * byte. Everything else — home, "/", relative, absent, unparseable — stays
+ * unknown and keeps blocking; unknown is never treated as foreign.
+ */
+function codexHeaderAttribution(
+  header: CodexRolloutHeader | undefined
+): NonNullable<LocalAgentOwnershipRecord["headerAttribution"]> {
+  const marker = header ? { isSubagent: header.isSubagent } : {};
+  const cwd = header?.cwd;
+  if (!cwd || !isAbsolute(cwd)) return { status: "unknown", ...marker };
+  const project = projectFromCwd(cwd);
+  if (!project || project === "(home)") return { status: "unknown", ...marker };
+  // Refs derive from the resolved directory: `absoluteWorkingDirectory`
+  // resolves the short-circuited session cwd before the call is emitted.
+  return {
+    status: "proven",
+    projectRef: derivedWorkingDirectoryRef(resolve(cwd)),
+    ...marker
+  };
+}
+
 /** @internal Runtime hook owned by the Claude Code registry entry. */
 export async function readClaudeCodeFinancialFileForRegistry(
   context: LocalAgentFormatFinancialFileContext
@@ -1124,7 +2364,10 @@ export async function readClaudeCodeFinancialFileForRegistry(
       const call = parseClaudeFinancialEntry(
         entry,
         filePath,
-        sinceMs,
+        // Window-blind on purpose: cached values must contain the complete
+        // file so a narrow-window run can never truncate a wider one. The
+        // loader's final timestamp filter performs all narrowing.
+        undefined,
         seen,
         (diagnostic) => fileDiagnostics.push(diagnostic)
       );
@@ -1296,6 +2539,1174 @@ function assertInvocationOwnership(
     throw new Error(
       `Local-agent format ${descriptor.id} emitted invocation evidence for a different source.`
     );
+  }
+}
+
+type BoundedQualitativeFile = {
+  filePath: string;
+  maxReadBytes?: number;
+  fileSize?: number;
+  indexKey?: LocalAgentQualitativeIndexKey;
+  /**
+   * A selection-time index probe validated this file's cached evidence, so it
+   * was admitted without consuming any byte budget (req 5). The parse loop
+   * still performs its own probe and identity re-validation.
+   */
+  budgetExempt?: boolean;
+  /** The selection-time probe already counted one index error for this file. */
+  probeErrored?: boolean;
+  /**
+   * Complete evidence produced by a checkpointed stream that finished this
+   * run. The entry is already persisted; the parse loop consumes the value
+   * exactly like a fresh complete read.
+   */
+  streamedValue?: LocalAgentQualitativeIndexValue;
+};
+
+type QualitativeFileMetadata = {
+  filePath: string;
+  size: number;
+  recencyMs: number;
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+};
+
+class QualitativeReadLimitError extends Error {
+  constructor() {
+    super("Qualitative transcript changed beyond the configured byte limit while being read.");
+    this.name = "QualitativeReadLimitError";
+  }
+}
+
+function validateQualitativeScanPolicy(
+  policy: LocalAgentQualitativeScanPolicy
+): LocalAgentQualitativeScanPolicy {
+  for (const [name, value] of Object.entries(policy)) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`${name} must be a positive safe integer byte limit.`);
+    }
+  }
+  return policy;
+}
+
+function initializeQualitativeCoverage(scan: LocalAgentSourceScan): void {
+  scan.filesSkippedBeforeWindow = 0;
+  scan.qualitativeCoverage = "complete";
+  scan.qualitativeFilesEligible = 0;
+  scan.qualitativeFilesSkippedForBudget = 0;
+  scan.qualitativeFilesSelected = 0;
+  scan.qualitativeFilesReadCompletely = 0;
+  scan.qualitativeBytesEligible = 0;
+  scan.qualitativeBytesSelected = 0;
+  scan.qualitativeBytesRead = 0;
+  scan.qualitativeBytesReused = 0;
+  scan.qualitativeIndexHits = 0;
+  scan.qualitativeIndexErrors = 0;
+  scan.qualitativeFilesIndexed = 0;
+  scan.qualitativeFilesForeignProven = 0;
+  scan.qualitativeFilesOwnershipUnknown = 0;
+  scan.qualitativeSelectedEvidence = "complete_files_only";
+}
+
+/**
+ * Select complete files, never byte ranges. A partial session can make a
+ * cumulative counter look like a turn or make inherited Codex history look
+ * like child usage, so a file that does not fit is omitted as a whole.
+ */
+async function selectBoundedQualitativeFiles(
+  discoveredFiles: readonly string[],
+  descriptor: LocalAgentFormatDescriptor,
+  sinceMs: number | undefined,
+  policy: LocalAgentQualitativeScanPolicy,
+  collectInvocationEvidence: boolean,
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[],
+  qualitativeIndex?: LocalAgentQualitativeIndexAdapter,
+  headerPass?: CodexHeaderPassState,
+  streamCheckpoints?: LocalAgentStreamCheckpointAdapter
+): Promise<BoundedQualitativeFile[]> {
+  const eligible: QualitativeFileMetadata[] = [];
+  for (const filePath of discoveredFiles) {
+    if (!matchesLocalAgentFormatFile(descriptor, filePath)) continue;
+    let metadata;
+    try {
+      metadata = await lstat(filePath);
+    } catch (error) {
+      recordUnreadableFile(descriptor.id, scan, diagnostics, error);
+      scan.qualitativeCoverage = "partial";
+      continue;
+    }
+    // Discovery accepts regular files only. Re-check immediately before the
+    // read so a path replacement cannot redirect a local scan through a link.
+    if (!metadata.isFile() || metadata.isSymbolicLink() ||
+        !Number.isSafeInteger(metadata.size) || metadata.size < 0) {
+      recordUnreadableFile(descriptor.id, scan, diagnostics, newErrorWithCode("EINVAL"));
+      scan.qualitativeCoverage = "partial";
+      continue;
+    }
+    // Match the financial reader's conservative proof: ctime catches a path
+    // whose mtime was restored after replacement, and birthtime catches a
+    // recent copy that preserved an older mtime.
+    const newestFileEvidence = Math.max(
+      metadata.mtimeMs,
+      metadata.ctimeMs,
+      metadata.birthtimeMs
+    );
+    if (typeof sinceMs === "number" && Number.isFinite(newestFileEvidence) &&
+        newestFileEvidence < sinceMs) {
+      scan.filesSkippedBeforeWindow = (scan.filesSkippedBeforeWindow ?? 0) + 1;
+      continue;
+    }
+    scan.qualitativeFilesEligible = (scan.qualitativeFilesEligible ?? 0) + 1;
+    scan.qualitativeBytesEligible = (scan.qualitativeBytesEligible ?? 0) + metadata.size;
+    eligible.push({
+      filePath,
+      size: metadata.size,
+      recencyMs: newestFileEvidence,
+      dev: metadata.dev,
+      ino: metadata.ino,
+      mtimeMs: metadata.mtimeMs,
+      ctimeMs: metadata.ctimeMs,
+      birthtimeMs: metadata.birthtimeMs
+    });
+  }
+
+  // Recent evidence is the most useful bounded prefix. Path order breaks
+  // equal-mtime ties so repeated scans of an unchanged tree are deterministic.
+  eligible.sort((left, right) => (
+    right.recencyMs - left.recencyMs || left.filePath.localeCompare(right.filePath)
+  ));
+
+  const selected: BoundedQualitativeFile[] = [];
+  const streamCandidates: QualitativeFileMetadata[] = [];
+  let remaining = policy.maxSourceBytes;
+  for (const file of eligible) {
+    let probeErrored = false;
+    // Probe the private index before any budget decision (req 5): a file with
+    // validated cached evidence is admitted regardless of size and consumes
+    // no byte budget. The probe is trusted for budget exemption only after
+    // the same identity re-check the parse loop performs.
+    if (qualitativeIndex) {
+      const candidateKey = qualitativeIndexKey(
+        descriptor.id, file.filePath, file, sinceMs, collectInvocationEvidence
+      );
+      let cachedHit = false;
+      try {
+        const candidate = await qualitativeIndex.read(candidateKey);
+        cachedHit = Boolean(
+          candidate &&
+          await qualitativeIndexKeyStillCurrent(file.filePath, candidateKey) &&
+          isQualitativeIndexValue(candidate, descriptor, collectInvocationEvidence)
+        );
+      } catch {
+        probeErrored = true;
+        scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+      }
+      if (cachedHit) {
+        selected.push({
+          filePath: file.filePath,
+          maxReadBytes: file.size,
+          fileSize: file.size,
+          indexKey: candidateKey,
+          budgetExempt: true,
+          probeErrored
+        });
+        scan.qualitativeFilesSelected = (scan.qualitativeFilesSelected ?? 0) + 1;
+        continue;
+      }
+    }
+    // Oversized Codex rollouts route to the bounded streaming pass instead
+    // of a permanent skip whenever both index sections are available; they
+    // never consume the whole-file byte budget (req 5).
+    if (streamCheckpoints && qualitativeIndex && descriptor.id === "codex" &&
+        file.size > policy.maxFileBytes) {
+      streamCandidates.push(file);
+      continue;
+    }
+    if (file.size > policy.maxFileBytes || file.size > remaining) {
+      recordQualitativeBudgetSkip(scan);
+      // A budget-skipped Codex file still gets a bounded header pass so a
+      // proven-foreign attribution can honestly narrow the requested
+      // project's blocking set without ever reading the body. Claude files
+      // get no header shortcut (their cwd can change mid-file).
+      if (headerPass && descriptor.id === "codex") {
+        await recordBudgetSkippedCodexHeader(file, headerPass, scan);
+      }
+      continue;
+    }
+    selected.push({
+      filePath: file.filePath,
+      // Bind the read to the selected metadata snapshot. Growth is treated as
+      // incomplete coverage rather than silently consuming another file's
+      // reserved source budget.
+      maxReadBytes: file.size,
+      fileSize: file.size,
+      indexKey: qualitativeIndexKey(
+        descriptor.id,
+        file.filePath,
+        file,
+        sinceMs,
+        collectInvocationEvidence
+      ),
+      probeErrored: probeErrored || undefined
+    });
+    scan.qualitativeFilesSelected = (scan.qualitativeFilesSelected ?? 0) + 1;
+    scan.qualitativeBytesSelected = (scan.qualitativeBytesSelected ?? 0) + file.size;
+    remaining -= file.size;
+  }
+  if (streamCandidates.length > 0 && streamCheckpoints && qualitativeIndex) {
+    const streamed = await runCodexStreamingPass(streamCandidates, {
+      descriptor,
+      qualitativeIndex,
+      streamCheckpoints,
+      ...(headerPass ? { ownershipIndex: headerPass.ownershipIndex } : {}),
+      collectInvocationEvidence,
+      sinceMs,
+      scan,
+      remainingBytes: policy.maxStreamedBytesPerRun ?? defaultStreamedBytesPerRun
+    });
+    for (const file of streamCandidates) {
+      const value = streamed.get(file.filePath);
+      if (value) {
+        selected.push({
+          filePath: file.filePath,
+          fileSize: file.size,
+          streamedValue: value
+        });
+        scan.qualitativeFilesSelected = (scan.qualitativeFilesSelected ?? 0) + 1;
+        continue;
+      }
+      // Unconverged this run: same honest accounting as a budget skip (the
+      // body was not fully parsed), plus explicit stream-progress counters
+      // and the A4a header-pass ownership classification.
+      recordQualitativeBudgetSkip(scan);
+      scan.qualitativeFilesStreaming = (scan.qualitativeFilesStreaming ?? 0) + 1;
+      if (headerPass) {
+        await recordBudgetSkippedCodexHeader(file, headerPass, scan);
+      }
+    }
+  }
+  return selected;
+}
+
+type CodexHeaderPassState = {
+  ownershipIndex: LocalAgentOwnershipIndexAdapter;
+  /** Validated `avref_…` requested by the caller, if any. */
+  coverageProjectRef?: string;
+  /** Fresh header reads left this run; persisted results carry over honestly. */
+  probesRemaining: number;
+};
+
+/**
+ * Fresh bounded header reads allowed per scan. Files beyond the cap simply
+ * stay ownership-unknown ("indexing") this run — never claimed either way —
+ * and are reached on a later run once earlier probes persist their results.
+ */
+export const codexHeaderProbesPerScan = 64;
+
+/**
+ * Classify one budget-skipped Codex file from its persisted or freshly probed
+ * header attribution. Only a "proven" attribution to a project OTHER than the
+ * requested coverage ref counts as foreign; proven-owned and unknown files
+ * keep blocking. Store failures count as index errors, which already force
+ * the fail-closed "indexing" state.
+ */
+async function recordBudgetSkippedCodexHeader(
+  file: QualitativeFileMetadata,
+  headerPass: CodexHeaderPassState,
+  scan: LocalAgentSourceScan
+): Promise<void> {
+  const pathHash = createHash("sha256").update(resolve(file.filePath)).digest("hex");
+  const fileIdentity = qualitativeFileIdentity(file);
+  let attribution: LocalAgentOwnershipRecord["headerAttribution"];
+  try {
+    const stored = await headerPass.ownershipIndex.readOwnership("codex", pathHash);
+    if (stored && stored.fileIdentity === fileIdentity) {
+      attribution = stored.headerAttribution;
+    }
+  } catch {
+    scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+    return;
+  }
+  if (!attribution) {
+    // Honest carry-over: past the cap the file simply stays unknown this run.
+    if (headerPass.probesRemaining <= 0) return;
+    headerPass.probesRemaining -= 1;
+    attribution = codexHeaderAttribution(
+      await probeCodexRolloutHeader(file.filePath, fileIdentity)
+    );
+    try {
+      await headerPass.ownershipIndex.writeOwnership("codex", pathHash, {
+        // Body-derived ownership is still unknown: only the header was read.
+        status: "unknown",
+        fileIdentity,
+        projectRefs: [],
+        headerAttribution: attribution
+      });
+    } catch {
+      scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+      return;
+    }
+  }
+  if (attribution.status === "proven" && attribution.projectRef &&
+      headerPass.coverageProjectRef &&
+      attribution.projectRef !== headerPass.coverageProjectRef) {
+    scan.qualitativeFilesForeignProven = (scan.qualitativeFilesForeignProven ?? 0) + 1;
+  }
+}
+
+const codexStreamChunkBytes = 8 * 1_024 * 1_024;
+/** A single JSONL line above this bound is skipped as malformed (design e). */
+const codexStreamMaxLineBytes = 32 * 1_024 * 1_024;
+const codexStreamPrefixProbeBytes = 64 * 1_024;
+/**
+ * Default per-run byte allowance for the streaming pass. Sized from measured
+ * end-to-end throughput (~99 MB/s on the reference machine, QA probe8): 512
+ * MiB keeps one slice at roughly 4-5 seconds of wall clock inside the cold
+ * budget. Callers with different budgets tune `maxStreamedBytesPerRun`.
+ */
+export const defaultStreamedBytesPerRun = 512 * 1_024 * 1_024;
+/** Bounded per-run header probes used only to order the streaming schedule. */
+const codexStreamSchedulingProbesPerScan = 256;
+
+/** Persisted privacy-reduced Codex reducer state (checkpoint payload). */
+type PersistedCodexReducerState = {
+  model?: string;
+  sessionId?: string;
+  sourceVersion?: string;
+  rootSessionMetaSeen: boolean;
+  startedAt?: string;
+  rootStartedAtMs?: number;
+  rootTaskStarted: boolean;
+  isSubagent: boolean;
+  parentSessionId?: string;
+  pendingTaskTurnId?: string;
+  completedTask?: LocalAgentCompletionEvidence;
+  malformedLines: number;
+  lastActivityAt?: string;
+  lastTotal?: Record<string, unknown>;
+  lastTurn?: Record<string, unknown>;
+  inheritedUsageBaseline?: Record<string, unknown>;
+  lastRateLimits?: LocalAgentRateLimitSnapshot;
+  rootCwd: RestoredCodexRootCwd;
+  workdirs: RestoredCodexWorkdirTally[];
+  promptOverflow: number;
+  recentPrompts: string[];
+  fileCounts: Array<[string, number]>;
+  toolCallCount: number;
+};
+
+/** Documented retention caps for the privacy-reduced checkpoint state. */
+const checkpointRecentPromptLimit = 12;
+const checkpointPromptCharLimit = 4_096;
+const checkpointFileCountLimit = 256;
+const checkpointWorkdirLimit = 128;
+
+/**
+ * Reduce live reducer state to its persistable form: prompts pass through
+ * `sanitizeLocalActivityText` and keep only the last 12 survivors (earlier
+ * survivors persist as a count); file basename tallies and hashed workdir
+ * tallies are capped deterministically; the raw session cwd collapses to its
+ * short-circuit decision plus resolved ref/project. Raw absolute paths and
+ * raw prompt text never reach disk.
+ */
+function serializeCodexReducerState(state: CodexRolloutParserState): PersistedCodexReducerState {
+  // Path spans are stripped BEFORE sanitization so persisted survivors carry
+  // the same privacy guarantee as entries: raw absolute paths (including
+  // home-anchored ones) never reach disk. Topic derivation is unaffected
+  // (topicTokens strips the same spans); the residual divergence is that
+  // inferAction can no longer see action words embedded inside path segments
+  // of checkpoint-crossing prompts, and path-only prompts stop counting —
+  // pinned by the streaming privacy fixture.
+  const survivors = state.prompts
+    .map((prompt) => sanitizeLocalActivityText(stripAbsolutePathSpans(prompt)))
+    .filter(isHumanPrompt)
+    .map((prompt) => prompt.length > checkpointPromptCharLimit
+      ? prompt.slice(0, checkpointPromptCharLimit)
+      : prompt);
+  const recentPrompts = survivors.slice(-checkpointRecentPromptLimit);
+  const promptOverflow = state.restoredPromptOverflow +
+    Math.max(0, survivors.length - checkpointRecentPromptLimit);
+  let rootCwd: RestoredCodexRootCwd;
+  if (state.rootCwd !== undefined) {
+    const sessionProject = projectFromCwd(state.rootCwd);
+    const resolved = absoluteWorkingDirectory(state.rootCwd);
+    rootCwd = {
+      present: true,
+      shortCircuits: Boolean(sessionProject && sessionProject !== "(home)"),
+      ...(resolved !== undefined
+        ? {
+            resolvedRef: derivedWorkingDirectoryRef(resolved),
+            ...(projectFromCwd(resolved) !== undefined
+              ? { resolvedProject: projectFromCwd(resolved) }
+              : {})
+          }
+        : {})
+    };
+  } else if (state.restoredRootCwd) {
+    rootCwd = state.restoredRootCwd;
+  } else {
+    rootCwd = { present: false, shortCircuits: false };
+  }
+  const workdirs = mergeCodexWorkdirTallies(state)
+    .map(({ rawPath: _rawPath, ...tally }) => tally)
+    .sort((left, right) => right.count - left.count || left.ref.localeCompare(right.ref))
+    .slice(0, checkpointWorkdirLimit);
+  const fileCounts = [...state.fileCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, checkpointFileCountLimit);
+  return {
+    ...(state.model !== undefined ? { model: state.model } : {}),
+    ...(state.sessionId !== undefined ? { sessionId: state.sessionId } : {}),
+    ...(state.sourceVersion !== undefined ? { sourceVersion: state.sourceVersion } : {}),
+    rootSessionMetaSeen: state.rootSessionMetaSeen,
+    ...(state.startedAt !== undefined ? { startedAt: state.startedAt } : {}),
+    ...(state.rootStartedAtMs !== undefined ? { rootStartedAtMs: state.rootStartedAtMs } : {}),
+    rootTaskStarted: state.rootTaskStarted,
+    isSubagent: state.isSubagent,
+    ...(state.parentSessionId !== undefined ? { parentSessionId: state.parentSessionId } : {}),
+    ...(state.pendingTaskTurnId !== undefined ? { pendingTaskTurnId: state.pendingTaskTurnId } : {}),
+    ...(state.completedTask !== undefined ? { completedTask: state.completedTask } : {}),
+    malformedLines: state.malformedLines,
+    ...(state.lastActivityAt !== undefined ? { lastActivityAt: state.lastActivityAt } : {}),
+    ...(state.lastTotal !== undefined ? { lastTotal: state.lastTotal } : {}),
+    ...(state.lastTurn !== undefined ? { lastTurn: state.lastTurn } : {}),
+    ...(state.inheritedUsageBaseline !== undefined
+      ? { inheritedUsageBaseline: state.inheritedUsageBaseline }
+      : {}),
+    ...(state.lastRateLimits !== undefined ? { lastRateLimits: state.lastRateLimits } : {}),
+    rootCwd,
+    workdirs,
+    promptOverflow,
+    recentPrompts,
+    fileCounts,
+    toolCallCount: state.toolCallCount
+  };
+}
+
+/** Fail-closed structural check for a restored reducer state. */
+function isPersistedCodexReducerState(value: unknown): value is PersistedCodexReducerState {
+  if (!isRecord(value)) return false;
+  const optionalString = (input: unknown): boolean =>
+    input === undefined || typeof input === "string";
+  const optionalRecord = (input: unknown): boolean =>
+    input === undefined || isRecord(input) && !Array.isArray(input);
+  const optionalFinite = (input: unknown): boolean =>
+    input === undefined || typeof input === "number" && Number.isFinite(input);
+  const nonnegativeInt = (input: unknown): boolean =>
+    Number.isSafeInteger(input) && Number(input) >= 0;
+  const rootCwd = value.rootCwd;
+  const validRootCwd = isRecord(rootCwd) &&
+    typeof rootCwd.present === "boolean" &&
+    typeof rootCwd.shortCircuits === "boolean" &&
+    optionalString(rootCwd.resolvedRef) &&
+    optionalString(rootCwd.resolvedProject);
+  const validWorkdirs = Array.isArray(value.workdirs) && value.workdirs.every((entry) => (
+    isRecord(entry) &&
+    typeof entry.ref === "string" &&
+    Array.isArray(entry.ancestorRefs) &&
+    entry.ancestorRefs.every((ref) => typeof ref === "string") &&
+    nonnegativeInt(entry.depth) &&
+    typeof entry.base === "string" &&
+    typeof entry.isHome === "boolean" &&
+    nonnegativeInt(entry.count)
+  ));
+  const validCompletion = value.completedTask === undefined || (
+    isRecord(value.completedTask) &&
+    value.completedTask.status === "completed" &&
+    value.completedTask.evidence === "codex_task_complete" &&
+    typeof value.completedTask.observedAt === "string"
+  );
+  const validRateLimits = value.lastRateLimits === undefined || (
+    isRecord(value.lastRateLimits) &&
+    typeof value.lastRateLimits.observedAt === "string" &&
+    Array.isArray(value.lastRateLimits.windows)
+  );
+  return typeof value.rootSessionMetaSeen === "boolean" &&
+    typeof value.rootTaskStarted === "boolean" &&
+    typeof value.isSubagent === "boolean" &&
+    optionalString(value.model) &&
+    optionalString(value.sessionId) &&
+    optionalString(value.sourceVersion) &&
+    optionalString(value.startedAt) &&
+    optionalFinite(value.rootStartedAtMs) &&
+    optionalString(value.parentSessionId) &&
+    optionalString(value.pendingTaskTurnId) &&
+    validCompletion &&
+    nonnegativeInt(value.malformedLines) &&
+    optionalString(value.lastActivityAt) &&
+    optionalRecord(value.lastTotal) &&
+    optionalRecord(value.lastTurn) &&
+    optionalRecord(value.inheritedUsageBaseline) &&
+    validRateLimits &&
+    validRootCwd &&
+    validWorkdirs &&
+    nonnegativeInt(value.promptOverflow) &&
+    Array.isArray(value.recentPrompts) &&
+    value.recentPrompts.every((prompt) => typeof prompt === "string") &&
+    Array.isArray(value.fileCounts) &&
+    value.fileCounts.every((pair) => (
+      Array.isArray(pair) && pair.length === 2 &&
+      typeof pair[0] === "string" && nonnegativeInt(pair[1])
+    )) &&
+    nonnegativeInt(value.toolCallCount);
+}
+
+function restoreCodexReducerState(persisted: PersistedCodexReducerState): CodexRolloutParserState {
+  const state = createCodexRolloutParserState();
+  state.model = persisted.model;
+  state.sessionId = persisted.sessionId;
+  state.sourceVersion = persisted.sourceVersion;
+  state.rootSessionMetaSeen = persisted.rootSessionMetaSeen;
+  state.startedAt = persisted.startedAt;
+  state.rootStartedAtMs = persisted.rootStartedAtMs;
+  state.rootTaskStarted = persisted.rootTaskStarted;
+  state.isSubagent = persisted.isSubagent;
+  state.parentSessionId = persisted.parentSessionId;
+  state.pendingTaskTurnId = persisted.pendingTaskTurnId;
+  state.completedTask = persisted.completedTask;
+  state.malformedLines = persisted.malformedLines;
+  state.lastActivityAt = persisted.lastActivityAt;
+  state.lastTotal = persisted.lastTotal;
+  state.lastTurn = persisted.lastTurn;
+  state.inheritedUsageBaseline = persisted.inheritedUsageBaseline;
+  state.lastRateLimits = persisted.lastRateLimits;
+  state.restoredRootCwd = persisted.rootCwd;
+  state.restoredWorkdirs = persisted.workdirs;
+  state.prompts = [...persisted.recentPrompts];
+  state.restoredPromptOverflow = persisted.promptOverflow;
+  state.fileCounts = new Map(persisted.fileCounts);
+  state.toolCallCount = persisted.toolCallCount;
+  return state;
+}
+
+type CodexStreamCandidate = {
+  file: QualitativeFileMetadata;
+  pathHash: string;
+  checkpoint?: LocalAgentStreamCheckpointRecord;
+  /** undefined = header unknown; scheduled after known-mainline files. */
+  isSubagent?: boolean;
+};
+
+type CodexStreamingRunContext = {
+  descriptor: LocalAgentFormatDescriptor;
+  qualitativeIndex: LocalAgentQualitativeIndexAdapter;
+  streamCheckpoints: LocalAgentStreamCheckpointAdapter;
+  /** Reused for persisted subagent markers so scheduling avoids re-probing. */
+  ownershipIndex?: LocalAgentOwnershipIndexAdapter;
+  collectInvocationEvidence: boolean;
+  sinceMs: number | undefined;
+  scan: LocalAgentSourceScan;
+  remainingBytes: number;
+};
+
+/**
+ * One run's bounded streaming pass over oversized Codex rollouts. Candidates
+ * are ordered mainline-first (checkpoint or bounded header probe supplies the
+ * subagent marker) so the 326-subagent reverse-scan pathology can never
+ * starve mainline files, then newest-first within each class. Returns the
+ * evidence of every file whose stream completed this run; everything else
+ * advanced by at least its checkpoint and stays honestly unconverged.
+ */
+async function runCodexStreamingPass(
+  files: readonly QualitativeFileMetadata[],
+  context: CodexStreamingRunContext
+): Promise<Map<string, LocalAgentQualitativeIndexValue>> {
+  const scan = context.scan;
+  const candidates: CodexStreamCandidate[] = [];
+  let schedulingProbes = codexStreamSchedulingProbesPerScan;
+  for (const file of files) {
+    const pathHash = createHash("sha256").update(resolve(file.filePath)).digest("hex");
+    let checkpoint: LocalAgentStreamCheckpointRecord | undefined;
+    try {
+      checkpoint = await context.streamCheckpoints.readStreamCheckpoint("codex", pathHash);
+    } catch {
+      scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+    }
+    let isSubagent: boolean | undefined;
+    if (checkpoint && isPersistedCodexReducerState(checkpoint.reducerState) &&
+        checkpoint.reducerState.rootSessionMetaSeen) {
+      isSubagent = checkpoint.reducerState.isSubagent;
+    } else {
+      if (context.ownershipIndex) {
+        try {
+          const stored = await context.ownershipIndex.readOwnership("codex", pathHash);
+          if (stored && stored.fileIdentity === qualitativeFileIdentity(file)) {
+            isSubagent = stored.headerAttribution?.isSubagent;
+          }
+        } catch {
+          // Scheduling is a hint; the ledger's own ownership reads count
+          // store failures and force the fail-closed coverage state.
+        }
+      }
+      if (isSubagent === undefined && schedulingProbes > 0) {
+        schedulingProbes -= 1;
+        const header = await probeCodexRolloutHeader(file.filePath, qualitativeFileIdentity(file));
+        isSubagent = header?.isSubagent;
+      }
+    }
+    candidates.push({
+      file,
+      pathHash,
+      ...(checkpoint ? { checkpoint } : {}),
+      ...(isSubagent !== undefined ? { isSubagent } : {})
+    });
+  }
+  const classOf = (candidate: CodexStreamCandidate): number =>
+    candidate.isSubagent === false ? 0 : candidate.isSubagent === undefined ? 1 : 2;
+  candidates.sort((left, right) => (
+    classOf(left) - classOf(right) ||
+    right.file.recencyMs - left.file.recencyMs ||
+    left.file.filePath.localeCompare(right.file.filePath)
+  ));
+  const completed = new Map<string, LocalAgentQualitativeIndexValue>();
+  const budget = { remainingBytes: context.remainingBytes };
+  for (const candidate of candidates) {
+    // The policy validator guarantees a positive allowance, so the first
+    // scheduled candidate always streams; later candidates run only while
+    // allowance remains (mainline-first order makes this starvation-safe).
+    if (budget.remainingBytes <= 0) break;
+    const value = await streamCodexRolloutSlice(candidate, context, budget);
+    if (value) completed.set(candidate.file.filePath, value);
+  }
+  return completed;
+}
+
+/**
+ * Advance one oversized rollout by a bounded slice; complete it when EOF is
+ * reached with a stable identity. Every failure path degrades to "no claim
+ * this run": a broken resume proof restarts from byte zero, a mid-stream
+ * append keeps the checkpoint and withholds the entry (design edge 4), and
+ * store errors surface as index errors that force the fail-closed
+ * "indexing" coverage state.
+ */
+async function streamCodexRolloutSlice(
+  candidate: CodexStreamCandidate,
+  context: CodexStreamingRunContext,
+  budget: { remainingBytes: number }
+): Promise<LocalAgentQualitativeIndexValue | undefined> {
+  const scan = context.scan;
+  const selectionIdentity = qualitativeFileIdentity(candidate.file);
+  const runSinceIso = typeof context.sinceMs === "number"
+    ? new Date(context.sinceMs).toISOString()
+    : null;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(candidate.file.filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = await handle.stat();
+    if (!before.isFile() ||
+        before.dev !== candidate.file.dev ||
+        before.ino !== candidate.file.ino ||
+        before.birthtimeMs !== candidate.file.birthtimeMs) {
+      return undefined;
+    }
+
+    // Resume proof: pinned identity, monotonic size, matching prefix bytes,
+    // matching contract, and structurally valid restored state. Anything
+    // less discards the checkpoint and restarts from byte zero.
+    let state = createCodexRolloutParserState();
+    let collector = context.collectInvocationEvidence
+      ? createCodexInvocationCollector(context.sinceMs)
+      : undefined;
+    let offset = 0;
+    let entrySinceIso = context.collectInvocationEvidence ? runSinceIso : null;
+    const checkpoint = candidate.checkpoint;
+    if (checkpoint) {
+      let resumable = checkpoint.parserVersion === localAgentQualitativeParserVersion &&
+        checkpoint.collectInvocationEvidence === context.collectInvocationEvidence &&
+        checkpoint.pin.dev === candidate.file.dev &&
+        checkpoint.pin.ino === candidate.file.ino &&
+        checkpoint.pin.birthtimeMs === candidate.file.birthtimeMs &&
+        checkpoint.offset <= candidate.file.size &&
+        checkpoint.prefixProbe.bytes === Math.min(codexStreamPrefixProbeBytes, checkpoint.offset) &&
+        isPersistedCodexReducerState(checkpoint.reducerState) &&
+        (!context.collectInvocationEvidence ||
+          isCodexInvocationCollectorSnapshot(checkpoint.collectorState));
+      if (resumable && checkpoint.offset > 0) {
+        const probeBytes = Math.min(codexStreamPrefixProbeBytes, checkpoint.offset);
+        const probe = Buffer.allocUnsafe(probeBytes);
+        let probeRead = 0;
+        while (probeRead < probeBytes) {
+          const read = await handle.read(
+            probe, probeRead, probeBytes - probeRead, checkpoint.offset - probeBytes + probeRead
+          );
+          if (read.bytesRead === 0) break;
+          probeRead += read.bytesRead;
+        }
+        resumable = probeRead === probeBytes &&
+          createHash("sha256").update(probe).digest("hex") === checkpoint.prefixProbe.sha256;
+      }
+      if (resumable) {
+        state = restoreCodexReducerState(checkpoint.reducerState as PersistedCodexReducerState);
+        if (context.collectInvocationEvidence) {
+          const pinnedSinceMs = checkpoint.sinceIso === null
+            ? undefined
+            : Date.parse(checkpoint.sinceIso);
+          collector = createCodexInvocationCollector(
+            pinnedSinceMs,
+            checkpoint.collectorState as CodexInvocationCollectorSnapshot
+          );
+          entrySinceIso = checkpoint.sinceIso;
+        }
+        offset = checkpoint.offset;
+      } else {
+        await context.streamCheckpoints.deleteStreamCheckpoint("codex", candidate.pathHash)
+          .catch(() => undefined);
+      }
+    }
+
+    // Bounded chunked line consumption from the resume offset.
+    const collectorConsume = collector?.consume;
+    let consumed = offset;
+    let position = offset;
+    let carry = Buffer.alloc(0);
+    let skippingOversizedLine = false;
+    let linesConsumed = 0;
+    let sawEof = false;
+    while (true) {
+      // A candidate that was scheduled always consumes at least one complete
+      // line (or reaches EOF/an oversized-line skip) before yielding to the
+      // byte allowance — this is what guarantees convergence across runs.
+      if (budget.remainingBytes <= 0 && linesConsumed > 0) break;
+      const readLength = budget.remainingBytes > 0
+        ? Math.min(codexStreamChunkBytes, budget.remainingBytes)
+        : codexStreamChunkBytes;
+      const chunk = Buffer.allocUnsafe(readLength);
+      const read = await handle.read(chunk, 0, readLength, position);
+      if (read.bytesRead === 0) {
+        sawEof = true;
+        break;
+      }
+      budget.remainingBytes -= read.bytesRead;
+      scan.qualitativeBytesStreamed = (scan.qualitativeBytesStreamed ?? 0) + read.bytesRead;
+      const dataStart = position - carry.length;
+      position += read.bytesRead;
+      const data = carry.length > 0
+        ? Buffer.concat([carry, chunk.subarray(0, read.bytesRead)])
+        : chunk.subarray(0, read.bytesRead);
+      let lineStart = 0;
+      while (true) {
+        const newlineAt = data.indexOf(0x0a, lineStart);
+        if (newlineAt === -1) break;
+        if (skippingOversizedLine) {
+          // The oversized line just terminated; count it once, exactly when
+          // its bytes are durably consumed past the checkpoint offset.
+          skippingOversizedLine = false;
+          state.malformedLines += 1;
+        } else if (newlineAt - lineStart > codexStreamMaxLineBytes) {
+          // Exact bound: chunk alignment can let a just-over-cap line
+          // accumulate fully before its newline arrives; it is still skipped
+          // as malformed, matching the documented >32 MiB rule.
+          state.malformedLines += 1;
+        } else {
+          consumeCodexRolloutLine(
+            state,
+            data.subarray(lineStart, newlineAt).toString("utf8"),
+            collectorConsume
+          );
+        }
+        lineStart = newlineAt + 1;
+        linesConsumed += 1;
+        consumed = dataStart + lineStart;
+      }
+      if (skippingOversizedLine) {
+        carry = Buffer.alloc(0);
+      } else {
+        carry = Buffer.from(data.subarray(lineStart));
+        if (carry.length > codexStreamMaxLineBytes) {
+          skippingOversizedLine = true;
+          carry = Buffer.alloc(0);
+        }
+      }
+    }
+
+    // A crashed or kill-9'd session leaves a final line with no trailing
+    // newline, and that file never changes again. When the post-slice
+    // identity still equals the selection identity, the tail is provably not
+    // an in-flight append: consume it as the final complete line, exactly as
+    // the whole-file parser's split("\\n") treats the same bytes. A torn tail
+    // degrades to the malformed_jsonl diagnostic both paths share.
+    if (sawEof && !skippingOversizedLine && carry.length > 0) {
+      const settled = await handle.stat();
+      if (settled.isFile() && settled.size === consumed + carry.length &&
+          qualitativeFileIdentity(settled) === selectionIdentity) {
+        if (carry.length > codexStreamMaxLineBytes) {
+          state.malformedLines += 1;
+        } else {
+          consumeCodexRolloutLine(state, carry.toString("utf8"), collectorConsume);
+        }
+        consumed += carry.length;
+        carry = Buffer.alloc(0);
+      }
+    }
+    if (sawEof && !skippingOversizedLine && carry.length === 0 && consumed > 0) {
+      const after = await handle.stat();
+      if (after.isFile() && after.size === consumed &&
+          qualitativeFileIdentity(after) === selectionIdentity) {
+        return await completeStreamedRollout(
+          candidate, context, state, collector, consumed, entrySinceIso, runSinceIso
+        );
+      }
+      // The rollout changed while streaming (an active append): keep the
+      // checkpoint at the last complete line and withhold the entry.
+    }
+    if (consumed > offset || (consumed > 0 && !candidate.checkpoint)) {
+      await writeStreamCheckpointAt(candidate, context, handle, state, collector, consumed, entrySinceIso);
+    }
+    return undefined;
+  } catch {
+    // Unreadable mid-stream: no claim this run; selection re-treats the file
+    // as skipped and the ledger keeps it blocking.
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function writeStreamCheckpointAt(
+  candidate: CodexStreamCandidate,
+  context: CodexStreamingRunContext,
+  handle: FileHandle,
+  state: CodexRolloutParserState,
+  collector: ReturnType<typeof createCodexInvocationCollector> | undefined,
+  consumed: number,
+  entrySinceIso: string | null
+): Promise<void> {
+  const scan = context.scan;
+  const probeBytes = Math.min(codexStreamPrefixProbeBytes, consumed);
+  const probe = Buffer.allocUnsafe(probeBytes);
+  let probeRead = 0;
+  while (probeRead < probeBytes) {
+    const read = await handle.read(
+      probe, probeRead, probeBytes - probeRead, consumed - probeBytes + probeRead
+    );
+    if (read.bytesRead === 0) break;
+    probeRead += read.bytesRead;
+  }
+  if (probeRead !== probeBytes) {
+    scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+    return;
+  }
+  try {
+    await context.streamCheckpoints.writeStreamCheckpoint("codex", candidate.pathHash, {
+      pin: {
+        dev: candidate.file.dev,
+        ino: candidate.file.ino,
+        birthtimeMs: candidate.file.birthtimeMs
+      },
+      parserVersion: localAgentQualitativeParserVersion,
+      collectInvocationEvidence: context.collectInvocationEvidence,
+      sinceIso: entrySinceIso,
+      offset: consumed,
+      prefixProbe: {
+        bytes: probeBytes,
+        sha256: createHash("sha256").update(probe).digest("hex")
+      },
+      reducerState: serializeCodexReducerState(state),
+      ...(collector ? { collectorState: collector.snapshot() } : {})
+    });
+  } catch {
+    scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+  }
+}
+
+async function completeStreamedRollout(
+  candidate: CodexStreamCandidate,
+  context: CodexStreamingRunContext,
+  state: CodexRolloutParserState,
+  collector: ReturnType<typeof createCodexInvocationCollector> | undefined,
+  consumed: number,
+  entrySinceIso: string | null,
+  runSinceIso: string | null
+): Promise<LocalAgentQualitativeIndexValue> {
+  const scan = context.scan;
+  const fileDiagnostics: TranscriptParseDiagnostic[] = [];
+  const calls = finishCodexRolloutParse(state, (diagnostic) => fileDiagnostics.push(diagnostic));
+  const invocationFile = collector?.finish();
+  const invocationWindowProof = collector?.windowProof();
+  const stored: LocalAgentQualitativeIndexValue = {
+    calls,
+    ...(invocationFile ? { invocationFile } : {}),
+    ...(collector ? { invocationWindowProof } : {}),
+    diagnostics: fileDiagnostics
+  };
+  assertFormatCallOwnership(context.descriptor, stored.calls);
+  assertInvocationOwnership(
+    context.descriptor, stored.invocationFile, context.collectInvocationEvidence
+  );
+  const entryKey: LocalAgentQualitativeIndexKey = {
+    schemaVersion: 1,
+    parserVersion: localAgentQualitativeParserVersion,
+    agent: "codex",
+    pathHash: candidate.pathHash,
+    fileIdentity: qualitativeFileIdentity(candidate.file),
+    sinceIso: entrySinceIso,
+    collectInvocationEvidence: context.collectInvocationEvidence
+  };
+  let entryPersisted = false;
+  try {
+    await context.qualitativeIndex.write(entryKey, stored);
+    entryPersisted = true;
+  } catch {
+    scan.qualitativeIndexErrors = (scan.qualitativeIndexErrors ?? 0) + 1;
+  }
+  if (entryPersisted) {
+    // Only a durably indexed file may drop its resumable state.
+    await context.streamCheckpoints.deleteStreamCheckpoint("codex", candidate.pathHash)
+      .catch(() => undefined);
+  }
+  void consumed;
+  // The stored entry carries the pinned collector window. This run may have
+  // requested a newer window; aggregated invocation evidence is used in-run
+  // only when it narrows exactly, otherwise this run honestly reports
+  // partial coverage while the calls (window-blind, filtered by timestamp
+  // downstream) remain exact.
+  if (stored.invocationFile && entrySinceIso !== runSinceIso &&
+      !streamedInvocationNarrowsExactly(entrySinceIso, runSinceIso, stored)) {
+    scan.qualitativeCoverage = "partial";
+    const { invocationFile: _omitted, invocationWindowProof: _proof, ...rest } = stored;
+    return { ...rest };
+  }
+  return stored;
+}
+
+/**
+ * In-run mirror of the store's `invocationWindowCanBeNarrowedExactly` for a
+ * freshly completed stream whose collector window predates this run's
+ * request (the loader cannot import the store module).
+ */
+function streamedInvocationNarrowsExactly(
+  pinnedSinceIso: string | null,
+  runSinceIso: string | null,
+  value: LocalAgentQualitativeIndexValue
+): boolean {
+  if (pinnedSinceIso === runSinceIso) return true;
+  if (runSinceIso === null) return false;
+  if (pinnedSinceIso !== null && Date.parse(pinnedSinceIso) > Date.parse(runSinceIso)) {
+    return false;
+  }
+  const invocation = value.invocationFile;
+  if (!invocation) return false;
+  const proof = value.invocationWindowProof;
+  if (!proof || !proof.allCountedEventsTimestamped) return false;
+  const hasCountedEvidence = invocation.assistantTurns > 0 ||
+    invocation.contextSignal.compactionEvents > 0 ||
+    invocation.invocations.length > 0 ||
+    invocation.invokedMcpTools.length > 0 ||
+    invocation.invokedSkills.length > 0 ||
+    invocation.invokedSubagents.length > 0 ||
+    invocation.invokedCommands.length > 0 ||
+    invocation.contextSignal.fileReads.length > 0 ||
+    invocation.contextSignal.repeatedFileReads.length > 0;
+  if (!hasCountedEvidence) return proof.earliestCountedAt === undefined;
+  if (proof.earliestCountedAt === undefined) return false;
+  return Date.parse(proof.earliestCountedAt) >= Date.parse(runSinceIso);
+}
+
+function qualitativeIndexKey(
+  agent: LocalAgentFormatId,
+  filePath: string,
+  metadata: QualitativeFileMetadata,
+  sinceMs: number | undefined,
+  collectInvocationEvidence: boolean
+): LocalAgentQualitativeIndexKey {
+  return {
+    schemaVersion: 1,
+    parserVersion: localAgentQualitativeParserVersion,
+    agent,
+    pathHash: createHash("sha256").update(resolve(filePath)).digest("hex"),
+    fileIdentity: qualitativeFileIdentity(metadata),
+    sinceIso: typeof sinceMs === "number" ? new Date(sinceMs).toISOString() : null,
+    collectInvocationEvidence
+  };
+}
+
+function qualitativeFileIdentity(metadata: {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+}): string {
+  return [
+    metadata.dev,
+    metadata.ino,
+    metadata.size,
+    metadata.mtimeMs,
+    metadata.ctimeMs,
+    metadata.birthtimeMs
+  ].join(":");
+}
+
+async function qualitativeIndexKeyStillCurrent(
+  filePath: string,
+  key: LocalAgentQualitativeIndexKey
+): Promise<boolean> {
+  try {
+    const current = await lstat(filePath);
+    return current.isFile() && !current.isSymbolicLink() &&
+      qualitativeFileIdentity(current) === key.fileIdentity;
+  } catch {
+    return false;
+  }
+}
+
+function isQualitativeIndexValue(
+  value: unknown,
+  descriptor: LocalAgentFormatDescriptor,
+  collectInvocationEvidence: boolean
+): value is LocalAgentQualitativeIndexValue {
+  if (!isRecord(value) || !Array.isArray(value.calls) ||
+      !Array.isArray(value.diagnostics)) {
+    return false;
+  }
+  const calls = value.calls;
+  if (!calls.every((call) => isIndexedLocalAgentCall(call, descriptor.id))) {
+    return false;
+  }
+  const diagnostics = value.diagnostics;
+  if (!diagnostics.every((entry) => (
+    isRecord(entry) &&
+    (entry.code === "malformed_jsonl" ||
+      entry.code === "malformed_session_file" ||
+      entry.code === "unsupported_token_shape") &&
+    Number.isSafeInteger(entry.count) && Number(entry.count) > 0
+  ))) {
+    return false;
+  }
+  const invocationFile = value.invocationFile as ParsedInvocationFile | undefined;
+  try {
+    assertInvocationOwnership(descriptor, invocationFile, collectInvocationEvidence);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function isIndexedLocalAgentCall(value: unknown, agent: LocalAgentFormatId): boolean {
+  if (!isRecord(value) || value.agent !== agent ||
+      typeof value.model !== "string" || value.model.length === 0 ||
+      typeof value.timestamp !== "string" || !Number.isFinite(Date.parse(value.timestamp))) {
+    return false;
+  }
+  const usage = value.usage;
+  if (!isRecord(usage)) return false;
+  const tokenFields = [
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWrite5mTokens",
+    "cacheWrite1hTokens",
+    "thoughtTokens",
+    "toolTokens"
+  ] as const;
+  return tokenFields.every((field) => {
+    const tokenValue = usage[field];
+    if (field === "inputTokens" || field === "outputTokens") {
+      return Number.isSafeInteger(tokenValue) && Number(tokenValue) >= 0;
+    }
+    return tokenValue === undefined ||
+      Number.isSafeInteger(tokenValue) && Number(tokenValue) >= 0;
+  });
+}
+
+async function readBoundedUtf8File(
+  filePath: string,
+  maxBytes: number,
+  expectedIdentity: string
+): Promise<{ content: string; bytesRead: number }> {
+  // Open the selected inode itself without following a last-moment link. The
+  // metadata snapshot used for selection is then checked on the descriptor,
+  // not on the path, both before and after reading. This prevents a path swap
+  // from turning an out-of-root or actively rewritten file into "complete"
+  // qualitative evidence.
+  const handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const chunks: Buffer[] = [];
+  let bytesRead = 0;
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || qualitativeFileIdentity(before) !== expectedIdentity) {
+      throw newErrorWithCode("ESTALE");
+    }
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1));
+    while (true) {
+      const remainingWithSentinel = maxBytes - bytesRead + 1;
+      const length = Math.min(chunk.length, remainingWithSentinel);
+      const read = await handle.read(chunk, 0, length, null);
+      if (read.bytesRead === 0) break;
+      bytesRead += read.bytesRead;
+      if (bytesRead > maxBytes) {
+        throw new QualitativeReadLimitError();
+      }
+      chunks.push(Buffer.from(chunk.subarray(0, read.bytesRead)));
+    }
+    const after = await handle.stat();
+    if (!after.isFile() || qualitativeFileIdentity(after) !== expectedIdentity) {
+      throw newErrorWithCode("ESTALE");
+    }
+  } finally {
+    await handle.close();
+  }
+  return {
+    content: Buffer.concat(chunks, bytesRead).toString("utf8"),
+    bytesRead
+  };
+}
+
+function recordQualitativeBudgetSkip(scan: LocalAgentSourceScan): void {
+  scan.qualitativeCoverage = "partial";
+  scan.qualitativeFilesSkippedForBudget =
+    (scan.qualitativeFilesSkippedForBudget ?? 0) + 1;
+}
+
+function finishQualitativeCoverage(
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[]
+): void {
+  if (scan.directoryStatus === "unreadable" || scan.unreadableFiles > 0) {
+    scan.qualitativeCoverage = "partial";
+  }
+  // Per-project ledger (BLOCKER-1 semantics, fail closed). An unparsed
+  // eligible file blocks unless the bounded header pass proved it belongs to
+  // a project other than the requested one; a file proven to belong to the
+  // requested project itself keeps blocking until indexed (design section d:
+  // it is the oversized relevant transcript, never an exclusion).
+  const eligible = scan.qualitativeFilesEligible ?? 0;
+  const indexed = Math.min(eligible, scan.qualitativeFilesReadCompletely ?? 0);
+  scan.qualitativeFilesIndexed = indexed;
+  const foreignProven = scan.qualitativeFilesForeignProven ?? 0;
+  scan.qualitativeFilesOwnershipUnknown = Math.max(0, eligible - indexed - foreignProven);
+  // A missing directory is an absent agent, not a failure; only unreadable
+  // state, unreadable files, or index errors force the fail-closed state.
+  const scanFailure = scan.directoryStatus === "unreadable" || scan.unreadableFiles > 0 ||
+    (scan.qualitativeIndexErrors ?? 0) > 0;
+  scan.qualitativeProjectCoverage =
+    !scanFailure && scan.qualitativeFilesOwnershipUnknown === 0
+      ? "complete"
+      : "indexing";
+  const indexErrors = scan.qualitativeIndexErrors ?? 0;
+  if (indexErrors > 0) {
+    diagnostics.push({
+      agent: scan.agent,
+      code: "qualitative_index_error",
+      severity: "warning",
+      message: `${agentLabel(scan.agent)} private index had ${indexErrors} read/write failure(s); project coverage is rebuilding. If this persists after several runs, a newer aibill version may own the index.`,
+      count: indexErrors
+    });
+  }
+  const skipped = scan.qualitativeFilesSkippedForBudget ?? 0;
+  if (skipped > 0) {
+    diagnostics.push({
+      agent: scan.agent,
+      code: "qualitative_scan_incomplete",
+      severity: "warning",
+      message: `${agentLabel(scan.agent)} qualitative coverage is partial: ${skipped} eligible transcript file(s) exceeded the configured scan limits. No omitted file contributed an action finding.`,
+      count: skipped
+    });
   }
 }
 
@@ -1725,6 +4136,40 @@ function newErrorWithCode(code: string): NodeJS.ErrnoException {
   return error;
 }
 
+type ClaudeNativeResponseIdentity = {
+  /** In-process only; raw provider ids never enter a returned call or cache. */
+  localDedupeKey: string;
+  /** Stable privacy-safe identity used for cross-file checkpoint deduplication. */
+  callId: string;
+};
+
+function claudeNativeResponseIdentity(
+  message: Record<string, unknown>,
+  entry: Record<string, unknown>
+): ClaudeNativeResponseIdentity | undefined {
+  const rawMessageId = stringOf(message.id);
+  const rawRequestId = stringOf(entry.requestId);
+  // Never weaken a two-part native identity by silently dropping one
+  // attacker-sized component; without the exact bounded pair there is no
+  // cross-file deduplication proof.
+  if ((rawMessageId && rawMessageId.length > 4_096) ||
+      (rawRequestId && rawRequestId.length > 4_096)) {
+    return undefined;
+  }
+  const messageId = rawMessageId || undefined;
+  const requestId = rawRequestId || undefined;
+  if (!messageId && !requestId) return undefined;
+  const localDedupeKey = JSON.stringify([messageId ?? null, requestId ?? null]);
+  return {
+    localDedupeKey,
+    callId: `callref_${createHash("sha256")
+      .update("claude-native-response-v1")
+      .update("\u0000")
+      .update(localDedupeKey)
+      .digest("hex")}`
+  };
+}
+
 function parseClaudeFinancialEntry(
   entry: Record<string, unknown>,
   filePath: string,
@@ -1736,20 +4181,22 @@ function parseClaudeFinancialEntry(
   const message = isRecord(entry.message) ? entry.message : undefined;
   const usage = message && isRecord(message.usage) ? message.usage : undefined;
   if (!message || !usage || stringOf(message.model) === "<synthetic>") return undefined;
-  const dedupeKey = `${stringOf(message.id) ?? ""}:${stringOf(entry.requestId) ?? ""}`;
-  if (dedupeKey !== ":" && seen.has(dedupeKey)) return undefined;
-  seen.add(dedupeKey);
+  const nativeResponse = claudeNativeResponseIdentity(message, entry);
+  if (nativeResponse && seen.has(nativeResponse.localDedupeKey)) return undefined;
+  if (nativeResponse) seen.add(nativeResponse.localDedupeKey);
   const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
   if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) return undefined;
   const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
   const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
   return {
     agent: "claude-code",
+    ...(nativeResponse ? { callId: nativeResponse.callId } : {}),
     model: stringOf(message.model) ?? "claude-code",
     timestamp,
     project: projectFromCwd(workingDirectory) ?? projectFromTranscriptPath(filePath),
     workingDirectory,
     sessionId: stringOf(entry.sessionId),
+    ...(stringOf(entry.version) ? { sourceVersion: stringOf(entry.version) } : {}),
     ...(parsedUsage.latestTurnUsage
       ? { latestTurnUsage: parsedUsage.latestTurnUsage }
       : {}),
@@ -1757,6 +4204,9 @@ function parseClaudeFinancialEntry(
     ...(parsedUsage.usageSupport ? { usageSupport: parsedUsage.usageSupport } : {}),
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+      : {}),
+    ...(parsedUsage.tokenComponentEvidence
+      ? { tokenComponentEvidence: parsedUsage.tokenComponentEvidence }
       : {}),
     usage: parsedUsage.usage
   };
@@ -1778,6 +4228,7 @@ function consumeCodexFinancialEntry(
   if (entry.type === "session_meta" && payload && !state.rootSessionMetaSeen) {
     state.rootSessionMetaSeen = true;
     state.sessionId = stringOf(payload.id);
+    state.sourceVersion = stringOf(payload.cli_version);
     state.rootCwd = stringOf(payload.cwd);
     state.startedAt = toIso(stringOf(payload.timestamp) ?? stringOf(entry.timestamp));
     state.rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
@@ -1852,6 +4303,7 @@ function finishCodexFinancialStream(
     project: projectFromCwd(workingDirectory),
     workingDirectory,
     sessionId: state.sessionId,
+    ...(state.sourceVersion ? { sourceVersion: state.sourceVersion } : {}),
     rateLimits: state.lastRateLimits,
     ...(usageSupport === "complete" && parsedTurn.usage
       ? { latestTurnUsage: parsedTurn.usage }
@@ -1860,6 +4312,9 @@ function finishCodexFinancialStream(
     usageSupport,
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
+      : {}),
+    ...(usageSupport === "complete" && parsedUsage.tokenComponentEvidence
+      ? { tokenComponentEvidence: parsedUsage.tokenComponentEvidence }
       : {}),
     usage: parsedUsage.usage
   };
@@ -2207,6 +4662,37 @@ function projectFromTranscriptPath(filePath: string): string | undefined {
   return tail && tail.length > 0 ? tail : undefined;
 }
 
+/**
+ * Parse the host-framed task-notification a background subagent's completion
+ * writes into the owning transcript. Only the leading host template tags are
+ * read (first match): the trailing `<result>` section is model output and is
+ * never trusted or retained. The same task-id may notify more than once for
+ * a resumed run; callers keep the latest record and the session-vitals join
+ * still requires the record to postdate the run's last observed activity.
+ */
+function parseTaskNotification(
+  content: string | undefined
+): { taskId: string; status: string } | undefined {
+  if (!content || !content.startsWith("<task-notification>")) return undefined;
+  const taskId = /<task-id>([A-Za-z0-9._-]{1,128})<\/task-id>/.exec(content)?.[1];
+  const status = /<status>([a-z_-]{1,64})<\/status>/.exec(content)?.[1];
+  return taskId && status ? { taskId, status } : undefined;
+}
+
+/**
+ * Fallback subagent-run identity from the `subagents/agent-<id>.jsonl` file
+ * name, for subagent transcripts whose lines omit `agentId`. Never derived
+ * for files outside a `subagents` directory, and never a path (one validated
+ * basename segment only).
+ */
+function subagentTranscriptFileId(filePath: string): string | undefined {
+  const segments = filePath.split(sep);
+  if (!segments.includes("subagents")) return undefined;
+  const base = segments.at(-1) ?? "";
+  const name = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name) ? name : undefined;
+}
+
 type ActivityInput = {
   title?: string;
   prompts: string[];
@@ -2215,6 +4701,13 @@ type ActivityInput = {
   project?: string;
   isSubagent: boolean;
   parentSessionId?: string;
+  /**
+   * Sanitized prompt survivors that a resumed stream checkpoint dropped
+   * beyond its last-12 retention. They contribute to the prompt count but
+   * can no longer influence topic/action derivation (documented divergence
+   * bound of the streaming path; zero for whole-file parses).
+   */
+  priorPromptCount?: number;
 };
 
 function localActivityScopeKey(
@@ -2301,11 +4794,11 @@ function buildLocalAgentActivity(input: ActivityInput): LocalAgentActivity | und
     kind,
     action,
     source,
-    promptCount: prompts.length,
+    promptCount: prompts.length + (input.priorPromptCount ?? 0),
     toolCallCount: input.toolCallCount,
     files,
     isSubagent: input.isSubagent,
-    parentSessionId: input.parentSessionId
+    ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {})
   };
 }
 
@@ -2474,14 +4967,20 @@ function promptTokens(value: string): string[] {
     .filter((token) => token.length >= 2 && token !== "cz" && !/^\d+$/.test(token));
 }
 
+/**
+ * Strip absolute-path spans (including file:// forms) from free text. Shared
+ * by topic derivation and by checkpoint prompt persistence: persisted prompt
+ * survivors must never carry a raw local path (req 1).
+ */
+function stripAbsolutePathSpans(value: string): string {
+  return value.replace(/(^|[\s("'=:])(?:file:\/\/)?\/[^\s)"']+/g, "$1");
+}
+
 function topicTokens(value: string): string[] {
   // Absolute paths often appear in attached-image metadata and tool-oriented
   // prompts. They are machine context, not the user's work topic, and can
   // otherwise outrank meaningful words when only one recent prompt exists.
-  const withoutAbsolutePaths = value.replace(
-    /(^|[\s("'=:])(?:file:\/\/)?\/[^\s)"']+/g,
-    "$1"
-  )
+  const withoutAbsolutePaths = stripAbsolutePathSpans(value)
     .replace(/\b[^\s/\\]+\.(?:png|jpe?g|gif|webp|heic|svg|pdf|mov|mp4)\b/gi, " ")
     .replace(/\b(?:attached|attachment|clipboard|image|images|photo|picture|screenshot|screenshots)\b/gi, " ");
   return promptTokens(sanitizeLocalActivityText(withoutAbsolutePaths));

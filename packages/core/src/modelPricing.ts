@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-08-14";
+export const PRICING_TABLE_AS_OF = "2026-08-16";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
