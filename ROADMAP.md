@@ -10,7 +10,7 @@ stay separate. Shipped behavior is documented in the [release
 notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
 [/docs/roadmap](https://asktilden.com/docs/roadmap).
 
-Last updated: August 14, 2026.
+Last updated: August 16, 2026.
 
 ## Available now — npm v0.8.1
 
@@ -35,6 +35,28 @@ invocation evidence, recommendations, or Apply.
 
 Workspace, accepted-outcome economics, ROI measurement, and autonomous
 enforcement are not shipped.
+
+## Unreleased source preview — action and proof
+
+The current development branch is testing one deliberately narrow launch loop:
+
+**Why is usage high? → What one safe change should I test? → Did token usage
+change while quality held?**
+
+It adds a bounded, coverage-labeled Claude Code/Codex qualitative index; one
+provider-aware reversible candidate; a repeated `aibill improve` flow; and one
+canonical matched-session result shared by CLI, MCP, report, and Glance. A
+percentage is allowed only for that user's calculated before/after result when
+the declared quality check held. It is not a universal saving, provider-bill,
+productivity, accepted-outcome, cash, or ROI claim.
+
+The same source preview contains local contracts for explicitly confirmed
+human/team/role ownership, optional client/cost-centre labels, pre-change local
+self-attestation, and an opt-in merged-GitHub-PR evidence record. Those are
+foundations for Workspace, not company identity, RBAC, approval routing, or a
+reconciled Project Economics Receipt. Public npm remains `v0.8.1` until a
+separate exact-version release passes its complete technical, external, and
+human acceptance gates.
 
 ## Next 30 days — current focus areas, not an exhaustive build order
 

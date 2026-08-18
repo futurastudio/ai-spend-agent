@@ -19,6 +19,7 @@ const expectedTools = [
   "sync_provider_spend",
   "get_usage_glance",
   "get_context_health",
+  "get_token_reduction_test",
   "list_sources",
   "get_spend_report",
   "recommend_cuts"

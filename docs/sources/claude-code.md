@@ -34,6 +34,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 
 - timestamp, model, and token-usage components
 - session and working-directory metadata for local deduplication and attribution
+- explicit system/turn_duration work-unit completion markers and transcript version strings when present
 - human-prompt and tool metadata for privacy-reduced local activity summaries
 
 ## Evidence boundary
@@ -77,6 +78,7 @@ Fixtures and generated documentation must never contain a real transcript, promp
 
 - Malformed lines are skipped and reported.
 - Incomplete token shapes remain unpriced with missing financial evidence instead of becoming $0.
+- A system/turn_duration marker proves only that the latest observed turn completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts.
 
 ## Recorded fixture IDs
 

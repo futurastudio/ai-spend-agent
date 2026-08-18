@@ -50,6 +50,9 @@ try {
       sinceDays: 30,
       project: "agent-finops"
     }),
+    tokenReductionTest: await callSummary("get_token_reduction_test", {
+      path: projectRoot
+    }),
     providers: []
   };
 
@@ -178,6 +181,20 @@ async function callSummary(name, args) {
         confidence: data.confidence,
         activation: data.activation,
         uploaded: data.provenance?.uploaded
+      }
+    };
+  }
+  if (name === "get_token_reduction_test") {
+    return {
+      name,
+      status: "ok",
+      data: {
+        status: data.status,
+        lifecycle: data.experiment?.lifecycle ?? null,
+        result: data.experiment?.evaluation?.status ?? null,
+        projection: data.projection ?? null,
+        coverage: data.coverage,
+        provenance: data.provenance
       }
     };
   }

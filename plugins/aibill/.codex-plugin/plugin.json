@@ -1,6 +1,6 @@
 {
   "name": "aibill",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "On-demand, sourced answers about AI-agent work, cost evidence, runway, and Context Health through local aibill MCP; provider sync is explicit and optional.",
   "author": {
     "name": "Futura Studio",

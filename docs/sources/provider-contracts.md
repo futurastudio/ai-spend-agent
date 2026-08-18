@@ -2,7 +2,7 @@
 
 # Provider financial contracts
 
-Contract schema v1; reviewed 2026-08-14.
+Contract schema v1; reviewed 2026-08-16.
 
 These contracts are the reviewed financial rulebook for each provider source. They do not imply that every declared surface is implemented, that a user's account was connected, or that an invoice reconciled. Implemented connector coverage is listed separately. Provider-reported cost, API-equivalent value, plan context, credits and final invoices remain separate.
 
@@ -39,9 +39,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
   - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `d845e13329e9c12b8eedc894cb599f8506970e839f471ae3825c98850e47bf07`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `14615071e4264b69c4ed3bcf61652ede1006ed3456826055bd40dd4292df9ba1`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `84f1aba4d1161730e2bb8dc0422ae2f58204a1026372710462307836350b23e3`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `c898dd29531e486948729132d5a7c0c70abbe8b86154baa59d827f685e2b6e3d`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `2340b524b4ad2ce925c67fee62e9b85ffda9a7346f1348e0e11c6caff443eda0`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `c03f80efb4db514570a746d110b0c3c919655e257e57f7a660b0bf710bcb3849`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `daff2b574e5cb7ea45a71ea45d78e8e2cba7dea02e0ef1a89eb5ecb76b93a877`
 
 ## Anthropic Platform Usage and Cost Admin API
 

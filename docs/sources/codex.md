@@ -33,6 +33,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 ## Fields read
 
 - session metadata, timestamps, model, and cumulative/last-turn token usage
+- explicit event_msg/task_complete work-unit completion markers and session_meta cli_version strings when present
 - transcript-reported rate-limit windows when present
 - tool-call metadata for local attribution and optional privacy-safe invocation counts
 
@@ -77,6 +78,7 @@ Fixtures and generated documentation must never contain a real transcript, promp
 
 - Only rollout-*.jsonl files are parsed as Codex sessions.
 - Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence.
+- An event_msg/task_complete marker proves only that the latest observed task completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts.
 
 ## Recorded fixture IDs
 
