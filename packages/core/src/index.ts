@@ -65,6 +65,7 @@ export * from "./projectEconomicsBuilder.js";
 export * from "./qualitativeIndexCache.js";
 export * from "./projectIndexStore.js";
 export * from "./runtimeCommands.js";
+export * from "./guidedAnswer.js";
 export * from "./sampleData.js";
 export * from "./scanGuard.js";
 export * from "./schema.js";
