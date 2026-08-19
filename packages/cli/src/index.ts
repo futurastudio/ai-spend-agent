@@ -464,6 +464,13 @@ type InstantReadData = {
   codexInvocationFiles?: ParsedInvocationFile[];
   /** Bounded local evidence used only for why/action/progress projections. */
   actionEvidence?: LocalAgentLogResult;
+  /**
+   * Connected mode only: the machine's local transcript records priced at
+   * API-equivalent rates. Billed provider records stay the headline, but this
+   * estimated axis must never be erased from the receipt (C-lane §1.4
+   * connected/mixed variants) — subscription rows keep their ~ figures.
+   */
+  localFinancialRecords?: UsageRecord[];
   /** Whether the supported financial sources had no unreadable/malformed/missing-token rows. */
   financialCoverageComplete?: boolean;
 };
@@ -488,6 +495,7 @@ async function quickstartCommand(
     providerCoverage,
     codexInvocationFiles,
     actionEvidence,
+    localFinancialRecords,
     financialCoverageComplete
   } = await loadInstantReadData(args);
   if (records.length === 0) {
@@ -497,6 +505,13 @@ async function quickstartCommand(
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
   const summary = analyzeSpend(summaryRecords);
+  // Connected receipts stay billed-primary but never ERASE the estimated
+  // axis: local transcript records ride along so subscription rows keep
+  // their ~ API-equivalent figures next to billed money (C-lane §1.4). The
+  // renderer classifies each record by basis and never blends the totals.
+  const receiptRecords = mode === "connected" && (localFinancialRecords?.length ?? 0) > 0
+    ? [...summaryRecords, ...localFinancialRecords!]
+    : summaryRecords;
   // For real local-log users the by-project view is the flagship table
   // ("which project burns my plan"); demo/connected keep by-model.
   const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
@@ -580,7 +595,7 @@ async function quickstartCommand(
     : undefined;
 
   const summaryText = generatePlainEnglishSummary(summary, {
-    records: summaryRecords,
+    records: receiptRecords,
     groupBy,
     color,
     mode,
@@ -1131,6 +1146,12 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
         actionEvidence,
         codexInvocationFiles: actionEvidence.codexInvocationFiles
       } : {}),
+      // Billed provider records are the headline, but the machine's local
+      // API-equivalent evidence is a separate axis the receipt must keep
+      // (per-subscription ~ figures) — connected mode never erases it.
+      ...(financialLogs && financialLogs.records.length > 0
+        ? { localFinancialRecords: financialLogs.records }
+        : {}),
       ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {}),
       financialCoverageComplete: persisted.providerCoverage === "complete" &&
         connectedHeadlineRecords.length > 0 &&

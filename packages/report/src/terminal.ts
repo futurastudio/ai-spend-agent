@@ -169,7 +169,7 @@ function renderPlainEnglishSummary(
   // raw confidence words — an estimated dollar is API-equivalent ONLY when it
   // was priced at published API rates; other priced-but-unverified dollars
   // (beta connectors) are detected (unverified) and never join these bars.
-  const cardBasisMode = resultCardModeFor(options.mode);
+  const cardBasisMode = resultCardModeFor(options.mode, options.records);
   const verifiedRecords = options.records.filter((record) => (
     classifyResultCardRecordBasis(record, cardBasisMode) === "provider_billed"
   ));
@@ -959,13 +959,30 @@ function compactLabeledLines(label: string, value: string, width: number, c: Col
 
 // --- canonical result card blocks (C-lane design §1.4/§1.5/§3) -------------
 
-function resultCardModeFor(mode: PlainEnglishSummaryOptions["mode"]): ResultCardMode {
-  return mode === "connected" ? "connected" : mode === "local-logs" ? "local-logs" : "demo";
+function resultCardModeFor(
+  mode: PlainEnglishSummaryOptions["mode"],
+  records: readonly UsageRecord[]
+): ResultCardMode {
+  if (mode === "connected") {
+    // C-lane §1.4 connected/mixed variants + QA M3: billed provider evidence
+    // alongside local API-equivalent transcripts is the MIXED state — billed
+    // leads the headline while the estimated axis (per-subscription ~ figures,
+    // local by-project attribution) is never erased. Evidence that is purely
+    // provider-reported stays "connected".
+    const hasBilled = records.some((record) => (
+      classifyResultCardRecordBasis(record, "connected") === "provider_billed"
+    ));
+    const hasApiEquivalent = records.some((record) => (
+      classifyResultCardRecordBasis(record, "connected") === "api_equivalent"
+    ));
+    return hasBilled && hasApiEquivalent ? "mixed" : "connected";
+  }
+  return mode === "local-logs" ? "local-logs" : "demo";
 }
 
 function buildResultCardForOptions(options: PlainEnglishSummaryOptions): ResultCard {
   return buildResultCard({
-    mode: resultCardModeFor(options.mode),
+    mode: resultCardModeFor(options.mode, options.records),
     windowDays: options.windowDays ?? 30,
     records: options.records,
     detectedPlans: options.detectedPlans ?? [],

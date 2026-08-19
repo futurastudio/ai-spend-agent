@@ -4615,6 +4615,87 @@ describe("minimal CLI vertical slice", () => {
     delete process.env.CURSOR_ADMIN_KEY;
   });
 
+  it("keeps local per-sub API-equivalent estimates on the connected receipt (founder mixed state)", async () => {
+    // Founder live-testing repro (2026-08-19): openai billed records synced +
+    // detected claude Max 20x and chatgpt Pro subscriptions + real local
+    // transcripts. The receipt must stay billed-primary WITHOUT erasing the
+    // estimated axis: sub rows keep their ~ figures from local evidence and
+    // only genuinely absent evidence reads n/r.
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connected-mixed-"));
+    // Detected plans: claude Max 20x ($200/mo) + chatgpt Pro ($200/mo).
+    await writeFile(process.env.AI_SPEND_CLAUDE_CONFIG!, JSON.stringify({
+      oauthAccount: {
+        billingType: "stripe_subscription",
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x"
+      }
+    }));
+    const codexClaims = Buffer.from(JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_plan_type: "pro" }
+    })).toString("base64url");
+    await writeFile(process.env.AI_SPEND_CODEX_AUTH!, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { id_token: `header.${codexClaims}.signature` }
+    }));
+    // Local claude transcript: 1M in @$5 + 100k out @$25 = ~$7.50 estimated.
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
+    await writeFile(join(logsDir, "-Users-jose-myproject", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      cwd: "/Users/testuser/myproject",
+      sessionId: "sess-mixed-1",
+      requestId: "req-mixed-1",
+      message: { id: "msg-mixed-1", model: "claude-opus-4-8", usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }
+    }), "utf8");
+    // Connected billing: openai $8.66 across two cost rows.
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "founder-admin-fake-token-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: [
+                { amount: { value: 0.5, currency: "usd" }, line_item: "Responses API" },
+                { amount: { value: 8.16, currency: "usd" }, line_item: "GPT-5.1 input" }
+              ]
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    await runCli([
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200", "--end-time", "1762041600"
+    ]);
+
+    const receipt = await runCli(["--path", dir, "--no-color"]);
+
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).toContain("CONNECTED · MIXED EVIDENCE");
+    // The claude sub row keeps its ~ figure from local transcripts.
+    expect(receipt.stdout).toContain(
+      "    claude    Max 20x     $200/mo committed       ~$8 API-equivalent"
+    );
+    // chatgpt has genuinely no local codex evidence — n/r stays honest there.
+    expect(receipt.stdout).toContain(
+      "    chatgpt   Pro         $200/mo committed     API-equivalent n/r"
+    );
+    // The Total carries all three bases labeled — billed never erases the
+    // estimated axis, and nothing is blended.
+    expect(receipt.stdout).toContain(
+      "  Total   committed $400/mo · API-equivalent ~$8 · billed $8.66"
+    );
+    expect(receipt.stdout).toContain("includes $8.66 billed from sources without a subscription row");
+    expect(receipt.stdout).toContain("$8.66 billed (provider-reported, verified)");
+    expect(receipt.stdout).not.toContain("$16.16");
+  });
+
   it("keeps inclusive OpenAI multimodal totals identical in persisted CLI JSON and the saved report", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-openai-inclusive-"));
     const fakeToken = "sk-" + "inclusive-token-fixture-do-not-store";

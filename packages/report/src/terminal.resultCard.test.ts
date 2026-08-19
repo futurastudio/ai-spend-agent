@@ -434,3 +434,108 @@ describe("--full header (§1.5)", () => {
     expect(output).toContain("evidence-labeled financial view");
   });
 });
+
+/**
+ * Founder live-testing regression (2026-08-19): connected billing synced
+ * (openai $8.66) while this machine also has detected subscriptions and local
+ * transcripts worth ~$1,296 API-equivalent. The receipt is billed-primary but
+ * must NEVER erase the estimated axis — sub rows keep their ~ figures, and
+ * only genuinely absent evidence reads n/r (C-lane §1.4 connected/mixed
+ * variants + QA M2-M4).
+ */
+describe("compact card — connected billing + local evidence (founder mixed state)", () => {
+  function billedRecord(input: { amountUsd: number; projectId?: string }): UsageRecord {
+    recordCounter += 1;
+    return {
+      id: `rc-billed-${recordCounter}`,
+      timestamp: "2026-08-09T12:00:00.000Z",
+      source: {
+        id: "openai-provider-api",
+        name: "OpenAI organization costs API",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "provider API",
+        account: "env:OPENAI_ADMIN_KEY_ORG2"
+      },
+      model: "Responses API",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: input.amountUsd,
+      costConfidence: "verified",
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket"
+    };
+  }
+
+  const claudeMax20x: DetectedPlan = {
+    agent: "claude-code",
+    provider: "anthropic",
+    planId: "claude-max-20x",
+    planLabel: "Claude Max 20x",
+    billing: "subscription",
+    source: "~/.claude.json"
+  };
+
+  /** claude ~$1,226.44 across projects + codex ~$70.02 + openai billed $8.66. */
+  function founderRecords(): UsageRecord[] {
+    return [
+      localRecord({ agent: "claude-code", amountUsd: 810.20, projectId: "tilden-web" }),
+      localRecord({ agent: "claude-code", amountUsd: 416.24, projectId: "agent-finops" }),
+      localRecord({ agent: "codex", amountUsd: 70.02 }),
+      billedRecord({ amountUsd: 0.50, projectId: "proj_org2_platform" }),
+      billedRecord({ amountUsd: 8.16 })
+    ];
+  }
+
+  const text = () => render(founderRecords(), {
+    mode: "connected",
+    detectedPlans: [claudeMax20x, codexPlan]
+  });
+
+  it("keeps per-subscription ~ figures next to billed money — never API-equivalent n/r", () => {
+    const output = text();
+    const claudeRow = "    claude    Max 20x     $200/mo committed   ~$1,226 API-equivalent";
+    const chatgptRow = "    chatgpt   Pro         $200/mo committed      ~$70 API-equivalent";
+    expect(output).toContain("aibill · CONNECTED · MIXED EVIDENCE");
+    expect(output).toContain("provider-reported cost and modeled value are shown separately");
+    expect(output).toContain(claudeRow);
+    expect(output).toContain(chatgptRow);
+    expect(output).not.toContain("API-equivalent n/r");
+    expect([...claudeRow].length).toBeLessThanOrEqual(72);
+    expect([...chatgptRow].length).toBeLessThanOrEqual(72);
+  });
+
+  it("carries all three bases labeled in the Total — never one blended number", () => {
+    const output = text();
+    const totalRow = "  Total   committed $400/mo · API-equivalent ~$1,296 · billed $8.66";
+    expect(output).toContain(totalRow);
+    expect([...totalRow].length).toBeLessThanOrEqual(72);
+    expect(output).toContain("includes $8.66 billed from sources without a subscription row");
+    expect(output).toContain("three kinds of money — never added into one number");
+    // 1296.46 + 8.66 must never blend into one figure.
+    expect(output).not.toContain("1,305");
+    expect(output).not.toContain("$1305");
+  });
+
+  it("keeps by-project on local attribution and both bases in Evidence", () => {
+    const output = text();
+    expect(output).toContain("tilden-web ~$810 (63%)");
+    expect(output).toContain("agent-finops ~$416 (32%)");
+    expect(output).toContain("unattributed ~$70 (5%)");
+    // The billed rows' provider project id must not hijack by-project (QA M3).
+    expect(output).not.toContain("proj_org2_platform");
+    expect(output).toContain("~$1,296 API-equivalent (estimated)");
+    expect(output).toContain("$8.66 billed (provider-reported, verified)");
+  });
+
+  it("still reads n/r when local evidence is GENUINELY absent in connected mode", () => {
+    const output = render(
+      [billedRecord({ amountUsd: 0.50 }), billedRecord({ amountUsd: 8.16 })],
+      { mode: "connected", detectedPlans: [claudeMax20x, codexPlan] }
+    );
+    expect(output).toContain("API-equivalent n/r");
+    expect(output).toContain("billed $8.66");
+    expect(output).toContain("n/r = not reported");
+  });
+});
