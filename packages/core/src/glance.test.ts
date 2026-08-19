@@ -1,11 +1,241 @@
 import { describe, expect, it } from "vitest";
 import { buildUsageGlance } from "./glance.js";
+import { PRICING_TABLE_AS_OF } from "./modelPricing.js";
+import type { ActionVerificationProjectionV0 } from "./actionPlanner.js";
 import type { LocalAgentActivity, LocalAgentCall } from "./localAgentLogs.js";
 
 const usage = (inputTokens: number, outputTokens: number) => ({
   inputTokens,
   outputTokens,
   cacheReadTokens: 0
+});
+
+describe("Glance token experiment projection", () => {
+  const projection: ActionVerificationProjectionV0 = {
+    schemaVersion: 0,
+    experimentId: `tre_v0_${"a".repeat(64)}`,
+    findingId: `wf_v0_${"b".repeat(64)}`,
+    candidateKey: `wfc_v0_${"c".repeat(64)}`,
+    state: "collect_post_change",
+    tone: "neutral",
+    headline: "Collect three matched post-change sessions",
+    detail: "Record whether quality passed, failed, or is still missing.",
+    evidenceLabel: "missing",
+    qualityLabel: "insufficient",
+    qualityEvidence: "missing",
+    baselineSessions: 3,
+    postChangeSessions: 2,
+    minimumSessions: 3,
+    reductionPercent: null
+  };
+
+  it("passes the canonical compact projection without recalculating it", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: projection
+    });
+
+    expect(snapshot.tokenExperiment).toEqual(projection);
+    expect(snapshot.tokenExperiment?.postChangeSessions).toBe(2);
+    expect(snapshot.tokenExperiment?.reductionPercent).toBeNull();
+    expect(snapshot.provenance.tokenExperiment).toEqual({
+      source: "canonical_action_verification_projection",
+      calculation: "core_experiment_evaluator",
+      cohort: "matched_local_sessions",
+      automaticExecution: false
+    });
+    expect(snapshot.caveats).toContain(
+      "A token-test percentage compares matched local session cohorts guarded by explicit quality evidence; it is not certified savings, verified outcome ROI, or a provider bill."
+    );
+  });
+
+  it("omits malformed or internally inconsistent claims", () => {
+    const malformed = {
+      ...projection,
+      state: "review_measured_result",
+      evidenceLabel: "missing",
+      qualityLabel: "insufficient",
+      reductionPercent: 18
+    } as ActionVerificationProjectionV0;
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: malformed
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+    expect(snapshot.provenance.tokenExperiment.source).toBe("not_available");
+  });
+
+  it.each(["verified", "observed", "user_declared"] as const)(
+    "allows a calculated measured result only with held %s quality evidence",
+    (qualityEvidence) => {
+      const measured: ActionVerificationProjectionV0 = {
+        ...projection,
+        state: "review_measured_result",
+        evidenceLabel: "calculated",
+        qualityLabel: "held",
+        qualityEvidence,
+        reductionPercent: 18
+      };
+      const snapshot = buildUsageGlance([], {
+        now: new Date("2026-08-15T12:00:00.000Z"),
+        actionVerificationProjection: measured
+      });
+
+      expect(snapshot.tokenExperiment).toEqual(measured);
+    }
+  );
+
+  it("omits a measured percentage when quality evidence is missing", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: {
+        ...projection,
+        state: "review_measured_result",
+        evidenceLabel: "calculated",
+        qualityLabel: "held",
+        qualityEvidence: "missing",
+        reductionPercent: 18
+      }
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+  });
+
+  it.each(["verified", "observed", "user_declared"] as const)(
+    "preserves a canonical negative rollback with held %s quality evidence",
+    (qualityEvidence) => {
+      const regression: ActionVerificationProjectionV0 = {
+        ...projection,
+        state: "rollback",
+        evidenceLabel: "calculated",
+        qualityLabel: "held",
+        qualityEvidence,
+        reductionPercent: -18
+      };
+      const snapshot = buildUsageGlance([], {
+        now: new Date("2026-08-15T12:00:00.000Z"),
+        actionVerificationProjection: regression
+      });
+
+      expect(snapshot.tokenExperiment).toEqual(regression);
+    }
+  );
+
+  it("omits a negative percentage in the measured-result state", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: {
+        ...projection,
+        state: "review_measured_result",
+        evidenceLabel: "calculated",
+        qualityLabel: "held",
+        qualityEvidence: "observed",
+        reductionPercent: -18
+      }
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+  });
+
+  it.each([0, 18])("omits a non-negative rollback percentage (%s)", (reductionPercent) => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: {
+        ...projection,
+        state: "rollback",
+        evidenceLabel: "calculated",
+        qualityLabel: "held",
+        qualityEvidence: "observed",
+        reductionPercent
+      }
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+  });
+
+  it("omits a negative rollback without complete claim evidence", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: {
+        ...projection,
+        state: "rollback",
+        evidenceLabel: "missing",
+        qualityLabel: "held",
+        qualityEvidence: "observed",
+        reductionPercent: -18
+      }
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+  });
+
+  it("omits either percentage sign in every non-result state", () => {
+    for (const state of [
+      "collect_baseline",
+      "approve_one_change",
+      "collect_post_change",
+      "resolve_evidence",
+      "rolled_back",
+      "cancelled"
+    ] as const) {
+      for (const reductionPercent of [-18, 18]) {
+        const snapshot = buildUsageGlance([], {
+          now: new Date("2026-08-15T12:00:00.000Z"),
+          actionVerificationProjection: {
+            ...projection,
+            state,
+            evidenceLabel: "calculated",
+            qualityLabel: "held",
+            qualityEvidence: "observed",
+            reductionPercent
+          }
+        });
+
+        expect(snapshot).not.toHaveProperty("tokenExperiment");
+      }
+    }
+  });
+
+  it("omits a projection with forged identifiers", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z"),
+      actionVerificationProjection: {
+        ...projection,
+        experimentId: "../../private-experiment"
+      } as ActionVerificationProjectionV0
+    });
+
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+    expect(JSON.stringify(snapshot)).not.toContain("private-experiment");
+  });
+
+  it("does not invent a token test when no projection is supplied", () => {
+    const snapshot = buildUsageGlance([], {
+      now: new Date("2026-08-15T12:00:00.000Z")
+    });
+    expect(snapshot).not.toHaveProperty("tokenExperiment");
+  });
+
+  it.each(["rolled_back", "cancelled"] as const)(
+    "preserves the canonical %s terminal state without a percentage",
+    (state) => {
+      const terminal: ActionVerificationProjectionV0 = {
+        ...projection,
+        state,
+        headline: state === "rolled_back" ? "Token test rolled back" : "Token test cancelled",
+        detail: "Terminal local audit state.",
+        reductionPercent: null
+      };
+      const snapshot = buildUsageGlance([], {
+        now: new Date("2026-08-15T12:00:00.000Z"),
+        actionVerificationProjection: terminal
+      });
+
+      expect(snapshot.tokenExperiment).toEqual(terminal);
+      expect(snapshot.tokenExperiment?.reductionPercent).toBeNull();
+    }
+  );
 });
 
 const activity = (
@@ -26,6 +256,49 @@ const activity = (
 });
 
 describe("buildUsageGlance", () => {
+  it("suppresses global focus, anomaly, and context advice when qualitative indexing is partial", () => {
+    const calls: LocalAgentCall[] = [{
+      agent: "codex",
+      sessionId: "selected-only",
+      project: "agent-finops",
+      model: "gpt-5.6-sol",
+      timestamp: "2026-08-16T12:00:00.000Z",
+      usage: usage(120_000, 5_000),
+      activity: activity("Refactoring the billing engine", 8, 12)
+    }];
+    const snapshot = buildUsageGlance(calls, {
+      now: new Date("2026-08-16T12:01:00.000Z"),
+      qualitativeCoverage: {
+        status: "partial",
+        selectedFiles: 1,
+        readCompletely: 1,
+        skippedForBudget: 4
+      }
+    });
+
+    expect(snapshot.coverage.qualitative).toEqual({
+      status: "partial",
+      selectedFiles: 1,
+      readCompletely: 1,
+      skippedForBudget: 4
+    });
+    expect(snapshot.focus).toBeNull();
+    expect(snapshot.anomaly).toBeNull();
+    expect(snapshot.primaryAction).toMatchObject({
+      intent: "inspect_current_work",
+      label: "Refresh evidence · agent-finops",
+      confidence: "low"
+    });
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "Do not infer a global main focus"
+    );
+    expect(snapshot.primaryAction.agentPrompt).toContain(
+      "npx aibill improve"
+    );
+    expect(snapshot.primaryAction.agentPrompt).toContain("npx aibill improve");
+    expect(JSON.stringify(snapshot)).not.toContain("Refactoring the billing engine");
+  });
+
   it("does not add repeated Codex cumulative snapshots for the same session", () => {
     const base: LocalAgentCall = {
       agent: "codex",
@@ -236,7 +509,7 @@ describe("buildUsageGlance", () => {
         source: "local_calculation",
         basis: "transcript_tokens_at_public_api_rates",
         confidence: "estimated",
-        pricingAsOf: "2026-08-14"
+        pricingAsOf: PRICING_TABLE_AS_OF
       },
       plan: {
         source: "local_agent_account_metadata",
@@ -264,6 +537,12 @@ describe("buildUsageGlance", () => {
       primaryAction: {
         source: "canonical_context_health_focus_and_reported_runway",
         execution: "copy_prompt",
+        automaticExecution: false
+      },
+      tokenExperiment: {
+        source: "not_available",
+        calculation: "core_experiment_evaluator",
+        cohort: "matched_local_sessions",
         automaticExecution: false
       },
       network: {

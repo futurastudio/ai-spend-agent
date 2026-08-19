@@ -9,9 +9,11 @@ import {
   utimes,
   writeFile
 } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activitySnapshotSchema,
@@ -29,6 +31,8 @@ import {
 } from "./activitySnapshotCache.js";
 import type { LocalAgentSourceScan } from "./localAgentLogs.js";
 import type { UsageRecord } from "./schema.js";
+
+const execFile = promisify(execFileCallback);
 
 const AS_OF = "2026-08-09T18:00:00.000Z";
 const originalCacheEnvironment = process.env[activitySnapshotCacheEnvironmentVariable];
@@ -128,7 +132,7 @@ describe("activity snapshot cache", () => {
   it("fails closed on future versions, malformed JSON, oversized files, and leak fields", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aibill-cache-invalid-"));
     const file = join(directory, activitySnapshotCacheFileName);
-    await writeFile(file, JSON.stringify({ kind: "aibill.activity_snapshot", schemaVersion: 2 }), { mode: 0o600 });
+    await writeFile(file, JSON.stringify({ kind: "aibill.activity_snapshot", schemaVersion: 3 }), { mode: 0o600 });
     await expect(readActivitySnapshot({ cacheDirectory: directory })).resolves.toEqual({
       status: "error",
       code: "unsupported_version"
@@ -262,6 +266,41 @@ describe("activity snapshot cache", () => {
     });
     await expect(writeActivitySnapshot(snapshot(), { homeDirectory: syntheticHome }))
       .rejects.toMatchObject({ code: "unsafe_directory" });
+  });
+
+  it("keeps a fresh default snapshot cache ignored when HOME is a Git worktree", async () => {
+    const syntheticHome = await mkdtemp(join(tmpdir(), "aibill-cache-git-home-"));
+    await execFile("git", ["-C", syntheticHome, "init", "--quiet"]);
+
+    await writeActivitySnapshot(snapshot(), { homeDirectory: syntheticHome });
+
+    expect(await readFile(join(syntheticHome, ".aibill", ".gitignore"), "utf8"))
+      .toBe("*\n");
+    await expect(readActivitySnapshot({ homeDirectory: syntheticHome })).resolves.toMatchObject({
+      status: "ok"
+    });
+    const { stdout } = await execFile("git", [
+      "-C", syntheticHome, "status", "--short", "--", ".aibill"
+    ], { encoding: "utf8" });
+    expect(stdout).toBe("");
+  });
+
+  it("does not impose the default Git marker on an explicit cache override", async () => {
+    const syntheticHome = await mkdtemp(join(tmpdir(), "aibill-cache-git-custom-home-"));
+    await execFile("git", ["-C", syntheticHome, "init", "--quiet"]);
+    const customDirectory = join(syntheticHome, "caller-owned-cache");
+    await mkdir(customDirectory, { mode: 0o700 });
+
+    await writeActivitySnapshot(snapshot(), {
+      homeDirectory: syntheticHome,
+      cacheDirectory: customDirectory
+    });
+
+    await expect(lstat(join(syntheticHome, ".aibill"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(join(customDirectory, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readActivitySnapshot({ cacheDirectory: customDirectory })).resolves.toMatchObject({
+      status: "ok"
+    });
   });
 
   it("prevents a slower older writer from replacing a newer snapshot", async () => {
@@ -443,5 +482,52 @@ describe("activity snapshot cache", () => {
     durations.sort((left, right) => left - right);
     const p95 = durations[Math.floor(durations.length * 0.95)]!;
     expect(p95).toBeLessThan(100);
+  });
+});
+
+/** C-lane §2.1 fleet back-compat: every v2 write dual-writes a v1 payload. */
+describe("activity snapshot cache dual-write (C-lane §2.1/QA-12b)", () => {
+  it("writes the v2 cache and a v1 payload side by side", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibill-cache-dual-write-"));
+    const written = await writeActivitySnapshot(snapshot(), { cacheDirectory: directory });
+    expect(written.status).toBe("written");
+
+    const v2Raw = JSON.parse(await readFile(join(directory, "statusline-v2.json"), "utf8")) as {
+      schemaVersion: number;
+      committedTotal: unknown;
+    };
+    expect(v2Raw.schemaVersion).toBe(2);
+    expect(v2Raw.committedTotal).toEqual({ amountUsd: null, pricedSubs: 0, totalSubs: 0 });
+
+    // The legacy file keeps today's EXACT v1 shape so an installed v1 runner
+    // stays fresh instead of decaying into permanent staleness.
+    const v1Raw = JSON.parse(await readFile(join(directory, "statusline-v1.json"), "utf8")) as Record<string, unknown>;
+    expect(v1Raw.schemaVersion).toBe(1);
+    expect(Object.keys(v1Raw).sort()).toEqual([
+      "asOf", "coverage", "currency", "generatedAt", "kind", "lastAttemptAt",
+      "lastSuccessAt", "metered", "mode", "networkUploaded", "overage",
+      "refresh", "schemaVersion", "subscription", "unresolved"
+    ]);
+    const v1Info = await stat(join(directory, "statusline-v1.json"));
+    expect(v1Info.mode & 0o077).toBe(0);
+  });
+
+  it("keeps the v1 payload fresh on refresh-failure writes too", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibill-cache-dual-fail-"));
+    await writeActivitySnapshot(snapshot(), { cacheDirectory: directory });
+    const failed = await recordActivitySnapshotRefreshFailure(
+      "2026-08-09T19:00:00.000Z",
+      "scan_failed",
+      { cacheDirectory: directory }
+    );
+    expect(failed.status).toBe("written");
+    const v1Raw = JSON.parse(await readFile(join(directory, "statusline-v1.json"), "utf8")) as {
+      schemaVersion: number;
+      lastAttemptAt: string;
+      refresh: { status: string };
+    };
+    expect(v1Raw.schemaVersion).toBe(1);
+    expect(v1Raw.lastAttemptAt).toBe("2026-08-09T19:00:00.000Z");
+    expect(v1Raw.refresh.status).toBe("error");
   });
 });

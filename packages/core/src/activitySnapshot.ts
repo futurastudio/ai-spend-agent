@@ -14,6 +14,7 @@ import {
   PRICING_TABLE_AS_OF
 } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
+import { subscriptionPlans } from "./planMath.js";
 import { isBundledSampleUsage, type UsageRecord } from "./schema.js";
 import {
   sourceValidationCoverageValues,
@@ -105,6 +106,18 @@ export type ActivitySnapshotBuildInput = {
   /** Explicit provider-billed overage records; must also be trusted. */
   billedOverageRecordIds?: readonly string[];
   providerCoverage?: readonly ActivitySnapshotProviderCoverageInput[];
+  /**
+   * C-lane §2.1: provider-billed subscriptions with no local agent (cursor).
+   * The builder includes a billed30d amount only when the supplied window is
+   * "verified"; anything else is degraded to a missing window (writer-side
+   * lock — the renderer re-checks independently).
+   */
+  providerSubscriptions?: readonly {
+    provider: ActivitySnapshotProvider;
+    planLabel: string | null;
+    committedUsdPerMonth: number | null;
+    billed30d?: ActivitySnapshotBilledWindow;
+  }[];
   pricingAsOf?: string;
   /** Deliberately accepts only false; a runtime true is rejected as defense in depth. */
   sampleData?: false;
@@ -256,6 +269,8 @@ export const activitySnapshotSubscriptionAgentSchema = z.object({
   agent: agentSchema,
   billing: z.literal("subscription"),
   planId: planIdSchema,
+  /** C-lane §2.1: detected-plan list price; null when the plan is unpriced. */
+  committedUsdPerMonth: usdSchema.nullable(),
   apiEquivalent: activitySnapshotApiEquivalentWindowsSchema,
   limits: z.array(activitySnapshotLimitSchema).max(2),
   pressure: z.enum(["extra_usage_credits_exhausted"]).nullable()
@@ -314,6 +329,47 @@ const activitySnapshotUnresolvedSchema = z.object({
     });
   }
 });
+
+/**
+ * C-lane §2.1: a provider-billed subscription with no local agent (cursor
+ * today). The writer includes a billed30d amount ONLY when its financial
+ * evidence is "verified"; the renderer independently drops anything else
+ * (double lock: estimated/unverified provider dollars can never reach a
+ * statusline segment).
+ */
+export const activitySnapshotProviderSubscriptionSchema = z.object({
+  provider: z.enum(activitySnapshotProviderValues),
+  billing: z.literal("subscription"),
+  planLabel: z.string().min(1).max(64).nullable(),
+  committedUsdPerMonth: usdSchema.nullable(),
+  billed30d: activitySnapshotBilledWindowSchema
+}).strict();
+export type ActivitySnapshotProviderSubscription = z.infer<
+  typeof activitySnapshotProviderSubscriptionSchema
+>;
+
+/** C-lane §2.1: the committed $/mo total across every detected subscription. */
+export const activitySnapshotCommittedTotalSchema = z.object({
+  amountUsd: usdSchema.nullable(),
+  pricedSubs: countSchema,
+  totalSubs: countSchema
+}).strict().superRefine((total, context) => {
+  if (total.pricedSubs > total.totalSubs) {
+    context.addIssue({
+      code: "custom",
+      path: ["pricedSubs"],
+      message: "Priced subscriptions cannot exceed total subscriptions."
+    });
+  }
+  if ((total.amountUsd === null) !== (total.pricedSubs === 0)) {
+    context.addIssue({
+      code: "custom",
+      path: ["amountUsd"],
+      message: "A committed total exists exactly when at least one subscription is priced."
+    });
+  }
+});
+export type ActivitySnapshotCommittedTotal = z.infer<typeof activitySnapshotCommittedTotalSchema>;
 
 export const activitySnapshotOverageSchema = z.object({
   amountUsd: z.number().finite().positive(),
@@ -436,7 +492,10 @@ export type ActivitySnapshotCoverage = z.infer<typeof activitySnapshotCoverageSc
 
 export const activitySnapshotSchema = z.object({
   kind: z.literal("aibill.activity_snapshot"),
-  schemaVersion: z.literal(1),
+  // v2 (C-lane §2.1): adds per-agent committedUsdPerMonth, provider-billed
+  // subscriptions, and the committed total. The writer dual-writes a v1
+  // payload for already-installed v1 runners during the deprecation window.
+  schemaVersion: z.literal(2),
   currency: z.literal("USD"),
   asOf: isoTimestampSchema,
   generatedAt: isoTimestampSchema,
@@ -453,6 +512,8 @@ export const activitySnapshotSchema = z.object({
   subscription: activitySnapshotSubscriptionSchema.nullable(),
   metered: activitySnapshotMeteredSchema.nullable(),
   unresolved: activitySnapshotUnresolvedSchema.nullable(),
+  providers: z.array(activitySnapshotProviderSubscriptionSchema).max(5).nullable(),
+  committedTotal: activitySnapshotCommittedTotalSchema,
   overage: activitySnapshotOverageSchema.nullable(),
   coverage: activitySnapshotCoverageSchema,
   networkUploaded: z.literal(false)
@@ -477,6 +538,20 @@ export const activitySnapshotSchema = z.object({
   if ((snapshot.mode === "empty" || snapshot.mode === "error") &&
       (snapshot.subscription || snapshot.metered || snapshot.unresolved || snapshot.overage)) {
     invalid("Empty and error snapshots cannot carry financial cohorts.", ["mode"]);
+  }
+  if ((snapshot.mode === "empty" || snapshot.mode === "error") &&
+      (snapshot.providers || snapshot.committedTotal.amountUsd !== null ||
+       snapshot.committedTotal.totalSubs !== 0)) {
+    invalid("Empty and error snapshots cannot carry subscription pricing.", ["committedTotal"]);
+  }
+  if (snapshot.providers &&
+      new Set(snapshot.providers.map((provider) => provider.provider)).size !== snapshot.providers.length) {
+    invalid("A provider subscription may appear only once.", ["providers"]);
+  }
+  const expectedTotalSubs = (snapshot.subscription?.agents.length ?? 0) +
+    (snapshot.providers?.length ?? 0);
+  if (snapshot.committedTotal.totalSubs !== expectedTotalSubs) {
+    invalid("The committed total must count every subscription row exactly once.", ["committedTotal"]);
   }
   if (snapshot.mode === "error" && snapshot.refresh.status !== "error") {
     invalid("Error mode requires an error refresh state.", ["refresh"]);
@@ -719,9 +794,33 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
     deduplicated.conflictingIds
   );
 
+  const finalSubscription = mode === "metered" || mode === "unresolved" || mode === "empty"
+    ? null
+    : subscription;
+  // Writer-side lock (C-lane §2.1): a provider-billed amount survives only
+  // when its supplied window is verified; anything else degrades to missing.
+  const providerSubscriptionRows = mode === "empty"
+    ? []
+    : (input.providerSubscriptions ?? []).map((row) => ({
+        provider: row.provider,
+        billing: "subscription" as const,
+        planLabel: row.planLabel,
+        committedUsdPerMonth: row.committedUsdPerMonth,
+        billed30d: row.billed30d &&
+            row.billed30d.financialEvidence === "verified" &&
+            row.billed30d.amountUsd !== null
+          ? row.billed30d
+          : missingBilledWindow()
+      }));
+  const committedRows = [
+    ...(finalSubscription?.agents ?? []).map((agent) => agent.committedUsdPerMonth),
+    ...providerSubscriptionRows.map((row) => row.committedUsdPerMonth)
+  ];
+  const pricedRows = committedRows.filter((amount): amount is number => amount !== null);
+
   return activitySnapshotSchema.parse({
     kind: "aibill.activity_snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     currency: "USD",
     asOf: new Date(asOfMs).toISOString(),
     generatedAt,
@@ -729,17 +828,75 @@ export function buildActivitySnapshot(input: ActivitySnapshotBuildInput): Activi
     lastSuccessAt: generatedAt,
     refresh: { status: "ok" },
     mode,
-    subscription: mode === "metered" || mode === "unresolved" || mode === "empty"
-      ? null
-      : subscription,
+    subscription: finalSubscription,
     metered: mode === "subscription" || mode === "unresolved" || mode === "empty"
       ? null
       : metered,
     unresolved,
+    providers: providerSubscriptionRows.length > 0 ? providerSubscriptionRows : null,
+    committedTotal: {
+      amountUsd: pricedRows.length > 0
+        ? roundUsd(pricedRows.reduce((total, amount) => total + amount, 0))
+        : null,
+      pricedSubs: pricedRows.length,
+      totalSubs: committedRows.length
+    },
     overage: mode === "metered" || mode === "mixed" ? overage : null,
     coverage,
     networkUploaded: false
   });
+}
+
+/** Detected-plan list price (subscriptionPlans); null when unpriced. */
+function committedPriceForPlanId(planId: string | undefined): number | null {
+  if (!planId) return null;
+  return subscriptionPlans.find((plan) => plan.id === planId)?.monthlyUsd ?? null;
+}
+
+function missingBilledWindow(): ActivitySnapshotBilledWindow {
+  return {
+    amountUsd: null,
+    recordCount: 0,
+    basis: "provider_billed",
+    financialEvidence: "missing",
+    coverage: "missing"
+  };
+}
+
+/**
+ * The v1 dual-write payload (C-lane §2.1 fleet back-compat): today's fields
+ * only, so an already-installed v1 runner keeps rendering fresh data instead
+ * of decaying into permanent staleness. Exact v1 key set; no v2 fields.
+ */
+export function activitySnapshotV1Payload(snapshot: ActivitySnapshot): Record<string, unknown> {
+  return {
+    kind: snapshot.kind,
+    schemaVersion: 1,
+    currency: snapshot.currency,
+    asOf: snapshot.asOf,
+    generatedAt: snapshot.generatedAt,
+    lastAttemptAt: snapshot.lastAttemptAt,
+    lastSuccessAt: snapshot.lastSuccessAt,
+    refresh: snapshot.refresh,
+    mode: snapshot.mode,
+    subscription: snapshot.subscription
+      ? {
+          agents: snapshot.subscription.agents.map((agent) => ({
+            agent: agent.agent,
+            billing: agent.billing,
+            planId: agent.planId,
+            apiEquivalent: agent.apiEquivalent,
+            limits: agent.limits,
+            pressure: agent.pressure
+          }))
+        }
+      : null,
+    metered: snapshot.metered,
+    unresolved: snapshot.unresolved,
+    overage: snapshot.overage,
+    coverage: snapshot.coverage,
+    networkUploaded: snapshot.networkUploaded
+  };
 }
 
 /** A bounded no-evidence state for an initial failed refresh. */
@@ -750,7 +907,7 @@ export function createActivitySnapshotError(
   const timestamp = new Date(parseTimestamp(attemptedAt, "attemptedAt")).toISOString();
   return activitySnapshotSchema.parse({
     kind: "aibill.activity_snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     currency: "USD",
     asOf: timestamp,
     generatedAt: timestamp,
@@ -761,6 +918,8 @@ export function createActivitySnapshotError(
     subscription: null,
     metered: null,
     unresolved: null,
+    providers: null,
+    committedTotal: { amountUsd: null, pricedSubs: 0, totalSubs: 0 },
     overage: null,
     coverage: {
       agents: [],
@@ -826,6 +985,7 @@ function activitySubscriptionAgents(
       agent,
       billing: "subscription",
       planId: isKnownPlanId(plan.planId) ? plan.planId : null,
+      committedUsdPerMonth: committedPriceForPlanId(plan.planId),
       apiEquivalent: buildApiWindows(
         agentRecords,
         allCalls.filter((call) => call.agent === agent),

@@ -125,7 +125,106 @@ export type ProviderConnectorInput = {
   accountId?: string;
   fetcher?: Fetcher;
   tokenResolver?: TokenResolver;
+  /**
+   * Operator-declared reconciliation anchor for this sync. Today only the
+   * Cursor connector consumes it; when absent, the Cursor connector also
+   * accepts the AI_SPEND_CURSOR_RECONCILE_* environment variables so the
+   * shipped CLI can run a reconciliation without new flags.
+   */
+  reconciliation?: CursorReconciliationExpectation;
 };
+
+/**
+ * A human-read billing anchor for one Cursor reconciliation run: the
+ * on-demand ("usage based pricing") total the operator read off the Cursor
+ * team dashboard or invoice for the CURRENT subscription cycle. The connector
+ * compares its own summed spendCents against this figure; only an in-run
+ * match within tolerance can produce verified financial evidence.
+ */
+export type CursorReconciliationExpectation = {
+  /** Dashboard/invoice on-demand total for the current cycle, in USD. */
+  expectedOnDemandUsd: number;
+  /**
+   * The billing-cycle start date shown next to that figure (YYYY-MM-DD).
+   * Must land within one calendar day of the UTC date of the API's
+   * subscriptionCycleStart, proving both numbers describe the same window.
+   */
+  expectedCycleStartDate: string;
+  /**
+   * Optional absolute comparison tolerance in USD. Defaults to $0.01 (the
+   * dashboard rounds to cents). Clamped to at most 1% of the expected total
+   * so a huge tolerance can never rubber-stamp a mismatch.
+   */
+  toleranceUsd?: number;
+};
+
+export type CursorReconciliationOutcome = {
+  status: "verified" | "mismatch" | "not_provable";
+  /** Product-authored, terminal-safe explanation of the outcome. */
+  note: string;
+  connectorTotalUsd?: number;
+  expectedOnDemandUsd?: number;
+  differenceUsd?: number;
+  toleranceUsd?: number;
+  /** Provider-reported cycle start for the reconciled window, ISO-8601. */
+  cycleStartIso?: string;
+};
+
+/** Environment variables the Cursor connector reads for a reconciliation run. */
+export const cursorReconciliationEnvVars = {
+  expectedUsd: "AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD",
+  cycleStart: "AI_SPEND_CURSOR_RECONCILE_CYCLE_START",
+  toleranceUsd: "AI_SPEND_CURSOR_RECONCILE_TOLERANCE_USD"
+} as const;
+
+/**
+ * Read an operator-declared Cursor reconciliation anchor from the local
+ * environment. Absent variables mean "no reconciliation requested"; present
+ * but invalid variables fail closed with a reason (records stay estimated)
+ * instead of throwing, so a typo can never abort or silently verify a sync.
+ * Raw variable values are never echoed into the reason.
+ */
+export function parseCursorReconciliationEnv(
+  env: Record<string, string | undefined> = process.env
+): { expectation?: CursorReconciliationExpectation; invalidReason?: string } {
+  const rawExpected = env[cursorReconciliationEnvVars.expectedUsd];
+  const rawCycleStart = env[cursorReconciliationEnvVars.cycleStart];
+  const rawTolerance = env[cursorReconciliationEnvVars.toleranceUsd];
+  if (rawExpected === undefined && rawCycleStart === undefined && rawTolerance === undefined) {
+    return {};
+  }
+  if (rawExpected === undefined || rawCycleStart === undefined) {
+    return {
+      invalidReason: `both ${cursorReconciliationEnvVars.expectedUsd} and ${cursorReconciliationEnvVars.cycleStart} are required to request a reconciliation`
+    };
+  }
+  const expectedOnDemandUsd = Number(rawExpected.trim());
+  const toleranceUsd = rawTolerance === undefined ? undefined : Number(rawTolerance.trim());
+  const expectation: CursorReconciliationExpectation = {
+    expectedOnDemandUsd,
+    expectedCycleStartDate: rawCycleStart.trim(),
+    ...(toleranceUsd === undefined ? {} : { toleranceUsd })
+  };
+  const invalidReason = invalidCursorReconciliationExpectationReason(expectation);
+  return invalidReason ? { invalidReason } : { expectation };
+}
+
+function invalidCursorReconciliationExpectationReason(
+  expectation: CursorReconciliationExpectation
+): string | undefined {
+  if (!Number.isFinite(expectation.expectedOnDemandUsd) || expectation.expectedOnDemandUsd <= 0) {
+    return `${cursorReconciliationEnvVars.expectedUsd} must be a positive USD amount read off the Cursor dashboard or invoice`;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expectation.expectedCycleStartDate) ||
+      !Number.isFinite(Date.parse(`${expectation.expectedCycleStartDate}T00:00:00Z`))) {
+    return `${cursorReconciliationEnvVars.cycleStart} must be the cycle start date shown on the dashboard, formatted YYYY-MM-DD`;
+  }
+  if (expectation.toleranceUsd !== undefined &&
+      (!Number.isFinite(expectation.toleranceUsd) || expectation.toleranceUsd < 0)) {
+    return `${cursorReconciliationEnvVars.toleranceUsd} must be a non-negative USD amount when set`;
+  }
+  return undefined;
+}
 
 export type ProviderConnectorResult = {
   provider: string;
@@ -580,10 +679,25 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
   return records;
 }
 
-export function normalizeCursorSpendResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
+export function normalizeCursorSpendResponse(
+  response: unknown,
+  options: NormalizerOptions,
+  reconciliation?: CursorReconciliationOutcome
+): UsageRecord[] {
   const users = extractArray(response, "teamMemberSpend");
   const cycleStart = isRecord(response) ? numberValue(response.subscriptionCycleStart) : undefined;
   const timestamp = typeof cycleStart === "number" ? new Date(cycleStart).toISOString() : new Date().toISOString();
+  // The Cursor connector's dollars are labeled estimated until an in-run
+  // reconciliation proves the connector total against a human-read dashboard
+  // or invoice figure for the same cycle. Only that evidence — never a
+  // hardcoded flip — can stamp these records "verified", and a mismatched or
+  // unprovable reconciliation fails closed back to estimated.
+  const reconciled = reconciliation?.status === "verified";
+  const confidence = reconciled ? "verified" as const : "estimated" as const;
+  // Documented semantics: spendCents is "On-demand spend in cents for the
+  // current billing cycle" — seat fees and included-pool usage are excluded.
+  const baseOperation = "Cursor on-demand team spend (current billing cycle; excludes seat fees and included-pool usage)";
+  const operation = reconciled ? `${baseOperation}; ${reconciliation.note}` : baseOperation;
   return users.flatMap((user) => {
     if (!isRecord(user)) return [];
     const userId = stringValue(user.email) ?? stringValue(user.userId);
@@ -592,20 +706,17 @@ export function normalizeCursorSpendResponse(response: unknown, options: Normali
     return [{
       id: slugifySourceId(["cursor-spend", options.accountId, userId].filter(Boolean).join("-")),
       timestamp,
-      // The Cursor connector is spec-built and not yet live-verified (beta),
-      // so its dollars are labeled estimated until reconciled against a real
-      // team's invoice. Never stamp "verified" on data we haven't verified.
-      source: { id: options.sourceId, name: "Cursor Admin API", provider: "cursor", confidence: "estimated", observedFrom: options.observedFrom },
+      source: { id: options.sourceId, name: "Cursor Admin API", provider: "cursor", confidence, observedFrom: options.observedFrom },
       model: "cursor-team-usage",
       inputTokens: 0,
       outputTokens: 0,
       amountUsd: cents / 100,
-      costConfidence: "estimated" as const,
+      costConfidence: confidence,
       userId,
       projectId: options.accountId,
       providerCostType: "cursor_spend",
       usageGranularity: "user_aggregate",
-      operation: "Cursor team spend"
+      operation
     }];
   });
 }
@@ -799,14 +910,114 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
 async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
   const accountId = input.accountId ?? input.org ?? "cursor-team";
   const spendFetch = await fetchCursorSpendPages(fetcher, token);
-  const records = spendFetch.pages.flatMap((page) => normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId }));
+  const requested = input.reconciliation
+    ? { expectation: input.reconciliation, invalidReason: invalidCursorReconciliationExpectationReason(input.reconciliation) }
+    : parseCursorReconciliationEnv();
+  const reconciliation = assessCursorReconciliation(spendFetch, requested.expectation, requested.invalidReason);
+  const records = spendFetch.pages.flatMap((page) => normalizeCursorSpendResponse(page, { sourceId, observedFrom: "Cursor Admin API", accountId }, reconciliation));
+  const qa = qaSummary("cursor", [spendFetch]);
+  if (reconciliation) {
+    // The outcome must survive the persisted-QA round trip, so it rides in
+    // instructions (kept verbatim) and, on failure, in responseDrift.
+    qa.instructions = [...qa.instructions, `Reconciliation ${reconciliation.status}: ${reconciliation.note}`];
+    if (reconciliation.status !== "verified") {
+      qa.responseDrift.push({
+        label: "Cursor Admin API spend",
+        field: "teamMemberSpend[].spendCents (cycle total)",
+        issue: reconciliation.note
+      });
+    }
+  }
   return providerResult(
     "cursor",
     sourceId,
     input.authReference,
     records,
-    qaSummary("cursor", [spendFetch])
+    qa
   );
+}
+
+/**
+ * Compare the connector's summed current-cycle on-demand total against the
+ * operator-read dashboard/invoice figure. Every exit that is not an exact
+ * window-proven match inside the clamped tolerance fails closed: the records
+ * stay estimated and the note says exactly why. Returns undefined when no
+ * reconciliation was requested.
+ */
+function assessCursorReconciliation(
+  spendFetch: FetchPagesResult,
+  expectation: CursorReconciliationExpectation | undefined,
+  invalidReason: string | undefined
+): CursorReconciliationOutcome | undefined {
+  if (!expectation && !invalidReason) return undefined;
+  if (invalidReason || !expectation) {
+    return {
+      status: "not_provable",
+      note: `Cursor reconciliation input was rejected (${invalidReason ?? "missing expectation"}); records remain estimated.`
+    };
+  }
+  if (spendFetch.pagination.stoppedBecause !== "complete" || spendFetch.coverageIncomplete === true) {
+    return {
+      status: "not_provable",
+      note: `Cursor reconciliation requires a complete spend window; pagination stopped because "${spendFetch.pagination.stoppedBecause}" so a partial window cannot verify billed dollars. Records remain estimated.`
+    };
+  }
+  const cycleStarts = spendFetch.pages.map((page) => isRecord(page) ? numberValue(page.subscriptionCycleStart) : undefined);
+  const cycleStart = cycleStarts[0];
+  if (typeof cycleStart !== "number" || cycleStarts.some((value) => value !== cycleStart)) {
+    return {
+      status: "not_provable",
+      note: "Cursor did not report one consistent subscriptionCycleStart across spend pages; the reconciliation window cannot be proven. Records remain estimated."
+    };
+  }
+  const cycleStartIso = new Date(cycleStart).toISOString();
+  const apiCycleDate = cycleStartIso.slice(0, 10);
+  const declaredDateMs = Date.parse(`${expectation.expectedCycleStartDate}T00:00:00Z`);
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(declaredDateMs) || Math.abs(Date.parse(`${apiCycleDate}T00:00:00Z`) - declaredDateMs) > dayMs) {
+    return {
+      status: "not_provable",
+      cycleStartIso,
+      note: `The declared cycle start ${expectation.expectedCycleStartDate} does not match the provider-reported cycle start ${apiCycleDate} (UTC); the dashboard figure and the connector read different windows. Records remain estimated.`
+    };
+  }
+  const connectorTotalCents = spendFetch.pages.reduce<number>((sum, page) =>
+    sum + extractArray(page, "teamMemberSpend").reduce<number>((pageSum, member) =>
+      pageSum + (isRecord(member) ? numberValue(member.spendCents) ?? 0 : 0), 0), 0);
+  const connectorTotalUsd = connectorTotalCents / 100;
+  if (!(connectorTotalUsd > 0)) {
+    return {
+      status: "not_provable",
+      cycleStartIso,
+      connectorTotalUsd,
+      expectedOnDemandUsd: expectation.expectedOnDemandUsd,
+      note: "Cursor reconciliation needs a non-zero connector total; matching $0.00 against a dashboard figure proves nothing. Records remain estimated."
+    };
+  }
+  // Default $0.01 (dashboards round to cents); clamp to at most 1% of the
+  // expected figure so an oversized tolerance cannot manufacture a match.
+  const requestedTolerance = Math.max(expectation.toleranceUsd ?? 0.01, 0.01);
+  const toleranceUsd = Math.min(requestedTolerance, Math.max(0.01, expectation.expectedOnDemandUsd * 0.01));
+  const differenceUsd = Math.abs(connectorTotalUsd - expectation.expectedOnDemandUsd);
+  const shared = {
+    connectorTotalUsd,
+    expectedOnDemandUsd: expectation.expectedOnDemandUsd,
+    differenceUsd,
+    toleranceUsd,
+    cycleStartIso
+  };
+  if (differenceUsd <= toleranceUsd + 1e-9) {
+    return {
+      status: "verified",
+      ...shared,
+      note: `reconciled to the operator-read dashboard/invoice on-demand total $${expectation.expectedOnDemandUsd.toFixed(2)} for the cycle starting ${apiCycleDate}: connector total $${connectorTotalUsd.toFixed(2)}, difference $${differenceUsd.toFixed(2)} within tolerance $${toleranceUsd.toFixed(2)}`
+    };
+  }
+  return {
+    status: "mismatch",
+    ...shared,
+    note: `Cursor reconciliation mismatch: connector on-demand total $${connectorTotalUsd.toFixed(2)} vs operator-read $${expectation.expectedOnDemandUsd.toFixed(2)} for the cycle starting ${apiCycleDate}; difference $${differenceUsd.toFixed(2)} exceeds tolerance $${toleranceUsd.toFixed(2)}. Records remain estimated until the totals agree.`
+  };
 }
 
 async function fetchCursorSpendPages(fetcher: Fetcher, token: string): Promise<FetchPagesResult> {
@@ -1658,7 +1869,18 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "total_seats", "seats", "seats[]", "seats[].created_at", "seats[].updated_at", "seats[].pending_cancellation_date", "seats[].last_activity_at", "seats[].last_activity_editor", "seats[].last_authenticated_at", "seats[].plan_type", "seats[].login", "seats[].id", "seats[].assignee", "seats[].assignee.login", "seats[].assignee.email", "seats[].assignee.id", "seats[].assignee.node_id", "seats[].assignee.avatar_url", "seats[].assignee.html_url", "seats[].assignee.type", "seats[].assignee.site_admin", "seats[].assigning_team", "seats[].organization"]);
   }
   if (provider === "cursor") {
-    return new Set([...common, "teamMemberSpend", "teamMemberSpend[]", "teamMemberSpend[].userId", "teamMemberSpend[].email", "teamMemberSpend[].name", "teamMemberSpend[].role", "teamMemberSpend[].spendCents", "teamMemberSpend[].fastPremiumRequests", "teamMemberSpend[].hardLimitOverrideDollars", "subscriptionCycleStart", "totalMembers", "totalPages"]);
+    return new Set([
+      ...common,
+      "teamMemberSpend", "teamMemberSpend[]", "teamMemberSpend[].userId", "teamMemberSpend[].email", "teamMemberSpend[].name", "teamMemberSpend[].role", "teamMemberSpend[].spendCents", "teamMemberSpend[].fastPremiumRequests", "teamMemberSpend[].hardLimitOverrideDollars",
+      // Documented in the 2026 Admin API reference alongside spendCents.
+      "teamMemberSpend[].overallSpendCents", "teamMemberSpend[].monthlyLimitDollars", "teamMemberSpend[].effectivePerUserLimitDollars",
+      // Present in live responses and staff-acknowledged as a docs lag
+      // (forum.cursor.com thread 162742, "docs for Get Spending Data are
+      // behind the current API schema"). billingTier and the percent fields
+      // are tiered-team-only and may be undefined elsewhere.
+      "teamMemberSpend[].includedSpendCents", "teamMemberSpend[].profilePictureUrl", "teamMemberSpend[].billingTier", "teamMemberSpend[].autoPercentUsed", "teamMemberSpend[].apiPercentUsed", "teamMemberSpend[].totalPercentUsed",
+      "subscriptionCycleStart", "totalMembers", "totalPages"
+    ]);
   }
   return new Set([...common]);
 }
@@ -1699,7 +1921,9 @@ function providerInstructions(provider: string): string[] {
   if (provider === "cursor") {
     return [
       "Use a Cursor team admin API key reference, or fall back to Browser Account UI/manual export when API access is unavailable.",
-      "Validate user-level spend against invoices before treating the source as finance-grade."
+      "Cursor's 2026 docs list the Admin API under Enterprise teams; individual Pro/Ultra plans expose no billing API. Standard Admin API endpoints are rate-limited to 20 requests/minute per team.",
+      "spendCents is on-demand spend for the current billing cycle; seat fees and included-pool usage are not in this total.",
+      "Validate user-level spend against invoices before treating the source as finance-grade; set AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD and AI_SPEND_CURSOR_RECONCILE_CYCLE_START to run an in-sync reconciliation."
     ];
   }
   return ["Use a local token reference only; never paste raw provider secrets into commands or reports."];

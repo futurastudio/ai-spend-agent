@@ -38,7 +38,7 @@ jobs:
       # and verify the broad-root safety guard. Unit coverage separately
       # exercises npm-style bin symlink resolution.
       - run: node scripts/smoke-mcp.mjs
-      # Exercise all eight tools over the built stdio protocol against an
+      # Exercise all nine tools over the built stdio protocol against an
       # isolated empty environment plus an explicitly labeled sample state.
       - run: npm run audit:mcp-fixtures
       # The workspace build above refreshes dist; now dry-pack every

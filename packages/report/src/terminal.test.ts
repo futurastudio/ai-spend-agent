@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
 import { generatePlainEnglishSummary, groupByDimensions } from "./terminal.js";
 
+// Copy assertions follow the C-lane result-centralization design (§1.2/§1.5):
+// every money label routes through the basis vocabulary (committed /
+// API-equivalent / billed); killed synonyms — "cost/value", "observed value",
+// "API-equivalent/estimated", "Value"/"Evidence" amount headers — were
+// replaced with the signed-off forms across these expectations.
+
 // eslint-disable-next-line no-control-regex
 const ansiPattern = /\[/;
 
@@ -24,10 +30,12 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("$87.00");
     expect(text).toContain("What to test");
     expect(normalizeWhitespace(text)).toMatch(/Move .* to .*model ~\$/);
-    expect(text).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
-    expect(text).toContain("Cost/value evidence by source");
-    expect(text).toContain("Cost/value evidence by model");
-    expect(text).toContain("Evidence");
+    expect(text).toContain("ILLUSTRATIVE EVIDENCE");
+    expect(text).toContain("Illustrative evidence by source");
+    expect(text).toContain("Illustrative evidence by model");
+    // C-lane §1.2: "Evidence" is killed as an amount column header — the
+    // basis-neutral "Amount" replaces it on unpriced/demo bases.
+    expect(text).toContain("Amount");
     expect(text).not.toContain("Spend by model");
     expect(text).toContain("modeled API-rate opportunity");
     expect(text).toContain("/mo");
@@ -87,10 +95,10 @@ describe("generatePlainEnglishSummary", () => {
     });
     const normalized = normalizeWhitespace(text);
 
-    expect(normalized).toContain("OBSERVED VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
+    expect(normalized).toContain("API-EQUIVALENT VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
     expect(text).toContain("value unavailable · share unavailable");
     expect(text).not.toContain("Not priced");
-    expect(normalized).not.toContain("OBSERVED API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
+    expect(normalized).not.toContain("API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
   });
 
   it("never renders a missing Gemini breakdown row as zero or a known share", () => {
@@ -118,7 +126,7 @@ describe("generatePlainEnglishSummary", () => {
         outputTokens: 100,
         amountUsd: null,
         costConfidence: "missing",
-        projectId: "missing-project",
+        projectId: "missing-proj",
         agentId: "gemini-cli",
         providerCostType: "local_agent_logs",
         usageGranularity: "daily_aggregate"
@@ -131,7 +139,7 @@ describe("generatePlainEnglishSummary", () => {
       view: "breakdown",
       groupBy: "project"
     });
-    const missingRow = text.split("\n").find((line) => line.includes("missing-project"));
+    const missingRow = text.split("\n").find((line) => line.includes("missing-proj"));
 
     expect(missingRow).toContain("Unavailable");
     expect(missingRow).toContain("missing");
@@ -151,7 +159,7 @@ describe("generatePlainEnglishSummary", () => {
     const records = await sample();
     const summary = analyzeSpend(records);
     const text = generatePlainEnglishSummary(summary, { records, color: false, groupBy: "agent" });
-    expect(text).toContain("Cost/value evidence by agent");
+    expect(text).toContain("Illustrative evidence by agent");
     expect(text).toContain("agent-analyst");
   });
 
@@ -160,7 +168,7 @@ describe("generatePlainEnglishSummary", () => {
     const summary = analyzeSpend(records);
     for (const dimension of groupByDimensions) {
       const text = generatePlainEnglishSummary(summary, { records, color: false, groupBy: dimension });
-      expect(text).toContain("Cost/value evidence by");
+      expect(text).toContain("Illustrative evidence by");
     }
   });
 
@@ -194,9 +202,9 @@ describe("generatePlainEnglishSummary", () => {
 
     const positions = [
       text.indexOf("MODE / TRUST"),
-      text.indexOf("OBSERVED API-EQUIVALENT VALUE"),
+      text.indexOf("API-EQUIVALENT VALUE"),
       text.indexOf("1 · DIAGNOSE"),
-      text.indexOf("Where observed API-equivalent value goes"),
+      text.indexOf("Where API-equivalent value goes"),
       text.indexOf("Plan context"),
       text.indexOf("2 · RECOMMEND"),
       text.indexOf("Context evidence"),
@@ -335,7 +343,7 @@ describe("generatePlainEnglishSummary", () => {
 
     expect(connected).toContain("\u001b[32m● provider-reported\u001b[39m");
     expect(connected).toMatch(/\u001b\[1m\u001b\[32m\$87\.00/);
-    expect(connected).toContain("PROVIDER-REPORTED COST");
+    expect(connected).toContain("BILLED COST");
     expect(connected).toMatch(/\u001b\[33m\u001b\[1mmodel ~\$/);
     expect(connected).toMatch(/\u001b\[33m\u001b\[1m~\$/);
     expect(connected).not.toMatch(/\u001b\[32m\u001b\[1m(?:model|~\$)/);
@@ -345,6 +353,10 @@ describe("generatePlainEnglishSummary", () => {
   });
 
   it("never relabels connected estimates as provider-reported cost", async () => {
+    // C-lane QA finding M2: an estimated dollar is API-equivalent ONLY when
+    // priced at published API rates. These sample rows carry a generic
+    // connector cost type, so the honest basis is detected (unverified) —
+    // and it must still never be promoted to billed/provider-reported.
     const records = (await sample()).filter((record) => record.costConfidence === "estimated");
     const text = generatePlainEnglishSummary(analyzeSpend(records), {
       records,
@@ -353,12 +365,39 @@ describe("generatePlainEnglishSummary", () => {
     });
 
     expect(text).toContain("CONNECTED · ESTIMATED");
-    expect(text).toContain("CONNECTED ESTIMATED COST / VALUE");
-    expect(text).toContain("Where connected estimated cost/value appears");
-    expect(text).toContain("Connected estimated cost/value by model");
-    expect(text).not.toContain("PROVIDER-REPORTED COST");
-    expect(text).not.toContain("Where provider-reported cost goes");
-    expect(text).not.toContain("Provider-reported cost by model");
+    expect(text).toContain("CONNECTED DETECTED (UNVERIFIED)");
+    expect(text).toContain("Where connected detected (unverified) appears");
+    expect(text).toContain("Connected detected (unverified) by model");
+    expect(text).not.toContain("BILLED COST");
+    expect(text).not.toContain("Where billed cost goes");
+    expect(text).not.toContain("Billed cost by model");
+  });
+
+  it("keeps API-rate-priced connected estimates on the API-equivalent basis with marked figures", () => {
+    // The one connected source that IS priced at published API rates keeps
+    // the API-equivalent heading, and every figure of that basis carries ~
+    // (§1.2 marker rule / QA MINOR-3).
+    const records: UsageRecord[] = [{
+      id: "anthropic-usage-estimated",
+      timestamp: "2026-08-14T00:00:00.000Z",
+      source: { id: "anthropic-usage", name: "Anthropic usage", provider: "anthropic", confidence: "estimated", observedFrom: "Usage API" },
+      model: "claude-sonnet-4-6",
+      inputTokens: 1_000,
+      outputTokens: 100,
+      amountUsd: 5,
+      costConfidence: "estimated",
+      providerCostType: "anthropic_claude_code_usage",
+      usageGranularity: "daily_aggregate"
+    }];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "connected",
+      width: 120
+    });
+    expect(text).toContain("CONNECTED API-EQUIVALENT (ESTIMATED)");
+    expect(text).toContain("Where connected API-equivalent (estimated) appears");
+    expect(text).toContain("~$5.00");
   });
 
   it("keeps provider completeness separate from verified row evidence", async () => {
@@ -378,7 +417,7 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("available rows keep their financial evidence labels");
     expect(text).not.toContain("CONNECTED · PROVIDER-REPORTED");
     expect(text).toContain("\u001b[32m● provider-reported\u001b[39m");
-    expect(text).toContain("PROVIDER-REPORTED COST");
+    expect(text).toContain("BILLED COST");
   });
 
   it("renders a positive sub-cent headline as less than one cent", async () => {
@@ -399,9 +438,9 @@ describe("generatePlainEnglishSummary", () => {
     });
     const normalized = normalizeWhitespace(text);
 
-    expect(normalized).toContain("OBSERVED API-EQUIVALENT VALUE evidence-labeled financial view <$0.01 tracked");
-    expect(normalized).not.toContain("OBSERVED API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
-    expect(normalized).toContain("evidence mix: <$0.01 API-equivalent/estimated");
+    expect(normalized).toContain("API-EQUIVALENT VALUE evidence-labeled financial view <$0.01 tracked");
+    expect(normalized).not.toContain("API-EQUIVALENT VALUE evidence-labeled financial view $0.00");
+    expect(normalized).toContain("evidence mix: <$0.01 API-equivalent (estimated)");
   });
 
   it("renders missing connected financial evidence as unavailable, never zero", () => {
@@ -430,7 +469,7 @@ describe("generatePlainEnglishSummary", () => {
       width: 120
     });
 
-    expect(normalizeWhitespace(text)).toContain("CONNECTED COST / VALUE UNAVAILABLE evidence-labeled financial view Unavailable");
+    expect(normalizeWhitespace(text)).toContain("CONNECTED EVIDENCE UNAVAILABLE evidence-labeled financial view Unavailable");
     expect(text).toContain("value unavailable · share unavailable");
     expect(text).not.toContain("Not priced");
     expect(text).not.toContain("$0.00");
@@ -544,7 +583,7 @@ describe("generatePlainEnglishSummary", () => {
       color: false,
       mode: "local-logs"
     });
-    expect(normalizeWhitespace(text)).toContain("$0.01 API-equivalent/estimated · 1 record missing cost");
+    expect(normalizeWhitespace(text)).toContain("$0.01 API-equivalent (estimated) · 1 record missing cost");
     expect(text).toContain("● missing");
   });
 
@@ -683,8 +722,8 @@ describe("generatePlainEnglishSummary", () => {
     });
     const normalized = normalizeWhitespace(text);
 
-    expect(normalized).toContain("Unavailable local activity found · cost/value missing");
-    expect(normalized).toContain("Primary activity gemini-cli · agent · cost/value unavailable");
+    expect(normalized).toContain("Unavailable local activity found · financial evidence missing");
+    expect(normalized).toContain("Primary activity gemini-cli · agent · financial evidence unavailable");
     expect(normalized).toContain("1 record missing cost");
     expect(text).toContain("npx aibill doctor --sources");
     expect(text).not.toContain("npx aibill apply");
@@ -761,7 +800,7 @@ describe("generatePlainEnglishSummary", () => {
     });
 
     expect(text).toContain("CONNECTED · PROVIDER-REPORTED");
-    expect(normalizeWhitespace(text)).toContain("$87.00 provider-reported cost");
+    expect(normalizeWhitespace(text)).toContain("$87.00 billed cost (provider-reported)");
     expect(text).toContain("Primary driver");
     expect(text).not.toContain("(unmapped) · agent");
     expect(text).not.toContain("~$87.00");
@@ -803,7 +842,7 @@ describe("generatePlainEnglishSummary", () => {
       const normalized = normalizeWhitespace(text);
       expect(text).toContain("CONNECTED · MIXED EVIDENCE");
       expect(normalized).toContain("$10.00 provider-reported");
-      expect(normalized).toContain("$5.00 API-equivalent/estimated");
+      expect(normalized).toContain("$5.00 API-equivalent (estimated)");
       expect(text).not.toContain("$15.00");
     }
   });

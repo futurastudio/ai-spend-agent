@@ -39,9 +39,12 @@ const runtimes: LocalAgentFormatRuntime[] = [
       const collector = collectInvocationEvidence
         ? createCodexInvocationCollector(sinceMs)
         : undefined;
+      const calls = parseCodexRollout(content, collector?.consume, onDiagnostic);
+      const invocationFile = collector?.finish();
       return {
-        calls: parseCodexRollout(content, collector?.consume, onDiagnostic),
-        ...(collector ? { invocationFile: collector.finish() } : {})
+        calls,
+        ...(invocationFile ? { invocationFile } : {}),
+        ...(collector ? { invocationWindowProof: collector.windowProof() } : {})
       };
     },
     parseFinancialFile: readCodexFinancialFileForRegistry

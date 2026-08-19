@@ -127,7 +127,10 @@ Use the JSON server definition above wherever that client stores its
 `ai-spend-mcp`. Consult that client's documentation for its exact config
 path and restart behavior.
 
-Restart the client and confirm that these eight tools appear:
+The published npm package (`v0.8.1`) exposes the first eight tools below. A
+built source checkout adds the ninth, `get_token_reduction_test`, as an
+unreleased read-only preview. Restart the client and confirm the tool set for
+the package you intentionally configured:
 
 1. `scan_ai_spend`
 2. `sync_local_agent_spend`
@@ -137,6 +140,7 @@ Restart the client and confirm that these eight tools appear:
 6. `list_sources`
 7. `get_spend_report`
 8. `recommend_cuts`
+9. `get_token_reduction_test` (source preview only)
 
 ## Optional on-demand Codex plugin
 
@@ -186,6 +190,13 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   roots are refused.
 - `get_usage_glance` is read-only and scans only the known Claude Code and
   Codex transcript locations (or the documented test-directory overrides).
+- `get_token_reduction_test` is read-only. It revalidates the bounded local
+  experiment envelope, reads supported Claude Code/Codex session evidence,
+  and delegates all matching, medians, quality gates, and percentage math to
+  the canonical core evaluator. It may reuse an existing private qualitative
+  index populated by the local CLI, but never creates or updates that cache or
+  any experiment/project state. It never applies a change or
+  turns a measured percentage into a savings, accepted-outcome, or ROI claim.
 - Project reports and source state are written to `<path>/.ai-spend-agent/`.
   After a successful provider sync, aibill also writes one hash-only trust
   receipt outside the repository at `~/.aibill/state-receipts/` (override with
@@ -328,6 +339,9 @@ machine-readable for every custom client:
 
 Returns the same hook-aware decision contract used by
 `aibill context --json` and `get_usage_glance.sessionHealth`.
+The MCP result also includes `qualitativeCoverage` with `complete`, `partial`,
+or `unknown` status and selected/read/skipped file counts. A partial bounded
+index cannot authorize a global main-focus or context-change claim.
 
 ```json
 {
@@ -359,6 +373,63 @@ is returned with evidence and caveats.
 Configured items whose host transcript does not expose explicit invocation
 evidence are counted as `invocationUnobservableItems` and excluded from
 no-matching-invocation totals.
+
+### `get_token_reduction_test`
+
+Returns one canonical local token-reduction experiment and the compact
+cross-surface projection calculated from it. With no `experimentId`, selection
+is active-preferred; lifecycle priority, creation time, and stable ID form the
+deterministic fallback. The project `path` is always
+required and must pass the same broad-root and symlink protections as other
+state tools.
+
+> **Source-preview boundary:** this tool is present in the source checkout and
+> is not part of published npm latest (`v0.8.1`) yet. It is read-only; the CLI
+> owns `inspect`, `start`, `mark-applied`, `rollback`, `cancel`, and result
+> recording. MCP cannot create or mutate an experiment. From the built
+> checkout root, the mutation path is
+> `node packages/cli/dist/index.js improve --path .`; generated MCP guidance
+> uses that same path-safe command and never points this preview at npm
+> `v0.8.1`.
+
+```json
+{
+  "path": "/Users/you/projects/your-project",
+  "experimentId": "tre_v0_<64 lowercase hex characters>"
+}
+```
+
+The tool revalidates the stable-lineage, revision-addressed persisted experiment
+and reads only supported Claude Code and Codex local logs. For an eligible
+in-progress experiment, it asks the shared core planner to refresh matched
+post-change completed session snapshots. Complete results and terminal attempts
+remain frozen. Persisted user-declared quality observations are preserved and
+new quality evidence stays `missing`; missing quality blocks a result rather
+than excluding the matched snapshot. Each comparison snapshot requires an
+explicit host completion marker (`Claude` turn duration or `Codex` task
+completion), and one native session contributes at most once to an experiment.
+The canonical Context Health view excludes the currently active session;
+inactivity, transcript age, or a quiet terminal never counts as completion. The
+tool never writes the refreshed result, approves or applies a change, executes
+a rollback, or calculates its own percentage. Its `coverage.qualitative`
+reports the same bounded-index status and counts used by Glance. A terminal
+frozen experiment uses `not_scanned` because no fresh transcript scan was
+needed to preserve that result.
+
+`status: no_test` is the honest empty state. Malformed, tampered, duplicated,
+oversized, or symlinked experiment state fails closed without returning any
+partial evidence. A session-cohort result can be `measured_token_reduction`,
+`no_measured_change`, `regressed`, or `inconclusive`; it is not verified
+accepted-outcome ROI and it never implies cash savings. A failed canary yields
+no result or percentage and requires a separately evidenced rollback. The
+`experiment` field is the complete canonical contract, including stable lineage
+`id`, immutable-content `revisionId`, the user-declared quality guard,
+intervention/canary/
+rollback evidence references, and per-component token coverage. Its components
+distinguish observed, partial, and not-separately-reported data; calculated
+component totals and provider-reported totals remain distinct. `projection` is
+the compact read-only CLI/MCP/Glance view; it does not re-run a different
+calculation or authorize an action.
 
 ### `sync_provider_spend`
 
@@ -443,9 +514,11 @@ sample state returns demo-only guidance; local coding-agent day aggregates
 return observed API-equivalent exposure candidates—or a collect-more-evidence
 result—because they do not prove an individual call, a safe change, or a
 savings counterfactual. Discovery-only state never invents downgrade, cache,
-batch, or savings advice. For the complete local workflow, run `npx aibill
-apply` to get read-only checks, an explicit approval gate, rollback, and matched
-future-session verification.
+batch, or savings advice. Published npm `v0.8.1` can generate a read-only Apply
+artifact, but it does not start or verify a token test. In a built source
+checkout root, run `node packages/cli/dist/index.js improve --path .` for the
+explicit approval gate, one reversible change,
+matched-session progress, and quality-gated result.
 
 ```json
 { "path": "/Users/you/projects/your-project" }

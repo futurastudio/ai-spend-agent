@@ -12,11 +12,21 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
   let anomaly: Anomaly?
   let sessionHealth: ContextHealth?
   let primaryAction: PrimaryAction?
+  /** Optional so Glance remains compatible with pre-experiment CLI snapshots. */
+  let tokenExperiment: TokenExperiment?
 
   struct Coverage: Decodable, Sendable {
     let filesParsed: Int
     let detectedAgents: [String]
     let rateLimitMetadata: [RateLimitMetadata]?
+    let qualitative: QualitativeCoverage?
+  }
+
+  struct QualitativeCoverage: Decodable, Sendable {
+    let status: String
+    let selectedFiles: Int
+    let readCompletely: Int
+    let skippedForBudget: Int
   }
 
   struct RateLimitMetadata: Decodable, Sendable {
@@ -194,6 +204,139 @@ struct UsageGlanceSnapshot: Decodable, Sendable {
     let execution: String
     let requiresUserConfirmation: Bool
     let evidenceWindowDays: Int?
+  }
+
+  /** Product-authored projection from the canonical experiment evaluator. */
+  struct TokenExperiment: Decodable, Sendable {
+    let schemaVersion: Int
+    let experimentId: String
+    let findingId: String
+    let candidateKey: String
+    let state: String
+    let tone: String
+    let headline: String
+    let detail: String
+    let evidenceLabel: String
+    let qualityLabel: String
+    let qualityEvidence: String?
+    let baselineSessions: Int
+    let postChangeSessions: Int
+    let minimumSessions: Int
+    let reductionPercent: Double?
+  }
+}
+
+struct GlanceTokenExperimentPresentation: Equatable {
+  let label: String
+
+  static func build(
+    projection: UsageGlanceSnapshot.TokenExperiment?,
+    evidenceCurrent: Bool
+  ) -> Self? {
+    guard let projection else { return nil }
+    guard isStructurallyValid(projection) else {
+      return Self(label: "Token test unavailable")
+    }
+    guard evidenceCurrent else {
+      // A failed refresh keeps the old snapshot on screen. Never repeat an old
+      // reduction percentage as though it were current evidence.
+      return Self(label: "Token test unavailable · refresh")
+    }
+
+    switch projection.state {
+    case "collect_baseline":
+      return Self(
+        label: "Token test · \(projection.baselineSessions)/\(projection.minimumSessions) baseline"
+      )
+    case "approve_one_change":
+      return Self(label: "Token test · ready for approval")
+    case "collect_post_change":
+      return Self(
+        label: "Token test · \(projection.postChangeSessions)/\(projection.minimumSessions) matched"
+      )
+    case "review_measured_result":
+      guard
+        let reduction = projection.reductionPercent,
+        projection.evidenceLabel == "calculated",
+        projection.qualityLabel == "held",
+        let qualityEvidence = projection.qualityEvidence
+      else {
+        return Self(label: "Token test unavailable")
+      }
+      let quality = qualityEvidence == "user_declared"
+        ? "quality user-declared"
+        : "quality \(qualityEvidence)"
+      if reduction == 0 {
+        return Self(label: "No measured token change · \(quality)")
+      }
+      return Self(label: "Measured \(signedReduction(reduction)) · \(quality)")
+    case "rollback":
+      return Self(label: "Regressed · review rollback")
+    case "rolled_back":
+      return Self(label: "Token test rolled back")
+    case "cancelled":
+      return Self(label: "Token test cancelled")
+    case "resolve_evidence":
+      if projection.qualityLabel == "insufficient" {
+        return Self(label: "Inconclusive · quality evidence missing")
+      }
+      return Self(label: "Inconclusive · review matching evidence")
+    default:
+      return Self(label: "Token test unavailable")
+    }
+  }
+
+  private static func isStructurallyValid(
+    _ projection: UsageGlanceSnapshot.TokenExperiment
+  ) -> Bool {
+    let states = Set([
+      "collect_baseline", "approve_one_change", "collect_post_change",
+      "review_measured_result", "rollback", "resolve_evidence", "rolled_back", "cancelled"
+    ])
+    let evidenceLabels = Set(["calculated", "missing"])
+    let qualityLabels = Set(["held", "regressed", "insufficient"])
+    let qualityEvidenceLabels = Set(["verified", "observed", "user_declared", "missing"])
+    let claimQualityEvidenceLabels = Set(["verified", "observed", "user_declared"])
+    let tones = Set(["neutral", "attention", "positive", "negative"])
+    let validReduction = projection.reductionPercent.map {
+      $0.isFinite && $0 <= 100 && $0 >= -1_000_000
+    } ?? true
+    let percentageIsConsistent: Bool
+    if let reduction = projection.reductionPercent {
+      let claimEvidenceIsComplete = projection.evidenceLabel == "calculated" &&
+        projection.qualityLabel == "held" &&
+        projection.qualityEvidence.map(claimQualityEvidenceLabels.contains) == true
+      let signMatchesState =
+        (projection.state == "review_measured_result" && reduction >= 0) ||
+        (projection.state == "rollback" && reduction < 0)
+      percentageIsConsistent = claimEvidenceIsComplete && signMatchesState
+    } else {
+      percentageIsConsistent = projection.state != "review_measured_result"
+    }
+    return projection.schemaVersion == 0 &&
+      projection.experimentId.wholeMatch(of: /tre_v0_[a-f0-9]{64}/) != nil &&
+      projection.findingId.wholeMatch(of: /wf_v0_[a-f0-9]{64}/) != nil &&
+      projection.candidateKey.wholeMatch(of: /wfc_v0_[a-f0-9]{64}/) != nil &&
+      states.contains(projection.state) &&
+      tones.contains(projection.tone) &&
+      evidenceLabels.contains(projection.evidenceLabel) &&
+      qualityLabels.contains(projection.qualityLabel) &&
+      (projection.qualityEvidence == nil || qualityEvidenceLabels.contains(projection.qualityEvidence!)) &&
+      projection.baselineSessions >= 0 &&
+      projection.postChangeSessions >= 0 &&
+      projection.minimumSessions > 0 &&
+      validReduction &&
+      percentageIsConsistent
+  }
+
+  private static func signedReduction(_ value: Double) -> String {
+    let magnitude = abs(value)
+    // The canonical evaluator retains two decimal places. Preserve a small,
+    // non-zero result instead of rounding it into the false claim “−0%”.
+    let amount = magnitude < 1
+      ? String(format: "%.2f", magnitude)
+      : String(Int(magnitude.rounded()))
+    return value >= 0 ? "−\(amount)%" : "+\(amount)%"
   }
 }
 

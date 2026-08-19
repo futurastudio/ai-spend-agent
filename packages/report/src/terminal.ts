@@ -3,14 +3,24 @@ import Table from "cli-table3";
 import pc from "picocolors";
 import {
   analyzeSpend,
+  buildResultCard,
+  classifyResultCardRecordBasis,
   computePlanChecks,
+  formatApproxUsd,
+  formatBilledUsdExact,
+  formatCommittedPerMonth,
   generateCutList,
   buildRecommendedPlan,
+  largestRemainderPercents,
+  resultCardVocabulary,
   usageWindowDays,
+  type ResultCardMode,
   type CostConfidence,
   type CutAction,
   type DeadContextResult,
   type DetectedPlan,
+  type ResultCard,
+  type ResultCardSubscriptionRow,
   type SpendBreakdownEntry,
   type SpendSummary,
   type UsageRecord
@@ -51,6 +61,22 @@ export type PlainEnglishSummaryOptions = {
   /** Terminal width for bar rendering. Defaults to 72. */
   width?: number;
   /**
+   * Evidence window in days for the canonical result card header (C-lane
+   * §1.4 "30d window"). Defaults to 30; records must already be
+   * window-scoped by the caller.
+   */
+  windowDays?: number;
+  /**
+   * Provider-side subscription plan facts (e.g. a priced Cursor plan) for
+   * the result card's provider-only rows. Nothing detects these today;
+   * absent entries render the honest §1.4 plan-not-priced variant.
+   */
+  providerPlans?: readonly {
+    provider: string;
+    planLabel: string | null;
+    committedUsdPerMonth: number | null;
+  }[];
+  /**
    * Demo banner (sample data), real connected/synced data, or real usage
    * estimated from supported local coding-agent session evidence.
    */
@@ -71,6 +97,22 @@ export type PlainEnglishSummaryOptions = {
    * headroom language; API payers get dollars.
    */
   detectedPlans?: DetectedPlan[];
+  /**
+   * Optional canonical action projection supplied by the CLI. The report
+   * renderer does not derive or verify these facts; it only places the one
+   * evidence-backed insight, test, progress, and result into the compact card.
+   */
+  guidedAction?: {
+    driverHeading: "MAIN DRIVER" | "TOP OBSERVED PROJECT";
+    insightHeading: "WHY IS IT HIGH?" | "WHAT STANDS OUT" | "WHAT STANDS OUT IN INDEXED EVIDENCE";
+    insightHeadline: string;
+    insightDetail: string;
+    actionHeadline: string;
+    actionDetail: string;
+    command: string;
+    progress?: { headline: string; detail: string };
+    result?: { headline: string; detail: string };
+  };
   /**
    * "compact" renders one decision receipt: trust, headline, primary driver,
    * coverage, one evidence-linked next step, and one details command.
@@ -123,26 +165,38 @@ function renderPlainEnglishSummary(
   const rawTotalUsd = options.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
   const hasHeadlineAmount = presentationBasis !== "connected_missing" &&
     presentationBasis !== "local_missing";
+  // QA finding M2: record buckets follow the shared basis classifier, not
+  // raw confidence words — an estimated dollar is API-equivalent ONLY when it
+  // was priced at published API rates; other priced-but-unverified dollars
+  // (beta connectors) are detected (unverified) and never join these bars.
+  const cardBasisMode = resultCardModeFor(options.mode);
   const verifiedRecords = options.records.filter((record) => (
-    record.costConfidence === "verified" && typeof record.amountUsd === "number"
+    classifyResultCardRecordBasis(record, cardBasisMode) === "provider_billed"
   ));
   const estimatedRecords = options.records.filter((record) => (
-    record.costConfidence === "estimated" && typeof record.amountUsd === "number"
+    classifyResultCardRecordBasis(record, cardBasisMode) === "api_equivalent"
   ));
   const detectedRecords = options.records.filter((record) => (
-    record.costConfidence === "detected_unverified" && typeof record.amountUsd === "number"
+    classifyResultCardRecordBasis(record, cardBasisMode) === "detected_unverified"
   ));
-  // Full and breakdown views also obey the no-blending rule. When connected
-  // evidence carries multiple accounting bases, the table and hero use one
-  // primary basis (provider-reported first), while the Evidence line discloses
-  // every other basis separately.
+  // Full and breakdown views also obey the no-blending rule. When the
+  // evidence carries multiple accounting bases — connected data, or local
+  // transcripts alongside beta-connector rows — the tables and hero use one
+  // primary basis (provider-reported first), while the Evidence lines
+  // disclose every other basis separately.
+  const localMixed = options.mode === "local-logs" && detectedRecords.length > 0 &&
+    (verifiedRecords.length > 0 || estimatedRecords.length > 0);
   const fullRecords = presentationBasis === "connected_mixed"
     ? verifiedRecords.length > 0
       ? verifiedRecords
       : estimatedRecords.length > 0
         ? estimatedRecords
         : detectedRecords
-    : options.records;
+    : localMixed
+      ? options.records.filter((record) => (
+          classifyResultCardRecordBasis(record, cardBasisMode) !== "detected_unverified"
+        ))
+      : options.records;
   const fullPresentationBasis: FinancialPresentationBasis = presentationBasis === "connected_mixed"
     ? verifiedRecords.length > 0
       ? "provider_reported"
@@ -150,7 +204,9 @@ function renderPlainEnglishSummary(
         ? "connected_estimated"
         : "connected_unverified"
     : presentationBasis;
-  const fullSummary = presentationBasis === "connected_mixed" ? analyzeSpend(fullRecords) : summary;
+  const fullSummary = presentationBasis === "connected_mixed" || localMixed
+    ? analyzeSpend(fullRecords)
+    : summary;
   const fullRawTotalUsd = fullRecords.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
   const fullHasHeadlineAmount = fullPresentationBasis !== "connected_missing" &&
     fullPresentationBasis !== "local_missing" && fullRecords.length > 0;
@@ -177,6 +233,19 @@ function renderPlainEnglishSummary(
   lines.push(c.dim(rule(width)));
   lines.push(modeTrustLine(options.mode, summary.confidence, options.providerCoverage, presentationBasis, c));
   lines.push("");
+  // C-lane §1.5: with detected subscriptions the --full hero IS the same
+  // Subscriptions + Total + By-project card block as the default receipt —
+  // one card contract, two zoom levels, not two framings. The single-basis
+  // hero remains for the no-subscription fallback and the breakdown view.
+  const fullResultCard = options.view !== "breakdown"
+    ? buildResultCardForOptions(options)
+    : undefined;
+  const useCardHero = fullResultCard !== undefined && fullResultCard.subscriptions.length > 0;
+  if (useCardHero) {
+    // Evidence rides the --full card too (QA finding M2): with mixed bases,
+    // the detected-unverified disclosure must exist somewhere on this screen.
+    lines.push(...renderResultCardBlocks(fullResultCard, width, c, { includeEvidence: true }));
+  } else {
   lines.push(
     `  ${c.bold(headlineMetricLabel(fullPresentationBasis))}  ${c.dim("evidence-labeled financial view")}`
   );
@@ -200,6 +269,7 @@ function renderPlainEnglishSummary(
     `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(`· evidence mix: ${coverageLine(summary, options.records)}`)}`
   );
   lines.push("");
+  }
 
   // Focused drill-down: an explicit --group-by asks one question — render
   // just the answer (table + definition + data window), not the whole loop.
@@ -222,7 +292,8 @@ function renderPlainEnglishSummary(
       rawGroupAmounts,
       fullRawTotalUsd,
       fullHasHeadlineAmount,
-      width
+      width,
+      isApproximateBasis(fullPresentationBasis)
     ), "  "));
     lines.push("");
     lines.push(`  ${c.dim("run")} ${c.bold("npx aibill --full")} ${c.dim("for the full diagnose → recommend → apply → verify readout")}`);
@@ -247,7 +318,8 @@ function renderPlainEnglishSummary(
     c,
     rawSourceAmounts,
     fullRawTotalUsd,
-    fullHasHeadlineAmount
+    fullHasHeadlineAmount,
+    isApproximateBasis(fullPresentationBasis)
   );
   if (spendBars.length > 0) {
     lines.push(c.bold(`  ${sourceBreakdownLabel(fullPresentationBasis)}`) + c.dim("  (by source)"));
@@ -322,7 +394,7 @@ function renderPlainEnglishSummary(
   } else if (subscriptionPlansDetected.length > 0) {
     lines.push(`  ${c.dim("Plan metadata was detected, but no comparable usage record matched it in this window.")}`);
   } else {
-    lines.push(`  ${c.dim("No local subscription-plan metadata detected; keep cost/value and plan price as separate evidence.")}`);
+    lines.push(`  ${c.dim("No local subscription-plan metadata detected; keep usage evidence and plan price as separate evidence.")}`);
   }
   lines.push("");
 
@@ -473,7 +545,7 @@ function renderPlainEnglishSummary(
   if (options.mode === "local-logs") {
     lines.push(hasHeadlineAmount
       ? `  ${c.cyan("›")} ${c.dim("priced local values are API-equivalent estimates — no account was connected or authorized")}`
-      : `  ${c.cyan("›")} ${c.dim("local activity was detected, but cost/value is unavailable — no account was connected or authorized")}`
+      : `  ${c.cyan("›")} ${c.dim("local activity was detected, but financial evidence is unavailable — no account was connected or authorized")}`
     );
     lines.push(
       `  ${c.cyan("›")} ${c.dim("pay for API usage too? set up an admin connector, then run its printed sync command:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")}`
@@ -584,24 +656,55 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   const detailsCommand = options.mode === "demo"
     ? "npx aibill --sample --full"
     : "npx aibill --full";
+  // C-lane §1.4: the default card renders per-subscription rows, the labeled
+  // totals stack, by-project rows, and basis-worded Evidence lines FROM the
+  // canonical result card. With no detected subscriptions the card falls back
+  // to today's single-basis headline (§1.4 "no subscriptions" variant).
+  const resultCard = buildResultCardForOptions(options);
+  const hasSubscriptionCard = resultCard.subscriptions.length > 0;
   const lines: string[] = [
     "",
     `  ${c.bold("aibill")} ${c.dim("·")} ${trust.label}`,
     `  ${c.dim(trust.note)}`,
-    "",
-    `  ${c.bold(evidenceAmount(headline.amount, summary.confidence, c))}`,
-    `  ${c.dim(headline.label)}`,
     ""
   ];
-
-  if (driver) {
-    lines.push(...compactLabeledLines(driver.kind, driver.value, width, c));
+  if (hasSubscriptionCard) {
+    lines.push(...renderResultCardBlocks(resultCard, width, c, { includeEvidence: true }));
+  } else {
+    lines.push(
+      `  ${c.bold(evidenceAmount(headline.amount, summary.confidence, c))}`,
+      `  ${c.dim(headline.label)}`,
+      ""
+    );
   }
-  lines.push(...compactLabeledLines("Evidence", coverageLine(summary, options.records), width, c));
-  lines.push("");
-  lines.push(...compactLabeledLines("Next", c.bold(next.title), width, c));
-  lines.push(`  ${c.dim(next.evidence)}`);
-  lines.push(`  ${c.cyan("›")} ${c.bold(next.command)}`);
+
+  const guided = options.guidedAction;
+  if (!hasSubscriptionCard && driver) {
+    lines.push(...compactLabeledLines(guided?.driverHeading ?? driver.kind, driver.value, width, c));
+  }
+  if (!hasSubscriptionCard) {
+    lines.push(...compactLabeledLines("Evidence", coverageLine(summary, options.records), width, c));
+  }
+  if (guided) {
+    lines.push("");
+    lines.push(c.bold(`  ${guided.insightHeading}`));
+    lines.push(...wrapProseLine(`  ${c.bold(guided.insightHeadline)}`, width));
+    lines.push(...wrapProseLine(`  ${c.dim(guided.insightDetail)}`, width));
+    if (guided.progress) {
+      lines.push("");
+      lines.push(...compactLabeledLines("Progress", c.bold(guided.progress.headline), width, c));
+      lines.push(`  ${c.dim(guided.progress.detail)}`);
+    }
+    if (guided.result) {
+      lines.push("");
+      lines.push(...compactLabeledLines("Result", c.bold(guided.result.headline), width, c));
+      lines.push(`  ${c.dim(guided.result.detail)}`);
+    }
+  }
+  if (lines[lines.length - 1] !== "") lines.push("");
+  lines.push(...compactLabeledLines("Next", c.bold(guided?.actionHeadline ?? next.title), width, c));
+  lines.push(`  ${c.dim(guided?.actionDetail ?? next.evidence)}`);
+  lines.push(`  ${c.cyan("›")} ${c.bold(guided?.command ?? next.command)}`);
   lines.push("");
   lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
   lines.push("");
@@ -666,31 +769,34 @@ function compactHeadline(
   hasProviderReportedAmount = false
 ): { amount: string; label: string } {
   const amount = formatBigUsd(totalUsd, rawTotalUsd);
+  // §1.2 vocabulary: "cost/value" is killed copy; each label carries its
+  // basis word instead. The local_estimate headline keeps the sanctioned
+  // canonical form (§1.4 no-subscription fallback).
   switch (basis) {
     case "provider_reported":
-      return { amount, label: "provider-reported cost" };
+      return { amount, label: "billed cost (provider-reported)" };
     case "local_estimate":
       return { amount: `~${amount}`, label: "API-equivalent value · not billed spend" };
     case "connected_estimated":
-      return { amount: `~${amount}`, label: "connected estimated cost/value" };
+      return { amount: `~${amount}`, label: "connected API-equivalent (estimated)" };
     case "connected_unverified":
-      return { amount: `~${amount}`, label: "connected detected/unverified cost/value" };
+      return { amount: `~${amount}`, label: "connected detected (unverified)" };
     case "connected_mixed":
       return hasProviderReportedAmount
         ? {
             amount: formatBigUsd(providerReportedRawTotal, providerReportedRawTotal),
-            label: "provider-reported cost · other evidence bases below"
+            label: "billed cost (provider-reported) · other evidence bases below"
           }
         : {
             amount: "Unavailable",
-            label: "provider-reported cost · other evidence bases below"
+            label: "billed cost (provider-reported) · other evidence bases below"
           };
     case "connected_missing":
-      return { amount: "Unavailable", label: "connected cost/value · financial evidence missing" };
+      return { amount: "Unavailable", label: "connected evidence · financial evidence missing" };
     case "local_missing":
-      return { amount: "Unavailable", label: "local activity found · cost/value missing" };
+      return { amount: "Unavailable", label: "local activity found · financial evidence missing" };
     default:
-      return { amount: `~${amount}`, label: "illustrative cost/value evidence" };
+      return { amount: `~${amount}`, label: "illustrative evidence" };
   }
 }
 
@@ -742,16 +848,17 @@ function compactPrimaryDriver(
   if (!amountAvailable) {
     return {
       kind: "Primary activity",
-      value: `${label} · cost/value unavailable`
+      value: `${label} · financial evidence unavailable`
     };
   }
 
   const prefix = basis === "local_estimate" ? "~" : "";
+  // §1.2: figures carry basis words — billed / API-equivalent — never "cost/value".
   const financialLabel = basis === "provider_reported"
-    ? "provider-reported cost"
+    ? "billed"
     : basis === "local_estimate"
       ? "API-equivalent value"
-      : "cost/value evidence";
+      : "evidence";
   const share = rawTotalUsd > 0
     ? ` · ${formatPercent(rawAmount / rawTotalUsd)} of priced evidence`
     : " · share unavailable";
@@ -842,6 +949,319 @@ function compactLabeledLines(label: string, value: string, width: number, c: Col
     return [`  ${c.dim(label.toUpperCase())}`, `  ${value}`];
   }
   return [`  ${c.dim(label.padEnd(14))} ${value}`];
+}
+
+// --- canonical result card blocks (C-lane design §1.4/§1.5/§3) -------------
+
+function resultCardModeFor(mode: PlainEnglishSummaryOptions["mode"]): ResultCardMode {
+  return mode === "connected" ? "connected" : mode === "local-logs" ? "local-logs" : "demo";
+}
+
+function buildResultCardForOptions(options: PlainEnglishSummaryOptions): ResultCard {
+  return buildResultCard({
+    mode: resultCardModeFor(options.mode),
+    windowDays: options.windowDays ?? 30,
+    records: options.records,
+    detectedPlans: options.detectedPlans ?? [],
+    ...(options.providerPlans ? { providerPlans: options.providerPlans } : {})
+  });
+}
+
+function resultCardConnectionWord(connection: ResultCardSubscriptionRow["connection"]): string {
+  return connection === "connected" ? "connected" : "detected";
+}
+
+const nr = resultCardVocabulary.notReportedShort;
+
+/** Wide (≥58 col) subscription row — §1.4 canonical geometry. */
+function wideSubscriptionRow(row: ResultCardSubscriptionRow): string {
+  const prefix = `    ${row.id.padEnd(10)}`;
+  const planCell = (row.planLabel ?? resultCardConnectionWord(row.connection)).padEnd(12);
+  if (row.committedUsdPerMonth === null) {
+    return `${prefix}${planCell}committed ${nr} · ${bareValueCell(row)}`;
+  }
+  const committedCell = `${formatCommittedPerMonth(row.committedUsdPerMonth).padStart(7)} committed`;
+  return `${prefix}${planCell}${committedCell}${alignedValueCell(row)}`;
+}
+
+/** Right-aligned money cell following "committed" (amounts land on one column). */
+function alignedValueCell(row: ResultCardSubscriptionRow): string {
+  if (row.apiEquivalentUsd !== null && row.providerBilledUsd !== null) {
+    return `${formatApproxUsd(row.apiEquivalentUsd).padStart(10)} API-equivalent · ` +
+      `${formatBilledUsdExact(row.providerBilledUsd)} billed`;
+  }
+  if (row.apiEquivalentUsd !== null) {
+    return `${formatApproxUsd(row.apiEquivalentUsd).padStart(10)} API-equivalent`;
+  }
+  if (row.providerBilledUsd !== null) {
+    return `${formatBilledUsdExact(row.providerBilledUsd).padStart(10)} billed`;
+  }
+  return `     ${bareValueCell(row)}`;
+}
+
+/** The row's money statement without column alignment (narrow + committed-n/r). */
+function bareValueCell(row: ResultCardSubscriptionRow): string {
+  if (row.apiEquivalentUsd !== null) {
+    return `${formatApproxUsd(row.apiEquivalentUsd)} API-equivalent`;
+  }
+  if (row.providerBilledUsd !== null) {
+    return `${formatBilledUsdExact(row.providerBilledUsd)} billed`;
+  }
+  // Evidence absent is never $0: agent rows are missing API-equivalent
+  // evidence; provider-only rows are missing billed evidence (§1.2).
+  return row.agentId !== null ? `API-equivalent ${nr}` : `billed ${nr}`;
+}
+
+type ResultCardTotalStack = {
+  parts: string[];
+  amountKinds: number;
+};
+
+/**
+ * "Then the total" — the labeled per-basis stack (§1.3). One figure per kind
+ * of money, always committed → API-equivalent → billed, never summed across
+ * kinds. A basis prints `n/r` when a source for it exists but reported
+ * nothing; a basis with no verified-capable source is omitted (cursor beta).
+ */
+function resultCardTotalStack(card: ResultCard): ResultCardTotalStack {
+  const parts: string[] = [];
+  let amountKinds = 0;
+  const committed = card.totals.subscriptionCommitted;
+  if (committed.amountUsd !== null) {
+    amountKinds += 1;
+    const partial = committed.pricedSubs < committed.totalSubs
+      ? ` (${committed.pricedSubs}/${committed.totalSubs} priced)`
+      : "";
+    parts.push(`committed ${formatCommittedPerMonth(committed.amountUsd)}${partial}`);
+  } else if (committed.totalSubs > 0) {
+    parts.push(`committed ${nr}`);
+  }
+  const hasAgentRows = card.subscriptions.some((row) => row.agentId !== null);
+  if (card.totals.apiEquivalent.amountUsd !== null) {
+    amountKinds += 1;
+    parts.push(`API-equivalent ${formatApproxUsd(card.totals.apiEquivalent.amountUsd)}`);
+  } else if (hasAgentRows) {
+    parts.push(`API-equivalent ${nr}`);
+  }
+  if (card.totals.providerBilled.amountUsd !== null) {
+    amountKinds += 1;
+    parts.push(`billed ${formatBilledUsdExact(card.totals.providerBilled.amountUsd)}`);
+  }
+  return { parts, amountKinds };
+}
+
+/**
+ * QA finding M1: a basis total spans the ENTIRE basis (§1.1), so usage from
+ * agents with no subscription row (e.g. codex on an API key) can exceed the
+ * row sums. Every such gap is explained ON the card — a total may never
+ * silently disagree with the rows above it.
+ */
+function resultCardTotalGapNotes(card: ResultCard, narrow: boolean): string[] {
+  const notes: string[] = [];
+  const rowApi = card.subscriptions
+    .reduce((total, row) => total + (row.apiEquivalentUsd ?? 0), 0);
+  const apiTotal = card.totals.apiEquivalent.amountUsd;
+  if (apiTotal !== null && apiTotal - rowApi > 0.005) {
+    const gap = formatApproxUsd(apiTotal - rowApi);
+    notes.push(narrow
+      ? `includes ${gap} with no detected subscription`
+      : `includes ${gap} from agents without a detected subscription`);
+  }
+  const rowBilled = card.subscriptions
+    .reduce((total, row) => total + (row.providerBilledUsd ?? 0), 0);
+  const billedTotal = card.totals.providerBilled.amountUsd;
+  if (billedTotal !== null && billedTotal - rowBilled > 0.005) {
+    const gap = formatBilledUsdExact(billedTotal - rowBilled);
+    notes.push(narrow
+      ? `includes ${gap} billed outside these rows`
+      : `includes ${gap} billed from sources without a subscription row`);
+  }
+  return notes;
+}
+
+function resultCardTotalNotes(card: ResultCard, stack: ResultCardTotalStack, anyNr: boolean): string[] {
+  // The gap note leads: it directly explains the Total arithmetic (M1).
+  const notes: string[] = [...resultCardTotalGapNotes(card, false)];
+  // No stack theater for one row (§1.4 single-sub variant).
+  if (stack.amountKinds >= 2 && card.subscriptions.length > 1) {
+    const word = stack.amountKinds === 2 ? "two" : "three";
+    notes.push(`${word} kinds of money — never added into one number`);
+  }
+  for (const row of card.subscriptions) {
+    if (row.detectedUnverifiedUsd !== null) {
+      notes.push(`${row.id} beta: billed unlocks after live verification`);
+    }
+  }
+  if (anyNr) {
+    const agentRows = card.subscriptions.filter((row) => row.agentId !== null);
+    const zeroUsage = agentRows.length > 0 &&
+      agentRows.every((row) => row.apiEquivalentUsd === null) &&
+      card.totals.apiEquivalent.amountUsd === null;
+    notes.push(zeroUsage
+      ? `${resultCardVocabulary.notReportedLegend} — no usage evidence in this window yet`
+      : `${resultCardVocabulary.notReportedLegend} — no evidence in this window`);
+  }
+  return notes;
+}
+
+function resultCardProjectAmount(card: ResultCard, amountUsd: number): string {
+  return card.byProject?.basis === "provider_billed"
+    ? `${formatBilledUsdExact(amountUsd)} billed`
+    : formatApproxUsd(amountUsd);
+}
+
+type ResultCardProjectLine = {
+  named: string[];
+  unattributed: string | undefined;
+  everythingElse: string | undefined;
+};
+
+function resultCardProjectSegments(card: ResultCard): ResultCardProjectLine | undefined {
+  const byProject = card.byProject;
+  if (!byProject) return undefined;
+  const weights = [
+    ...byProject.rows.map((row) => row.amountUsd),
+    ...(byProject.everythingElse ? [byProject.everythingElse.amountUsd] : [])
+  ];
+  const percents = largestRemainderPercents(weights);
+  const named: string[] = [];
+  let unattributed: string | undefined;
+  byProject.rows.forEach((row, index) => {
+    const segment = `${row.project} ${resultCardProjectAmount(card, row.amountUsd)} (${percents[index]}%)`;
+    if (row.unattributed) {
+      unattributed = segment;
+    } else {
+      named.push(segment);
+    }
+  });
+  const everythingElse = byProject.everythingElse
+    ? `${resultCardVocabulary.everythingElse} ${resultCardProjectAmount(card, byProject.everythingElse.amountUsd)} ` +
+      `(${percents[byProject.rows.length]}% · ${byProject.everythingElse.projectCount} ` +
+      `project${byProject.everythingElse.projectCount === 1 ? "" : "s"})`
+    : undefined;
+  return { named, unattributed, everythingElse };
+}
+
+function resultCardEvidenceLines(card: ResultCard): string[] {
+  const lines: string[] = [];
+  if (card.totals.apiEquivalent.amountUsd !== null) {
+    lines.push(`${formatApproxUsd(card.totals.apiEquivalent.amountUsd)} API-equivalent (estimated)`);
+  }
+  if (card.totals.providerBilled.amountUsd !== null) {
+    // "provider-reported" survives only here: explaining where billed comes from (§1.2).
+    lines.push(`${formatBilledUsdExact(card.totals.providerBilled.amountUsd)} billed (provider-reported, verified)`);
+  }
+  for (const row of card.subscriptions) {
+    if (row.detectedUnverifiedUsd !== null) {
+      lines.push(
+        `${formatBilledUsdExact(row.detectedUnverifiedUsd)} ${row.id} ` +
+        resultCardVocabulary.detectedUnverifiedSuffix
+      );
+    }
+  }
+  return lines;
+}
+
+/**
+ * Subscriptions + Total (+ By project, + Evidence) — the §1.4 card blocks.
+ * Wide layouts use the canonical column geometry; below 58 columns every
+ * labeled line splits label-above-value and sub rows drop the plan column.
+ */
+function renderResultCardBlocks(
+  card: ResultCard,
+  width: number,
+  c: Colors,
+  options: { includeEvidence: boolean }
+): string[] {
+  if (card.subscriptions.length === 0) return [];
+  const stack = resultCardTotalStack(card);
+  const projects = resultCardProjectSegments(card);
+  const evidenceLines = options.includeEvidence ? resultCardEvidenceLines(card) : [];
+  const lines: string[] = [];
+
+  if (width < 58) {
+    const subRows = card.subscriptions.map((row) => {
+      const committedPart = row.committedUsdPerMonth === null
+        ? `committed ${nr}`
+        : `${formatCommittedPerMonth(row.committedUsdPerMonth)} committed`;
+      const valuePart = row.apiEquivalentUsd !== null
+        ? formatApproxUsd(row.apiEquivalentUsd)
+        : bareValueCell(row);
+      return `  ${row.id} ${committedPart} · ${valuePart}`;
+    });
+    const anyNr = [...subRows, ...stack.parts].some((line) => line.includes(nr));
+    const anyApprox = [...subRows, ...stack.parts].some((line) => line.includes("~"));
+    lines.push(`  ${c.dim(`SUBSCRIPTIONS (${card.windowDays}D)`)}`);
+    lines.push(...subRows);
+    lines.push(`  ${c.dim("TOTAL")}`);
+    lines.push(...stack.parts.map((part) => `  ${part}`));
+    lines.push(...resultCardTotalGapNotes(card, true).map((note) => `  ${c.dim(note)}`));
+    const legendParts = [
+      ...(anyApprox ? [resultCardVocabulary.estimatedMarkerLegend] : []),
+      ...(anyNr ? [resultCardVocabulary.notReportedLegend] : [])
+    ];
+    if (legendParts.length > 0) {
+      const joinedLegend = legendParts.join(" · ");
+      // QA MINOR-1: a legend must never wrap mid-phrase — below the joined
+      // width each part gets its own line.
+      if ([...joinedLegend].length + 2 <= width) {
+        lines.push(`  ${c.dim(joinedLegend)}`);
+      } else {
+        lines.push(...legendParts.map((part) => `  ${c.dim(part)}`));
+      }
+    }
+    for (const row of card.subscriptions) {
+      if (row.detectedUnverifiedUsd !== null) {
+        lines.push(`  ${c.dim(`${row.id} beta: billed unlocks after live verification`)}`);
+      }
+    }
+    if (projects) {
+      lines.push("");
+      lines.push(`  ${c.dim("BY PROJECT")}`);
+      for (const segment of [...projects.named, projects.unattributed, projects.everythingElse]) {
+        if (segment) lines.push(`  ${segment}`);
+      }
+    }
+    if (evidenceLines.length > 0) {
+      lines.push("");
+      lines.push(`  ${c.dim("EVIDENCE")}`);
+      lines.push(...evidenceLines.map((line) => `  ${line}`));
+    }
+    lines.push("");
+    return lines;
+  }
+
+  lines.push(`  ${c.bold("Subscriptions")}   ${c.dim(`${card.windowDays}d window`)}`);
+  const subRows = card.subscriptions.map((row) => wideSubscriptionRow(row));
+  lines.push(...subRows);
+  lines.push(`  ${c.bold("Total")}   ${stack.parts.join(" · ")}`);
+  const anyNr = [...subRows, ...stack.parts].some((line) => line.includes(nr));
+  for (const note of resultCardTotalNotes(card, stack, anyNr)) {
+    lines.push(`          ${c.dim(note)}`);
+  }
+  if (projects) {
+    lines.push("");
+    const projectLines = [
+      ...(projects.named.length > 0 ? [projects.named.join(" · ")] : []),
+      ...(projects.unattributed ? [projects.unattributed] : []),
+      ...(projects.everythingElse ? [projects.everythingElse] : [])
+    ];
+    projectLines.forEach((line, index) => {
+      lines.push(index === 0
+        ? `  ${c.bold("By project".padEnd(15))}${line}`
+        : `                 ${line}`);
+    });
+  }
+  if (evidenceLines.length > 0) {
+    lines.push("");
+    evidenceLines.forEach((line, index) => {
+      lines.push(index === 0
+        ? `  ${c.bold("Evidence".padEnd(15))}${line}`
+        : `                 ${line}`);
+    });
+  }
+  lines.push("");
+  return lines;
 }
 
 function hasEvidenceActionCandidate(
@@ -973,6 +1393,11 @@ function renderContextEvidence(dc: DeadContextResult | undefined, c: Colors): st
   return lines;
 }
 
+/** §1.2 marker rule: `~` rides EVERY figure of the API-equivalent basis. */
+function isApproximateBasis(basis: FinancialPresentationBasis): boolean {
+  return basis === "local_estimate" || basis === "connected_estimated";
+}
+
 function renderBreakdownTable(
   entries: SpendBreakdownEntry[],
   total: number,
@@ -984,7 +1409,8 @@ function renderBreakdownTable(
   rawAmounts: ReadonlyMap<string, number> = new Map(),
   rawTotal = total,
   amountsAvailable = true,
-  maxWidth = 72
+  maxWidth = 72,
+  approximate = false
 ): string {
   if (entries.length === 0) {
     return c.dim("(no breakdown available for this dimension)");
@@ -1005,7 +1431,7 @@ function renderBreakdownTable(
         ? "Unattributed"
         : labelOf(entry.key);
       const evidence = entryAmountAvailable
-        ? `${formatUsd(displayAmount)} · ${formatPercent(share)}`
+        ? `${approximate ? "~" : ""}${formatUsd(displayAmount)} · ${formatPercent(share)}`
         : "value unavailable · share unavailable";
       return [
         c.bold(label),
@@ -1015,8 +1441,12 @@ function renderBreakdownTable(
   }
 
   const table = new Table({
+    // Column widths keep the 64-char content budget (72 with borders and
+    // indent): the amount header must hold the full basis word
+    // "API-equivalent" (C-lane §1.5) without truncation, and the confidence
+    // column must hold "detected/unverified" whole.
     head: [c.bold(""), c.bold(amountLabel), c.bold("Share"), c.bold(recordLabel), c.bold("Confidence")],
-    colWidths: [16, 11, 14, 3, 20],
+    colWidths: [15, 15, 11, 3, 20],
     colAligns: ["left", "right", "left", "right", "left"],
     style: useColor
       ? { head: [], border: ["dim"], "padding-left": 0, "padding-right": 1 }
@@ -1035,7 +1465,7 @@ function renderBreakdownTable(
       labelUnattributedProject && isUnattributedProjectKey(entry.key)
         ? "Unattributed"
         : labelOf(entry.key),
-      entryAmountAvailable ? formatUsd(displayAmount) : "Unavailable",
+      entryAmountAvailable ? `${approximate ? "~" : ""}${formatUsd(displayAmount)}` : "Unavailable",
       entryAmountAvailable ? `${bar(share, c)} ${formatPercent(share)}` : "Unavailable",
       String(entry.recordCount),
       confidenceWord(entry.confidence)
@@ -1069,8 +1499,12 @@ function coverageLine(summary: SpendSummary, records: readonly UsageRecord[]): s
   const detectedRaw = rawByConfidence("detected_unverified");
   const parts: string[] = [];
   if (verifiedRaw > 0) parts.push(`${formatUsd(verifiedRaw < 0.01 ? verifiedRaw : verified)} provider-reported`);
-  if (estimatedRaw > 0) parts.push(`${formatUsd(estimatedRaw < 0.01 ? estimatedRaw : estimated)} API-equivalent/estimated`);
-  if (detectedRaw > 0) parts.push(`${formatUsd(detectedRaw < 0.01 ? detectedRaw : detected)} detected/unverified`);
+  // §1.2: "API-equivalent/estimated" is killed copy — the basis word plus its
+  // parenthesized evidence level replaces it.
+  if (estimatedRaw > 0) parts.push(`${formatUsd(estimatedRaw < 0.01 ? estimatedRaw : estimated)} API-equivalent (estimated)`);
+  // QA MINOR-8: the slash form is killed on figure labels (§1.2) — the
+  // parenthesized form replaces it, matching "API-equivalent (estimated)".
+  if (detectedRaw > 0) parts.push(`${formatUsd(detectedRaw < 0.01 ? detectedRaw : detected)} detected (unverified)`);
   const missingRecords = records.filter((record) => (
     record.costConfidence === "missing" || typeof record.amountUsd !== "number"
   )).length;
@@ -1204,11 +1638,19 @@ function financialPresentationBasis(
   const priced = records.filter((record) => typeof record.amountUsd === "number");
   if (priced.length === 0) return "connected_missing";
 
-  const hasVerified = priced.some((record) => record.costConfidence === "verified");
-  const hasEstimated = priced.some((record) => record.costConfidence === "estimated");
-  const hasUnverified = priced.some((record) => record.costConfidence === "detected_unverified");
-  const hasMissing = priced.some((record) => record.costConfidence === "missing");
-  const bearingKinds = [hasVerified, hasEstimated, hasUnverified, hasMissing].filter(Boolean).length;
+  // QA finding M2: the heading basis follows the shared classifier — an
+  // estimated dollar counts as API-equivalent only when priced at published
+  // API rates; a beta connector's dollars are detected (unverified).
+  const hasVerified = priced.some((record) => (
+    classifyResultCardRecordBasis(record, "connected") === "provider_billed"
+  ));
+  const hasEstimated = priced.some((record) => (
+    classifyResultCardRecordBasis(record, "connected") === "api_equivalent"
+  ));
+  const hasUnverified = priced.some((record) => (
+    classifyResultCardRecordBasis(record, "connected") === "detected_unverified"
+  ));
+  const bearingKinds = [hasVerified, hasEstimated, hasUnverified].filter(Boolean).length;
 
   if (hasVerified && bearingKinds === 1) return "provider_reported";
   if (hasEstimated && bearingKinds === 1) return "connected_estimated";
@@ -1216,49 +1658,52 @@ function financialPresentationBasis(
   return "connected_mixed";
 }
 
+// C-lane §1.2/§1.5: every label routes through the basis vocabulary
+// (committed / API-equivalent / billed). Killed synonyms — "cost/value",
+// "observed value", "Value"/"Evidence" amount headers — do not return.
 function headlineMetricLabel(basis: FinancialPresentationBasis): string {
   switch (basis) {
-    case "provider_reported": return "PROVIDER-REPORTED COST";
-    case "connected_estimated": return "CONNECTED ESTIMATED COST / VALUE";
-    case "connected_unverified": return "CONNECTED UNVERIFIED COST / VALUE";
-    case "connected_mixed": return "MIXED CONNECTED COST / VALUE EVIDENCE";
-    case "connected_missing": return "CONNECTED COST / VALUE UNAVAILABLE";
-    case "local_missing": return "OBSERVED VALUE UNAVAILABLE";
-    case "local_estimate": return "OBSERVED API-EQUIVALENT VALUE";
-    default: return "ILLUSTRATIVE COST / VALUE EVIDENCE";
+    case "provider_reported": return "BILLED COST";
+    case "connected_estimated": return "CONNECTED API-EQUIVALENT (ESTIMATED)";
+    case "connected_unverified": return "CONNECTED DETECTED (UNVERIFIED)";
+    case "connected_mixed": return "MIXED CONNECTED EVIDENCE";
+    case "connected_missing": return "CONNECTED EVIDENCE UNAVAILABLE";
+    case "local_missing": return "API-EQUIVALENT VALUE UNAVAILABLE";
+    case "local_estimate": return "API-EQUIVALENT VALUE";
+    default: return "ILLUSTRATIVE EVIDENCE";
   }
 }
 
 function evidenceBreakdownLabel(basis: FinancialPresentationBasis): string {
   switch (basis) {
-    case "provider_reported": return "Provider-reported cost";
-    case "connected_estimated": return "Connected estimated cost/value";
-    case "connected_unverified": return "Connected unverified cost/value";
-    case "connected_mixed": return "Mixed connected cost/value evidence";
-    case "connected_missing": return "Connected cost/value coverage";
+    case "provider_reported": return "Billed cost";
+    case "connected_estimated": return "Connected API-equivalent (estimated)";
+    case "connected_unverified": return "Connected detected (unverified)";
+    case "connected_mixed": return "Mixed connected evidence";
+    case "connected_missing": return "Connected financial coverage";
     case "local_missing": return "Local usage evidence";
     case "local_estimate": return "API-equivalent value";
-    default: return "Cost/value evidence";
+    default: return "Illustrative evidence";
   }
 }
 
 function evidenceAmountColumnLabel(basis: FinancialPresentationBasis): string {
-  if (basis === "provider_reported") return "Cost";
-  if (basis === "local_estimate") return "Value";
-  if (basis === "local_missing") return "Evidence";
-  return "Evidence";
+  if (basis === "provider_reported") return "Billed";
+  if (basis === "local_estimate" || basis === "connected_estimated") return "API-equivalent";
+  if (basis === "connected_unverified") return "Detected";
+  return "Amount";
 }
 
 function sourceBreakdownLabel(basis: FinancialPresentationBasis): string {
   switch (basis) {
-    case "provider_reported": return "Where provider-reported cost goes";
-    case "connected_estimated": return "Where connected estimated cost/value appears";
-    case "connected_unverified": return "Where connected unverified cost/value appears";
-    case "connected_mixed": return "Where mixed connected cost/value evidence appears";
+    case "provider_reported": return "Where billed cost goes";
+    case "connected_estimated": return "Where connected API-equivalent (estimated) appears";
+    case "connected_unverified": return "Where connected detected (unverified) appears";
+    case "connected_mixed": return "Where mixed connected evidence appears";
     case "connected_missing": return "Connected source coverage";
     case "local_missing": return "Local usage evidence by source";
-    case "local_estimate": return "Where observed API-equivalent value goes";
-    default: return "Cost/value evidence by source";
+    case "local_estimate": return "Where API-equivalent value goes";
+    default: return "Illustrative evidence by source";
   }
 }
 
@@ -1291,7 +1736,8 @@ function renderSpendBars(
   c: Colors,
   rawAmounts: ReadonlyMap<string, number> = new Map(),
   rawTotal = total,
-  amountsAvailable = true
+  amountsAvailable = true,
+  approximate = false
 ): string[] {
   if (entries.length === 0) return [];
   const top = entries.slice(0, 5);
@@ -1307,7 +1753,7 @@ function renderSpendBars(
     if (!entryAmountAvailable) {
       return `  ${c.dim(label)}  ${c.dim("value unavailable · share unavailable")}`;
     }
-    const amount = formatUsd(displayAmount).padStart(10);
+    const amount = `${approximate ? "~" : ""}${formatUsd(displayAmount)}`.padStart(10);
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
@@ -1324,7 +1770,9 @@ function spendBar(ratio: number, c: Colors): string {
 
 /** Unicode bar that degrades to ASCII when color is off. */
 function bar(ratio: number, c: Colors): string {
-  const slots = 8;
+  // 5 slots keep "█████ 100%" inside the narrower Share column that funds
+  // the full "API-equivalent" amount header (C-lane §1.5).
+  const slots = 5;
   const filled = Math.max(0, Math.min(slots, Math.round(ratio * slots)));
   const full = c.cyan("█".repeat(filled));
   const empty = c.dim("░".repeat(slots - filled));

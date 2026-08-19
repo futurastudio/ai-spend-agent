@@ -5,10 +5,44 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  askGuidedQuestion,
+  classifyGuidedAnswer,
+  createInteractivePromptSource,
+  renderForYourAgent,
+  type GuidedPromptSource
+} from "./guidedPrompt.js";
+import {
+  parsePlanDraft,
+  renderCleanExit,
+  runIdentitySequence,
+  runPlanSitting,
+  runQualitySitting,
+  runRecordSitting,
+  runRollbackSitting,
+  runStartSitting,
+  shortSittingHint,
+  type FlowIo,
+  type PlanDraftStore
+} from "./improveFlow.js";
+import {
   analyzeSpend,
+  APPROVAL_EVENT_V0_KIND,
+  buildContextHealth,
+  buildActionVerificationProjectionV0,
+  buildProjectEconomicsProjectionV0,
+  buildTokenReductionBaselineV0,
+  aibillCommandV0,
+  aibillImproveCommandV0,
   attributeUsageRecords,
   buildUsageGlance,
   buildActivitySnapshot,
+  buildResultCard,
+  buildResultCardProjectLine,
+  formatBilledUsdExact,
+  formatCommittedPerMonth,
+  resultCardSchema,
+  type ResultCard,
+  type ResultCardRunway,
   loadContextHealth,
   detectLocalCredentials,
   detectLocalPlans,
@@ -20,6 +54,7 @@ import {
   subscriptionPlans,
   unsafeScanRootReason,
   selectProviderFinancialHeadlineRecords,
+  SAFE_QUALITATIVE_SCAN_POLICY,
   summarizeProviderFinancials,
   providerFinancialCompleteness,
   writeSafeStateText,
@@ -29,10 +64,14 @@ import {
   type DetectedPlan,
   loadDeadContext,
   sampleDeadContext,
+  sanitizeLocalActivityText,
   latestObservedWorkingDirectory,
   downgradeSampleUsageEvidence,
   isBundledSampleUsage,
-  loadLocalAgentUsage,
+  hasCompleteQualitativeCoverage,
+  hasExactSelectedQualitativeEvidence,
+  loadLocalAgentActionEvidence,
+  extractSessionVitalsV0,
   loadLocalAgentFinancialUsage,
   localAgentFormatDescriptors,
   localAgentFormatLabel,
@@ -42,6 +81,11 @@ import {
   scanLocalUsageSignals,
   buildMissingSourcePrompts,
   confirmMapping,
+  createProjectIndexAdapters,
+  createActionVerificationReference,
+  createProjectEconomicsReference,
+  createProjectEconomicsPlannedActionRefV0,
+  PROJECT_ECONOMICS_V0_VERSION,
   createProviderConnectorStub,
   createProviderConnection,
   createLocalFolderSourceRegistry,
@@ -56,8 +100,14 @@ import {
   slugifySourceId,
   financialEvidenceForRecords,
   formatSourceStatuses,
+  markTokenReductionAppliedV0,
+  invalidateTokenReductionExperimentV0,
+  markTokenReductionRolledBackV0,
   readActivitySnapshot,
   recordActivitySnapshotRefreshFailure,
+  refreshTokenReductionExperimentV0,
+  resolveWasteFindingTargetV0,
+  selectBestWasteFindingV0,
   sourceStatusDefinitions,
   writeActivitySnapshot,
   type ActivitySnapshot,
@@ -79,19 +129,50 @@ import {
   type ProviderQaSummary,
   type SourceStatusObservation,
   type LocalAgentLogDiagnostic,
+  type LocalAgentLogResult,
+  type LocalAgentCall,
   type LocalAgentSourceScan,
   type ContextHealthResult,
-  type ParsedInvocationFile
+  type ParsedInvocationFile,
+  type SessionVitalsV0,
+  type TokenReductionExperimentV0
 } from "@agent-finops/core";
 import {
   StatuslineInstallerError,
   installClaudeStatusline,
+  refreshOwnedStatuslineRunner,
   uninstallClaudeStatusline
 } from "./statuslineInstaller.js";
 import {
   readStatuslineCache,
   renderStatusline
 } from "./statuslineRuntime.js";
+import {
+  chooseLatestTokenReductionExperiment,
+  loadTokenVerificationState,
+  upsertTokenReductionExperiment
+} from "./tokenVerificationState.js";
+import {
+  buildGuidedExperience,
+  renderGuidedExperience,
+  type GuidedExperienceModel
+} from "./guidedExperience.js";
+import {
+  buildImproveExperience,
+  type ImproveAdvancedOperation,
+  type ImproveExperienceModel
+} from "./improveExperience.js";
+import {
+  appendAcceptedProjectOutcome,
+  appendProjectApprovalEvent,
+  createProjectAccountabilityOwnership,
+  loadProjectAccountabilityState,
+  projectAccountabilityStatePath,
+  upsertConfirmedProjectOwnership,
+  type ProjectAccountabilityOwnershipV1,
+  type ProjectAccountabilityStateV1
+} from "./projectAccountabilityState.js";
+import { fetchGitHubAcceptedOutcomeV0 } from "./githubAcceptedOutcome.js";
 import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
@@ -107,6 +188,17 @@ import {
   type GroupByDimension,
   type SpendReportInput
 } from "@agent-finops/report";
+
+// One shared v2 sharded store instance for BOTH evidence kinds: the v1
+// monolithic qualitative adapter re-probed git privacy on every read (176
+// spawned git processes per warm run with $HOME itself a git repo) and
+// rewrote the whole index per entry. The v2 store memoizes the probe and
+// shards per transcript; unchanged files skip their full re-read.
+const cliProjectIndexAdapters = createProjectIndexAdapters();
+const cliQualitativeIndex = cliProjectIndexAdapters.qualitative;
+const cliFinancialIndex = cliProjectIndexAdapters.financial;
+const improveRuntimeCommand = aibillImproveCommandV0();
+const actionRuntimeCommand = (args: string) => aibillCommandV0(args);
 
 export type CliResult = {
   exitCode: number;
@@ -126,6 +218,8 @@ type ParsedArgs = {
   team?: string;
   person?: string;
   client?: string;
+  costCenter?: string;
+  role?: string;
   project?: string;
   agent?: string;
   workflow?: string;
@@ -154,6 +248,18 @@ type ParsedArgs = {
   statusline?: boolean;
   statuslineAction?: string;
   replaceStatusline?: boolean;
+  verifyAction?: "inspect" | "start" | "mark-applied" | "rollback" | "cancel" | "result";
+  verifyTarget?: string;
+  canary?: "passed" | "failed";
+  quality?: "held" | "regressed" | "missing";
+  approvedAt?: string;
+  appliedAt?: string;
+  changeDigest?: string;
+  rollbackDigest?: string;
+  canaryDigest?: string;
+  outcomeAction?: "github";
+  pullRequestNumber?: number;
+  businessOutcome?: string;
   parseErrors: string[];
 };
 
@@ -165,6 +271,19 @@ export type CliRuntimeOptions = {
   statuslineNow?: Date;
   statuslineColumns?: number;
   statuslineTimeZone?: string;
+  /** True only for the foreground terminal entrypoint; embedded/CI callers stay read-only. */
+  interactive?: boolean;
+  /** Foreground terminal prompt. Tests/embeddings must inject it explicitly. */
+  prompt?: (question: string) => Promise<string>;
+  /**
+   * Guided-flow line IO for the improve/identify sittings. The foreground
+   * terminal wires an arrival-timestamped readline source; tests inject
+   * scripted sources. When absent, `prompt` is bridged as a fallback.
+   */
+  openGuidedIo?: () => Promise<{
+    source: GuidedPromptSource;
+    write: (text: string) => void;
+  }>;
 };
 
 export async function runCli(
@@ -191,7 +310,9 @@ export async function runCli(
     };
   }
 
-  if (args.json && args.command !== "context" && args.command !== "context-health" && args.command !== "glance") {
+  if (args.json && args.command !== "context" && args.command !== "context-health" &&
+      args.command !== "glance" && args.command !== "verify" &&
+      args.command !== "accountability") {
     return {
       exitCode: 1,
       stdout: "",
@@ -213,7 +334,7 @@ export async function runCli(
   // Running with no subcommand reads only evidence available on this machine.
   // Illustrative records are reachable only through an explicit --sample.
   if (!args.command || args.command.startsWith("--") || args.command === "quickstart" || args.command === "demo") {
-    return quickstartCommand(args);
+    return quickstartCommand(args, runtime);
   }
 
   if (args.command === "doctor") {
@@ -237,7 +358,7 @@ export async function runCli(
   }
 
   if (args.command === "quickstart" || args.command === "demo") {
-    return quickstartCommand(args);
+    return quickstartCommand(args, runtime);
   }
 
   if (args.command === "watch") {
@@ -262,6 +383,30 @@ export async function runCli(
 
   if (args.command === "apply-artifact" || args.command === "apply") {
     return applyArtifactCommand(args);
+  }
+
+  if (args.command === "improve") {
+    return improveCommand(args, runtime);
+  }
+
+  if (args.command === "index") {
+    return indexEvidenceCommand(args, runtime);
+  }
+
+  if (args.command === "identify") {
+    return identifyProjectCommand(args, runtime);
+  }
+
+  if (args.command === "outcome") {
+    return projectOutcomeCommand(args);
+  }
+
+  if (args.command === "accountability") {
+    return projectAccountabilityCommand(args);
+  }
+
+  if (args.command === "verify") {
+    return tokenVerificationCommand(args);
   }
 
   if (args.command === "add-source") {
@@ -299,9 +444,16 @@ type InstantReadData = {
   warnings: string[];
   providerCoverage?: ProviderCoverageStatus;
   codexInvocationFiles?: ParsedInvocationFile[];
+  /** Bounded local evidence used only for why/action/progress projections. */
+  actionEvidence?: LocalAgentLogResult;
+  /** Whether the supported financial sources had no unreadable/malformed/missing-token rows. */
+  financialCoverageComplete?: boolean;
 };
 
-async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
+async function quickstartCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions = {}
+): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   if (args.plan && !planOverrideFromFlag(args.plan)) {
@@ -311,7 +463,15 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
       stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
     };
   }
-  const { records, mode, warnings, providerCoverage, codexInvocationFiles } = await loadInstantReadData(args);
+  const {
+    records,
+    mode,
+    warnings,
+    providerCoverage,
+    codexInvocationFiles,
+    actionEvidence,
+    financialCoverageComplete
+  } = await loadInstantReadData(args);
   if (records.length === 0) {
     return noEvidenceResult("receipt", warnings, sinceDays);
   }
@@ -390,6 +550,17 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     deadContext = sampleDeadContext();
   }
 
+  const guidedExperience = !args.sample && actionEvidence
+    ? await buildQuickstartGuidedExperience({
+        args,
+        summary,
+        actionEvidence,
+        deadContext,
+        financialCoverageComplete: financialCoverageComplete === true,
+        interactive: runtime.interactive === true
+      }).catch(() => undefined)
+    : undefined;
+
   const summaryText = generatePlainEnglishSummary(summary, {
     records: summaryRecords,
     groupBy,
@@ -399,7 +570,12 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
     nextSteps,
     deadContext,
     detectedPlans,
+    // C-lane §1.4: the result card header states the evidence window.
+    windowDays: sinceDays,
     width: outputWidth,
+    ...(guidedExperience && !args.groupBy && !args.full ? {
+      guidedAction: guidedActionForTerminal(guidedExperience)
+    } : {}),
     // An explicit --group-by is a drill-down question: answer with just the
     // table + window instead of repeating the whole readout.
     view: args.groupBy ? "breakdown" : args.full ? "full" : "compact"
@@ -413,17 +589,185 @@ async function quickstartCommand(args: ParsedArgs): Promise<CliResult> {
   return ok(header ? `${header}\n${summaryText}` : summaryText);
 }
 
+async function buildQuickstartGuidedExperience(input: {
+  args: ParsedArgs;
+  summary: SpendSummary;
+  actionEvidence: LocalAgentLogResult;
+  deadContext?: Awaited<ReturnType<typeof loadDeadContext>>;
+  financialCoverageComplete: boolean;
+  interactive: boolean;
+}): Promise<GuidedExperienceModel> {
+  const generatedAt = new Date();
+  const sinceDays = input.args.sinceDays ?? 30;
+  const sinceIso = sinceIsoForDays(sinceDays, generatedAt);
+  const rootPath = realpathSync(resolve(input.args.path));
+  const actionProjectRef = createActionVerificationReference(
+    "project-working-directory",
+    rootPath
+  );
+  const calls = input.actionEvidence.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "actionPlanning") &&
+    callMatchesActionProject(call, actionProjectRef)
+  ));
+  const actionAgents = [...new Set(calls.map((call) => call.agent))];
+  const globallyComplete = hasCompleteQualitativeCoverage(input.actionEvidence);
+  const selectedEvidenceExact = hasExactSelectedQualitativeEvidence(
+    input.actionEvidence,
+    actionAgents
+  );
+  const qualitativeCoverage: "complete" | "partial" | "unknown" = globallyComplete
+    ? "complete"
+    : selectedEvidenceExact
+      ? "partial"
+      : "unknown";
+  const windowDays = Math.max(1, sinceDays);
+  const contextHealth = calls.length > 0
+    ? await loadContextHealth(calls, {
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+        projectDir: rootPath,
+        sinceIso,
+        windowDays,
+        codexInvocationFiles: input.actionEvidence.codexInvocationFiles
+      }).catch(() => buildContextHealth({ calls, now: generatedAt, windowDays }))
+    : undefined;
+  const sessionVitals = calls.length > 0 ? extractSessionVitalsV0(calls) : undefined;
+  const finding = sessionVitals && globallyComplete
+    ? selectBestWasteFindingV0({
+        sessionVitals,
+        generatedAt: generatedAt.toISOString(),
+        ...(contextHealth ? { contextHealth } : {}),
+        ...(input.deadContext ? { deadContext: input.deadContext } : {})
+      })
+    : null;
+
+  let preferredExperiment: TokenReductionExperimentV0 | undefined;
+  try {
+    const state = await loadTokenVerificationState(rootPath);
+    const stored = chooseLatestTokenReductionExperiment(state.experiments);
+    if (stored) {
+      const terminal = stored.lifecycle === "complete" ||
+        stored.lifecycle === "rolled_back" ||
+        stored.lifecycle === "invalidated" ||
+        stored.intervention.canary?.status === "failed";
+      const cohortAgent = stored.cohort.agent === "claude-code" ||
+          stored.cohort.agent === "codex"
+        ? stored.cohort.agent
+        : undefined;
+      preferredExperiment = stored.intervention.appliedAt && !terminal &&
+          sessionVitals &&
+          cohortAgent !== undefined &&
+          hasCompleteQualitativeCoverage(input.actionEvidence, [cohortAgent])
+        ? refreshTokenReductionExperimentV0(stored, {
+            sessionVitals,
+            observedAt: generatedAt.toISOString(),
+            ...(contextHealth ? { contextHealth } : {})
+          })
+        : stored;
+    }
+  } catch {
+    // A malformed or unsafe private state file cannot authorize a claim. The
+    // financial receipt remains useful and the action projection is omitted.
+  }
+
+  return buildGuidedExperience({
+    sessionVitals,
+    summary: input.summary,
+    contextHealth,
+    wasteFinding: finding,
+    preferredExperiment,
+    qualitativeCoverage,
+    financialDriverComplete: input.financialCoverageComplete,
+    interactive: input.interactive
+  });
+}
+
+function guidedActionForTerminal(model: GuidedExperienceModel): NonNullable<
+  Parameters<typeof generatePlainEnglishSummary>[1]["guidedAction"]
+> {
+  return {
+    driverHeading: model.mainDriver.heading,
+    insightHeading: model.insight.heading,
+    insightHeadline: model.insight.headline,
+    insightDetail: model.insight.detail,
+    actionHeadline: model.safeTest.headline,
+    actionDetail: model.safeTest.available
+      ? model.safeTest.detail
+      : `${model.safeTest.detail} ${model.interaction.mode === "read_only" ? "Nothing changed." : ""}`.trim(),
+    command: model.safeTest.available || model.progress || model.result
+      ? improveRuntimeCommand
+      : "npx aibill --full",
+    ...(model.progress ? { progress: model.progress } : {}),
+    ...(model.result ? { result: model.result } : {})
+  };
+}
+
+function mergeGlanceCalls(
+  financialCalls: readonly LocalAgentCall[],
+  qualitativeCalls: readonly LocalAgentCall[]
+): LocalAgentCall[] {
+  const qualitativeByIdentity = new Map(
+    qualitativeCalls.map((call) => [glanceCallIdentity(call), call] as const)
+  );
+  return financialCalls.map((financial) => {
+    const qualitative = qualitativeByIdentity.get(glanceCallIdentity(financial));
+    if (!qualitative) return financial;
+    return {
+      ...financial,
+      ...(qualitative.project ? { project: qualitative.project } : {}),
+      ...(qualitative.workingDirectory ? {
+        workingDirectory: qualitative.workingDirectory
+      } : {}),
+      ...(qualitative.workingDirectoryRef ? {
+        workingDirectoryRef: qualitative.workingDirectoryRef
+      } : {}),
+      ...(qualitative.activity ? { activity: qualitative.activity } : {}),
+      ...(qualitative.completion ? { completion: qualitative.completion } : {})
+    };
+  });
+}
+
+function glanceCallIdentity(call: LocalAgentCall): string {
+  return [
+    call.agent,
+    call.callId ?? "",
+    call.sessionId ?? "",
+    call.timestamp,
+    call.model
+  ].join("\u0000");
+}
+
+function callMatchesActionProject(
+  call: LocalAgentCall,
+  projectRef: string
+): boolean {
+  const observedProjectRef = call.workingDirectoryRef ?? (
+    call.workingDirectory
+      ? createActionVerificationReference("project-working-directory", call.workingDirectory)
+      : undefined
+  );
+  return observedProjectRef === projectRef;
+}
+
 async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
-  const logs = await loadLocalAgentUsage({
-    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-    sinceIso: sinceIsoForDays(sinceDays),
-    collectCodexInvocationEvidence: true
-  });
-  const glanceCalls = logs.calls.filter((call) => (
+  const sinceIso = sinceIsoForDays(sinceDays);
+  const [logs, actionEvidence] = await Promise.all([
+    loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
+      sinceIso
+    }),
+    loadBoundedLocalActionEvidence(sinceIso).catch(() => undefined)
+  ]);
+  const mergedCalls = mergeGlanceCalls(logs.calls, actionEvidence?.calls ?? []);
+  const glanceCalls = mergedCalls.filter((call) => (
     localAgentFormatSupports(call.agent, "glance")
   ));
   const calls = args.project
@@ -433,6 +777,13 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   const contextProjectDir = args.pathExplicit
     ? resolve(args.path)
     : latestWorkingDirectory ?? resolve(args.path);
+  // A name-filtered Glance can project a token experiment only when the
+  // filtered transcript evidence proves that project's actual working root.
+  // Falling back to cwd/--path after an empty or path-less filter would attach
+  // an unrelated project's experiment to the requested project snapshot.
+  const experimentProjectDir = args.project
+    ? latestWorkingDirectory
+    : contextProjectDir;
   let detectedPlans: DetectedPlan[];
   if (args.plan) {
     const override = planOverrideFromFlag(args.plan);
@@ -450,7 +801,15 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
       codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
     }).catch(() => []);
   }
-  const contextHealth = await loadContextHealth(calls, {
+  const unfilteredContextCalls = (actionEvidence?.calls ?? []).filter((call) => (
+    localAgentFormatSupports(call.agent, "contextHealth")
+  ));
+  // A project-filtered Glance must not combine project A's financial card
+  // with project B's context churn or suggested action.
+  const contextCalls = args.project
+    ? unfilteredContextCalls.filter((call) => call.project === args.project)
+    : unfilteredContextCalls;
+  const contextHealth = await loadContextHealth(contextCalls, {
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
     claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
@@ -458,10 +817,41 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
     claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
     claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
     projectDir: contextProjectDir,
-    sinceIso: sinceIsoForDays(sinceDays),
+    sinceIso,
     windowDays: sinceDays,
-    codexInvocationFiles: logs.codexInvocationFiles
-  });
+    codexInvocationFiles: actionEvidence?.codexInvocationFiles
+  }).catch(() => buildContextHealth({ calls: contextCalls, windowDays: sinceDays }));
+  const actionVerificationProjection = await (async () => {
+    if (!experimentProjectDir) return undefined;
+    try {
+      const state = await loadTokenVerificationState(experimentProjectDir);
+      const experiment = chooseLatestTokenReductionExperiment(state.experiments);
+      if (!experiment) return undefined;
+      const cannotAcceptFreshEvidence = experiment.lifecycle === "complete" ||
+        experiment.lifecycle === "rolled_back" ||
+        experiment.lifecycle === "invalidated" ||
+        experiment.intervention.canary?.status === "failed";
+      const current = experiment.intervention.appliedAt && !cannotAcceptFreshEvidence
+        ? await (async () => {
+            const observation = await loadTokenVerificationObservation(
+              experimentProjectDir,
+              experiment
+            );
+            if (!observation.qualitativeCoverageComplete) return experiment;
+            return refreshTokenReductionExperimentV0(experiment, {
+              sessionVitals: observation.sessionVitals,
+              observedAt: observation.generatedAt,
+              contextHealth: observation.contextHealth
+            });
+          })()
+        : experiment;
+      return buildActionVerificationProjectionV0(current);
+    } catch {
+      // Glance is read-only and fail-closed. A malformed, symlinked, stale, or
+      // otherwise unreadable experiment never reuses an older percentage.
+      return undefined;
+    }
+  })();
   const snapshot = buildUsageGlance(calls, {
     filesParsed: logs.sourceScans
       .filter((scan) => localAgentFormatSupports(scan.agent, "glance"))
@@ -471,7 +861,9 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
     )),
     detectedPlans,
     limitCalls: glanceCalls,
-    contextHealth
+    contextHealth,
+    qualitativeCoverage: summarizeCliQualitativeCoverage(actionEvidence),
+    ...(actionVerificationProjection ? { actionVerificationProjection } : {})
   });
   return ok(JSON.stringify(snapshot));
 }
@@ -480,13 +872,7 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const sinceIso = sinceIsoForDays(sinceDays);
-  const logs = await loadLocalAgentUsage({
-    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-    sinceIso,
-    collectCodexInvocationEvidence: true
-  });
+  const logs = await loadBoundedLocalActionEvidence(sinceIso);
   const contextCalls = logs.calls.filter((call) => (
     localAgentFormatSupports(call.agent, "contextHealth")
   ));
@@ -505,7 +891,10 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
     windowDays: sinceDays,
     codexInvocationFiles: logs.codexInvocationFiles
   });
-  return ok(args.json ? JSON.stringify(health) : renderContextHealth(health));
+  const qualitativeCoverage = summarizeCliQualitativeCoverage(logs);
+  return ok(args.json
+    ? JSON.stringify({ ...health, qualitativeCoverage })
+    : `${renderContextHealth(health)}\n\n${renderCliQualitativeCoverage(qualitativeCoverage)}`);
 }
 
 function renderContextHealth(health: ContextHealthResult): string {
@@ -581,7 +970,7 @@ function quickstartNextSteps(
   }
   steps.push(
     mode === "demo"
-      ? "npx aibill report --sample     write a clearly labeled demo Markdown + HTML report"
+      ? "npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
       : "npx aibill report              write a shareable Markdown + HTML report"
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
@@ -677,7 +1066,27 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     return { records: await loadSampleUsageData(), mode: "demo", warnings };
   }
 
-  const persisted = args.ignoreState ? undefined : await readPersistedSpend(resolve(args.path));
+  const sinceIso = sinceIsoForDays(args.sinceDays ?? 30);
+  const [persisted, financialResult, actionResult] = await Promise.all([
+    args.ignoreState ? Promise.resolve(undefined) : readPersistedSpend(resolve(args.path)),
+    loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
+      sinceIso
+    }).then((value) => ({ value })).catch(() => ({ value: undefined })),
+    loadBoundedLocalActionEvidence(sinceIso)
+      .then((value) => ({ value }))
+      .catch(() => ({ value: undefined }))
+  ]);
+  const financialLogs = financialResult.value;
+  const actionEvidence = actionResult.value;
+  if (!financialLogs) {
+    warnings.push("Some local financial evidence could not be read; coverage is incomplete.");
+  }
+  if (!actionEvidence) {
+    warnings.push("Local why/action evidence could not be indexed; no action claim was inferred.");
+  }
 
   // Only real connected/synced provider state is authoritative enough to serve
   // directly. Sample or legacy persisted state must NEVER mask real local logs.
@@ -694,11 +1103,22 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     looksConnected &&
     persisted.connectedTrust?.trusted === true
   ) {
+    const connectedRecords = applyProviderContractGate(persisted.records);
+    const connectedHeadlineRecords = selectProviderFinancialHeadlineRecords(connectedRecords);
     return {
-      records: applyProviderContractGate(persisted.records),
+      records: connectedRecords,
       mode: "connected",
       warnings,
-      ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {})
+      ...(actionEvidence ? {
+        actionEvidence,
+        codexInvocationFiles: actionEvidence.codexInvocationFiles
+      } : {}),
+      ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {}),
+      financialCoverageComplete: persisted.providerCoverage === "complete" &&
+        connectedHeadlineRecords.length > 0 &&
+        connectedHeadlineRecords.every((record) => (
+          typeof record.amountUsd === "number" && record.costConfidence !== "missing"
+        ))
     };
   }
 
@@ -708,23 +1128,10 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     );
   }
 
-  // Real local agent logs (Claude Code / Codex) beat any sample/legacy state.
-  let logs: Awaited<ReturnType<typeof loadLocalAgentUsage>> | undefined;
-  try {
-    logs = await loadLocalAgentUsage({
-      // Env overrides keep tests (and unusual installs) isolated from $HOME.
-      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-      sinceIso: sinceIsoForDays(args.sinceDays ?? 30),
-      collectCodexInvocationEvidence: true
-    });
-  } catch {
-    // A failed read is not the same as an honest empty scan. Keep the compact
-    // result useful without leaking a local path or raw parser exception.
-    warnings.push("Some local agent evidence could not be read; coverage is incomplete.");
-  }
-  if (logs && logs.records.length > 0) {
+  // Financial rows use the streaming, proof-based reader. The richer action
+  // reader is independently bounded above and can never make a partial index
+  // look like complete financial evidence.
+  if (financialLogs && financialLogs.records.length > 0) {
     // Persisted local_logs state (written by report/apply-artifact) is the
     // same data source we just re-read — superseding it silently is correct,
     // not worth a scary "sample/legacy" warning.
@@ -732,14 +1139,20 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
       warnings.push("Ignored persisted sample/legacy state in .ai-spend-agent/spend.json — showing your real local agent logs. Run `npx aibill reset` to clear it, or pass --ignore-state.");
     }
     return {
-      records: logs.records,
+      records: financialLogs.records,
       mode: "local-logs",
       warnings,
-      codexInvocationFiles: logs.codexInvocationFiles
+      ...(actionEvidence ? {
+        actionEvidence,
+        codexInvocationFiles: actionEvidence.codexInvocationFiles
+      } : {}),
+      financialCoverageComplete: financialLogs
+        ? localFinancialEvidenceComplete(financialLogs)
+        : false
     };
   }
 
-  const geminiPresence = logs?.sourceScans.find((scan) => scan.agent === "gemini-cli");
+  const geminiPresence = financialLogs?.sourceScans.find((scan) => scan.agent === "gemini-cli");
   if (geminiPresence && (
     (geminiPresence.detectionSignals ?? 0) > 0 || geminiPresence.filesDiscovered > 0
   )) {
@@ -750,7 +1163,13 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
       records: [],
       mode: "local-logs",
       warnings,
-      codexInvocationFiles: logs?.codexInvocationFiles
+      ...(actionEvidence ? {
+        actionEvidence,
+        codexInvocationFiles: actionEvidence.codexInvocationFiles
+      } : {}),
+      financialCoverageComplete: financialLogs
+        ? localFinancialEvidenceComplete(financialLogs)
+        : false
     };
   }
 
@@ -770,7 +1189,189 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     );
   }
 
-  return { records: [], mode: "local-logs", warnings };
+  return {
+    records: [],
+    mode: "local-logs",
+    warnings,
+    ...(actionEvidence ? {
+      actionEvidence,
+      codexInvocationFiles: actionEvidence.codexInvocationFiles
+    } : {}),
+    financialCoverageComplete: financialLogs
+      ? localFinancialEvidenceComplete(financialLogs)
+      : false
+  };
+}
+
+function localFinancialEvidenceComplete(result: LocalAgentLogResult): boolean {
+  const scanCoverageComplete = result.sourceScans.every((scan) => (
+    scan.directoryStatus !== "unreadable" &&
+    scan.unreadableFiles === 0 &&
+    scan.malformedLines === 0 &&
+    scan.unsupportedUsageSnapshots === 0
+  ));
+  const everyObservedRowHasFinancialValue = result.records.length > 0 &&
+    result.records.every((record) => (
+      typeof record.amountUsd === "number" && record.costConfidence !== "missing"
+    ));
+  return scanCoverageComplete && everyObservedRowHasFinancialValue;
+}
+
+async function loadBoundedLocalActionEvidence(sinceIso: string): Promise<LocalAgentLogResult> {
+  return loadLocalAgentActionEvidence({
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    sinceIso,
+    collectCodexInvocationEvidence: true,
+    qualitativeScan: SAFE_QUALITATIVE_SCAN_POLICY,
+    qualitativeIndex: cliQualitativeIndex,
+    streamCheckpoints: cliProjectIndexAdapters
+  });
+}
+
+/**
+ * `aibill index` — drain the oversized-transcript backlog to completion in
+ * one foreground command. `improve` and the receipt stay fast by streaming a
+ * bounded slice per run; this command loops those bounded passes until the
+ * qualitative index converges, printing honest per-pass progress.
+ */
+async function indexEvidenceCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  const rootGuard = await guardExactProjectRoot("index", args.path);
+  if (rootGuard) return rootGuard;
+  const sinceDays = args.sinceDays ?? 30;
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+  const sinceIso = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString();
+  const liveLine = (line: string) => {
+    if (runtime.interactive) process.stdout.write(`${line}\n`);
+  };
+  const formatBytes = (bytes: number): string =>
+    bytes >= 1_000_000_000
+      ? `${(bytes / 1_000_000_000).toFixed(1)} GB`
+      : `${Math.round(bytes / 1_000_000)} MB`;
+  liveLine("aibill index · reading your local evidence to completion");
+  liveLine("Large histories take a few minutes on the first full pass. Local only.");
+  const startedAt = Date.now();
+  const maxPasses = 64;
+  const perPassBytes = 8 * 1024 * 1024 * 1024;
+  let totalBytes = 0;
+  let passes = 0;
+  for (let pass = 1; pass <= maxPasses; pass += 1) {
+    passes = pass;
+    const evidence = await loadLocalAgentActionEvidence({
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+      sinceIso,
+      collectCodexInvocationEvidence: true,
+      qualitativeScan: { ...SAFE_QUALITATIVE_SCAN_POLICY, maxStreamedBytesPerRun: perPassBytes },
+      qualitativeIndex: cliQualitativeIndex,
+      streamCheckpoints: cliProjectIndexAdapters
+    });
+    const coverage = summarizeCliQualitativeCoverage(evidence);
+    const scans = evidence.sourceScans.filter((scan) => (
+      scan.agent === "claude-code" || scan.agent === "codex"
+    ));
+    const passBytes = scans.reduce(
+      (sum, scan) => sum + (scan.qualitativeBytesStreamed ?? 0), 0
+    );
+    const stillConverging = scans.reduce(
+      (sum, scan) => sum + (scan.qualitativeFilesStreaming ?? 0), 0
+    );
+    totalBytes += passBytes;
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+    liveLine(
+      `pass ${pass} · ${formatBytes(passBytes)} read · ` +
+      `${stillConverging} large file(s) still converging · ${elapsedSeconds}s elapsed`
+    );
+    if (coverage.status === "complete") {
+      return ok(renderCleanExit({
+        lines: [
+          "Index complete",
+          `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
+            `${formatBytes(totalBytes)} streamed across ${passes} pass(es)`
+        ],
+        next: { reason: "your evidence is fully indexed — run the token test", command: improveRuntimeCommand }
+      }));
+    }
+    if (passBytes === 0 && stillConverging === 0) {
+      // Nothing left to stream, yet coverage is not complete: whatever
+      // remains is not convergable by streaming. Say so honestly.
+      return ok(renderCleanExit({
+        lines: [
+          `Index ${coverage.status} · nothing more can be streamed`,
+          `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
+            `${coverage.skippedForBudget} file(s) remain outside the read budget`
+        ],
+        next: { reason: "run the token test on the evidence that is indexed", command: improveRuntimeCommand }
+      }));
+    }
+  }
+  return ok(renderCleanExit({
+    lines: [
+      `Index still converging after ${passes} passes · ${formatBytes(totalBytes)} streamed`,
+      "Progress is saved; every pass resumes exactly where the last one stopped."
+    ],
+    next: { reason: "run this again to continue", command: actionRuntimeCommand("index") }
+  }));
+}
+
+type CliQualitativeCoverage = {
+  status: "complete" | "partial" | "unknown";
+  selectedFiles: number;
+  readCompletely: number;
+  skippedForBudget: number;
+};
+
+function summarizeCliQualitativeCoverage(
+  logs: LocalAgentLogResult | undefined
+): CliQualitativeCoverage {
+  if (!logs) return {
+    status: "unknown",
+    selectedFiles: 0,
+    readCompletely: 0,
+    skippedForBudget: 0
+  };
+  const scans = logs.sourceScans.filter((scan) => (
+    scan.agent === "claude-code" || scan.agent === "codex"
+  ));
+  return {
+    status: ["claude-code", "codex"].every((agent) => (
+      scans.find((scan) => scan.agent === agent)?.qualitativeCoverage === "complete"
+    )) ? "complete" : "partial",
+    selectedFiles: scans.reduce(
+      (sum, scan) => sum + (scan.qualitativeFilesSelected ?? 0), 0
+    ),
+    readCompletely: scans.reduce(
+      (sum, scan) => sum + (scan.qualitativeFilesReadCompletely ?? 0), 0
+    ),
+    skippedForBudget: scans.reduce(
+      (sum, scan) => sum + (scan.qualitativeFilesSkippedForBudget ?? 0), 0
+    )
+  };
+}
+
+function summarizeCliQualitativeCoverageByAgent(
+  logs: LocalAgentLogResult | undefined
+): NonNullable<SpendReportInput["qualitativeCoverageByAgent"]> {
+  return Object.fromEntries(
+    (["claude-code", "codex"] as const).map((agent) => {
+      if (!logs) return [agent, "unknown"] as const;
+      const scan = logs.sourceScans.find((candidate) => candidate.agent === agent);
+      if (!scan) return [agent, "unknown"] as const;
+      return [
+        agent,
+        hasCompleteQualitativeCoverage(logs, [agent]) ? "complete" : "partial"
+      ] as const;
+    })
+  );
+}
+
+function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string {
+  return `QUALITATIVE INDEX  ${coverage.status.toUpperCase()} · ` +
+    `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
+    `${coverage.skippedForBudget} eligible files skipped by budget`;
 }
 
 function noEvidenceResult(
@@ -870,7 +1471,7 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
       : (persisted.mode ?? "unknown legacy")
     : "no state";
 
-  const logs = await loadLocalAgentUsage({
+  const logs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
     claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
     codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
     geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
@@ -976,10 +1577,10 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
   const now = new Date();
   const observations: SourceStatusObservation[] = [];
 
-  let localLogs: Awaited<ReturnType<typeof loadLocalAgentUsage>> | undefined;
+  let localLogs: Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>> | undefined;
   let localError: string | undefined;
   try {
-    localLogs = await loadLocalAgentUsage({
+    localLogs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
       geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
@@ -1514,11 +2115,12 @@ async function statuslineCommand(
   if (action === "install") return installStatuslineCommand(args, runtime);
   if (action === "uninstall") return uninstallStatuslineCommand(runtime);
   if (action === "refresh") return refreshStatuslineCommand(args, runtime);
+  if (action === "expand") return expandStatuslineCommand(runtime);
   return {
     exitCode: 1,
     stdout: "",
     stderr: `Unknown statusline action: ${sanitizeSecretishError(action)}\n` +
-      "Use: aibill statusline [refresh|install|uninstall]"
+      "Use: aibill statusline [refresh|install|uninstall|expand]"
   };
 }
 
@@ -1748,7 +2350,7 @@ async function collectAndPublishActivitySnapshot(input: {
   let logs: Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>> | undefined;
   let scanError: string | undefined;
   try {
-    logs = await loadLocalAgentFinancialUsage({
+    logs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
       geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
@@ -1894,6 +2496,19 @@ async function refreshStatuslineCommand(
       stderr: `aibill statusline refresh failed safely: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
     };
   }
+  // C-lane §2.1 (QA-12c): a cache-refreshing run re-copies OUR OWN previously
+  // installed runner so a frozen v1 copy picks up the current runtime — the
+  // same consent as the original `statusline install`. Unowned or absent
+  // installs are never touched, and a copy failure never fails the refresh.
+  try {
+    await refreshOwnedStatuslineRunner({
+      homeDir: runtime.homeDirectory ?? homedir(),
+      cwd: resolve(args.path),
+      runnerContents: await packagedStatuslineRunner(runtime)
+    });
+  } catch {
+    // Best-effort only; the refreshed cache remains valid either way.
+  }
   const cache = await readStatuslineCache({
     cacheDirectory,
     homeDirectory: runtime.homeDirectory
@@ -1910,6 +2525,281 @@ async function refreshStatuslineCommand(
         stderr: `aibill statusline refresh failed safely: ${refresh.scanError ?? "local evidence was unavailable"}`
       }
     : ok(line);
+}
+
+/**
+ * C-lane §2.4: `aibill statusline expand` — the teach-the-marker surface.
+ * Renders FROM the canonical result card (converted from the private v2
+ * snapshot; `runways[]` carries both limits), never bypassing the contract.
+ * Printed command output, not a hook line.
+ */
+async function expandStatuslineCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+  const cache = await readStatuslineCache({
+    cacheDirectory: process.env.AIBILL_CACHE_DIR,
+    homeDirectory: runtime.homeDirectory
+  });
+  if (cache.status !== "ok") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: cache.status === "missing"
+        ? "aibill statusline expand needs a refreshed private cache: run `npx aibill statusline refresh` first."
+        : "aibill statusline expand could not read the private cache safely; run `npx aibill statusline refresh`."
+    };
+  }
+  const now = runtime.statuslineNow ?? new Date();
+  const snapshot = cache.snapshot;
+  if (snapshot.mode === "empty" || snapshot.mode === "error" || !snapshot.subscription) {
+    return ok([
+      "aibill subscriptions · 30d window",
+      "  no detected subscription evidence in the private cache",
+      "  run `npx aibill statusline refresh` after using Claude Code or Codex"
+    ].join("\n"));
+  }
+  const card = statuslineSnapshotToResultCard(snapshot, now);
+  return ok(renderStatuslineExpansion(card, snapshot, now, runtime.statuslineTimeZone));
+}
+
+const EXPANSION_FIVE_HOUR_FRESH_MS = 5 * 60 * 60 * 1_000;
+const EXPANSION_WEEKLY_FRESH_MS = 24 * 60 * 60 * 1_000;
+
+type ExpansionSnapshot = NonNullable<Awaited<ReturnType<typeof readStatuslineCache>> extends infer R
+  ? R extends { status: "ok"; snapshot: infer S } ? S : never
+  : never>;
+
+/** Fresh limits only (existing statusline freshness rules), most-urgent first, max 2. */
+function expansionRunways(
+  limits: ReadonlyArray<{
+    kind: "five-hour" | "weekly";
+    remainingPercent: number;
+    observedAt: string;
+    resetsAt: string;
+  }>,
+  now: Date
+): ResultCardRunway[] {
+  return limits
+    .filter((limit) => {
+      const observedMs = Date.parse(limit.observedAt);
+      const ageMs = now.getTime() - observedMs;
+      const maxAgeMs = limit.kind === "five-hour"
+        ? EXPANSION_FIVE_HOUR_FRESH_MS
+        : EXPANSION_WEEKLY_FRESH_MS;
+      return Number.isFinite(observedMs) && ageMs >= 0 && ageMs <= maxAgeMs &&
+        Date.parse(limit.resetsAt) > now.getTime();
+    })
+    .map((limit) => ({
+      kind: limit.kind,
+      remainingPercent: limit.remainingPercent,
+      resetsAt: new Date(Date.parse(limit.resetsAt)).toISOString()
+    }))
+    .sort((left, right) => left.remainingPercent - right.remainingPercent ||
+      Date.parse(left.resetsAt) - Date.parse(right.resetsAt))
+    .slice(0, 2);
+}
+
+/** Convert the private snapshot into the canonical result card (§2.4). */
+function statuslineSnapshotToResultCard(snapshot: ExpansionSnapshot, now: Date): ResultCard {
+  const subscriptions: ResultCard["subscriptions"] = [];
+  for (const agent of snapshot.subscription?.agents ?? []) {
+    const sevenDays = agent.apiEquivalent.sevenDays;
+    const plan = agent.planId
+      ? subscriptionPlans.find((candidate) => candidate.id === agent.planId)
+      : undefined;
+    subscriptions.push({
+      id: agent.agent === "claude-code" ? "claude" : "chatgpt",
+      agentId: agent.agent,
+      planLabel: plan
+        ? plan.name.replace(/^Claude /u, "").replace(/^ChatGPT /u, "")
+        : null,
+      connection: "local_logs",
+      committedUsdPerMonth: agent.committedUsdPerMonth ?? null,
+      // 7d figures: same basis, same window, summable (§2.4); the /7d window
+      // is always printed next to every figure.
+      apiEquivalentUsd: sevenDays.amountUsd !== null && sevenDays.financialEvidence === "estimated"
+        ? sevenDays.amountUsd
+        : null,
+      providerBilledUsd: null,
+      detectedUnverifiedUsd: null,
+      runways: expansionRunways(agent.limits, now)
+    });
+  }
+  for (const provider of snapshot.providers ?? []) {
+    subscriptions.push({
+      id: provider.provider,
+      agentId: null,
+      planLabel: provider.planLabel,
+      connection: "connected",
+      committedUsdPerMonth: provider.committedUsdPerMonth,
+      apiEquivalentUsd: null,
+      // Renderer-side lock: only verified provider dollars are billed money.
+      providerBilledUsd: provider.billed30d.financialEvidence === "verified" &&
+          provider.billed30d.amountUsd !== null
+        ? provider.billed30d.amountUsd
+        : null,
+      detectedUnverifiedUsd: null,
+      runways: []
+    });
+  }
+  const pricedRows = subscriptions.filter((row) => row.committedUsdPerMonth !== null);
+  const apiAmounts = subscriptions
+    .map((row) => row.apiEquivalentUsd)
+    .filter((amount): amount is number => amount !== null);
+  const billedAmounts = subscriptions
+    .map((row) => row.providerBilledUsd)
+    .filter((amount): amount is number => amount !== null);
+  const apiTotal = apiAmounts.length > 0
+    ? Math.round(apiAmounts.reduce((total, amount) => total + amount, 0) * 100) / 100
+    : null;
+  const billedTotal = billedAmounts.length > 0
+    ? Math.round(billedAmounts.reduce((total, amount) => total + amount, 0) * 100) / 100
+    : null;
+  return resultCardSchema.parse({
+    kind: "aibill.result_card",
+    schemaVersion: 1,
+    currency: "USD",
+    windowDays: 30,
+    mode: snapshot.providers && snapshot.providers.length > 0 ? "mixed" : "local-logs",
+    subscriptions,
+    totals: {
+      subscriptionCommitted: {
+        amountUsd: pricedRows.length > 0
+          ? pricedRows.reduce((total, row) => total + (row.committedUsdPerMonth ?? 0), 0)
+          : null,
+        pricedSubs: pricedRows.length,
+        totalSubs: subscriptions.length
+      },
+      apiEquivalent: {
+        amountUsd: apiTotal,
+        financialEvidence: apiTotal === null ? "missing" : "estimated"
+      },
+      providerBilled: {
+        amountUsd: billedTotal,
+        financialEvidence: billedTotal === null ? "missing" : "verified"
+      },
+      blended: null,
+      blendPolicy: "never_blended"
+    },
+    byProject: null
+  });
+}
+
+function renderStatuslineExpansion(
+  card: ResultCard,
+  snapshot: ExpansionSnapshot,
+  now: Date,
+  timeZone?: string
+): string {
+  const lines: string[] = [`aibill subscriptions · ${card.windowDays}d window`];
+  for (const row of card.subscriptions) {
+    const parts: string[] = [];
+    parts.push(row.committedUsdPerMonth !== null
+      ? `${formatCommittedPerMonth(row.committedUsdPerMonth).padStart(7)} committed`
+      : "committed not reported");
+    for (const runway of row.runways) {
+      const kindLabel = runway.kind === "five-hour" ? "5h" : "wk";
+      parts.push(`${kindLabel} ${formatExpansionPercent(runway.remainingPercent)}% ↻${formatExpansionReset(runway, now, timeZone)}`);
+    }
+    if (row.apiEquivalentUsd !== null) {
+      parts.push(`~$${Math.round(row.apiEquivalentUsd)}/7d`);
+    } else if (row.agentId !== null) {
+      parts.push("API-equivalent not reported");
+    }
+    if (row.agentId === null) {
+      parts.push(row.providerBilledUsd !== null
+        ? `${formatBilledUsdExact(row.providerBilledUsd)} billed/30d`
+        : "billed not reported (beta)");
+    }
+    const planCell = (row.planLabel ?? (row.connection === "connected" ? "connected" : "detected")).padEnd(9);
+    lines.push(`  ${row.id.padEnd(10)}${planCell}${parts.join(" · ")}`);
+  }
+  const totalParts: string[] = [];
+  const committed = card.totals.subscriptionCommitted;
+  if (committed.amountUsd !== null) {
+    const partial = committed.pricedSubs < committed.totalSubs
+      ? ` (${committed.pricedSubs}/${committed.totalSubs} priced)`
+      : "";
+    totalParts.push(`committed ${formatCommittedPerMonth(committed.amountUsd)}${partial}`);
+  } else if (committed.totalSubs > 0) {
+    totalParts.push("committed not reported");
+  }
+  if (card.totals.apiEquivalent.amountUsd !== null) {
+    totalParts.push(`API-equivalent ~$${Math.round(card.totals.apiEquivalent.amountUsd)}/7d`);
+  } else if (card.subscriptions.some((row) => row.agentId !== null)) {
+    totalParts.push("API-equivalent not reported");
+  }
+  if (card.totals.providerBilled.amountUsd !== null) {
+    totalParts.push(`billed ${formatBilledUsdExact(card.totals.providerBilled.amountUsd)}/30d`);
+  }
+  lines.push(`  ${"total".padEnd(10)}${totalParts.join(" · ")}`);
+  lines.push(`  ~ = usage at published API rates (estimated, never billed) · ${expansionFreshness(snapshot, now)}`);
+  // A stale or pre-upgrade snapshot honestly reports "not reported" for plan
+  // pricing the receipt already knows. Tell the user the one command that
+  // fixes it instead of leaving the two surfaces looking inconsistent.
+  if (committed.amountUsd === null && committed.totalSubs > 0) {
+    lines.push("  plan pricing missing from this snapshot — run: npx aibill statusline refresh");
+  }
+  return lines.join("\n");
+}
+
+function formatExpansionPercent(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/u, "");
+}
+
+function formatExpansionReset(
+  runway: ResultCardRunway,
+  now: Date,
+  timeZone?: string
+): string {
+  const reset = new Date(runway.resetsAt);
+  const zone = validExpansionTimeZone(timeZone) ? timeZone : undefined;
+  if (runway.kind === "weekly") {
+    return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: zone }).format(reset);
+  }
+  const dateKey = (value: Date): string => new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: zone
+  }).format(value);
+  const sameDay = dateKey(reset) === dateKey(now);
+  const formatter = new Intl.DateTimeFormat("en-US", sameDay ? {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: zone
+  } : {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: zone
+  });
+  return formatter.format(reset).replaceAll(" ", "").toLowerCase().replace(":00", "");
+}
+
+function validExpansionTimeZone(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function expansionFreshness(snapshot: ExpansionSnapshot, now: Date): string {
+  const referenceMs = Date.parse(snapshot.lastSuccessAt ?? snapshot.generatedAt);
+  const ageMs = now.getTime() - referenceMs;
+  if (!Number.isFinite(referenceMs) || ageMs < 0) return "clock mismatch";
+  const seconds = Math.floor(ageMs / 1_000);
+  const age = seconds < 60
+    ? `${seconds}s`
+    : seconds < 3_600
+      ? `${Math.floor(seconds / 60)}m`
+      : seconds < 48 * 3_600
+        ? `${Math.floor(seconds / 3_600)}h`
+        : `${Math.floor(seconds / 86_400)}d`;
+  return ageMs > 5 * 60 * 1_000 ? `stale ${age}` : `updated ${age}`;
 }
 
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
@@ -2342,8 +3232,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
     };
   }
 
-  const stateDir = join(rootPath, ".ai-spend-agent");
-  await mkdir(stateDir, { recursive: true });
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
   const registry = createLocalFolderSourceRegistry(rootPath);
   const startedAt = new Date().toISOString();
@@ -2446,8 +3335,7 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function watchCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
-  await mkdir(stateDir, { recursive: true });
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
   const intervalSeconds = Number.isFinite(args.interval) && (args.interval ?? 0) > 0 ? args.interval! : 3600;
   // cycles bounds how many iterations run; default 1 keeps the command testable and
@@ -2534,7 +3422,7 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
     } else {
       // Same freshness rule as quickstart/report: re-read local logs live,
       // never serve a stale snapshot.
-      const logs = await loadLocalAgentUsage({
+      const logs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
         codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
@@ -2646,11 +3534,11 @@ function roundMoneyCli(value: number): number {
 
 async function addSourceCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
   if (!args.sourcePath || !args.sourceType || !args.label) {
     return { exitCode: 1, stdout: "", stderr: "add-source requires --source-path, --type, and --label" };
   }
 
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
   const registry = await readSourceRegistry(stateDir, rootPath);
   const sourcePath = args.sourceType === "mcp_tool" ? args.sourcePath : resolve(args.sourcePath);
   const id = slugifySourceId(args.label);
@@ -2738,7 +3626,6 @@ function providerSyncSetupCommand(provider: string, adminRef: string): string {
 
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
   const requestedProvider = (args.provider ?? "unknown").trim().toLowerCase();
   const provider = providerAliases[requestedProvider] ?? requestedProvider;
   if (!provider || provider === "unknown") {
@@ -2770,10 +3657,10 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
       ].join("\n")
     };
   }
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
   const registry = await readSourceRegistry(stateDir, rootPath);
   const source = createProviderConnectorStub(provider, type);
   const nextRegistry = addApprovedSource(registry, source);
-  await mkdir(stateDir, { recursive: true });
   await writeJson(join(stateDir, "sources.json"), nextRegistry);
   await appendAuditEvent(stateDir, {
     timestamp: nextRegistry.updatedAt,
@@ -2856,7 +3743,8 @@ function describeOrigin(credential: DetectedCredential): string {
 
 async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
+  let stateDir = join(rootPath, ".ai-spend-agent");
+  let stateBoundaryReady = false;
   const requestedProvider = (args.provider ?? "").trim().toLowerCase();
   const provider = providerAliases[requestedProvider] ?? requestedProvider;
   if (!provider) {
@@ -2915,6 +3803,8 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
   }
 
   try {
+    stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+    stateBoundaryReady = true;
     // A provider sync may merge only a prior connected snapshot whose exact
     // repository bytes have a matching external machine receipt. A cloned
     // provider-records.json is never allowed to launder fake rows into a new
@@ -2989,7 +3879,6 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     // local write fails, the partially updated repository state stays
     // untrusted rather than inheriting the previous sync's authority.
     await invalidateConnectedSpendTrustReceipt(rootPath);
-    await mkdir(stateDir, { recursive: true });
     await writeJson(join(stateDir, "sources.json"), nextRegistry);
     await writeJson(join(stateDir, "provider-records.json"), {
       provider: result.provider,
@@ -3069,7 +3958,7 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     ].join("\n"));
   } catch (error) {
     const sanitizedError = sanitizeSecretishError(error instanceof Error ? error.message : String(error), args.authReference);
-    await recordProviderSourceAttempt(stateDir, provider, new Date().toISOString(), sanitizedError).catch(() => {
+    if (stateBoundaryReady) await recordProviderSourceAttempt(stateDir, provider, new Date().toISOString(), sanitizedError).catch(() => {
       // Source-status state is diagnostic only. Do not hide the provider's
       // real error if derived-state persistence is unavailable.
     });
@@ -3105,7 +3994,6 @@ async function recordProviderSourceAttempt(
     // Missing/corrupt derived status state is safe to replace. Provider
     // financial records live in a separate file and are never touched here.
   }
-  await mkdir(stateDir, { recursive: true });
   await writeJson(join(stateDir, "source-status.json"), {
     version: 1,
     providers: {
@@ -3122,10 +4010,10 @@ async function recordProviderSourceAttempt(
 
 async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
   if (!args.provider || !args.sourceId) {
     return { exitCode: 1, stdout: "", stderr: "confirm-mapping requires --provider and --source-id" };
   }
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
   const mapping = confirmMapping({
     provider: args.provider,
@@ -3141,7 +4029,6 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
   });
   const mappings = await readConfirmedMappings(stateDir);
   const nextMappings = [...mappings.filter((candidate) => candidate.id !== mapping.id), mapping];
-  await mkdir(stateDir, { recursive: true });
   await writeJson(join(stateDir, "confirmed-mappings.json"), nextMappings);
   await appendAuditEvent(stateDir, {
     timestamp: mapping.confirmedAt,
@@ -3161,34 +4048,101 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
 
 async function reportCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
 
   try {
     const sinceDays = args.sinceDays ?? 30;
     if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+    const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
     // Like Apply, an explicit sample report is a strict privacy boundary. It
     // must not inspect local transcripts, account metadata, or persisted state.
     const reportInput = args.sample
       ? await buildExplicitSampleReportInput(rootPath)
       : await buildReportInput(stateDir, rootPath, sinceDays);
+    const persistedPreferredExperiment = args.sample
+      ? undefined
+      : chooseLatestTokenReductionExperiment(
+          (await loadTokenVerificationState(rootPath)).experiments
+        );
+    const preferredExperiment = persistedPreferredExperiment &&
+        persistedPreferredExperiment.intervention.appliedAt &&
+        persistedPreferredExperiment.lifecycle !== "complete" &&
+        persistedPreferredExperiment.lifecycle !== "rolled_back" &&
+        persistedPreferredExperiment.lifecycle !== "invalidated" &&
+        persistedPreferredExperiment.intervention.canary?.status !== "failed" &&
+        reportInput.sessionVitals &&
+        (persistedPreferredExperiment.cohort.agent === "claude-code" ||
+          persistedPreferredExperiment.cohort.agent === "codex") &&
+        reportInput.qualitativeCoverageByAgent?.[persistedPreferredExperiment.cohort.agent] === "complete"
+      ? refreshTokenReductionExperimentV0(persistedPreferredExperiment, {
+          sessionVitals: reportInput.sessionVitals,
+          observedAt: reportInput.generatedAt ?? new Date().toISOString(),
+          ...(reportInput.contextHealth ? { contextHealth: reportInput.contextHealth } : {})
+        })
+      : persistedPreferredExperiment;
+    const reportableExperiment = preferredExperiment?.lifecycle === "invalidated"
+      ? undefined
+      : preferredExperiment;
+    const reportExperimentProjection = reportableExperiment
+      ? buildActionVerificationProjectionV0(reportableExperiment)
+      : undefined;
+    const reportRenderInput: SpendReportInput = reportableExperiment
+      ? {
+          ...reportInput,
+          tokenExperiment: {
+            id: reportableExperiment.id,
+            lifecycle: reportableExperiment.lifecycle,
+            status: reportableExperiment.evaluation.status,
+            matchingEvidence: reportableExperiment.evaluation.matchingEvidence,
+            projection: reportExperimentProjection!,
+            nextCommand: improveRuntimeCommand
+          }
+        }
+      : reportInput;
+    const qualitativeActionsSuppressed = reportInput.dataMode !== "sample" &&
+      reportInput.qualitativeCoverage?.status !== "complete";
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
     const markdownPath = `${outBase}.md`;
     const htmlPath = `${outBase}.html`;
-    await mkdir(stateDir, { recursive: true });
-    await writeLocalReportFile(markdownPath, generateMarkdownReport(reportInput), stateDir);
-    await writeLocalReportFile(htmlPath, generateHtmlReport(reportInput), stateDir);
-    const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
+    await writeLocalReportFile(markdownPath, generateMarkdownReport(reportRenderInput), stateDir);
+    await writeLocalReportFile(htmlPath, generateHtmlReport(reportRenderInput), stateDir);
+    // A preferred canonical experiment owns this project's action/result
+    // lineage even after completion or rollback. A report may refresh its
+    // read-only projection, but never overwrite the frozen handoff with a
+    // fresh or contradictory candidate. Coverage gaps receive only explicit
+    // non-executable gap artifacts from the report package.
+    const artifactPaths = reportableExperiment
+      ? undefined
+      : await writeApplyArtifacts(stateDir, reportInput);
 
     return ok([
       "aibill report",
       `path: ${rootPath}`,
       `markdown: ${markdownPath}`,
       `html: ${htmlPath}`,
-      `apply artifact: ${artifactPaths.codingPrompt}`,
-      `action plan: ${artifactPaths.actionPlan}`,
-      `policy/config draft: ${artifactPaths.policyConfigDraft}`,
-      `verification plan: ${artifactPaths.verificationPlan}`,
-      `demo package: ${artifactPaths.demoPackage}`,
+      ...(reportableExperiment
+        ? [
+            `action artifacts: preserved · canonical token test ${reportableExperiment.id} (${reportableExperiment.lifecycle})`,
+            `token result: status=${reportableExperiment.evaluation.status}; reductionPercent=${reportExperimentProjection!.reductionPercent ?? "unavailable"}; metricEvidence=${reportExperimentProjection!.evidenceLabel}; quality=${reportExperimentProjection!.qualityLabel}; qualityEvidence=${reportExperimentProjection!.qualityEvidence}; matchingEvidence=${reportableExperiment.evaluation.matchingEvidence}`,
+            `token test: ${improveRuntimeCommand}`
+          ]
+        : qualitativeActionsSuppressed
+          ? [
+              `action artifacts: suppressed · qualitative index ${reportInput.qualitativeCoverage?.status ?? "unknown"}`,
+              `coverage artifact: ${artifactPaths!.codingPrompt}`,
+              `coverage action plan: ${artifactPaths!.actionPlan}`,
+              `coverage policy/config: ${artifactPaths!.policyConfigDraft}`,
+              `coverage verification: ${artifactPaths!.verificationPlan}`,
+              `coverage package: ${artifactPaths!.demoPackage}`
+            ]
+        : artifactPaths
+        ? [
+            `apply artifact: ${artifactPaths.codingPrompt}`,
+            `action plan: ${artifactPaths.actionPlan}`,
+            `policy/config draft: ${artifactPaths.policyConfigDraft}`,
+            `verification plan: ${artifactPaths.verificationPlan}`,
+            `demo package: ${artifactPaths.demoPackage}`
+          ]
+        : []),
       reportInput.dataMode === "sample"
         ? `DEMO SAMPLE · illustrative cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)} · not user data`
         : reportInput.dataMode === "connected_provider" &&
@@ -3200,9 +4154,13 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
       `  less ${markdownPath}       read it in the terminal`,
-      reportInput.dataMode === "sample"
-        ? "  npx aibill apply --sample  print the non-executable demo boundary"
-        : "  npx aibill apply       print the paste-ready coding-agent prompt"
+      reportableExperiment
+        ? `  ${improveRuntimeCommand}  review canonical token test ${reportableExperiment.id}`
+        : qualitativeActionsSuppressed
+          ? `  ${actionRuntimeCommand(`context --json --since-days ${sinceDays}`)}  complete bounded qualitative evidence before any action`
+          : reportInput.dataMode === "sample"
+            ? `  ${actionRuntimeCommand("apply --sample")}  print the non-executable demo boundary`
+            : `  ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}  print the paste-ready coding-agent prompt from this exact evidence window`
     ].join("\n"));
   } catch (error) {
     return {
@@ -3286,20 +4244,1349 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   }
 }
 
+/**
+ * B1 broad-root gate: refuse home/root/system/home-containing targets with a
+ * plain "cd to a project" instruction BEFORE any state, git, or trust-receipt
+ * code can surface its own vocabulary. Also covers a --path that does not
+ * exist (a location problem is not a breadth problem, but the fix is the
+ * same). Returns undefined when the root is an acceptable exact project.
+ */
+async function guardExactProjectRoot(
+  commandName: string,
+  requestedPath: string
+): Promise<CliResult | undefined> {
+  const rootPath = resolve(requestedPath);
+  // An unset/empty $HOME (containers) must never make the current directory
+  // masquerade as "home": substitute a sentinel that cannot match anything.
+  const home = homedir();
+  const guardHome = home && home.trim().length > 0
+    ? home
+    : join(rootPath, "aibill-impossible-home-sentinel");
+  const reason = unsafeScanRootReason(rootPath, guardHome);
+  let explanation: string | undefined;
+  if (reason) {
+    if (reason.includes("home directory is too broad")) {
+      explanation = "You ran it from your home directory, which is too broad to observe.";
+    } else if (reason.includes("filesystem root")) {
+      explanation = "You ran it from the filesystem root, which is too broad to observe.";
+    } else if (reason.includes("contains your home directory")) {
+      explanation = "You ran it from a folder that contains your home directory.";
+    } else {
+      explanation = "You ran it from a system directory, which is too broad to observe.";
+    }
+  } else {
+    const info = await stat(rootPath).catch(() => undefined);
+    if (!info) {
+      explanation = "The folder you pointed at does not exist.";
+    } else if (!info.isDirectory()) {
+      explanation = "The path you pointed at is not a folder.";
+    }
+  }
+  if (!explanation) return undefined;
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: [
+      `aibill ${commandName} needs one exact project folder.`,
+      explanation,
+      "",
+      "cd to an exact project or use --path <project>",
+      `  e.g. cd ~/code/my-app && ${actionRuntimeCommand(`${commandName} --path .`)}`,
+      "",
+      "Nothing was read, created, or changed."
+    ].join("\n")
+  };
+}
+
+/**
+ * `improve --sample`: the full guided questionnaire against synthetic
+ * evidence so a new user can practice every step safely. Fail-closed by
+ * construction: this function never receives a draft store or persistence
+ * path — no experiment, ownership, approval, draft, or file is written.
+ */
+async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+  const demoNext = {
+    reason: "run the real flow from inside one exact project",
+    command: improveRuntimeCommand
+  };
+  const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
+  if (!runtime.interactive || !guidedIo) {
+    return ok(renderCleanExit({
+      lines: [
+        "aibill improve · DEMO · synthetic sample — practice run, nothing is recorded",
+        "Demo sample data can never start a token test."
+      ],
+      next: {
+        reason: "practice the guided token test safely in an interactive terminal",
+        command: `${improveRuntimeCommand.replace(" --path .", "")} --sample`
+      }
+    }));
+  }
+  const header = {
+    commandTitle: "aibill improve · one reversible token test",
+    experimentLabel: "test DEMO-tre_v0_00000000",
+    demo: true
+  };
+  guidedIo.write("Demo sample data can never start a token test.");
+  const demoComplete = (firstLine: string): CliResult => ok(renderCleanExit({
+    lines: [
+      firstLine,
+      "No experiment, ownership, approval, draft, or file was written. A demo",
+      "can never start a real token test or create a real claim."
+    ],
+    next: demoNext
+  }));
+  const start = await runStartSitting(guidedIo, {
+    header,
+    findingLabel: "Start with only the files and instructions this task needs",
+    evidenceLine: "synthetic sample evidence — not read from your machine"
+  });
+  if (start.action !== "start") {
+    return demoComplete("DEMO ENDED · nothing was created or stored");
+  }
+  const plan = await runPlanSitting(guidedIo, {
+    header,
+    experimentId: "DEMO-tre_v0_0000000000000000",
+    revisionId: "demo",
+    sanitize: (value) => value,
+    nowIso: () => new Date().toISOString(),
+    approveExtraLine: "This is a practice approval. It is not recorded and creates no claim.",
+    suggestedAnswers: {
+      change: "Start with only the files and instructions this task needs.",
+      rollback: "Restore the prior session workflow.",
+      canary: "The project tests pass and the requested output is accepted."
+    }
+  });
+  return demoComplete(plan.action === "approved"
+    ? "DEMO COMPLETE · nothing was created or stored"
+    : "DEMO ENDED · nothing was created or stored");
+}
+
+async function createGuidedIo(runtime: CliRuntimeOptions): Promise<FlowIo | undefined> {
+  if (runtime.openGuidedIo) {
+    const opened = await runtime.openGuidedIo();
+    return { source: opened.source, write: opened.write };
+  }
+  if (!runtime.prompt) return undefined;
+  // Bridge for prompt-function embeddings and tests: screens buffer into the
+  // next question string. Real terminals get an arrival-timestamped stdin
+  // source via openGuidedIo; this bridge cannot observe paste timing, so it
+  // keeps the identical-rejection circuit breaker as its backstop.
+  const promptFn = runtime.prompt;
+  let pending = "";
+  return {
+    source: {
+      next: async () => {
+        const question = pending;
+        pending = "";
+        try {
+          const line = await promptFn(question);
+          return { kind: "line", text: line, receivedAtMs: Date.now() };
+        } catch {
+          return { kind: "closed" };
+        }
+      },
+      drain: () => 0
+    },
+    write: (text: string) => {
+      pending = pending.length > 0 ? `${pending}\n${text}` : text;
+    },
+    maxIdenticalRejections: 8
+  };
+}
+
+function createPlanDraftStore(rootPath: string): PlanDraftStore {
+  const draftFileName = "improve-draft.json";
+  return {
+    load: async () => {
+      try {
+        const statePath = await projectAccountabilityStatePath(rootPath);
+        const raw = await readFile(join(dirname(statePath), draftFileName), "utf8");
+        return parsePlanDraft(JSON.parse(raw));
+      } catch {
+        return undefined;
+      }
+    },
+    save: async (draft) => {
+      const statePath = await projectAccountabilityStatePath(rootPath, { create: true });
+      await writeSafeStateText(
+        dirname(statePath),
+        draftFileName,
+        `${JSON.stringify(draft, null, 2)}\n`
+      );
+    },
+    clear: async () => {
+      try {
+        const statePath = await projectAccountabilityStatePath(rootPath);
+        await rm(join(dirname(statePath), draftFileName), { force: true });
+      } catch {
+        // Missing private storage means there is no draft to clear.
+      }
+    }
+  };
+}
+
+function improveAgentInstruction(changeSentence: string): string {
+  return [
+    `"Execute only the pre-approved reversible plan: ${changeSentence}`,
+    "Make no other optimization, preserve the approved rollback, run the",
+    "approved canary, and report the exact UTC ISO-8601 time the change was",
+    'applied plus whether that exact canary passed or failed."'
+  ].join("\n");
+}
+
+async function improveCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  if (args.sample) {
+    return demoImproveCommand(runtime);
+  }
+  const rootGuard = await guardExactProjectRoot("improve", args.path);
+  if (rootGuard) return rootGuard;
+  const sinceDays = args.sinceDays ?? 30;
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+  const rootPath = resolve(args.path);
+  let stateDir = join(rootPath, ".ai-spend-agent");
+
+  try {
+    // Interactive Improve may persist the fresh financial snapshot before it
+    // loads token-test state. Establish or safely migrate the private Git
+    // boundary first so that no spend/mapping file is ever written unignored.
+    if (runtime.interactive === true) {
+      stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+    }
+    const reportInput = await buildReportInput(stateDir, rootPath, sinceDays, {
+      persistLocalFinancialState: runtime.interactive === true
+    });
+    // C-lane §3: the current project's standing for the improve card's
+    // PROJECT line, computed from the canonical result card contract.
+    // Omitted (never fabricated) when no project attribution exists.
+    const improveProjectLine = buildResultCardProjectLine({
+      card: buildResultCard({
+        mode: reportInput.dataMode === "sample"
+          ? "demo"
+          : reportInput.dataMode === "connected_provider"
+            ? "connected"
+            : "local-logs",
+        windowDays: sinceDays,
+        records: reportInput.allRecords,
+        detectedPlans: reportInput.detectedPlans
+      }),
+      records: reportInput.allRecords,
+      currentProjectId: resolve(rootPath) === (runtime.homeDirectory ?? homedir())
+        ? undefined
+        : basename(rootPath)
+    });
+    let preferred = chooseLatestTokenReductionExperiment(
+      (await loadTokenVerificationState(rootPath)).experiments
+    );
+    // Cancellation is terminal audit history, not the current guided task.
+    // When fresh evidence supports a new finding, let the repeated Improve
+    // command start a new lineage instead of remaining stuck forever on the
+    // most-recent invalidated experiment. The cancelled record remains in the
+    // bounded store and continues to appear on audit/report surfaces.
+    if (preferred?.lifecycle === "invalidated" && reportInput.wasteFinding) {
+      preferred = undefined;
+    }
+    let observation: Awaited<ReturnType<typeof loadTokenVerificationObservation>> | undefined;
+    if (preferred?.intervention.appliedAt &&
+        preferred.lifecycle !== "complete" &&
+        preferred.lifecycle !== "rolled_back" &&
+        preferred.lifecycle !== "invalidated" &&
+        preferred.intervention.canary?.status !== "failed") {
+      observation = await loadTokenVerificationObservation(rootPath, preferred);
+      const refreshed = observation.qualitativeCoverageComplete
+        ? refreshTokenReductionExperimentV0(preferred, {
+            sessionVitals: observation.sessionVitals,
+            observedAt: observation.generatedAt,
+            contextHealth: observation.contextHealth
+          })
+        : preferred;
+      if (runtime.interactive && refreshed.revisionId !== preferred.revisionId) {
+        await upsertTokenReductionExperiment(rootPath, refreshed, {
+          expectedRevisionId: preferred.revisionId
+        });
+      }
+      preferred = refreshed;
+    }
+
+    const sessionVitals = observation?.sessionVitals ?? reportInput.sessionVitals;
+    const contextHealth = observation?.contextHealth ?? reportInput.contextHealth;
+    let model = buildImproveExperience({
+      finding: reportInput.wasteFinding,
+      preferredExperiment: preferred,
+      sessionVitals,
+      interactive: runtime.interactive === true,
+      readOnly: runtime.prompt === undefined
+    });
+
+    const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
+    if (!runtime.interactive || !guidedIo) {
+      return ok(renderImproveExperience(model, {
+        note: "No experiment, approval, or project state changed. The private local evidence cache may refresh. Run this command in an interactive terminal to start or record a test.",
+        ...(improveProjectLine ? { projectLine: improveProjectLine } : {})
+      }));
+    }
+    const commandTitle = "aibill improve · one reversible token test";
+    const experimentTag = (id?: string): string =>
+      id ? `test ${id.slice(0, 15)}` : "test: none yet";
+
+    if (model.phase === "start" && !preferred) {
+      const start = await runStartSitting(guidedIo, {
+        header: { commandTitle, experimentLabel: experimentTag() },
+        findingLabel: model.oneChange.label,
+        evidenceLine: `evidence: calculated from completed local sessions, last ${sinceDays} days`
+      });
+      if (start.action === "declined" || start.action === "cancelled") {
+        return ok(renderCleanExit({
+          lines: ["Nothing changed."],
+          next: { reason: "run this again when you want to look", command: improveRuntimeCommand }
+        }));
+      }
+      if (start.action === "qualityNotAccepted") {
+        return ok(renderCleanExit({
+          lines: ["No baseline was frozen. Nothing changed."],
+          next: { reason: "run this again when you want to look", command: improveRuntimeCommand }
+        }));
+      }
+      const requested = buildImproveExperience({
+        finding: reportInput.wasteFinding,
+        sessionVitals,
+        interactive: true,
+        intent: {
+          kind: "start",
+          createdAt: reportInput.generatedAt ?? new Date().toISOString(),
+          baselineQuality: "held"
+        }
+      });
+      preferred = await applyImproveOperation(
+        requested.advancedOperation,
+        rootPath,
+        contextHealth
+      );
+      model = buildImproveExperience({
+        preferredExperiment: preferred,
+        sessionVitals,
+        interactive: true
+      });
+      guidedIo.write([
+        "",
+        `Baseline frozen · ${experimentTag(preferred.id)}`,
+        "quality: held (user-declared)",
+        "",
+        "Next: define and approve the one exact change.",
+        ""
+      ].join("\n"));
+      // Continue in the same repeated command: the next step is to define
+      // and approve the exact reversible plan before any agent handoff.
+    }
+
+    if (model.phase === "awaiting_intervention" && preferred) {
+      const actionProjectRef = await projectActionRootReference(rootPath);
+      if (preferred.cohort.projectRef !== actionProjectRef) {
+        throw new Error(
+          `this token test belongs to a different observed project; from that project root run ${improveRuntimeCommand} before recording ownership or approval`
+        );
+      }
+      const accountabilityState = await loadProjectAccountabilityState(rootPath);
+      const approvedPlan = findPreapprovedPlan(preferred, accountabilityState);
+      const header = { commandTitle, experimentLabel: experimentTag(preferred.id) };
+      if (!approvedPlan) {
+        const expectedProjectRef = await projectAccountabilityRootReference(rootPath);
+        if (accountabilityState.ownership &&
+            accountabilityState.ownership.contract.projectRef !== expectedProjectRef) {
+          throw new Error(
+            "the confirmed ownership belongs to a different project root; inspect the private accountability state before approving"
+          );
+        }
+        const existingIdentity = accountabilityState.ownership
+          ? {
+              owner: accountabilityState.ownership.displayLabels.humanOwner,
+              team: accountabilityState.ownership.displayLabels.team,
+              role: accountabilityState.ownership.approverRole.roleLabel
+            }
+          : undefined;
+        const draftStore = createPlanDraftStore(rootPath);
+        const plan = await runPlanSitting(guidedIo, {
+          header,
+          experimentId: preferred.id,
+          revisionId: preferred.revisionId,
+          ...(existingIdentity ? { existingIdentity } : {}),
+          draftStore,
+          sanitize: sanitizeLocalActivityText,
+          nowIso: () => new Date().toISOString(),
+          // The machine drafts; the human approves. aibill already knows the
+          // change it found — never make the user re-type a worse version.
+          suggestedAnswers: {
+            change: model.oneChange.label.endsWith(".")
+              ? model.oneChange.label
+              : `${model.oneChange.label}.`,
+            rollback: "Restore the prior session workflow.",
+            canary: "The project tests pass and the requested output is accepted."
+          }
+        });
+        const rerunNext = { reason: "run this again to continue the plan", command: improveRuntimeCommand };
+        if (plan.action === "cancelled" || plan.action === "backedOut") {
+          return ok(renderCleanExit({
+            lines: [
+              `${experimentTag(preferred.id)} · plan not finished`,
+              "Nothing was approved or handed off; your frozen baseline is untouched."
+            ],
+            next: {
+              ...rerunNext,
+              advancedLine: `To abandon this test entirely: ${actionRuntimeCommand(`verify cancel ${preferred.id}`)} — keeps the audit record.`
+            }
+          }));
+        }
+        if (plan.action === "identityDeclined") {
+          return ok(renderCleanExit({
+            lines: [
+              `${experimentTag(preferred.id)} · identity not confirmed`,
+              "Nothing was approved or handed off."
+            ],
+            next: { reason: "confirm who owns this project first", command: actionRuntimeCommand("identify") }
+          }));
+        }
+        if (plan.action === "notApproved") {
+          await draftStore.clear();
+          return ok(renderCleanExit({
+            lines: [
+              "Not approved. No handoff was emitted and nothing changed; your",
+              "frozen baseline is untouched."
+            ],
+            next: { reason: "run this when you are ready to approve", command: improveRuntimeCommand }
+          }));
+        }
+        const references = {
+          changeRef: createActionVerificationReference("approved-change", plan.change),
+          rollbackRef: createActionVerificationReference("rollback-artifact", plan.rollback),
+          canaryRef: createActionVerificationReference("planned-canary", plan.canary)
+        };
+        let ownershipState = accountabilityState;
+        let approverLabel: string;
+        let approverRoleLabel: string;
+        if (plan.identity === "existing") {
+          approverLabel = existingIdentity!.owner;
+          approverRoleLabel = existingIdentity!.role;
+        } else {
+          let ownership: ProjectAccountabilityOwnershipV1;
+          try {
+            ownership = createProjectAccountabilityOwnership({
+              projectRef: expectedProjectRef,
+              humanOwnerLabel: plan.identity.humanOwner,
+              teamLabel: plan.identity.team,
+              ...(plan.identity.client ? { clientLabel: plan.identity.client } : {}),
+              ...(plan.identity.costCenter ? { costCenterLabel: plan.identity.costCenter } : {}),
+              confirmedAt: new Date().toISOString(),
+              confirmedByLabel: plan.identity.humanOwner,
+              approverRoleLabel: plan.identity.role
+            });
+          } catch (identityError) {
+            // Backstop only: every field was already validated at its own
+            // prompt, so reaching this means a classifier gap. Fail closed
+            // without losing the saved plan answers.
+            const reason = identityError instanceof Error ? identityError.message : String(identityError);
+            return ok(renderCleanExit({
+              lines: [
+                `That identity could not be stored: ${sanitizeSecretishError(reason)}`,
+                "Nothing was approved or handed off; your plan answers are saved."
+              ],
+              next: rerunNext
+            }));
+          }
+          ownershipState = await upsertConfirmedProjectOwnership(rootPath, ownership, {
+            expectedOwnershipId: null
+          });
+          approverLabel = plan.identity.humanOwner;
+          approverRoleLabel = plan.identity.role;
+        }
+        const approvedAt = new Date().toISOString();
+        const actionRef = createProjectEconomicsPlannedActionRefV0(preferred, references);
+        await appendProjectApprovalEvent(rootPath, {
+          kind: APPROVAL_EVENT_V0_KIND,
+          schemaVersion: PROJECT_ECONOMICS_V0_VERSION,
+          approvedAt,
+          decision: "approved",
+          attestation: {
+            scope: "local_self_attested",
+            evidence: "user_declared",
+            approverIdentityRef:
+              ownershipState.ownership!.contract.confirmation.confirmedByRef,
+            approverRoleRef: ownershipState.ownership!.approverRole.roleRef,
+            rbacVerified: false
+          },
+          references: { actionRef, ...references }
+        }, {
+          expectedPreviousEventId: ownershipState.approvals.at(-1)?.id ?? null
+        });
+        await draftStore.clear();
+        return ok(renderCleanExit({
+          lines: [
+            `Approved · token test ${preferred.id}`,
+            `Pre-change local self-attestation: ${approverLabel} (${approverRoleLabel}) approved this exact plan at ${approvedAt}.`
+          ],
+          extraBlocks: [renderForYourAgent(improveAgentInstruction(plan.change))],
+          next: { reason: "after the agent reports back, run exactly this", command: improveRuntimeCommand }
+        }));
+      }
+
+      const approvedByLine = accountabilityState.ownership
+        ? `Approved ${approvedPlan.approvedAt} by ${accountabilityState.ownership.displayLabels.humanOwner} (${accountabilityState.ownership.approverRole.roleLabel})`
+        : `Approved ${approvedPlan.approvedAt}`;
+      const record = await runRecordSitting(guidedIo, {
+        header,
+        approvedAtIso: approvedPlan.approvedAt,
+        approvedByLine
+      });
+      if (record.action === "cancelled") {
+        return ok(renderCleanExit({
+          lines: [
+            `${experimentTag(preferred.id)} · nothing recorded`,
+            "Your approved plan is still waiting for its result."
+          ],
+          next: { reason: "run this again to record what happened", command: improveRuntimeCommand }
+        }));
+      }
+      if (record.action === "backedOut") {
+        return ok(renderCleanExit({
+          lines: [`${experimentTag(preferred.id)} · waiting for the applied change`],
+          extraBlocks: [renderForYourAgent(improveAgentInstruction(model.oneChange.label))],
+          next: { reason: "after the agent reports back, run exactly this", command: improveRuntimeCommand }
+        }));
+      }
+      if (record.action === "notYet") {
+        return ok(renderCleanExit({
+          lines: ["Nothing recorded yet — run the approved canary first."],
+          next: { reason: "after the canary has run", command: improveRuntimeCommand }
+        }));
+      }
+      const requested = buildImproveExperience({
+        preferredExperiment: preferred,
+        sessionVitals,
+        interactive: true,
+        intent: {
+          kind: "record_preapproved_application",
+          approvedAt: approvedPlan.approvedAt,
+          appliedAt: record.appliedAtIso,
+          approvalRef: approvedPlan.references.actionRef,
+          changeRef: approvedPlan.references.changeRef,
+          rollbackRef: approvedPlan.references.rollbackRef,
+          canaryRef: approvedPlan.references.canaryRef,
+          canaryStatus: record.canary
+        }
+      });
+      const operation = requested.advancedOperation;
+      if (!operation || operation.kind !== "mark_applied") {
+        throw new Error(requested.interaction.blockedReason ??
+          "the current evidence did not authorize this change");
+      }
+      preferred = await applyImproveOperation(operation, rootPath, contextHealth);
+      model = buildImproveExperience({ preferredExperiment: preferred, interactive: true });
+      if (preferred.intervention.canary?.status === "failed") {
+        return ok(renderCleanExit({
+          lines: [
+            `Recorded · ${experimentTag(preferred.id)} · canary: failed (user-declared)`,
+            "Execute the rollback you preserved. No post-change reduction will be",
+            "claimed from this attempt."
+          ],
+          next: { reason: "after you have rolled back", command: improveRuntimeCommand }
+        }));
+      }
+      return ok(renderCleanExit({
+        lines: [
+          `Recorded · ${experimentTag(preferred.id)} · applied ${record.appliedAtIso} · canary: passed (user-declared)`,
+          "Use your agent normally now. aibill needs matched completed sessions",
+          "after the change before it can measure anything."
+        ],
+        next: { reason: "after a few normal completed tasks", command: improveRuntimeCommand }
+      }));
+    }
+
+    if (model.phase === "collecting" && preferred && observation) {
+      const missingQuality = preferred.postSessions.some((session) => (
+        session.quality.status === "missing"
+      ));
+      if (preferred.postSessions.length >= preferred.matchingPolicy.minimumPostSessions && missingQuality) {
+        const declared = await runQualitySitting(guidedIo, {
+          header: { commandTitle, experimentLabel: experimentTag(preferred.id) },
+          matchedSessions: preferred.postSessions.length,
+          minimumSessions: preferred.matchingPolicy.minimumPostSessions
+        });
+        if (declared.action === "stillMissing") {
+          return ok(renderCleanExit({
+            lines: ["Quality stays missing. No result will be claimed until you can say."],
+            next: { reason: "run this again when you can declare quality", command: improveRuntimeCommand }
+          }));
+        }
+        if (declared.action === "cancelled") {
+          return ok(renderCleanExit({
+            lines: ["Nothing changed. The matched sessions are still waiting for your quality call."],
+            next: { reason: "run this again to declare quality", command: improveRuntimeCommand }
+          }));
+        }
+        if (declared.action === "declared") {
+          const qualityBySessionRef = Object.fromEntries(
+            preferred.postSessions
+              .filter((session) => session.quality.status === "missing")
+              .map((session) => [session.sessionRef, declared.quality === "held" ? "passed" : "failed"] as const)
+          );
+          const refreshed = refreshTokenReductionExperimentV0(preferred, {
+            sessionVitals: observation.sessionVitals,
+            observedAt: observation.generatedAt,
+            qualityBySessionRef,
+            contextHealth: observation.contextHealth
+          });
+          await upsertTokenReductionExperiment(rootPath, refreshed, {
+            expectedRevisionId: preferred.revisionId
+          });
+          preferred = refreshed;
+          model = buildImproveExperience({ preferredExperiment: preferred, interactive: true });
+          const resultLines = model.result
+            ? [
+                "RESULT",
+                model.result.headline,
+                `Evidence: ${model.result.metricEvidence} · quality: ${model.result.qualityLabel} (${model.result.qualityEvidence})`
+              ]
+            : [`Recorded · ${experimentTag(preferred.id)} · quality: ${declared.quality} (user-declared)`];
+          return ok(renderCleanExit({
+            lines: resultLines,
+            next: declared.quality === "regressed"
+              ? { reason: "run this again to record the rollback", command: improveRuntimeCommand }
+              : { reason: "run this again to review progress", command: improveRuntimeCommand }
+          }));
+        }
+      }
+    }
+
+    if (model.phase === "rollback" && preferred?.intervention.rollbackRef &&
+        preferred.lifecycle !== "rolled_back") {
+      const approvedRollbackRef = preferred.intervention.rollbackRef;
+      const rolled = await runRollbackSitting(guidedIo, {
+        header: { commandTitle, experimentLabel: experimentTag(preferred.id) },
+        sanitize: sanitizeLocalActivityText,
+        rollbackExample: "Restore the prior session workflow.",
+        matchesApprovedRollback: (evidence) =>
+          createActionVerificationReference("rollback-artifact", evidence) === approvedRollbackRef
+      });
+      if (rolled.action === "notRolledBack") {
+        return ok(renderCleanExit({
+          lines: ["Roll back first — the approved change is still in place."],
+          next: { reason: "after you have rolled back", command: improveRuntimeCommand }
+        }));
+      }
+      if (rolled.action === "cancelled") {
+        return ok(renderCleanExit({
+          lines: ["Nothing changed. The approved change is still recorded as applied."],
+          next: { reason: "run this again after you have rolled back", command: improveRuntimeCommand }
+        }));
+      }
+      if (rolled.action === "rolledBack") {
+        const requested = buildImproveExperience({
+          preferredExperiment: preferred,
+          interactive: true,
+          intent: {
+            kind: "rollback",
+            rolledBackAt: new Date().toISOString(),
+            rollbackEvidence: rolled.evidence
+          }
+        });
+        preferred = await applyImproveOperation(
+          requested.advancedOperation,
+          rootPath,
+          contextHealth
+        );
+        model = buildImproveExperience({ preferredExperiment: preferred, interactive: true });
+        return ok(renderCleanExit({
+          lines: [
+            `Rolled back · ${experimentTag(preferred.id)} (user-declared)`,
+            "The evidence is preserved; no reduction will be claimed from this",
+            "attempt."
+          ],
+          next: { reason: "run this again when you want to look", command: improveRuntimeCommand }
+        }));
+      }
+    }
+
+    return ok(renderImproveExperience(
+      model,
+      improveProjectLine ? { projectLine: improveProjectLine } : {}
+    ));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith(
+      "no persisted spend state and no supported local-agent financial evidence found."
+    )) {
+      const setup = buildImproveExperience({
+        interactive: runtime.interactive === true,
+        readOnly: runtime.prompt === undefined
+      });
+      return ok(renderImproveExperience(setup, {
+        note: `No token test was created. Use Claude Code or Codex normally, then rerun \`${improveRuntimeCommand}\`.`
+      }));
+    }
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't run the local token test: ${sanitizeSecretishError(message)}`
+    };
+  }
+}
+
+async function applyImproveOperation(
+  operation: ImproveAdvancedOperation | null,
+  rootPath: string,
+  contextHealth?: ContextHealthResult
+): Promise<TokenReductionExperimentV0> {
+  if (!operation) throw new Error("the requested action was not authorized by the current evidence phase");
+  let next: TokenReductionExperimentV0 | null;
+  let expectedRevisionId: string | undefined;
+  switch (operation.kind) {
+    case "freeze_baseline":
+      next = buildTokenReductionBaselineV0({
+        finding: operation.finding,
+        sessionVitals: operation.sessionVitals,
+        createdAt: operation.createdAt,
+        qualityBySessionRef: operation.qualityBySessionRef,
+        ...(contextHealth ? { contextHealth } : {})
+      });
+      break;
+    case "mark_applied":
+      expectedRevisionId = operation.expectedRevisionId;
+      next = markTokenReductionAppliedV0(operation.experiment, operation.input);
+      break;
+    case "refresh_experiment":
+      expectedRevisionId = operation.expectedRevisionId;
+      next = refreshTokenReductionExperimentV0(operation.experiment, {
+        ...operation.input,
+        ...(contextHealth ? { contextHealth } : {})
+      });
+      break;
+    case "mark_rolled_back":
+      expectedRevisionId = operation.expectedRevisionId;
+      next = markTokenReductionRolledBackV0(operation.experiment, operation.input);
+      break;
+    case "cancel_experiment":
+      expectedRevisionId = operation.expectedRevisionId;
+      next = invalidateTokenReductionExperimentV0(operation.experiment, operation.input);
+      break;
+  }
+  if (!next) throw new Error("the current evidence does not support a comparable baseline");
+  await upsertTokenReductionExperiment(rootPath, next, {
+    ...(expectedRevisionId ? { expectedRevisionId } : {})
+  });
+  return next;
+}
+
+function renderImproveExperience(
+  model: ImproveExperienceModel,
+  options: { note?: string; projectLine?: string } = {}
+): string {
+  const progress = model.progress
+    ? `${model.progress.postChangeSessions}/${model.progress.minimumSessions} matched post-change sessions`
+    : "No active matched cohort yet";
+  return [
+    "aibill improve · one reversible token test",
+    "",
+    model.headline,
+    model.detail,
+    // C-lane §3: improve is project-scoped — the current project's standing
+    // on the card's primary basis, omitted (never fabricated) when no
+    // attribution exists.
+    ...(options.projectLine ? ["", "PROJECT", options.projectLine] : []),
+    "",
+    "ONE CHANGE",
+    model.oneChange.label,
+    "",
+    "PROGRESS",
+    progress,
+    ...(model.result ? [
+      "",
+      "RESULT",
+      model.result.headline,
+      `Evidence: ${model.result.metricEvidence} · quality: ${model.result.qualityLabel} (${model.result.qualityEvidence})`
+    ] : []),
+    ...(options.note ? ["", options.note] : []),
+    "",
+    "Local only · no provider settings or code changed automatically."
+  ].join("\n");
+}
+
+function findPreapprovedPlan(
+  experiment: TokenReductionExperimentV0,
+  state: ProjectAccountabilityStateV1
+): ProjectAccountabilityStateV1["approvals"][number] | undefined {
+  return [...state.approvals].reverse().find((event) => {
+    if (Date.parse(event.approvedAt) < Date.parse(experiment.createdAt)) return false;
+    try {
+      return event.references.actionRef === createProjectEconomicsPlannedActionRefV0(
+        experiment,
+        {
+          changeRef: event.references.changeRef,
+          rollbackRef: event.references.rollbackRef,
+          canaryRef: event.references.canaryRef
+        }
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function identifyProjectCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
+  const rootGuard = await guardExactProjectRoot("identify", args.path);
+  if (rootGuard) return rootGuard;
+  const rootPath = resolve(args.path);
+  try {
+    const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
+    const current = await loadProjectAccountabilityState(rootPath);
+    const projectRef = await projectAccountabilityRootReference(rootPath);
+    // Flag-seeded values pass the SAME classifier as typed answers before
+    // they can prefill a screen or reach storage (B3/B4 QA M1): an invalid
+    // seed is dropped — never echoed, never Enter-kept, never stored.
+    const cleanSeed = (
+      kind: "name" | "team" | "role" | "optional",
+      value: string | undefined
+    ): string | undefined => {
+      if (!value) return undefined;
+      const verdict = classifyGuidedAnswer(kind, value);
+      return verdict.outcome === "accept" ? verdict.value : undefined;
+    };
+    let humanOwner = cleanSeed("name", args.person?.trim());
+    let team = cleanSeed("team", args.team?.trim());
+    let role = cleanSeed("role", args.role?.trim());
+    let client = cleanSeed("optional", args.client?.trim());
+    let costCenter = cleanSeed("optional", args.costCenter?.trim());
+    const identifyNext = {
+      reason: "start the token test once ownership is confirmed",
+      command: improveRuntimeCommand
+    };
+    if (guidedIo) {
+      let needsSequence = !(humanOwner && team && role);
+      for (;;) {
+        if (needsSequence) {
+          const seq = await runIdentitySequence(guidedIo, {
+            header: {
+              commandTitle: "aibill identify · who owns this project's AI cost",
+              experimentLabel: `project ${basename(rootPath)}`,
+              sitting: "IDENTIFY"
+            },
+            stepLabel: (_fieldLabel, fieldIndex) => ({ step: fieldIndex + 1, totalSteps: 6 }),
+            sittingHint: shortSittingHint,
+            initial: {
+              ...(humanOwner ? { humanOwner } : {}),
+              ...(team ? { team } : {}),
+              ...(role ? { role } : {}),
+              ...(client ? { client } : {}),
+              ...(costCenter ? { costCenter } : {})
+            }
+          });
+          if (seq.action !== "answered") {
+            return ok(renderCleanExit({
+              lines: ["Ownership was not confirmed. Nothing changed."],
+              next: identifyNext
+            }));
+          }
+          humanOwner = seq.identity.humanOwner;
+          team = seq.identity.team;
+          role = seq.identity.role;
+          client = seq.identity.client;
+          costCenter = seq.identity.costCenter;
+        }
+        guidedIo.write([
+          "STEP 6 of 6 · confirm",
+          "",
+          `  Owner: ${humanOwner} · Team: ${team} · Role: ${role}`,
+          `  Client: ${client || "—"} · Cost center: ${costCenter || "—"}`,
+          ""
+        ].join("\n"));
+        const confirmed = await askGuidedQuestion({
+          kind: "choice",
+          render: () => [
+            "QUESTION · step 6 of 6",
+            `Confirm ${humanOwner} owns ${basename(rootPath)} for ${team} as ${role}?`,
+            "  Answer y or n. Type back to edit a field, or cancel to stop safely.",
+            "> "
+          ].join("\n"),
+          context: { choiceTokens: ["y", "n"] },
+          sittingHint: shortSittingHint,
+          write: guidedIo.write,
+          source: guidedIo.source,
+          ...(guidedIo.maxIdenticalRejections !== undefined
+            ? { maxIdenticalRejections: guidedIo.maxIdenticalRejections }
+            : {})
+        });
+        if (confirmed.outcome === "back") {
+          // Re-open the fields prefilled — typed answers are never discarded.
+          needsSequence = true;
+          continue;
+        }
+        if (confirmed.outcome !== "answered" || confirmed.value !== "y") {
+          return ok(renderCleanExit({
+            lines: ["Ownership was not confirmed. Nothing changed."],
+            next: identifyNext
+          }));
+        }
+        break;
+      }
+    }
+    if (!humanOwner || !team || !role) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: [
+          "Confirm the accountable human, team, and approval role explicitly.",
+          `Run: ${actionRuntimeCommand('identify --person "Name" --team "Team" --role "Role"')}`,
+          "Optional: --client \"Client\" --cost-center \"Cost center\""
+        ].join("\n")
+      };
+    }
+    let next: ProjectAccountabilityStateV1;
+    try {
+      const ownership = createProjectAccountabilityOwnership({
+        projectRef,
+        humanOwnerLabel: humanOwner,
+        teamLabel: team,
+        ...(client ? { clientLabel: client } : {}),
+        ...(costCenter ? { costCenterLabel: costCenter } : {}),
+        confirmedAt: new Date().toISOString(),
+        confirmedByLabel: humanOwner,
+        approverRoleLabel: role
+      });
+      next = await upsertConfirmedProjectOwnership(rootPath, ownership, {
+        expectedOwnershipId: current.ownership?.contract.id ?? null
+      });
+    } catch (identityError) {
+      if (guidedIo) {
+        // Backstop only — every field was already classifier-validated.
+        const reason = identityError instanceof Error ? identityError.message : String(identityError);
+        return ok(renderCleanExit({
+          lines: [
+            `That identity could not be stored: ${sanitizeSecretishError(reason)}`,
+            "Nothing changed."
+          ],
+          next: { reason: "run this again to re-enter the fields", command: actionRuntimeCommand("identify") }
+        }));
+      }
+      throw identityError;
+    }
+    const labels = next.ownership!.displayLabels;
+    return ok(renderCleanExit({
+      lines: [
+        "Project accountability confirmed locally",
+        `owner: ${labels.humanOwner}`,
+        `team: ${labels.team}`,
+        ...(labels.client ? [`client: ${labels.client}`] : []),
+        ...(labels.costCenter ? [`cost center: ${labels.costCenter}`] : []),
+        `approval role: ${next.ownership!.approverRole.roleLabel}`,
+        "basis: explicit local confirmation · not inferred · not company RBAC"
+      ],
+      next: identifyNext
+    }));
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't confirm project accountability: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
+    };
+  }
+}
+
+async function projectAccountabilityRootReference(rootPath: string): Promise<string> {
+  return createProjectEconomicsReference(
+    "project-root",
+    await resolveSafeScanRoot(rootPath)
+  );
+}
+
+async function projectActionRootReference(rootPath: string): Promise<string> {
+  return createActionVerificationReference(
+    "project-working-directory",
+    await resolveSafeScanRoot(rootPath)
+  );
+}
+
+async function projectOutcomeCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootGuard = await guardExactProjectRoot("outcome", args.path);
+  if (rootGuard) return rootGuard;
+  if (args.outcomeAction !== "github") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Use \`${actionRuntimeCommand('outcome github [--pr N] [--business-outcome "…"]')}\`. Nothing was fetched.`
+    };
+  }
+  const rootPath = resolve(args.path);
+  try {
+    const current = await loadProjectAccountabilityState(rootPath);
+    if (!current.ownership) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Confirm this project's human owner and team first: ${actionRuntimeCommand("identify")}`
+      };
+    }
+    const fetched = await fetchGitHubAcceptedOutcomeV0({
+      projectRoot: rootPath,
+      ...(args.pullRequestNumber ? { pullRequestNumber: args.pullRequestNumber } : {}),
+      ...(args.businessOutcome ? { businessDescription: args.businessOutcome } : {})
+    });
+    if (fetched.status === "error") {
+      return { exitCode: 1, stdout: "", stderr: fetched.message };
+    }
+    const next = await appendAcceptedProjectOutcome(rootPath, fetched.outcome);
+    return ok([
+      "Accepted GitHub outcome recorded locally",
+      `selection: ${fetched.selection === "explicit_pr" ? `PR #${args.pullRequestNumber}` : "current branch PR"}`,
+      "state: merged · observed status checks passed",
+      `accepted: ${fetched.outcome.acceptedAt}`,
+      ...(fetched.outcome.businessDescription
+        ? [`business outcome: ${fetched.outcome.businessDescription.value} (user-declared)`]
+        : []),
+      `outcomes retained: ${next.outcomes.length}`,
+      "No source code, URL, native commit SHA, or credential was stored."
+    ].join("\n"));
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't record the accepted outcome: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
+    };
+  }
+}
+
+type ProjectAccountabilityProjectionV1 = {
+  schemaVersion: 1;
+  owner: {
+    status: "confirmed" | "missing";
+    human?: string;
+    team?: string;
+    client?: string;
+    costCenter?: string;
+    basis: "local_user_confirmation" | "missing";
+  };
+  outcome: {
+    status: "accepted" | "missing";
+    platform?: "github";
+    acceptedAt?: string;
+    businessDescription?: string;
+    businessDescriptionBasis?: "user_declared";
+    linkage?: "linked_to_token_test" | "unlinked_project_evidence";
+  };
+  approval: {
+    status: "recorded" | "missing";
+    role?: string;
+    approvedAt?: string;
+    basis: "local_self_attested" | "missing";
+    rbacVerified: false;
+    linkage?: "linked_to_token_test" | "unlinked_project_evidence";
+  };
+  tokenTest: ReturnType<typeof projectTokenTestProjection>;
+  billReconciliation: {
+    status: "not_attempted";
+    invoiceReconciled: false;
+  };
+  projectEconomicsReceipt: {
+    status: "receipt_ready" | "incomplete";
+    receiptId?: string;
+    missing: string[];
+  };
+};
+
+async function projectAccountabilityCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootGuard = await guardExactProjectRoot("accountability", args.path);
+  if (rootGuard) return rootGuard;
+  const rootPath = resolve(args.path);
+  try {
+    const state = await loadProjectAccountabilityState(rootPath);
+    const experiment = chooseLatestTokenReductionExperiment(
+      (await loadTokenVerificationState(rootPath)).experiments
+    );
+    const projection = buildProjectAccountabilityProjection(
+      await projectActionRootReference(rootPath),
+      state,
+      experiment
+    );
+    if (args.json) return ok(JSON.stringify(projection, null, 2));
+    const owner = projection.owner.status === "confirmed"
+      ? `${projection.owner.human} · ${projection.owner.team}`
+      : `Missing · run ${actionRuntimeCommand("identify")}`;
+    const allocation = projection.owner.status === "confirmed"
+      ? [projection.owner.client && `client ${projection.owner.client}`,
+          projection.owner.costCenter && `cost center ${projection.owner.costCenter}`]
+          .filter(Boolean).join(" · ") || "No client or cost center confirmed"
+      : "Not confirmed";
+    const outcome = projection.outcome.status === "accepted"
+      ? projection.outcome.linkage === "linked_to_token_test"
+        ? `Linked GitHub outcome accepted ${projection.outcome.acceptedAt}`
+        : `Unlinked project evidence · GitHub outcome accepted ${projection.outcome.acceptedAt}; this does not show that the current token test produced it`
+      : `Missing · run ${actionRuntimeCommand("outcome github")}`;
+    const approval = projection.approval.status === "recorded"
+      ? projection.approval.linkage === "linked_to_token_test"
+        ? `${projection.approval.role} · ${projection.approval.approvedAt} · linked pre-change local self-attestation`
+        : `Unlinked project evidence · ${projection.approval.role} · ${projection.approval.approvedAt}; this does not approve the current token test`
+      : "Missing · approval is recorded only when one token test is authorized";
+    return ok([
+      "aibill accountability · this project",
+      "",
+      "WHO OWNS THIS COST?",
+      owner,
+      allocation,
+      "",
+      "WHAT OUTCOME DID IT PRODUCE?",
+      outcome,
+      ...(projection.outcome.businessDescription
+        ? [`${projection.outcome.businessDescription} (user-declared business meaning)`]
+        : []),
+      "",
+      "WHO APPROVED THE CHANGE?",
+      approval,
+      "RBAC verified: no",
+      "",
+      "WHAT HAPPENED AFTERWARD?",
+      projection.tokenTest.headline,
+      projection.tokenTest.detail,
+      "",
+      "PROVIDER BILL",
+      "Not reconciled in this local preview; billed cost and API-equivalent value remain separate.",
+      "",
+      "PROJECT ECONOMICS RECEIPT",
+      projection.projectEconomicsReceipt.status === "receipt_ready"
+        ? projection.projectEconomicsReceipt.missing.length > 0
+          ? `Envelope ready · evidence incomplete: ${projection.projectEconomicsReceipt.missing.join(", ")} · ${projection.projectEconomicsReceipt.receiptId}`
+          : `Receipt ready · ${projection.projectEconomicsReceipt.receiptId}`
+        : `Incomplete · ${projection.projectEconomicsReceipt.missing.join(", ") || "required linked evidence is missing"}`
+    ].join("\n"));
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't read project accountability: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
+    };
+  }
+}
+
+function buildProjectAccountabilityProjection(
+  actionProjectRef: string,
+  state: ProjectAccountabilityStateV1,
+  experiment?: TokenReductionExperimentV0
+): ProjectAccountabilityProjectionV1 {
+  const ownership = state.ownership;
+  // This human view always describes the latest recorded evidence. Older
+  // evidence is never silently substituted merely because it links better.
+  // The latest item earns a linked label only through the canonical bridges.
+  const approval = state.approvals.at(-1);
+  const scopedExperiment = experiment?.cohort.projectRef === actionProjectRef
+    ? experiment
+    : undefined;
+  const linkedApprovalCandidate = scopedExperiment
+    ? findPreapprovedPlan(scopedExperiment, state)
+    : undefined;
+  const linkedApproval = approval?.id === linkedApprovalCandidate?.id
+    ? approval
+    : undefined;
+  const outcome = state.outcomes.at(-1);
+  const linkedOutcome = ownership && scopedExperiment && outcome
+    ? (() => {
+        const candidateProjection = buildProjectEconomicsProjectionV0({
+          generatedAt: new Date().toISOString(),
+          scope: {
+            projectRef: ownership.contract.projectRef,
+            workUnitRef: outcome.workUnitRef,
+            actionProjectRef,
+            actionWorkUnitRef: createActionVerificationReference(
+              "accepted-work-unit",
+              outcome.workUnitRef
+            )
+          },
+          financialRecords: [],
+          ownership: ownership.contract,
+          ...(linkedApproval ? { approvalEvent: linkedApproval } : {}),
+          outcome,
+          tokenExperiment: scopedExperiment
+        });
+        return !candidateProjection.missing.some((entry) =>
+          entry.code === "experiment_work_unit_scope" ||
+          entry.code === "outcome_work_unit_scope"
+        ) ? outcome : undefined;
+      })()
+    : undefined;
+  const projectEconomics = ownership && outcome
+    ? buildProjectEconomicsProjectionV0({
+        generatedAt: new Date().toISOString(),
+        scope: {
+          projectRef: ownership.contract.projectRef,
+          workUnitRef: outcome.workUnitRef,
+          actionProjectRef,
+          actionWorkUnitRef: createActionVerificationReference(
+            "accepted-work-unit",
+            outcome.workUnitRef
+          )
+        },
+        financialRecords: [],
+        ownership: ownership.contract,
+        ...(approval ? { approvalEvent: approval } : {}),
+        outcome,
+        ...(scopedExperiment ? { tokenExperiment: scopedExperiment } : {})
+      })
+    : undefined;
+  return {
+    schemaVersion: 1,
+    owner: ownership ? {
+      status: "confirmed",
+      human: ownership.displayLabels.humanOwner,
+      team: ownership.displayLabels.team,
+      ...(ownership.displayLabels.client ? { client: ownership.displayLabels.client } : {}),
+      ...(ownership.displayLabels.costCenter
+        ? { costCenter: ownership.displayLabels.costCenter }
+        : {}),
+      basis: "local_user_confirmation"
+    } : { status: "missing", basis: "missing" },
+    outcome: outcome ? {
+      status: "accepted",
+      platform: "github",
+      acceptedAt: outcome.acceptedAt,
+      linkage: outcome.id === linkedOutcome?.id
+        ? "linked_to_token_test"
+        : "unlinked_project_evidence",
+      ...(outcome.businessDescription ? {
+        businessDescription: outcome.businessDescription.value,
+        businessDescriptionBasis: "user_declared"
+      } : {})
+    } : { status: "missing" },
+    approval: approval && ownership ? {
+      status: "recorded",
+      role: ownership.approverRole.roleLabel,
+      approvedAt: approval.approvedAt,
+      basis: "local_self_attested",
+      rbacVerified: false,
+      linkage: approval.id === linkedApproval?.id
+        ? "linked_to_token_test"
+        : "unlinked_project_evidence"
+    } : { status: "missing", basis: "missing", rbacVerified: false },
+    tokenTest: projectTokenTestProjection(scopedExperiment),
+    billReconciliation: { status: "not_attempted", invoiceReconciled: false },
+    projectEconomicsReceipt: projectEconomics ? {
+      status: projectEconomics.status,
+      ...(projectEconomics.receipt ? { receiptId: projectEconomics.receipt.id } : {}),
+      missing: projectEconomics.missing.map((entry) => entry.code)
+    } : {
+      status: "incomplete",
+      missing: [
+        ...(!ownership ? ["confirmed_ownership"] : []),
+        ...(!outcome ? ["accepted_outcome"] : []),
+        ...(!scopedExperiment ? ["token_experiment"] : [])
+      ]
+    }
+  };
+}
+
+function projectTokenTestProjection(experiment?: TokenReductionExperimentV0): {
+  status: "not_started" | "collecting" | "reduced" | "unchanged" | "regressed" | "inconclusive";
+  headline: string;
+  detail: string;
+  reductionPercent: number | null;
+  quality: "held" | "regressed" | "insufficient" | "missing";
+} {
+  if (!experiment) return {
+    status: "not_started",
+    headline: "No matched token test yet",
+    detail: `Run ${improveRuntimeCommand} from the exact project root to test one reversible change.`,
+    reductionPercent: null,
+    quality: "missing"
+  };
+  const projection = buildActionVerificationProjectionV0(experiment);
+  const reduction = projection.reductionPercent;
+  if (projection.state === "review_measured_result" &&
+      projection.evidenceLabel === "calculated" &&
+      projection.qualityLabel === "held" && reduction !== null) {
+    if (reduction > 0) return {
+      status: "reduced",
+      headline: `${formatMeasuredPercent(reduction)} fewer tokens per comparable completed session`,
+      detail: "Calculated by aibill from this project's frozen matched baseline and post-change sessions; quality held by user declaration.",
+      reductionPercent: reduction,
+      quality: "held"
+    };
+    if (reduction === 0) return {
+      status: "unchanged",
+      headline: "No measured token change",
+      detail: "Matched session medians were unchanged and quality held by user declaration.",
+      reductionPercent: 0,
+      quality: "held"
+    };
+  }
+  if (projection.state === "rollback" || experiment.evaluation.status === "regressed") {
+    return {
+      status: "regressed",
+      headline: "Token use or quality regressed; use the preserved rollback",
+      detail: projection.detail,
+      reductionPercent: reduction,
+      quality: projection.qualityLabel
+    };
+  }
+  if (projection.state === "collect_post_change" ||
+      projection.state === "collect_baseline" ||
+      projection.state === "approve_one_change") {
+    return {
+      status: "collecting",
+      headline: projection.headline,
+      detail: projection.detail,
+      reductionPercent: null,
+      quality: "insufficient"
+    };
+  }
+  return {
+    status: "inconclusive",
+    headline: "No defensible token-reduction result yet",
+    detail: projection.detail,
+    reductionPercent: null,
+    quality: experiment.evaluation.qualityStatus
+  };
+}
+
+function formatMeasuredPercent(value: number): string {
+  const digits = Number.isInteger(value) ? 0 : 2;
+  return `${value.toFixed(digits).replace(/\.00$/u, "").replace(/(\.\d)0$/u, "$1")}%`;
+}
+
 async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
   const rootPath = resolve(args.path);
-  const stateDir = join(rootPath, ".ai-spend-agent");
 
   try {
     const sinceDays = args.sinceDays ?? 30;
     if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+    // Apply is a state-writing command. Establish (or safely migrate) the
+    // private, Git-ignored project-state boundary before the first state read.
+    // This keeps a first Apply followed by a second Apply usable while still
+    // refusing tracked or repository-authored state.
+    const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+    // Sample mode is an absolute privacy boundary and never reads local state.
+    // In live mode, an active project-scoped experiment is the action to finish
+    // even if its original transient signal no longer appears in a fresh scan.
+    // Foreground it before generating or overwriting any Apply artifacts.
+    if (!args.sample) {
+      const active = chooseLatestTokenReductionExperiment(
+        (await loadTokenVerificationState(rootPath)).experiments.filter((experiment) =>
+          experiment.lifecycle !== "complete" &&
+          experiment.lifecycle !== "rolled_back" &&
+          experiment.lifecycle !== "invalidated"
+        )
+      );
+      if (active) {
+        return tokenVerificationResult(active, false, [
+          "An active token test already owns this project; Apply handed off to it and generated no conflicting candidate or artifacts."
+        ]);
+      }
+    }
     // `--sample` is a privacy boundary, not presentation sugar. It must never
     // fall through to live transcript, plan, credential, or persisted-state
     // discovery — regardless of where the flag appears after the command.
     const reportInput = args.sample
       ? await buildExplicitSampleReportInput(rootPath)
       : await buildReportInput(stateDir, rootPath, sinceDays);
-    await mkdir(stateDir, { recursive: true });
     const artifactPaths = await writeApplyArtifacts(stateDir, reportInput);
     // The prompt IS the product of this command — print it so a terminal
     // user can copy it right here instead of hunting for a file path.
@@ -3347,18 +5634,471 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
         "- Claude Code / Codex / Gemini CLI: use the agent normally so supported local history exists.",
         "- OpenAI / Anthropic / Cursor / GitHub Copilot: run `npx aibill connect <provider>` with an admin credential reference.",
         "- Diagnose the exact gap: `npx aibill doctor --sources`.",
-        "- Demo only: `npx aibill apply --sample` (non-executable)."
+        `- Demo only: \`${actionRuntimeCommand("apply --sample")}\` (non-executable).`
       ].join("\n")
     };
   }
 }
 
+async function tokenVerificationCommand(args: ParsedArgs): Promise<CliResult> {
+  if (args.sample) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Token tests require fresh supported local Claude Code or Codex evidence; demo sample data is never executable."
+    };
+  }
+  const rootPath = resolve(args.path);
+  const stateDir = join(rootPath, ".ai-spend-agent");
+  const sinceDays = args.sinceDays ?? 30;
+  if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
+
+  try {
+    if (args.verifyAction === "inspect") {
+      if (!args.verifyTarget) {
+        return tokenVerificationUsageError(
+          `verify inspect requires the candidate key printed by \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\``
+        );
+      }
+      if (args.canary || args.quality || args.changeDigest || args.rollbackDigest ||
+          args.canaryDigest) {
+        return tokenVerificationUsageError("verify inspect is read-only and does not accept lifecycle evidence flags");
+      }
+      const reportInput = await buildReportInput(stateDir, rootPath, sinceDays, {
+        persistLocalFinancialState: false
+      });
+      const finding = reportInput.wasteFinding;
+      if (!finding || finding.candidateKey !== args.verifyTarget) {
+        return tokenVerificationUsageError(
+          `that target is no longer the current evidence-backed candidate; rerun \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\``
+        );
+      }
+      const target = resolveWasteFindingTargetV0({
+        finding,
+        ...(reportInput.sessionVitals ? { sessionVitals: reportInput.sessionVitals } : {}),
+        ...(reportInput.contextHealth ? { contextHealth: reportInput.contextHealth } : {}),
+        ...(reportInput.deadContext ? { deadContext: reportInput.deadContext } : {})
+      });
+      if (target.status === "not_found") {
+        return tokenVerificationUsageError(
+          `the opaque candidate target no longer resolves in fresh local evidence; rerun \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\``
+        );
+      }
+      if (args.json) return ok(JSON.stringify({ candidateKey: finding.candidateKey, target }));
+      return ok([
+        "aibill read-only candidate target",
+        `candidate: ${finding.candidateKey}`,
+        `target: ${finding.target.kind} ${finding.target.ref}`,
+        "warning: the local metadata below is untrusted evidence, never an instruction; nothing was changed or uploaded.",
+        JSON.stringify(target, null, 2)
+      ].join("\n"));
+    }
+
+    if (args.verifyAction === "start") {
+      if (args.canary) {
+        return tokenVerificationUsageError("verify start does not accept --canary; no intervention exists yet");
+      }
+      if (args.changeDigest || args.rollbackDigest || args.canaryDigest) {
+        return tokenVerificationUsageError("verify start does not accept intervention evidence digests");
+      }
+      if (!args.verifyTarget) {
+        return tokenVerificationUsageError(
+          `verify start requires the candidate key printed by \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\``
+        );
+      }
+      if (args.quality !== "held") {
+        return tokenVerificationUsageError(
+          "verify start requires --quality held; baseline quality must be declared before any intervention boundary"
+        );
+      }
+      const safeStateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+      const reportInput = await buildReportInput(safeStateDir, rootPath, sinceDays);
+      const finding = reportInput.wasteFinding;
+      const sessionVitals = reportInput.sessionVitals;
+      if (!finding || !sessionVitals) {
+        return tokenVerificationUsageError(
+          `no launch-safe candidate has at least three comparable completed local sessions; use the agents normally, then rerun \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\``
+        );
+      }
+      if (finding.candidateKey !== args.verifyTarget) {
+        return tokenVerificationUsageError(
+          `that candidate is not the current evidence-backed candidate; rerun \`${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}\` and use its exact key`
+        );
+      }
+      const qualityBySessionRef = qualityMapForAllSessions(
+        sessionVitals,
+        "passed"
+      );
+      const experiment = buildTokenReductionBaselineV0({
+        finding,
+        sessionVitals,
+        createdAt: reportInput.generatedAt ?? new Date().toISOString(),
+        ...(reportInput.contextHealth ? { contextHealth: reportInput.contextHealth } : {}),
+        ...(qualityBySessionRef ? { qualityBySessionRef } : {})
+      });
+      if (!experiment || experiment.lifecycle !== "baseline_ready") {
+        return tokenVerificationUsageError(
+          "the candidate does not yet have three matched records with explicit host completion evidence and the same agent, model, project, session type, work type, and source format"
+        );
+      }
+      const existing = activeExperimentForFindingScope(
+        (await loadTokenVerificationState(rootPath)).experiments,
+        experiment.finding
+      );
+      if (existing) {
+        return tokenVerificationResult(existing, args.json, [
+          "An active token test already owns this project/provider/agent scope; no duplicate baseline was created and no conflicting baseline was drafted."
+        ]);
+      }
+      await upsertTokenReductionExperiment(rootPath, experiment);
+      return tokenVerificationResult(experiment, args.json, [
+        "Baseline frozen locally. Nothing was changed.",
+        `Next: inspect and approve one reversible change, preserve its rollback, run a canary, then record the actual user-declared timestamps and outcome with \`${actionRuntimeCommand(`verify mark-applied ${experiment.id} --approved-at <ISO-8601> --applied-at <ISO-8601> --canary passed|failed --change-digest <sha256> --rollback-digest <sha256> --canary-digest <sha256>`)}\`.`,
+        `If it failed, execute the frozen rollback and record that separate boundary with \`${actionRuntimeCommand(`verify rollback ${experiment.id} --rollback-digest <same-sha256>`)}\`; do not collect post-change sessions or claim a reduction.`
+      ]);
+    }
+
+    const state = await loadTokenVerificationState(rootPath);
+    const experiment = args.verifyTarget
+      ? state.experiments.find((candidate) => candidate.id === args.verifyTarget)
+      : chooseLatestTokenReductionExperiment(state.experiments);
+    if (!experiment) {
+      return tokenVerificationUsageError(
+        args.verifyTarget
+          ? "that experiment ID was not found in this project's safe local state"
+          : `no local token test exists; from this exact project root run \`${improveRuntimeCommand}\``
+      );
+    }
+
+    if (args.verifyAction === "mark-applied") {
+      if (args.quality) {
+        return tokenVerificationUsageError("verify mark-applied does not accept --quality; label matched work when starting or evaluating the test");
+      }
+      if (args.sinceDays !== undefined) {
+        return tokenVerificationUsageError("verify mark-applied does not accept --since-days; the experiment boundary is immutable");
+      }
+      if (!args.verifyTarget) {
+        return tokenVerificationUsageError("verify mark-applied requires an exact experiment ID");
+      }
+      if (!args.canary) {
+        return tokenVerificationUsageError("verify mark-applied requires --canary passed or --canary failed");
+      }
+      const approvedAt = canonicalBoundaryTimestamp(args.approvedAt);
+      const appliedAt = canonicalBoundaryTimestamp(args.appliedAt);
+      if (!approvedAt || !appliedAt) {
+        return tokenVerificationUsageError(
+          "verify mark-applied requires the actual --approved-at and --applied-at timestamps in ISO-8601 form; aibill never invents a pre-change approval time after the canary"
+        );
+      }
+      if (Date.parse(approvedAt) >= Date.parse(appliedAt)) {
+        return tokenVerificationUsageError(
+          "--approved-at must be earlier than --applied-at; approval after or at application is not a pre-change boundary"
+        );
+      }
+      if (Date.parse(appliedAt) > Date.now()) {
+        return tokenVerificationUsageError("--applied-at cannot be in the future");
+      }
+      const changeRef = digestReference("approved-change", args.changeDigest);
+      const rollbackRef = digestReference("rollback-artifact", args.rollbackDigest);
+      const canaryRef = digestReference("canary-result", args.canaryDigest);
+      if (!changeRef || !rollbackRef || !canaryRef) {
+        return tokenVerificationUsageError(
+          "an intervention boundary requires 64-character SHA-256 values for --change-digest, --rollback-digest, and --canary-digest; aibill stores only opaque references"
+        );
+      }
+      const applied = markTokenReductionAppliedV0(experiment, {
+        approvedAt,
+        appliedAt,
+        changeRef,
+        rollbackRef,
+        canaryRef,
+        canaryStatus: args.canary
+      });
+      await upsertTokenReductionExperiment(rootPath, applied, {
+        expectedRevisionId: experiment.revisionId
+      });
+      if (args.canary === "failed") {
+        const recorded = tokenVerificationResult(applied, args.json, [
+          "The failed canary was preserved as user-declared evidence; no reduction will be calculated from this attempt.",
+          `Execute the frozen rollback, then record that separate boundary with \`${actionRuntimeCommand(`verify rollback ${applied.id} --rollback-digest <same-sha256>`)}\`.`
+        ]);
+        return {
+          exitCode: 1,
+          stdout: recorded.stdout,
+          stderr: "Canary failed. aibill recorded the attempted change and now recommends the separately evidenced rollback; it made no savings claim."
+        };
+      }
+      return tokenVerificationResult(applied, args.json, [
+        "The user-supplied pre-change approval time, intervention boundary, and passing canary are recorded as user-declared evidence.",
+        `Next: complete at least ${applied.matchingPolicy.minimumPostSessions} comparable sessions, then run \`${actionRuntimeCommand(`verify ${applied.id} --quality held`)}\`.`
+      ]);
+    }
+
+    if (args.verifyAction === "rollback") {
+      if (!args.verifyTarget) {
+        return tokenVerificationUsageError("verify rollback requires an exact experiment ID");
+      }
+      if (args.canary || args.quality || args.changeDigest || args.canaryDigest ||
+          args.sinceDays !== undefined) {
+        return tokenVerificationUsageError(
+          "verify rollback accepts only the experiment ID and the frozen --rollback-digest"
+        );
+      }
+      const rollbackRef = digestReference("rollback-artifact", args.rollbackDigest);
+      if (!rollbackRef) {
+        return tokenVerificationUsageError(
+          "verify rollback requires the same 64-character SHA-256 --rollback-digest frozen at mark-applied"
+        );
+      }
+      const rolledBack = markTokenReductionRolledBackV0(experiment, {
+        rolledBackAt: new Date().toISOString(),
+        rollbackRef
+      });
+      await upsertTokenReductionExperiment(rootPath, rolledBack, {
+        expectedRevisionId: experiment.revisionId
+      });
+      return tokenVerificationResult(rolledBack, args.json, [
+        "Rollback execution was recorded against the frozen opaque rollback reference."
+      ]);
+    }
+
+    if (args.verifyAction === "cancel") {
+      if (!args.verifyTarget) {
+        return tokenVerificationUsageError("verify cancel requires an exact experiment ID");
+      }
+      if (args.canary || args.quality || args.changeDigest || args.rollbackDigest ||
+          args.canaryDigest || args.sinceDays !== undefined) {
+        return tokenVerificationUsageError(
+          "verify cancel accepts only an un-applied experiment ID"
+        );
+      }
+      const invalidated = invalidateTokenReductionExperimentV0(experiment, {
+        invalidatedAt: new Date().toISOString(),
+        reason: "manual"
+      });
+      await upsertTokenReductionExperiment(rootPath, invalidated, {
+        expectedRevisionId: experiment.revisionId
+      });
+      // The cancelled experiment's unfinished plan answers are dead with it.
+      await createPlanDraftStore(rootPath).clear();
+      return tokenVerificationResult(invalidated, args.json, [
+        "The un-applied token test was cancelled; its evidence remains in local history and its scope is available for a new baseline."
+      ]);
+    }
+
+    if (args.canary) {
+      return tokenVerificationUsageError("verify result does not accept --canary; use verify mark-applied for the canary boundary");
+    }
+    if (args.changeDigest || args.rollbackDigest || args.canaryDigest) {
+      return tokenVerificationUsageError("verify result does not accept intervention evidence digests");
+    }
+    if (args.sinceDays !== undefined) {
+      return tokenVerificationUsageError("verify result does not accept --since-days; it reads from the experiment's immutable intervention boundary");
+    }
+
+    if (!experiment.intervention.appliedAt) {
+      if (args.quality) {
+        return tokenVerificationUsageError(
+          "quality for post-change work cannot be recorded before an approved intervention boundary"
+        );
+      }
+      return tokenVerificationResult(experiment, args.json);
+    }
+
+    if (experiment.lifecycle === "complete" || experiment.lifecycle === "rolled_back" ||
+        experiment.lifecycle === "invalidated" ||
+        experiment.intervention.canary?.status === "failed") {
+      if (args.quality) {
+        return tokenVerificationUsageError(
+          "terminal or failed-canary token tests cannot accept new post-change quality evidence"
+        );
+      }
+      return tokenVerificationResult(experiment, args.json, [
+        "This token test is terminal or awaiting its required rollback; no new session evidence was appended."
+      ]);
+    }
+
+    const observation = await loadTokenVerificationObservation(rootPath, experiment);
+    if (!observation.qualitativeCoverageComplete) {
+      return tokenVerificationUsageError(
+        "the bounded qualitative index is incomplete for this experiment's agent; no post-change sessions or reduction percentage were accepted"
+      );
+    }
+    const unlabelled = refreshTokenReductionExperimentV0(experiment, {
+      sessionVitals: observation.sessionVitals,
+      observedAt: observation.generatedAt,
+      contextHealth: observation.contextHealth
+    });
+    const qualityBySessionRef = qualityMapForMatchedPostSessions(unlabelled, args.quality);
+    const refreshed = qualityBySessionRef
+      ? refreshTokenReductionExperimentV0(experiment, {
+          sessionVitals: observation.sessionVitals,
+          observedAt: observation.generatedAt,
+          contextHealth: observation.contextHealth,
+          qualityBySessionRef
+        })
+      : unlabelled;
+    await upsertTokenReductionExperiment(rootPath, refreshed, {
+      expectedRevisionId: experiment.revisionId
+    });
+    return tokenVerificationResult(refreshed, args.json);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Couldn't evaluate the local token test: ${sanitizeSecretishError(error instanceof Error ? error.message : String(error))}`
+    };
+  }
+}
+
+async function loadTokenVerificationObservation(
+  rootPath: string,
+  experiment: TokenReductionExperimentV0
+): Promise<{
+  generatedAt: string;
+  sessionVitals: SessionVitalsV0;
+  contextHealth: ContextHealthResult;
+  qualitativeCoverageComplete: boolean;
+}> {
+  const generatedAt = new Date();
+  const sinceIso = experiment.intervention.appliedAt ?? experiment.createdAt;
+  const logs = await loadBoundedLocalActionEvidence(sinceIso);
+  const calls = logs.calls.filter((call) => (
+    localAgentFormatSupports(call.agent, "actionPlanning") &&
+    callMatchesActionProject(call, experiment.cohort.projectRef)
+  ));
+  const windowDays = Math.max(
+    1,
+    Math.ceil((generatedAt.getTime() - Date.parse(sinceIso)) / (24 * 60 * 60 * 1_000))
+  );
+  const contextOptions = {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+    codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+    projectDir: rootPath,
+    sinceIso,
+    windowDays,
+    codexInvocationFiles: logs.codexInvocationFiles
+  };
+  const contextHealth = await loadContextHealth(calls, contextOptions).catch(() =>
+    buildContextHealth({ calls, now: generatedAt, windowDays })
+  );
+  return {
+    generatedAt: generatedAt.toISOString(),
+    sessionVitals: extractSessionVitalsV0(calls),
+    contextHealth,
+    qualitativeCoverageComplete:
+      (experiment.cohort.agent === "claude-code" || experiment.cohort.agent === "codex") &&
+      hasCompleteQualitativeCoverage(logs, [experiment.cohort.agent])
+  };
+}
+
+function qualityMapForAllSessions(
+  vitals: SessionVitalsV0,
+  quality: "passed" | "failed" | "missing"
+): Record<string, "passed" | "failed" | "missing"> | undefined {
+  if (quality === "missing") return undefined;
+  return Object.fromEntries(vitals.sessions.map((session) => [session.sessionRef, quality]));
+}
+
+function qualityMapForMatchedPostSessions(
+  refreshed: TokenReductionExperimentV0,
+  quality: ParsedArgs["quality"]
+): Record<string, "passed" | "failed" | "missing"> | undefined {
+  if (!quality || quality === "missing") return undefined;
+  const entries = refreshed.postSessions
+    .filter((session) => session.quality.status === "missing")
+    .map((session) => [
+    session.sessionRef,
+    quality === "held" ? "passed" : "failed"
+    ] as const);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function activeExperimentForFindingScope(
+  experiments: readonly TokenReductionExperimentV0[],
+  finding: NonNullable<SpendReportInput["wasteFinding"]>
+): TokenReductionExperimentV0 | undefined {
+  return chooseLatestTokenReductionExperiment(experiments.filter((experiment) =>
+    experiment.lifecycle !== "complete" &&
+    experiment.lifecycle !== "rolled_back" &&
+    experiment.lifecycle !== "invalidated" &&
+    experiment.cohort.projectRef === finding.scope.projectRef &&
+    experiment.cohort.provider === finding.scope.provider &&
+    experiment.cohort.agent === finding.scope.agent
+  ));
+}
+
+function digestReference(namespace: string, digest: string | undefined): string | undefined {
+  return digest && /^[a-f0-9]{64}$/i.test(digest)
+    ? createActionVerificationReference(namespace, digest.toLowerCase())
+    : undefined;
+}
+
+function canonicalBoundaryTimestamp(value: string | undefined): string | undefined {
+  return value && validIsoString(value) ? new Date(value).toISOString() : undefined;
+}
+
+function tokenVerificationUsageError(message: string): CliResult {
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: [
+      message,
+      "Run `npx aibill --help` for the safe token-test lifecycle."
+    ].join("\n")
+  };
+}
+
+function tokenVerificationResult(
+  experiment: TokenReductionExperimentV0,
+  json = false,
+  notes: string[] = []
+): CliResult {
+  const projection = buildActionVerificationProjectionV0(experiment);
+  if (json) return ok(JSON.stringify({ experiment, projection }));
+  const evaluation = experiment.evaluation;
+  const measured = evaluation.reductionPercent === null
+    ? "not available"
+    : evaluation.reductionPercent > 0
+      ? `${evaluation.reductionPercent.toFixed(2)}% fewer tokens in the matched session cohort`
+      : evaluation.reductionPercent < 0
+        ? `${Math.abs(evaluation.reductionPercent).toFixed(2)}% more tokens in the matched session cohort`
+        : "no measured token change in the matched session cohort";
+  const resultLabel = evaluation.status.replaceAll("_", " ");
+  return ok([
+    "aibill token test",
+    `experiment: ${experiment.id}`,
+    `revision: ${experiment.revisionId}`,
+    `candidate: ${experiment.finding.candidateKey}`,
+    `state: ${projection.state}`,
+    `baseline: ${projection.baselineSessions}/${projection.minimumSessions} matched completed session snapshots`,
+    `post-change: ${projection.postChangeSessions}/${projection.minimumSessions} matched completed session snapshots`,
+    `result: ${resultLabel}`,
+    `measured change: ${measured}`,
+    `quality: ${evaluation.qualityStatus} (${evaluation.qualityEvidence})`,
+    `evidence: ${evaluation.metricEvidence}; matching=${evaluation.matchingEvidence}`,
+    `rollback: ${experiment.lifecycle === "rolled_back"
+      ? "recorded"
+      : evaluation.rollbackRecommended
+        ? "recommended"
+        : "not triggered by current evidence"}`,
+    "claim boundary: a session-cohort result is measured—not certified savings, verified ROI, or a provider bill.",
+    "privacy: raw prompts, responses, native session IDs, absolute paths, and credentials are not stored in this experiment.",
+    ...notes
+  ].join("\n"));
+}
+
 function applyEvidenceAcquisitionLines(input: SpendReportInput): string[] {
   const records = input.allRecords ?? input.providerRecords ?? [];
   const providers = new Set(records.map((record) => record.source.provider));
+  const sinceDays = input.evidenceWindowDays ?? input.deadContext?.windowDays ?? 30;
   const lines: string[] = [];
   if (providers.has("anthropic") || providers.has("openai") || input.dataMode === "local_logs") {
-    lines.push("- Local coding agents: run `npx aibill context --json` after comparable Claude Code/Codex sessions to inspect action-capable context evidence.");
+    lines.push(`- Local coding agents: run \`npx aibill context --json --since-days ${sinceDays}\` after comparable Claude Code/Codex sessions to inspect action-capable context evidence from this exact window.`);
   }
   if (providers.has("gemini") || providers.has("gemini-cli")) {
     lines.push("- Gemini CLI: current chat evidence is financial-only; unsupported context/action evidence remains missing.");
@@ -3388,17 +6128,36 @@ async function buildExplicitSampleReportInput(rootPath: string): Promise<SpendRe
     providerRecords: [],
     providerQa: [],
     deadContext: sampleDeadContext(),
-    detectedPlans: []
+    detectedPlans: [],
+    qualitativeCoverage: {
+      status: "unknown",
+      selectedFiles: 0,
+      readCompletely: 0,
+      skippedForBudget: 0
+    },
+    qualitativeCoverageByAgent: {
+      "claude-code": "unknown",
+      codex: "unknown"
+    }
   };
 }
 
-async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 30) {
+async function buildReportInput(
+  stateDir: string,
+  rootPath: string,
+  sinceDays = 30,
+  options: { persistLocalFinancialState?: boolean } = {}
+) {
   // One anchor for logs, Context Health, the paste-ready prompt, and every
   // supporting Apply artifact. This prevents millisecond window drift between
   // files generated by the same command.
   const generatedAt = new Date();
   const sinceIso = sinceIsoForDays(sinceDays, generatedAt);
-  let freshLocalCalls: Awaited<ReturnType<typeof loadLocalAgentUsage>>["calls"] | undefined;
+  const canonicalActionProjectRef = createActionVerificationReference(
+    "project-working-directory",
+    await resolveSafeScanRoot(rootPath)
+  );
+  let freshLocalCalls: LocalAgentLogResult["calls"] | undefined;
   let freshCodexInvocationFiles: ParsedInvocationFile[] | undefined;
   let exactSpendContents: string | undefined;
   try {
@@ -3480,22 +6239,28 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
     // Mislabeled state (local-log records stamped connected by a past bug)
     // must be superseded by a fresh read, not trusted.
     (spendState.mode === "connected_provider" && !persistedLooksConnected);
+  // Always read supported local transcripts for context/action evidence. A
+  // trusted connected snapshot remains the authoritative financial ledger and
+  // is never rewritten or relabeled by this read.
+  const freshActionLogs = await loadBoundedLocalActionEvidence(sinceIso).catch(() => undefined);
+  if (freshActionLogs && freshActionLogs.calls.length > 0) {
+    freshLocalCalls = freshActionLogs.calls;
+    freshCodexInvocationFiles = freshActionLogs.codexInvocationFiles;
+  }
   if (needsFreshLogs) {
-    const logs = await loadLocalAgentUsage({
+    const freshFinancialLogs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
       claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
       codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
       geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-      sinceIso,
-      collectCodexInvocationEvidence: true
+      sinceIso
     }).catch(() => undefined);
-    if (logs && logs.records.length > 0) {
-      freshLocalCalls = logs.calls;
-      freshCodexInvocationFiles = logs.codexInvocationFiles;
-      const records = logs.records;
+    if (freshFinancialLogs && freshFinancialLogs.records.length > 0) {
+      const records = freshFinancialLogs.records;
       const summary = analyzeSpend(records);
       const liveMappings = attributeUsageRecords(records);
-      await mkdir(stateDir, { recursive: true });
-      await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
+      if (options.persistLocalFinancialState !== false) {
+        await writeLocalSpendState(stateDir, records, summary, liveMappings, "local_logs");
+      }
       spendState = { summary, records, mode: "local_logs" };
       mappings = liveMappings;
       unavailablePersistedLocalLogs = false;
@@ -3568,9 +6333,20 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
       ? "complete"
       : undefined;
 
-  // Named dead-context items feed the apply artifact for local-log users —
-  // the concrete "remove these" list, from the same engine as the readout.
-  const deadContext = spendState.mode === "local_logs"
+  const callsForCurrentProject = freshLocalCalls?.filter((call) =>
+    callMatchesActionProject(call, canonicalActionProjectRef)
+  );
+  const actionPlanningCalls = callsForCurrentProject?.filter((call) => (
+    localAgentFormatSupports(call.agent, "actionPlanning")
+  ));
+  const contextHealthCalls = callsForCurrentProject?.filter((call) => (
+    localAgentFormatSupports(call.agent, "contextHealth")
+  ));
+  const hasLocalActionEvidence = Boolean(actionPlanningCalls?.length);
+
+  // Named dead-context items feed the local action artifact even when a
+  // connected provider snapshot owns the financial headline.
+  const deadContext = hasLocalActionEvidence
     ? await loadDeadContext({
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
         codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
@@ -3586,7 +6362,7 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
       }).catch(() => undefined)
     : undefined;
 
-  const detectedPlans = spendState.mode === "local_logs"
+  const detectedPlans = hasLocalActionEvidence
     ? await detectLocalPlans({
         claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
         codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
@@ -3596,10 +6372,8 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
   // Report/apply and Glance consume the same canonical Context Health result.
   // If live transcript calls are unavailable, omit it instead of fabricating a
   // session-level recommendation from day-aggregate spend records.
-  const contextHealth = spendState.mode === "local_logs" && freshLocalCalls
-    ? await loadContextHealth(freshLocalCalls.filter((call) => (
-        localAgentFormatSupports(call.agent, "contextHealth")
-      )), {
+  const contextHealth = contextHealthCalls && contextHealthCalls.length > 0
+    ? await loadContextHealth(contextHealthCalls, {
         claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
         codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
@@ -3613,13 +6387,41 @@ async function buildReportInput(stateDir: string, rootPath: string, sinceDays = 
         codexInvocationFiles: freshCodexInvocationFiles
       }).catch(() => undefined)
     : undefined;
+  const sessionVitals = actionPlanningCalls && actionPlanningCalls.length > 0
+    ? extractSessionVitalsV0(actionPlanningCalls)
+    // Local financial rows may belong to a different project than the exact
+    // Apply root. Preserve an explicit empty action-evidence contract so the
+    // report layer cannot fall back to a machine-wide aggregate candidate.
+    : spendState.mode === "local_logs"
+      ? extractSessionVitalsV0([])
+      : undefined;
+  const qualitativeCoverage = summarizeCliQualitativeCoverage(freshActionLogs);
+  const completeActionEvidence = qualitativeCoverage.status === "complete" && freshActionLogs
+    ? hasCompleteQualitativeCoverage(
+        freshActionLogs,
+        [...new Set((actionPlanningCalls ?? []).map((call) => call.agent))]
+      )
+    : false;
+  const wasteFinding = sessionVitals && completeActionEvidence
+    ? selectBestWasteFindingV0({
+        sessionVitals,
+        generatedAt: generatedAt.toISOString(),
+        ...(contextHealth ? { contextHealth } : {}),
+        ...(deadContext ? { deadContext } : {})
+      })
+    : null;
 
   return {
     generatedAt: generatedAt.toISOString(),
+    evidenceWindowDays: sinceDays,
     summary: spendState.summary,
     deadContext,
     detectedPlans,
     contextHealth,
+    ...(sessionVitals ? { sessionVitals } : {}),
+    ...(wasteFinding ? { wasteFinding } : {}),
+    qualitativeCoverage,
+    qualitativeCoverageByAgent: summarizeCliQualitativeCoverageByAgent(freshActionLogs),
     // Evidence ledger is built from the SAME records as the confidence
     // breakdown so the two sections can never contradict each other.
     allRecords: spendState.mode === "connected_provider"
@@ -3675,13 +6477,26 @@ async function writeApplyArtifacts(stateDir: string, reportInput: SpendReportInp
     actionPlan: join(stateDir, "ai-spend-action-plan.md"),
     policyConfigDraft: join(stateDir, "ai-spend-policy-config-draft.md"),
     verificationPlan: join(stateDir, "ai-spend-verify-plan.md"),
-    demoPackage: join(stateDir, "demo-package.md")
+    demoPackage: join(stateDir, "demo-package.md"),
+    wasteFinding: join(stateDir, "waste-finding.json")
   };
   await writeSafeStateText(stateDir, basename(paths.codingPrompt), generateApplyArtifactMarkdown(reportInput));
   await writeSafeStateText(stateDir, basename(paths.actionPlan), generateActionPlanMarkdown(reportInput));
   await writeSafeStateText(stateDir, basename(paths.policyConfigDraft), generatePolicyConfigDraftMarkdown(reportInput));
   await writeSafeStateText(stateDir, basename(paths.verificationPlan), generateVerificationPlanMarkdown(reportInput));
   await writeSafeStateText(stateDir, basename(paths.demoPackage), generateDemoPackageMarkdown(reportInput));
+  if (reportInput.wasteFinding) {
+    await writeSafeStateText(
+      stateDir,
+      basename(paths.wasteFinding),
+      `${JSON.stringify(reportInput.wasteFinding, null, 2)}\n`
+    );
+  } else {
+    // A prior candidate must never survive a fresh no-candidate run. `rm`
+    // removes a symlink itself rather than following it, and a directory at
+    // this file path fails closed because recursive deletion is not enabled.
+    await rm(paths.wasteFinding, { force: true });
+  }
   return paths;
 }
 
@@ -3705,17 +6520,37 @@ function parseArgs(argv: string[]): ParsedArgs {
     parsed.provider = rest[0];
     rest.shift();
   }
+  if (command === "verify") {
+    const first = rest[0];
+    if (first === "inspect" || first === "start" || first === "mark-applied" ||
+        first === "rollback" || first === "cancel") {
+      parsed.verifyAction = first;
+      rest.shift();
+    } else {
+      parsed.verifyAction = "result";
+    }
+    if (rest[0] && !rest[0]!.startsWith("--")) {
+      parsed.verifyTarget = rest.shift();
+    }
+  }
+  if (command === "outcome" && rest[0] && !rest[0]!.startsWith("--")) {
+    if (rest[0] === "github") parsed.outcomeAction = "github";
+    else parsed.parseErrors.push(`unsupported outcome source "${rest[0]}"; use github`);
+    rest.shift();
+  }
 
   const valueFlags = new Set([
     "--plan", "--since-days", "--path", "--out",
     "--source-path", "--type", "--provider", "--source-id", "--team",
-    "--person", "--client", "--project", "--agent", "--workflow",
+    "--person", "--client", "--cost-center", "--role", "--project", "--agent", "--workflow",
     "--evidence", "--confidence", "--label", "--auth-reference",
     "--start-time", "--end-time", "--org", "--enterprise", "--account-id",
-    "--interval", "--cycles"
+    "--interval", "--cycles", "--canary", "--quality", "--change-digest",
+    "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
+    "--pr", "--business-outcome"
   ]);
   const numericValueFlags = new Set([
-    "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles"
+    "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles", "--pr"
   ]);
 
   for (let index = 0; index < rest.length; index += 1) {
@@ -3753,6 +6588,48 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--replace") {
       parsed.replaceStatusline = true;
+      continue;
+    }
+    if (arg === "--canary") {
+      const next = rest[index + 1];
+      if (next === "passed" || next === "failed") {
+        parsed.canary = next;
+        index += 1;
+      } else if (next) {
+        parsed.parseErrors.push("--canary must be passed or failed");
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--quality") {
+      const next = rest[index + 1];
+      if (next === "held" || next === "regressed" || next === "missing") {
+        parsed.quality = next;
+        index += 1;
+      } else if (next) {
+        parsed.parseErrors.push("--quality must be held, regressed, or missing");
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--approved-at" || arg === "--applied-at") {
+      const next = rest[index + 1];
+      if (next) {
+        if (arg === "--approved-at") parsed.approvedAt = next;
+        else parsed.appliedAt = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--change-digest" || arg === "--rollback-digest" ||
+        arg === "--canary-digest") {
+      const next = rest[index + 1];
+      if (next) {
+        if (arg === "--change-digest") parsed.changeDigest = next;
+        else if (arg === "--rollback-digest") parsed.rollbackDigest = next;
+        else parsed.canaryDigest = next;
+        index += 1;
+      }
       continue;
     }
     if (arg === "--ignore-state") {
@@ -3869,6 +6746,22 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
+    if (arg === "--cost-center") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.costCenter = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--role") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.role = next;
+        index += 1;
+      }
+      continue;
+    }
     if (arg === "--project") {
       const next = rest[index + 1];
       if (next) {
@@ -3971,6 +6864,27 @@ function parseArgs(argv: string[]): ParsedArgs {
       const next = rest[index + 1];
       if (next) {
         parsed.accountId = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--pr") {
+      const next = rest[index + 1];
+      if (next) {
+        const value = Number(next);
+        if (Number.isSafeInteger(value) && value >= 1 && value <= 1_000_000_000) {
+          parsed.pullRequestNumber = value;
+        } else {
+          parsed.parseErrors.push("--pr must be a positive pull-request number");
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--business-outcome") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.businessOutcome = next;
         index += 1;
       }
       continue;
@@ -4160,6 +7074,11 @@ function helpText(): string {
     "  npx aibill --sample                  Show the clearly labeled illustrative demo (never implicit)",
     "  npx aibill --group-by agent          Drill down by source|model|client|project|agent|user|workspace|apiKey",
     "  npx aibill --plan <id>               Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
+    `  ${improveRuntimeCommand}    Source preview: test one personalized change and measure whether token usage fell`,
+    `  ${actionRuntimeCommand("index")}    Source preview: read very large agent histories to completion so results stop saying "indexing"`,
+    `  ${actionRuntimeCommand("identify")}    Source preview: confirm the human owner, team, client/cost center, and approval role`,
+    `  ${actionRuntimeCommand("outcome github")}    Source preview: attach one merged PR whose observed status checks passed`,
+    `  ${actionRuntimeCommand("accountability")}    Source preview: answer owner → outcome → approval → measured-result for this project`,
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",
@@ -4181,6 +7100,7 @@ function helpText(): string {
     "  statusline install      Reversibly add the standalone runner to Claude user settings",
     "    [--replace]           Explicitly replace an existing statusLine while preserving it for uninstall",
     "  statusline uninstall    Remove only the owned setting and restore its preserved predecessor",
+    "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
@@ -4197,6 +7117,19 @@ function helpText(): string {
     "  Main receipt JSON is not published yet; unsupported --json requests fail instead of returning text.",
     "  apply [--sample] [--since-days N]  Print an evidence-constrained inspection/approval prompt + verification plans",
     "  apply-artifact          Same as `apply` (long form)",
+    "  identify --person <name> --team <team> --role <role> [--client <name>] [--cost-center <id>]",
+    "    Confirm local accountability explicitly; no owner/team/client/cost-center is inferred.",
+    "  outcome github [--pr N] [--business-outcome <text>]  Opt-in GitHub verification via gh; no default network call",
+    "  accountability [--json] Show the local accountability projection; labels stay in this project's private state",
+    "  Advanced token-test controls (the guided `improve` command normally handles these):",
+    "  verify inspect <candidate-key> [--since-days N] [--json]  Resolve its exact target from the candidate's evidence window",
+    "  verify start <candidate-key> --quality held [--since-days N]  Freeze a matched baseline from that same window",
+    "  verify mark-applied <experiment-id> --approved-at <ISO-8601> --applied-at <ISO-8601>",
+    "    --canary passed|failed --change-digest <sha256> --rollback-digest <sha256>",
+    "    --canary-digest <sha256>  Record user-declared approval/application times and canary",
+    "  verify rollback <experiment-id> --rollback-digest <sha256>  Record the frozen rollback",
+    "  verify cancel <experiment-id>  Cancel an un-applied baseline and retain its audit evidence",
+    "  verify <experiment-id> [--quality held|regressed|missing] [--json]  Calculate the matched result",
     "",
     "Cron (production watch): add a crontab entry such as:",
     "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
@@ -4254,8 +7187,43 @@ export async function runMain(): Promise<void> {
   }
 
   let result: CliResult;
+  let promptInterface: import("node:readline/promises").Interface | undefined;
+  let guidedInterface: import("node:readline").Interface | undefined;
   try {
-    result = await runCli(argv);
+    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    let guidedIoShared:
+      | { source: GuidedPromptSource; write: (text: string) => void }
+      | undefined;
+    result = await runCli(argv, {
+      interactive,
+      ...(interactive ? {
+        prompt: async (question: string) => {
+          if (!promptInterface) {
+            const { createInterface } = await import("node:readline/promises");
+            promptInterface = createInterface({ input: process.stdin, output: process.stdout });
+          }
+          return promptInterface.question(question);
+        },
+        openGuidedIo: async () => {
+          if (!guidedIoShared) {
+            const { createInterface } = await import("node:readline");
+            const lineInterface = createInterface({ input: process.stdin, output: process.stdout });
+            guidedInterface = lineInterface;
+            guidedIoShared = {
+              source: createInteractivePromptSource({
+                onLine: (listener) => { lineInterface.on("line", listener); },
+                onClose: (listener) => { lineInterface.on("close", listener); },
+                onInterrupt: (listener) => { lineInterface.on("SIGINT", listener); }
+              }),
+              write: (text: string) => {
+                process.stdout.write(text.endsWith("> ") || text.endsWith("\n") ? text : `${text}\n`);
+              }
+            };
+          }
+          return guidedIoShared;
+        }
+      } : {})
+    });
   } catch (error) {
     // The product's error voice, never a raw stack trace — and never an
     // un-redacted secret from a provider payload or file path.
@@ -4270,6 +7238,8 @@ export async function runMain(): Promise<void> {
       ].join("\n")
     };
   } finally {
+    promptInterface?.close();
+    guidedInterface?.close();
     spinner?.stop();
   }
 

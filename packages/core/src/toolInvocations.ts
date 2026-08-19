@@ -108,6 +108,12 @@ export type ParsedInvocationFile = {
   contextSignal: SessionContextSignal;
 };
 
+/** Private-index proof used to narrow one aggregated Codex window exactly. */
+export type ParsedInvocationWindowProof = {
+  earliestCountedAt?: string;
+  allCountedEventsTimestamped: boolean;
+};
+
 export type ToolInvocationOptions = {
   /** default: join(homedir(), ".claude", "projects") */
   claudeProjectsDir?: string;
@@ -252,29 +258,113 @@ export function parseCodexInvocations(
 }
 
 /**
+ * Serializable snapshot of one Codex invocation collector, used by the
+ * checkpointed streaming path to carry aggregation across bounded runs. It
+ * contains only what the finished summary itself persists — tool/skill/
+ * command names, file basenames, opaque session ids, counters and window
+ * proof timestamps — never raw transcript text or absolute paths.
+ */
+export type CodexInvocationCollectorSnapshot = {
+  counts: Array<[string, number]>;
+  mcpTools: string[];
+  skills: string[];
+  subagents: string[];
+  commands: string[];
+  fileReads: Array<[string, number]>;
+  assistantTurns: number;
+  sessionId?: string;
+  rootSessionMetaSeen: boolean;
+  rootStartedAtMs?: number;
+  rootTaskStarted: boolean;
+  lastActivityAt?: string;
+  compactionEvents: number;
+  isSubagent: boolean;
+  parentSessionId?: string;
+  nestedSessions: Array<[string, NestedSessionMetadata]>;
+  earliestCountedMs?: number;
+  allCountedEventsTimestamped: boolean;
+};
+
+/** Fail-closed structural check for a restored collector snapshot. */
+export function isCodexInvocationCollectorSnapshot(
+  value: unknown
+): value is CodexInvocationCollectorSnapshot {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const stringNumberPairs = (input: unknown): boolean => (
+    Array.isArray(input) && input.every((pair) => (
+      Array.isArray(pair) && pair.length === 2 &&
+      typeof pair[0] === "string" &&
+      Number.isSafeInteger(pair[1]) && Number(pair[1]) >= 0
+    ))
+  );
+  const stringArray = (input: unknown): boolean => (
+    Array.isArray(input) && input.every((item) => typeof item === "string")
+  );
+  const optionalString = (input: unknown): boolean => (
+    input === undefined || typeof input === "string"
+  );
+  const optionalFinite = (input: unknown): boolean => (
+    input === undefined || typeof input === "number" && Number.isFinite(input)
+  );
+  return stringNumberPairs(record.counts) &&
+    stringArray(record.mcpTools) &&
+    stringArray(record.skills) &&
+    stringArray(record.subagents) &&
+    stringArray(record.commands) &&
+    stringNumberPairs(record.fileReads) &&
+    Number.isSafeInteger(record.assistantTurns) && Number(record.assistantTurns) >= 0 &&
+    optionalString(record.sessionId) &&
+    typeof record.rootSessionMetaSeen === "boolean" &&
+    optionalFinite(record.rootStartedAtMs) &&
+    typeof record.rootTaskStarted === "boolean" &&
+    optionalString(record.lastActivityAt) &&
+    Number.isSafeInteger(record.compactionEvents) && Number(record.compactionEvents) >= 0 &&
+    typeof record.isSubagent === "boolean" &&
+    optionalString(record.parentSessionId) &&
+    Array.isArray(record.nestedSessions) && record.nestedSessions.every((pair) => (
+      Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" &&
+      typeof pair[1] === "object" && pair[1] !== null &&
+      typeof (pair[1] as Record<string, unknown>).isSubagent === "boolean"
+    )) &&
+    optionalFinite(record.earliestCountedMs) &&
+    typeof record.allCountedEventsTimestamped === "boolean";
+}
+
+/**
  * Stateful Codex invocation parser used to share localAgentLogs' JSONL pass.
  * One collector is created per rollout file and discarded after `finish()`.
+ * A checkpointed stream restores a prior run's snapshot; the window (sinceMs)
+ * must be the one the snapshot was created under — the caller pins it in the
+ * checkpoint envelope.
  */
-export function createCodexInvocationCollector(sinceMs?: number): {
+export function createCodexInvocationCollector(
+  sinceMs?: number,
+  restored?: CodexInvocationCollectorSnapshot
+): {
   consume: (entry: Record<string, unknown>) => void;
   finish: () => ParsedInvocationFile;
+  windowProof: () => ParsedInvocationWindowProof;
+  snapshot: () => CodexInvocationCollectorSnapshot;
 } {
-  const counts = new Map<string, number>();
-  const mcpTools = new Set<string>();
-  const skills = new Set<string>();
-  const subagents = new Set<string>();
-  const commands = new Set<string>();
-  const fileReads = new Map<string, number>();
-  let assistantTurns = 0;
-  let sessionId: string | undefined;
-  let rootSessionMetaSeen = false;
-  let rootStartedAtMs: number | undefined;
-  let rootTaskStarted = false;
-  let lastActivityAt: string | undefined;
-  let compactionEvents = 0;
-  let isSubagent = false;
-  let parentSessionId: string | undefined;
-  const nestedSessions = new Map<string, NestedSessionMetadata>();
+  const counts = new Map<string, number>(restored?.counts ?? []);
+  const mcpTools = new Set<string>(restored?.mcpTools ?? []);
+  const skills = new Set<string>(restored?.skills ?? []);
+  const subagents = new Set<string>(restored?.subagents ?? []);
+  const commands = new Set<string>(restored?.commands ?? []);
+  const fileReads = new Map<string, number>(restored?.fileReads ?? []);
+  let assistantTurns = restored?.assistantTurns ?? 0;
+  let sessionId: string | undefined = restored?.sessionId;
+  let rootSessionMetaSeen = restored?.rootSessionMetaSeen ?? false;
+  let rootStartedAtMs: number | undefined = restored?.rootStartedAtMs;
+  let rootTaskStarted = restored?.rootTaskStarted ?? false;
+  let lastActivityAt: string | undefined = restored?.lastActivityAt;
+  let compactionEvents = restored?.compactionEvents ?? 0;
+  let isSubagent = restored?.isSubagent ?? false;
+  let parentSessionId: string | undefined = restored?.parentSessionId;
+  const nestedSessions = new Map<string, NestedSessionMetadata>(restored?.nestedSessions ?? []);
+  let earliestCountedMs: number | undefined = restored?.earliestCountedMs;
+  let allCountedEventsTimestamped = restored?.allCountedEventsTimestamped ?? true;
 
   const resetObservedEvidence = (): void => {
     counts.clear();
@@ -285,6 +375,19 @@ export function createCodexInvocationCollector(sinceMs?: number): {
     fileReads.clear();
     assistantTurns = 0;
     compactionEvents = 0;
+    earliestCountedMs = undefined;
+    allCountedEventsTimestamped = true;
+  };
+
+  const recordCountedTimestamp = (entry: Record<string, unknown>): void => {
+    const timestamp = Date.parse(stringOf(entry.timestamp) ?? "");
+    if (!Number.isFinite(timestamp)) {
+      allCountedEventsTimestamped = false;
+      return;
+    }
+    earliestCountedMs = earliestCountedMs === undefined
+      ? timestamp
+      : Math.min(earliestCountedMs, timestamp);
   };
 
   const consume = (entry: Record<string, unknown>): void => {
@@ -336,18 +439,25 @@ export function createCodexInvocationCollector(sinceMs?: number): {
     if (!payload) return;
     // Codex writes both a top-level `compacted` entry and a separate
     // `context_compacted` event for one compaction. Count only the former.
-    if (entry.type === "compacted") compactionEvents += 1;
+    if (entry.type === "compacted") {
+      compactionEvents += 1;
+      recordCountedTimestamp(entry);
+    }
 
     // Codex emits one turn_context per model turn.
     if (entry.type === "turn_context") {
       assistantTurns += 1;
+      recordCountedTimestamp(entry);
       return;
     }
 
     if (payload.type === "message" && payload.role === "user") {
       for (const text of codexTextValues(payload.content)) {
         const command = /^\s*\/([A-Za-z0-9:_-]+)/.exec(text)?.[1];
-        if (command) commands.add(command);
+        if (command) {
+          commands.add(command);
+          recordCountedTimestamp(entry);
+        }
       }
       return;
     }
@@ -358,6 +468,7 @@ export function createCodexInvocationCollector(sinceMs?: number): {
     const name = stringOf(payload.name);
     if (!name) return;
     counts.set(name, (counts.get(name) ?? 0) + 1);
+    recordCountedTimestamp(entry);
     const input = codexToolInput(payload);
     if (name.startsWith("mcp__")) {
       mcpTools.add(name);
@@ -403,7 +514,35 @@ export function createCodexInvocationCollector(sinceMs?: number): {
     };
   };
 
-  return { consume, finish };
+  const windowProof = (): ParsedInvocationWindowProof => ({
+    ...(earliestCountedMs === undefined
+      ? {}
+      : { earliestCountedAt: new Date(earliestCountedMs).toISOString() }),
+    allCountedEventsTimestamped
+  });
+
+  const snapshot = (): CodexInvocationCollectorSnapshot => ({
+    counts: [...counts.entries()],
+    mcpTools: [...mcpTools],
+    skills: [...skills],
+    subagents: [...subagents],
+    commands: [...commands],
+    fileReads: [...fileReads.entries()],
+    assistantTurns,
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    rootSessionMetaSeen,
+    ...(rootStartedAtMs !== undefined ? { rootStartedAtMs } : {}),
+    rootTaskStarted,
+    ...(lastActivityAt !== undefined ? { lastActivityAt } : {}),
+    compactionEvents,
+    isSubagent,
+    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
+    nestedSessions: [...nestedSessions.entries()],
+    ...(earliestCountedMs !== undefined ? { earliestCountedMs } : {}),
+    allCountedEventsTimestamped
+  });
+
+  return { consume, finish, windowProof, snapshot };
 }
 
 /** Scan this machine's Claude Code + Codex transcripts and aggregate invocations. */

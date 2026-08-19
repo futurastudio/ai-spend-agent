@@ -48,6 +48,7 @@ const descriptors = [
       fieldsRead: [
         "timestamp, model, and token-usage components",
         "session and working-directory metadata for local deduplication and attribution",
+        "explicit system/turn_duration work-unit completion markers and transcript version strings when present",
         "human-prompt and tool metadata for privacy-reduced local activity summaries"
       ],
       verified: [
@@ -67,7 +68,8 @@ const descriptors = [
       ],
       limitations: [
         "Malformed lines are skipped and reported.",
-        "Incomplete token shapes remain unpriced with missing financial evidence instead of becoming $0."
+        "Incomplete token shapes remain unpriced with missing financial evidence instead of becoming $0.",
+        "A system/turn_duration marker proves only that the latest observed turn completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts."
       ]
     },
     fixtures: ["claude-code-v1"]
@@ -117,6 +119,7 @@ const descriptors = [
       ],
       fieldsRead: [
         "session metadata, timestamps, model, and cumulative/last-turn token usage",
+        "explicit event_msg/task_complete work-unit completion markers and session_meta cli_version strings when present",
         "transcript-reported rate-limit windows when present",
         "tool-call metadata for local attribution and optional privacy-safe invocation counts"
       ],
@@ -137,7 +140,8 @@ const descriptors = [
       ],
       limitations: [
         "Only rollout-*.jsonl files are parsed as Codex sessions.",
-        "Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence."
+        "Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence.",
+        "An event_msg/task_complete marker proves only that the latest observed task completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts."
       ]
     },
     fixtures: ["codex-v1"]

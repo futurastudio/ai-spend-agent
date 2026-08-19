@@ -30,6 +30,7 @@ const expectedTools = [
   "sync_provider_spend",
   "get_usage_glance",
   "get_context_health",
+  "get_token_reduction_test",
   "list_sources",
   "get_spend_report",
   "recommend_cuts"
@@ -110,6 +111,16 @@ try {
     path: stateRoot,
     sinceDays: 30
   }, (data) => {
+    assert.equal(data.provenance?.uploaded, false);
+  });
+  await callOk("get_token_reduction_test", {
+    path: stateRoot
+  }, (data) => {
+    assert.equal(data.status, "no_test");
+    assert.equal(data.experiment, null);
+    assert.equal(data.projection, null);
+    assert.equal(data.provenance?.state, "missing");
+    assert.equal(data.provenance?.readOnly, true);
     assert.equal(data.provenance?.uploaded, false);
   });
   await callOk("list_sources", { path: stateRoot }, (data) => {

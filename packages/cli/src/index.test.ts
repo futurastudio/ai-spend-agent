@@ -1,14 +1,28 @@
-import { mkdir, mkdtemp, readFile, realpath, symlink, unlink, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readFile, realpath, symlink, truncate, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  APPROVAL_EVENT_V0_KIND,
+  PROJECT_ECONOMICS_V0_VERSION,
+  aibillCommandV0,
   activitySnapshotCacheFileName,
+  appendApprovalEventV0,
+  createActionVerificationReference,
   readActivitySnapshot,
   sourceStatusDefinitions,
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
+import {
+  appendProjectApprovalEvent,
+  loadProjectAccountabilityState,
+  projectAccountabilityStatePath
+} from "./projectAccountabilityState.js";
+
+const execFileAsync = promisify(execFile);
 
 async function trustConnectedSpendFixture(root: string): Promise<void> {
   const statePath = join(root, ".ai-spend-agent", "spend.json");
@@ -30,6 +44,15 @@ afterEach(() => {
 });
 
 describe("zero-key evidence-first receipt", () => {
+  async function explicitInterventionTimes(): Promise<{
+    approvedAt: string;
+    appliedAt: string;
+  }> {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 2));
+    const approvedAt = new Date().toISOString();
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 2));
+    return { approvedAt, appliedAt: new Date().toISOString() };
+  }
   // Point agent-log discovery at empty dirs so tests never read this
   // machine's real ~/.claude / ~/.codex transcripts.
   beforeEach(async () => {
@@ -68,6 +91,20 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).not.toContain("connect anthropic");
     expect(result.stdout).not.toContain("$87.00");
     expect(result.stdout).not.toContain("demo sample");
+  });
+
+  it("renders a friendly read-only improve setup when no supported evidence exists", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-empty-improve-"));
+    const result = await runCli(["improve", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("aibill improve · one reversible token test");
+    expect(result.stdout).toContain("Use aibill normally to build a comparable baseline");
+    expect(result.stdout).toContain("No token test was created");
+    expect(result.stdout).toContain("Use Claude Code or Codex normally");
+    expect(result.stdout).not.toContain("Couldn't run");
+    expect(result.stdout).not.toMatch(/tokens? (?:fell|reduced|saved) by/iu);
   });
 
   it("keeps explicit sample output deterministic and free of local plan or credential hints", async () => {
@@ -136,7 +173,7 @@ describe("zero-key evidence-first receipt", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("DEMO SAMPLE · illustrative cost/value evidence total: $87.00 · not user data");
-    expect(result.stdout).toContain("npx aibill apply --sample");
+    expect(result.stdout).toContain(aibillCommandV0("apply --sample"));
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
     expect(markdown).toContain("DEMO / SAMPLE DATA");
@@ -173,7 +210,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.8\.1$/);
+    expect(result.stdout).toMatch(/^0\.9\.0$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -216,6 +253,12 @@ describe("zero-key evidence-first receipt", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("instant, zero-key local readout");
+    expect(result.stdout).toContain("--canary passed|failed");
+    expect(result.stdout).toContain("Record user-declared approval/application times and canary");
+    expect(result.stdout).toContain(
+      "npx aibill improve"
+    );
+    expect(result.stdout).toContain("npx aibill improve");
     expect(result.stdout).not.toContain("instant, zero-key demo");
   });
 
@@ -224,7 +267,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--sample", "--group-by", "agent", "--no-color", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Cost/value evidence by agent");
+    expect(result.stdout).toContain("Illustrative evidence by agent");
     expect(result.stdout).toContain("agent-analyst");
   });
 
@@ -233,7 +276,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--sample", "--group-by", "project", "--no-color", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Cost/value evidence by project");
+    expect(result.stdout).toContain("Illustrative evidence by project");
     expect(result.stdout).toMatch(/window: \d+ days? of data/);
     // The drill-down answers one question — the four-stage loop stays out.
     expect(result.stdout).not.toContain("RECOMMEND");
@@ -305,7 +348,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["report", "--path", dir]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("open ");
-    expect(result.stdout).toContain("aibill apply");
+    expect(result.stdout).toContain(aibillCommandV0("apply --since-days 30"));
   });
 
   async function writeClaudeLogFixture() {
@@ -334,10 +377,40 @@ describe("zero-key evidence-first receipt", () => {
     // 1M in @$5 + 100k out @$25 = $7.50, estimated.
     expect(result.stdout).toContain("$7.50");
     expect(result.stdout).toContain("API-equivalent value · not billed spend");
+    expect(result.stdout).toContain("WHAT STANDS OUT");
+    // Published delivery: the improve pointer rides only on a real finding;
+    // no source-preview command paths may leak into the receipt.
+    expect(result.stdout).not.toContain("node packages/cli/dist");
     expect(result.stdout).toContain("Details");
     expect(result.stdout).toContain("npx aibill --full");
     expect(result.stdout).not.toContain("DATA MODE:");
     expect(result.stdout).not.toContain("1 · DIAGNOSE");
+  });
+
+  it("does not call a priced subset the main driver when another local row is unpriced", async () => {
+    await writeClaudeLogFixture();
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    const unknownDir = join(logsDir, "-Users-jose-unknown-model-project");
+    await mkdir(unknownDir, { recursive: true });
+    await writeFile(join(unknownDir, "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 30 * 60 * 1_000).toISOString(),
+      cwd: "/Users/testuser/unknown-model-project",
+      sessionId: "unknown-model-session",
+      requestId: "unknown-model-request",
+      message: {
+        id: "unknown-model-message",
+        model: "claude-model-not-in-pricing-table",
+        usage: { input_tokens: 500_000, output_tokens: 50_000 }
+      }
+    }), "utf8");
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-mixed-financial-coverage-"));
+
+    const result = await runCli(["--path", dir, "--no-color"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("TOP OBSERVED PROJECT");
+    expect(result.stdout).not.toContain("MAIN DRIVER");
   });
 
   it("keeps the complete audit behind --full and respects terminal width", async () => {
@@ -397,6 +470,50 @@ describe("zero-key evidence-first receipt", () => {
     });
   });
 
+  it("never attaches the selected path's token test to an unmatched project filter", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-glance-project-scope-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [72, 48, 24].map((hours) =>
+      new Date(Date.now() - hours * 60 * 60 * 1_000)
+    );
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `glance-project-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "glance-project-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(candidateKey).toBeTruthy();
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    const experimentId = started.stdout.match(/experiment: (tre_v0_[a-f0-9]{64})/)?.[1];
+    expect(experimentId).toBeTruthy();
+
+    const unfiltered = JSON.parse((await runCli([
+      "glance", "--path", dir, "--since-days", "30"
+    ])).stdout);
+    expect(unfiltered.tokenExperiment?.experimentId).toBe(experimentId);
+
+    const filtered = JSON.parse((await runCli([
+      "glance", "--path", dir, "--project", "a-different-project", "--since-days", "30"
+    ])).stdout);
+    expect(filtered.currentSession).toBeNull();
+    expect(filtered.tokenExperiment).toBeUndefined();
+  });
+
   it("rejects an invalid Glance history window", async () => {
     const result = await runCli(["glance", "--since-days", "0"]);
     expect(result.exitCode).toBe(1);
@@ -405,6 +522,19 @@ describe("zero-key evidence-first receipt", () => {
 
   it("keeps terminal JSON and Glance on the same Context Health contract", async () => {
     await writeClaudeLogFixture();
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await writeFile(join(logsDir, "other-project.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date().toISOString(),
+      cwd: "/Users/testuser/otherproject",
+      sessionId: "other-project-session",
+      requestId: "other-project-request",
+      message: {
+        id: "other-project-message",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 9_000_000, output_tokens: 900_000 }
+      }
+    }), "utf8");
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-context-"));
     const terminal = await runCli([
       "context",
@@ -443,6 +573,7 @@ describe("zero-key evidence-first receipt", () => {
     expect(terminalGeneratedAt).toEqual(expect.any(String));
     expect(glanceGeneratedAt).toEqual(expect.any(String));
     expect(glanceContract).toEqual(terminalContract);
+    expect(JSON.stringify(glanceContract)).not.toContain("otherproject");
   });
 
   it("renders Context Health as a readable terminal decision", async () => {
@@ -489,6 +620,22 @@ describe("zero-key evidence-first receipt", () => {
     expect(new Set(ranges).size).toBe(1);
   });
 
+  it("keeps repeated Apply private and usable inside a Git worktree", async () => {
+    await writeClaudeLogFixture();
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-apply-git-private-"));
+    await execFileAsync("git", ["init", "--quiet", dir]);
+
+    const first = await runCli(["apply", "--path", dir]);
+    const second = await runCli(["apply", "--path", dir]);
+
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(await readFile(join(dir, ".ai-spend-agent", ".gitignore"), "utf8"))
+      .toBe("*\n");
+    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--porcelain"]);
+    expect(stdout).toBe("");
+  });
+
   it("report without state or logs explains what to run — and never suggests sample data as the fix for real data", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-empty-"));
     const result = await runCli(["report", "--path", dir]);
@@ -526,13 +673,1413 @@ describe("zero-key evidence-first receipt", () => {
       }
     }));
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-apply-no-candidate-"));
+    const staleCandidatePath = join(dir, ".ai-spend-agent", "waste-finding.json");
+    await mkdir(dirname(staleCandidatePath), { recursive: true });
+    await writeFile(staleCandidatePath, JSON.stringify({ stale: true }));
     const result = await runCli(["apply", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("No scoped change is supported yet");
     expect(result.stdout).toContain("context --json");
     expect(result.stdout).toContain("NO SCOPED CHANGE CANDIDATE");
+    await expect(readFile(staleCandidatePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("turns every report sidecar non-executable and removes stale findings when qualitative coverage is partial", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-partial-"));
+    const projectRoot = await realpath(dir);
+    for (let index = 0; index < 4; index += 1) {
+      await writeClaudeActionSession(
+        `report-partial-${index}`,
+        new Date(Date.now() - (index + 1) * 60 * 60 * 1_000),
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    const oversized = join(
+      process.env.AI_SPEND_CLAUDE_LOGS_DIR!,
+      "-private-customer-token-test",
+      "report-partial-skipped.jsonl"
+    );
+    await writeFile(oversized, "", "utf8");
+    await truncate(oversized, 64 * 1024 * 1024 + 1);
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const staleFindingPath = join(stateDir, "waste-finding.json");
+    await writeFile(staleFindingPath, JSON.stringify({ stale: true }), "utf8");
+
+    const report = await runCli(["report", "--since-days", "7", "--path", dir]);
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout).toContain("action artifacts: suppressed · qualitative index partial");
+    expect(report.stdout).toContain("cost/value evidence total:");
+    expect(report.stdout).toContain(aibillCommandV0("context --json --since-days 7"));
+    expect(report.stdout).not.toContain(aibillCommandV0("apply --since-days 7"));
+    await expect(readFile(staleFindingPath, "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+
+    const reportFiles = ["report.md", "report.html"];
+    for (const name of reportFiles) {
+      const contents = await readFile(join(stateDir, name), "utf8");
+      expect(contents).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
+      expect(contents).not.toContain("trimming context (below)");
+    }
+    const sidecars = [
+      "ai-spend-coding-agent-prompt.md",
+      "ai-spend-action-plan.md",
+      "ai-spend-policy-config-draft.md",
+      "ai-spend-verify-plan.md",
+      "demo-package.md"
+    ];
+    for (const name of sidecars) {
+      const contents = await readFile(join(stateDir, name), "utf8");
+      expect(contents).toContain("NON-EXECUTABLE");
+      expect(contents).toContain("Qualitative indexing is partial");
+      expect(contents).toContain(aibillCommandV0("context --json --since-days 7"));
+      expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
+      expect(contents).not.toContain("Candidate key:");
+    }
+  });
+
+  it("runs one local baseline, approval, canary, and measured token-test lifecycle", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-token-test-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [
+      new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      new Date(Date.now() - 48 * 60 * 60 * 1_000),
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    ];
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+
+    const apply = await runCli(["apply", "--path", dir]);
+    expect(apply.exitCode).toBe(0);
+    expect(apply.stdout).toContain("ONE CANDIDATE:");
+    expect(apply.stdout).toContain("aibill—not this coding agent—calculates");
+    expect(apply.stdout.match(/- Candidate key:/g)).toHaveLength(1);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(candidateKey).toBeTruthy();
+    const finding = JSON.parse(await readFile(
+      join(dir, ".ai-spend-agent", "waste-finding.json"),
+      "utf8"
+    ));
+    expect(finding.candidateKey).toBe(candidateKey);
+    const artifactNames = [
+      "ai-spend-coding-agent-prompt.md",
+      "ai-spend-action-plan.md",
+      "ai-spend-policy-config-draft.md",
+      "ai-spend-verify-plan.md",
+      "demo-package.md"
+    ];
+    const artifacts = await Promise.all(artifactNames.map((name) =>
+      readFile(join(dir, ".ai-spend-agent", name), "utf8")
+    ));
+    for (const artifact of artifacts) {
+      expect(artifact).toContain(candidateKey!);
+      expect(artifact).not.toContain("/private/customer-token-test");
+      expect(artifact).not.toContain("verified_operational_improvement");
+    }
+    expect(artifacts[1]!.match(/Candidate key:/g)).toHaveLength(1);
+    expect(artifacts[1]).toContain("--canary passed|failed");
+    expect(artifacts[1]).toContain("verify rollback <experiment-id>");
+    expect(artifacts[1]).toContain("Only after a passing canary");
+    expect(artifacts[3]).toContain("cannot emit a verified or certified token-reduction claim");
+    expect(artifacts[0]).toContain("--canary passed|failed");
+    expect(artifacts[0]).toContain("verify rollback <experiment-id>");
+    expect(artifacts[3]).toContain("Record either a passing or failed canary");
+    expect(artifacts[3]).not.toContain("A failed canary is not recorded");
+
+    const missingBaselineQuality = await runCli([
+      "verify", "start", candidateKey!, "--path", dir
+    ]);
+    expect(missingBaselineQuality.exitCode).toBe(1);
+    expect(missingBaselineQuality.stderr).toContain("requires --quality held");
+
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    expect(started.exitCode).toBe(0);
+    expect(started.stdout).toContain("baseline: 3/3 matched completed session snapshots");
+    expect(started.stdout).toContain("Baseline frozen locally. Nothing was changed.");
+    expect(started.stdout).toContain("--canary passed|failed");
+    expect(started.stdout).toContain("If it failed, execute the frozen rollback");
+    expect(started.stdout).toContain("do not collect post-change sessions");
+    const experimentId = started.stdout.match(/experiment: (tre_v0_[a-f0-9]{64})/)?.[1];
+    expect(experimentId).toBeTruthy();
+
+    const repeatedStart = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    expect(repeatedStart.exitCode).toBe(0);
+    expect(repeatedStart.stdout).toContain(`experiment: ${experimentId}`);
+    expect(repeatedStart.stdout).toContain("no duplicate baseline was created");
+    const oneStored = JSON.parse(await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    ));
+    expect(oneStored.experiments).toHaveLength(1);
+
+    await unlink(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"));
+    const handedOffApply = await runCli(["apply", "--path", dir]);
+    expect(handedOffApply.exitCode).toBe(0);
+    expect(handedOffApply.stdout).toContain(`experiment: ${experimentId}`);
+    expect(handedOffApply.stdout).toContain("Apply handed off to it");
+    expect(handedOffApply.stdout).not.toContain("aibill apply-artifact");
+    await expect(readFile(
+      join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"),
+      "utf8"
+    )).rejects.toMatchObject({ code: "ENOENT" });
+
+    const reportDuringActiveTest = await runCli(["report", "--path", dir]);
+    expect(reportDuringActiveTest.exitCode).toBe(0);
+    expect(reportDuringActiveTest.stdout).toContain(
+      `action artifacts: preserved · canonical token test ${experimentId} (baseline_ready)`
+    );
+    expect(reportDuringActiveTest.stdout).toContain(
+      "token result: status=not_evaluated; reductionPercent=unavailable; metricEvidence=missing; quality=held; qualityEvidence=user_declared; matchingEvidence=missing"
+    );
+    expect(reportDuringActiveTest.stdout).toContain(
+      "npx aibill improve"
+    );
+    const activeMarkdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const activeHtml = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
+    for (const report of [activeMarkdown, activeHtml]) {
+      expect(report).toContain(experimentId!);
+      expect(report).toContain("npx aibill improve");
+      expect(report.toLowerCase()).toContain("suppressed");
+      expect(report).not.toContain("node packages/cli/dist/index.js apply --since-days");
+    }
+    await expect(readFile(
+      join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"),
+      "utf8"
+    )).rejects.toMatchObject({ code: "ENOENT" });
+
+    const interventionTimes = await explicitInterventionTimes();
+
+    // The active experiment remains the canonical action even after its
+    // original high-context signal disappears from a fresh scan. Apply must
+    // not overwrite the handoff with a contradictory no-candidate artifact.
+    await writeClaudeActionSession(
+      "active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      100,
+      10,
+      projectRoot
+    );
+    const handedOffWithoutCurrentFinding = await runCli(["apply", "--path", dir]);
+    expect(handedOffWithoutCurrentFinding.exitCode).toBe(0);
+    expect(handedOffWithoutCurrentFinding.stdout).toContain(`experiment: ${experimentId}`);
+    expect(handedOffWithoutCurrentFinding.stdout).toContain("Apply handed off to it");
+    expect(handedOffWithoutCurrentFinding.stdout).not.toContain("NO SCOPED CHANGE CANDIDATE");
+    await expect(readFile(
+      join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"),
+      "utf8"
+    )).rejects.toMatchObject({ code: "ENOENT" });
+
+    const wrongQualitySurface = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt, "--canary", "passed",
+      "--quality", "held", "--path", dir
+    ]);
+    expect(wrongQualitySurface.exitCode).toBe(1);
+    expect(wrongQualitySurface.stderr).toContain("does not accept --quality");
+
+    const failedCanary = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt, "--canary", "failed", "--path", dir
+    ]);
+    expect(failedCanary.exitCode).toBe(1);
+    expect(failedCanary.stderr).toContain("requires 64-character SHA-256 values");
+    const stillBaseline = await runCli(["verify", experimentId!, "--path", dir]);
+    expect(stillBaseline.stdout).toContain("state: approve_one_change");
+
+    const applied = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt, "--canary", "passed",
+      "--change-digest", "a".repeat(64),
+      "--rollback-digest", "b".repeat(64),
+      "--canary-digest", "c".repeat(64),
+      "--path", dir
+    ]);
+    expect(applied.exitCode).toBe(0);
+    expect(applied.stdout).toContain("state: collect_post_change");
+    const wrongCanarySurface = await runCli([
+      "verify", experimentId!, "--canary", "passed", "--path", dir
+    ]);
+    expect(wrongCanarySurface.exitCode).toBe(1);
+    expect(wrongCanarySurface.stderr).toContain("does not accept --canary");
+    const mutableWindow = await runCli([
+      "verify", experimentId!, "--since-days", "1", "--path", dir
+    ]);
+    expect(mutableWindow.exitCode).toBe(1);
+    expect(mutableWindow.stderr).toContain("immutable intervention boundary");
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
+    for (let index = 0; index < 4; index += 1) {
+      await writeClaudeActionSession(
+        `post-${index}`,
+        new Date(),
+        50,
+        5,
+        projectRoot
+      );
+    }
+
+    // A bounded scan that omits any eligible Claude file is not a
+    // representative experiment cohort. The compact default may keep showing
+    // the persisted collecting state, but it must not refresh a percentage
+    // from only the selected subset or mutate the canonical experiment.
+    const oversized = join(
+      process.env.AI_SPEND_CLAUDE_LOGS_DIR!,
+      "-private-customer-token-test",
+      "omitted-for-budget.jsonl"
+    );
+    await writeFile(oversized, "");
+    await truncate(oversized, 64 * 1024 * 1024 + 1);
+    const beforePartialQuickstart = await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    );
+    const partialQuickstart = await runCli(["--path", dir, "--no-color"]);
+    expect(partialQuickstart.stdout).not.toContain("fewer tokens");
+    expect(await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    )).toBe(beforePartialQuickstart);
+    await unlink(oversized);
+
+    // Refreshing an existing frozen Claude cohort depends on Claude's exact
+    // qualitative coverage, not an unrelated partial Codex index. Report may
+    // project the fresh result read-only, but must not persist it.
+    const unrelatedCodexGap = join(
+      process.env.AI_SPEND_CODEX_LOGS_DIR!,
+      "unrelated-codex-skipped.jsonl"
+    );
+    await writeFile(unrelatedCodexGap, "", "utf8");
+    await truncate(unrelatedCodexGap, 64 * 1024 * 1024 + 1);
+    const beforeReadOnlyReportRefresh = await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    );
+    const exactCohortReport = await runCli(["report", "--path", dir]);
+    expect(exactCohortReport.exitCode).toBe(0);
+    expect(exactCohortReport.stdout).toContain(
+      `action artifacts: preserved · canonical token test ${experimentId} (collecting)`
+    );
+    expect(exactCohortReport.stdout).toContain(
+      "status=inconclusive; reductionPercent=unavailable; metricEvidence=missing; quality=insufficient; qualityEvidence=missing; matchingEvidence=observed"
+    );
+    expect(exactCohortReport.stdout).not.toContain("apply --since-days");
+    expect(await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    )).toBe(beforeReadOnlyReportRefresh);
+    await unlink(unrelatedCodexGap);
+
+    const measured = await runCli([
+      "verify", experimentId!, "--quality", "held", "--path", dir
+    ]);
+    expect(measured.exitCode).toBe(0);
+    expect(measured.stdout).toContain("result: measured token reduction");
+    expect(measured.stdout).toContain("matched session cohort");
+    expect(measured.stdout).toContain("not certified savings, verified ROI, or a provider bill");
+    expect(measured.stdout).not.toContain("verified token reduction");
+
+    const completeStatePath = join(
+      dir,
+      ".ai-spend-agent",
+      "token-reduction-experiments.json"
+    );
+    const completeState = await readFile(completeStatePath, "utf8");
+    const terminalRelabel = await runCli([
+      "verify", experimentId!, "--quality", "regressed", "--path", dir
+    ]);
+    expect(terminalRelabel.exitCode).toBe(1);
+    expect(terminalRelabel.stderr).toContain("terminal or failed-canary token tests");
+    expect(await readFile(completeStatePath, "utf8")).toBe(completeState);
+
+    const jsonResult = await runCli(["verify", experimentId!, "--json", "--path", dir]);
+    const parsed = JSON.parse(jsonResult.stdout);
+    expect(parsed.projection).toMatchObject({
+      state: "review_measured_result",
+      evidenceLabel: "calculated",
+      qualityLabel: "held"
+    });
+    expect(parsed.experiment.id).toBe(experimentId);
+    expect(parsed.experiment.revisionId).toMatch(/^trev_v0_[a-f0-9]{64}$/);
+    expect(JSON.stringify(parsed)).not.toContain("/private/customer-token-test");
+
+    const completedReport = await runCli(["report", "--path", dir]);
+    expect(completedReport.exitCode).toBe(0);
+    expect(completedReport.stdout).toContain(
+      `action artifacts: preserved · canonical token test ${experimentId} (complete)`
+    );
+    expect(completedReport.stdout).toContain(
+      `token result: status=measured_token_reduction; reductionPercent=${parsed.projection.reductionPercent}; metricEvidence=calculated; quality=held; qualityEvidence=user_declared; matchingEvidence=${parsed.experiment.evaluation.matchingEvidence}`
+    );
+    expect(completedReport.stdout).toContain("cost/value evidence total:");
+    expect(completedReport.stdout).not.toContain("apply --since-days");
+    const completedMarkdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const completedHtml = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
+    for (const report of [completedMarkdown, completedHtml]) {
+      expect(report).toContain(experimentId!);
+      expect(report).toContain("status=measured_token_reduction");
+      expect(report).toContain(`measured token change=${parsed.projection.reductionPercent}% reduction`);
+      expect(report).toContain("metric evidence=calculated");
+      expect(report).toContain("quality=held (user_declared)");
+      expect(report).toContain(`matching evidence=${parsed.experiment.evaluation.matchingEvidence}`);
+      expect(report).not.toContain("apply --since-days");
+    }
+
+    const improveResult = await runCli(["improve", "--path", dir]);
+    expect(improveResult.exitCode).toBe(0);
+    expect(improveResult.stdout).toContain("RESULT");
+    expect(improveResult.stdout).toContain(
+      `${parsed.projection.reductionPercent}% fewer tokens per comparable completed session`
+    );
+    expect(improveResult.stdout).toContain(
+      "Evidence: calculated · quality: held (user_declared)"
+    );
+
+    const glance = await runCli(["glance", "--path", dir, "--since-days", "30"]);
+    const glanceSnapshot = JSON.parse(glance.stdout);
+    expect(glanceSnapshot.tokenExperiment).toEqual(parsed.projection);
+  });
+
+  it("preserves held quality for a negative-token regression in accountability JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aibill-accountability-token-regression-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [72, 48, 24].map((hours) =>
+      new Date(Date.now() - hours * 60 * 60 * 1_000)
+    );
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `regression-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "regression-active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(candidateKey).toBeTruthy();
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    const experimentId = started.stdout.match(/experiment: (tre_v0_[a-f0-9]{64})/)?.[1];
+    expect(experimentId).toBeTruthy();
+    const interventionTimes = await explicitInterventionTimes();
+    const applied = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt,
+      "--canary", "passed",
+      "--change-digest", "1".repeat(64),
+      "--rollback-digest", "2".repeat(64),
+      "--canary-digest", "3".repeat(64),
+      "--path", dir
+    ]);
+    expect(applied.exitCode).toBe(0);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
+    for (let index = 0; index < 4; index += 1) {
+      await writeClaudeActionSession(
+        `regression-post-${index}`,
+        new Date(),
+        200 + index * 10,
+        20,
+        projectRoot
+      );
+    }
+
+    const verified = await runCli([
+      "verify", experimentId!, "--quality", "held", "--path", dir
+    ]);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("state: rollback");
+    expect(verified.stdout).toContain("more tokens in the matched session cohort");
+    expect(verified.stdout).toContain("quality: held (user_declared)");
+
+    const accountability = await runCli(["accountability", "--json", "--path", dir]);
+    expect(accountability.exitCode).toBe(0);
+    expect(JSON.parse(accountability.stdout).tokenTest).toMatchObject({
+      status: "regressed",
+      reductionPercent: expect.any(Number),
+      quality: "held"
+    });
+    expect(JSON.parse(accountability.stdout).tokenTest.reductionPercent).toBeLessThan(0);
+  });
+
+  it("persists pre-change approval before handoff and resumes after output loss without SHA input", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-guided-improve-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [
+      new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      new Date(Date.now() - 48 * 60 * 60 * 1_000),
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    ];
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `guided-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "guided-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const responses = [
+      "y",
+      "y",
+      "started the next comparable task with only required context",
+      "restore the prior session workflow",
+      "project tests pass",
+      "Jose Artigas",
+      "Developer Experience",
+      "Founder",
+      "",
+      "R&D",
+      "APPROVE"
+    ];
+    const started = await runCli(["improve", "--path", dir], {
+      interactive: true,
+      prompt: async () => responses.shift() ?? ""
+    });
+
+    expect(started.exitCode).toBe(0);
+    expect(started.stdout).toContain("Approved · token test tre_v0_");
+    expect(started.stdout).toContain("FOR YOUR AGENT");
+    expect(started.stdout).toContain("Pre-change local self-attestation");
+    expect(started.stdout).toContain("NEXT COMMAND");
+    expect(started.stdout).toContain("npx aibill improve");
+    expect(started.stdout).not.toContain("--change-digest");
+    expect(started.stdout).not.toContain("<sha256>");
+
+    const statePath = join(dir, ".ai-spend-agent", "token-reduction-experiments.json");
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    expect(state.experiments).toHaveLength(1);
+    expect(state.experiments[0]).toMatchObject({
+      lifecycle: "baseline_ready",
+      intervention: { approval: { status: "pending" } }
+    });
+    const accountabilityStatePath = await projectAccountabilityStatePath(dir);
+    const preApplicationAccountabilityText = await readFile(
+      accountabilityStatePath,
+      "utf8"
+    );
+    const preApplicationAccountability = JSON.parse(preApplicationAccountabilityText);
+    expect(preApplicationAccountability.approvals).toHaveLength(1);
+    expect(preApplicationAccountability.approvals[0]).toMatchObject({
+      decision: "approved",
+      attestation: {
+        scope: "local_self_attested",
+        evidence: "user_declared",
+        rbacVerified: false
+      }
+    });
+    expect(preApplicationAccountabilityText).not.toContain(
+      "started the next comparable task with only required context"
+    );
+    expect(preApplicationAccountabilityText).not.toContain("restore the prior session workflow");
+    expect(preApplicationAccountabilityText).not.toContain("project tests pass");
+    const preApplicationView = await runCli(["accountability", "--path", dir]);
+    expect(preApplicationView.stdout).toContain(
+      "linked pre-change local self-attestation"
+    );
+    expect(preApplicationView.stdout).not.toContain(
+      "this does not approve the current token test"
+    );
+
+    // A later project event is real local evidence, but it cannot inherit the
+    // earlier plan's linkage. The human view must show the latest event and
+    // call it unlinked rather than silently substituting the older approval.
+    const unrelatedApprovals = appendApprovalEventV0(
+      preApplicationAccountability.approvals,
+      {
+        kind: APPROVAL_EVENT_V0_KIND,
+        schemaVersion: PROJECT_ECONOMICS_V0_VERSION,
+        approvedAt: new Date(
+          Date.parse(preApplicationAccountability.approvals[0].approvedAt) + 1
+        ).toISOString(),
+        decision: "approved",
+        attestation: preApplicationAccountability.approvals[0].attestation,
+        references: {
+          actionRef: createActionVerificationReference("unrelated-action", "latest"),
+          changeRef: createActionVerificationReference("unrelated-change", "latest"),
+          rollbackRef: createActionVerificationReference("unrelated-rollback", "latest"),
+          canaryRef: createActionVerificationReference("unrelated-canary", "latest")
+        }
+      }
+    );
+    await writeFile(
+      accountabilityStatePath,
+      `${JSON.stringify({
+        ...preApplicationAccountability,
+        approvals: unrelatedApprovals
+      }, null, 2)}\n`,
+      "utf8"
+    );
+    const unrelatedLatestView = await runCli(["accountability", "--path", dir]);
+    expect(unrelatedLatestView.stdout).toContain("Unlinked project evidence");
+    expect(unrelatedLatestView.stdout).toContain(
+      "this does not approve the current token test"
+    );
+
+    const observed = await runCli(["improve", "--path", dir]);
+    expect(observed.exitCode).toBe(0);
+    expect(observed.stdout).toContain(
+      "No experiment, approval, or project state changed. The private local evidence cache may refresh."
+    );
+    expect(await readFile(statePath, "utf8")).toBe(JSON.stringify(state, null, 2) + "\n");
+
+    const applicationQuestions: string[] = [];
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 2));
+    const actualAppliedAt = new Date().toISOString();
+    const applyResponses = [actualAppliedAt, "passed"];
+    const applied = await runCli(["improve", "--path", dir], {
+      interactive: true,
+      prompt: async (question) => {
+        applicationQuestions.push(question);
+        return applyResponses.shift() ?? "";
+      }
+    });
+    expect(applied.exitCode).toBe(0);
+    expect(applied.stdout).toContain("canary: passed (user-declared)");
+    expect(applied.stdout).not.toContain("started the next comparable task");
+    expect(applied.stdout).not.toContain("project tests pass");
+    expect(applicationQuestions).toHaveLength(2);
+    expect(applicationQuestions[0]).toContain("When was the approved change applied?");
+    expect(applicationQuestions[1]).toContain("Did the approved canary pass?");
+    expect(applicationQuestions.join("\n")).not.toContain("what exact reversible change");
+    const appliedStateText = await readFile(statePath, "utf8");
+    const appliedState = JSON.parse(appliedStateText);
+    expect(appliedState.experiments[0]).toMatchObject({
+      lifecycle: "applied",
+      intervention: {
+        approval: { status: "explicit", evidence: "user_declared" },
+        canary: { status: "passed", evidence: "user_declared" }
+      }
+    });
+    expect(appliedStateText).not.toContain("started the next comparable task");
+    expect(appliedStateText).not.toContain("restore the prior session workflow");
+    expect(appliedStateText).not.toContain("project tests passed");
+    const accountabilityStateText = await readFile(accountabilityStatePath, "utf8");
+    const accountabilityState = JSON.parse(accountabilityStateText);
+    expect(accountabilityState.ownership.displayLabels).toEqual({
+      humanOwner: "Jose Artigas",
+      team: "Developer Experience",
+      costCenter: "R&D"
+    });
+    expect(accountabilityState.approvals).toHaveLength(2);
+    expect(accountabilityState.approvals[0]).toMatchObject({
+      decision: "approved",
+      attestation: {
+        scope: "local_self_attested",
+        evidence: "user_declared",
+        rbacVerified: false
+      },
+      references: {
+        changeRef: appliedState.experiments[0].intervention.changeRef,
+        rollbackRef: appliedState.experiments[0].intervention.rollbackRef
+      }
+    });
+    expect(accountabilityStateText).not.toContain("started the next comparable task");
+    expect(accountabilityStateText).not.toContain("project tests pass");
+    expect(Date.parse(accountabilityState.approvals[0].approvedAt)).toBeLessThanOrEqual(
+      Date.parse(appliedState.experiments[0].intervention.appliedAt)
+    );
+    expect(appliedState.experiments[0].intervention.appliedAt).toBe(actualAppliedAt);
+  });
+
+  it("never emits an agent handoff when pre-change approval is declined", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-declined-approval-"));
+    await execFileAsync("git", ["init", "--quiet", dir]);
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [72, 48, 24].map((hours) =>
+      new Date(Date.now() - hours * 60 * 60 * 1_000)
+    );
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `declined-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "declined-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const responses = [
+      "y",
+      "y",
+      "limit the next task to the required files",
+      "restore the previous task context",
+      "run the project test suite",
+      "Alice",
+      "Platform",
+      "Lead",
+      "",
+      "",
+      "NO"
+    ];
+    const result = await runCli(["improve", "--path", dir], {
+      interactive: true,
+      prompt: async () => responses.shift() ?? ""
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Not approved");
+    expect(result.stdout).not.toContain("FOR YOUR AGENT");
+    expect(result.stdout).not.toContain("Execute only the pre-approved reversible plan");
+    // The plan draft may create the private storage directory, but no
+    // ownership or approval state exists until APPROVE is typed.
+    const declinedAccountabilityPath = await projectAccountabilityStatePath(dir);
+    await expect(readFile(declinedAccountabilityPath, "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(
+      join(dirname(declinedAccountabilityPath), "improve-draft.json"),
+      "utf8"
+    )).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(dir, ".ai-spend-agent", ".gitignore"), "utf8")).toBe("*\n");
+    const { stdout: gitStatus } = await execFileAsync("git", [
+      "-C", dir, "status", "--porcelain"
+    ]);
+    expect(gitStatus).toBe("");
+  });
+
+  it("starts a fresh guided baseline after an un-applied test is cancelled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-cancel-restart-"));
+    const projectRoot = await realpath(dir);
+    for (const [index, hoursAgo] of [72, 48, 24].entries()) {
+      await writeClaudeActionSession(
+        `cancel-restart-baseline-${index}`,
+        new Date(Date.now() - hoursAgo * 60 * 60 * 1_000),
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "cancel-restart-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(
+      /Candidate key: (wfc_v0_[a-f0-9]{64})/
+    )?.[1];
+    expect(candidateKey).toBeTruthy();
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    const cancelledId = started.stdout.match(
+      /experiment: (tre_v0_[a-f0-9]{64})/
+    )?.[1];
+    expect(cancelledId).toBeTruthy();
+
+    const cancelled = await runCli([
+      "verify", "cancel", cancelledId!, "--path", dir
+    ]);
+    expect(cancelled.exitCode).toBe(0);
+    expect(cancelled.stdout).toContain("scope is available for a new baseline");
+
+    const prompts: string[] = [];
+    const responses = ["y", "y"];
+    const restarted = await runCli(["improve", "--path", dir], {
+      interactive: true,
+      prompt: async (question) => {
+        prompts.push(question);
+        return responses.shift() ?? "";
+      }
+    });
+    expect(restarted.exitCode).toBe(0);
+    expect(prompts[0]).toContain("Start this token test?");
+    // The empty answers reprompt in place until the non-TTY circuit breaker
+    // cancels; the plan stays unfinished and nothing was approved.
+    expect(restarted.stdout).toContain("plan not finished");
+
+    const state = JSON.parse(await readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    ));
+    expect(state.experiments).toHaveLength(2);
+    expect(state.experiments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: cancelledId, lifecycle: "invalidated" }),
+      expect.objectContaining({ lifecycle: "baseline_ready" })
+    ]));
+  });
+
+  it("never offers or persists a token test from another project root", async () => {
+    const baselineTimes = [72, 48, 24].map((hours) =>
+      new Date(Date.now() - hours * 60 * 60 * 1_000)
+    );
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `scope-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10
+      );
+    }
+    await writeClaudeActionSession(
+      "scope-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20
+    );
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-cross-project-approval-"));
+    const receipt = await runCli(["--path", dir, "--no-color"]);
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).not.toContain("WHY IT'S HIGH");
+    expect(receipt.stdout).not.toContain("npx aibill improve");
+    expect(receipt.stdout).toContain("npx aibill --full");
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(apply.exitCode).toBe(0);
+    expect(candidateKey).toBeUndefined();
+    expect(apply.stdout).toContain("No scoped change is supported yet");
+    expect(apply.stdout).not.toContain("/private/customer-token-test");
+    await expect(readFile(
+      join(dir, ".ai-spend-agent", "token-reduction-experiments.json"),
+      "utf8"
+    )).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails closed before handoff when approval persistence loses its append race", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-raced-approval-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [72, 48, 24].map((hours) =>
+      new Date(Date.now() - hours * 60 * 60 * 1_000)
+    );
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `raced-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "raced-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const identified = await runCli([
+      "identify", "--path", dir,
+      "--person", "Alice", "--team", "Platform", "--role", "Lead"
+    ]);
+    expect(identified.exitCode).toBe(0);
+
+    const answers = [
+      "y",
+      "y",
+      "limit the next task to required files",
+      "restore the prior task context",
+      "run the project tests",
+      "y"
+    ];
+    let competingApprovalId: string | undefined;
+    const result = await runCli(["improve", "--path", dir], {
+      interactive: true,
+      prompt: async (question) => {
+        if (!question.includes("Type APPROVE")) return answers.shift() ?? "";
+        const current = await loadProjectAccountabilityState(dir);
+        const ownership = current.ownership!;
+        const raced = await appendProjectApprovalEvent(dir, {
+          kind: APPROVAL_EVENT_V0_KIND,
+          schemaVersion: PROJECT_ECONOMICS_V0_VERSION,
+          approvedAt: new Date().toISOString(),
+          decision: "approved",
+          attestation: {
+            scope: "local_self_attested",
+            evidence: "user_declared",
+            approverIdentityRef: ownership.contract.confirmation.confirmedByRef,
+            approverRoleRef: ownership.approverRole.roleRef,
+            rbacVerified: false
+          },
+          references: {
+            actionRef: createActionVerificationReference("competing-action", "one"),
+            changeRef: createActionVerificationReference("competing-change", "one"),
+            rollbackRef: createActionVerificationReference("competing-rollback", "one"),
+            canaryRef: createActionVerificationReference("competing-canary", "one")
+          }
+        }, { expectedPreviousEventId: null });
+        competingApprovalId = raced.approvals[0]?.id;
+        return "APPROVE";
+      }
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Approval history changed after it was read");
+    expect(result.stderr).not.toContain("Paste this into");
+    const state = await loadProjectAccountabilityState(dir);
+    expect(state.approvals.map((event) => event.id)).toEqual([competingApprovalId]);
+  });
+
+  it("confirms local ownership and renders the four-question accountability view", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aibill-accountability-cli-"));
+    const identified = await runCli([
+      "identify", "--path", dir,
+      "--person", "Jose Artigas",
+      "--team", "Developer Experience",
+      "--role", "Founder",
+      "--client", "Futura Studio",
+      "--cost-center", "R&D"
+    ]);
+    expect(identified.exitCode).toBe(0);
+    expect(identified.stdout).toContain("Project accountability confirmed locally");
+    expect(identified.stdout).toContain("not inferred · not company RBAC");
+
+    const view = await runCli(["accountability", "--path", dir]);
+    expect(view.exitCode).toBe(0);
+    expect(view.stdout).toContain("WHO OWNS THIS COST?");
+    expect(view.stdout).toContain("Jose Artigas · Developer Experience");
+    expect(view.stdout).toContain("WHAT OUTCOME DID IT PRODUCE?");
+    expect(view.stdout).toContain("WHO APPROVED THE CHANGE?");
+    expect(view.stdout).toContain("No matched token test yet");
+    expect(view.stdout).toContain("Not reconciled in this local preview");
+
+    const json = await runCli(["accountability", "--json", "--path", dir]);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      schemaVersion: 1,
+      owner: {
+        status: "confirmed",
+        human: "Jose Artigas",
+        team: "Developer Experience",
+        basis: "local_user_confirmation"
+      },
+      outcome: { status: "missing" },
+      approval: { status: "missing", rbacVerified: false },
+      billReconciliation: { status: "not_attempted", invoiceReconciled: false },
+      projectEconomicsReceipt: {
+        status: "incomplete",
+        missing: expect.arrayContaining(["accepted_outcome", "token_experiment"])
+      }
+    });
+  });
+
+  it("never presents accountability state copied from a different project root", async () => {
+    const source = await mkdtemp(join(tmpdir(), "aibill-accountability-source-"));
+    const target = await mkdtemp(join(tmpdir(), "aibill-accountability-copy-"));
+    const identified = await runCli([
+      "identify", "--path", source,
+      "--person", "Alice", "--team", "Platform", "--role", "Owner"
+    ]);
+    expect(identified.exitCode).toBe(0);
+    const sourceStatePath = await projectAccountabilityStatePath(source);
+    const targetStatePath = await projectAccountabilityStatePath(target, { create: true });
+    await writeFile(
+      targetStatePath,
+      await readFile(sourceStatePath, "utf8"),
+      { mode: 0o600 }
+    );
+
+    const view = await runCli(["accountability", "--path", target]);
+    expect(view.exitCode).toBe(1);
+    expect(view.stdout).toBe("");
+    expect(view.stderr).toContain("different canonical project root");
+    expect(view.stderr).not.toContain("Alice");
+
+    const outcome = await runCli(["outcome", "github", "--path", target, "--pr", "1"]);
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.stderr).toContain("different canonical project root");
+  });
+
+  it("records a merged GitHub outcome only when every observed status check passed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aibill-github-outcome-cli-"));
+    const bin = await mkdtemp(join(tmpdir(), "aibill-fake-gh-"));
+    const gh = join(bin, "gh");
+    const git = join(bin, "git");
+    const payload = JSON.stringify({
+      number: 28,
+      state: "MERGED",
+      mergedAt: "2026-08-16T15:00:00Z",
+      mergeCommit: { oid: "a".repeat(40) },
+      url: "https://github.com/futurastudio/ai-spend-agent/pull/28",
+      headRefOid: "b".repeat(40),
+      statusCheckRollup: [
+        { name: "test", status: "COMPLETED", conclusion: "SUCCESS" }
+      ]
+    });
+    await writeFile(gh, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(payload)});\n`);
+    await chmod(gh, 0o700);
+    await writeFile(
+      git,
+      `#!/usr/bin/env node\nconst args = process.argv.slice(2);\n` +
+        `if (args[0] === "rev-parse") process.stdout.write(${JSON.stringify(`${dir}\n`)});\n` +
+        `else if (args[0] === "remote") process.stdout.write("git@github.com:futurastudio/ai-spend-agent.git\\n");\n` +
+        `else process.exitCode = 1;\n`
+    );
+    await chmod(git, 0o700);
+    const identified = await runCli([
+      "identify", "--path", dir,
+      "--person", "Jose", "--team", "Platform", "--role", "Owner"
+    ]);
+    expect(identified.exitCode).toBe(0);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    try {
+      const recorded = await runCli([
+        "outcome", "github", "--path", dir, "--pr", "28",
+        "--business-outcome", "Shipped the launch-critical onboarding flow"
+      ]);
+      expect(recorded.exitCode).toBe(0);
+      expect(recorded.stdout).toContain("Accepted GitHub outcome recorded locally");
+      expect(recorded.stdout).toContain("PR #28");
+      expect(recorded.stdout).toContain("observed status checks passed");
+      expect(recorded.stdout).not.toContain("required checks passed");
+      const view = await runCli(["accountability", "--path", dir]);
+      expect(view.stdout).toContain(
+        "Unlinked project evidence · GitHub outcome accepted 2026-08-16T15:00:00.000Z"
+      );
+      expect(view.stdout).toContain("does not show that the current token test produced it");
+      expect(view.stdout).toContain("Shipped the launch-critical onboarding flow");
+      expect(view.stdout).toContain("PROJECT ECONOMICS RECEIPT");
+      expect(view.stdout).toContain("token_experiment");
+      const state = await readFile(await projectAccountabilityStatePath(dir), "utf8");
+      expect(state).not.toContain("github.com");
+      expect(state).not.toContain("a".repeat(40));
+      expect(state).not.toContain("b".repeat(40));
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  it("labels only new missing post-change rows and never rewrites earlier quality", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-quality-immutable-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [
+      new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      new Date(Date.now() - 48 * 60 * 60 * 1_000),
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    ];
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `quality-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "quality-active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(candidateKey).toBeTruthy();
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    const experimentId = started.stdout.match(/experiment: (tre_v0_[a-f0-9]{64})/)?.[1];
+    expect(experimentId).toBeTruthy();
+    const interventionTimes = await explicitInterventionTimes();
+    const applied = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt, "--canary", "passed",
+      "--change-digest", "a".repeat(64),
+      "--rollback-digest", "b".repeat(64),
+      "--canary-digest", "c".repeat(64),
+      "--path", dir
+    ]);
+    expect(applied.exitCode).toBe(0);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
+    await writeClaudeActionSession("quality-post-held-0", new Date(), 50, 5, projectRoot);
+    await writeClaudeActionSession("quality-post-held-1", new Date(), 50, 5, projectRoot);
+    const held = await runCli([
+      "verify", experimentId!, "--quality", "held", "--path", dir
+    ]);
+    expect(held.exitCode).toBe(0);
+    const statePath = join(
+      dir,
+      ".ai-spend-agent",
+      "token-reduction-experiments.json"
+    );
+    const afterHeld = JSON.parse(await readFile(statePath, "utf8")).experiments[0];
+    const passedRefs = afterHeld.postSessions
+      .filter((session: { quality: { status: string } }) => session.quality.status === "passed")
+      .map((session: { sessionRef: string }) => session.sessionRef);
+    expect(passedRefs.length).toBeGreaterThan(0);
+
+    await writeClaudeActionSession(
+      "quality-post-regressed-0",
+      new Date(),
+      45,
+      5,
+      projectRoot
+    );
+    await writeClaudeActionSession(
+      "quality-post-regressed-1",
+      new Date(),
+      45,
+      5,
+      projectRoot
+    );
+    const regressed = await runCli([
+      "verify", experimentId!, "--quality", "regressed", "--path", dir
+    ]);
+    expect(regressed.exitCode).toBe(0);
+    const afterRegressed = JSON.parse(await readFile(statePath, "utf8")).experiments[0];
+    const qualityByRef = new Map(afterRegressed.postSessions.map(
+      (session: { sessionRef: string; quality: { status: string } }) => [
+        session.sessionRef,
+        session.quality.status
+      ]
+    ));
+    for (const sessionRef of passedRefs) expect(qualityByRef.get(sessionRef)).toBe("passed");
+    expect([...qualityByRef.values()]).toContain("failed");
+  });
+
+  it("preserves connected billing bytes while local action evidence uses the exact requested window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connected-action-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [
+      new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      new Date(Date.now() - 48 * 60 * 60 * 1_000),
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    ];
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `connected-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "connected-active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const stateDir = join(dir, ".ai-spend-agent");
+    const spendPath = join(stateDir, "spend.json");
+    await mkdir(stateDir, { recursive: true });
+    const spendRaw = `${JSON.stringify({
+      mode: "connected_provider",
+      records: [{
+        id: "provider-billed-window-row",
+        timestamp: new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+        source: {
+          id: "openai-provider-api",
+          name: "OpenAI Costs API",
+          provider: "openai",
+          confidence: "verified",
+          observedFrom: "fixture"
+        },
+        model: "provider-billing",
+        inputTokens: 0,
+        outputTokens: 0,
+        amountUsd: 12.34,
+        costConfidence: "verified",
+        providerCostType: "openai_cost",
+        usageGranularity: "billing_bucket"
+      }],
+      summary: { totalUsd: 12.34 },
+      accounting: { coverageByProvider: { openai: "complete" } },
+      futureField: { preserveExactly: true }
+    }, null, 2)}\n`;
+    await writeFile(spendPath, spendRaw, "utf8");
+    await writeConnectedSpendTrustReceipt(dir, spendRaw);
+
+    const apply = await runCli(["apply", "--since-days", "7", "--path", dir]);
+    expect(apply.exitCode).toBe(0);
+    expect(apply.stdout).toContain("ONE CANDIDATE:");
+    expect(apply.stdout).toContain("--since-days 7");
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+    const prompt = await readFile(
+      join(stateDir, "ai-spend-coding-agent-prompt.md"),
+      "utf8"
+    );
+    const actionPlan = await readFile(join(stateDir, "ai-spend-action-plan.md"), "utf8");
+    const demoPackage = await readFile(join(stateDir, "demo-package.md"), "utf8");
+    expect(prompt).toContain("verify inspect");
+    expect(prompt).toContain("--since-days 7");
+    expect(actionPlan).toContain("--since-days 7");
+    expect(demoPackage).toContain("apply --since-days 7");
+    expect(demoPackage).toContain("verify start");
+    expect(demoPackage).toContain("--since-days 7");
+    expect(demoPackage).toContain("--canary passed|failed");
+    expect(demoPackage).toContain("verify rollback <experiment-id>");
+    expect(demoPackage).toContain("Passing canary only");
+
+    const report = await runCli(["report", "--since-days", "7", "--path", dir]);
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout).toContain("apply --since-days 7");
+    expect(await readFile(spendPath, "utf8")).toBe(spendRaw);
+    const markdown = await readFile(join(stateDir, "report.md"), "utf8");
+    expect(markdown).toContain("$12.34");
+    expect(markdown).toContain("provider-reported cost");
+  });
+
+  it("persists a failed canary, then requires one exact separately evidenced rollback", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-failed-canary-"));
+    const projectRoot = await realpath(dir);
+    const baselineTimes = [
+      new Date(Date.now() - 72 * 60 * 60 * 1_000),
+      new Date(Date.now() - 48 * 60 * 60 * 1_000),
+      new Date(Date.now() - 24 * 60 * 60 * 1_000)
+    ];
+    for (const [index, timestamp] of baselineTimes.entries()) {
+      await writeClaudeActionSession(
+        `failed-baseline-${index}`,
+        timestamp,
+        100 + index * 10,
+        10,
+        projectRoot
+      );
+    }
+    await writeClaudeActionSession(
+      "failed-active-high",
+      new Date(Date.now() - 2 * 60 * 1_000),
+      500,
+      20,
+      projectRoot
+    );
+    const apply = await runCli(["apply", "--path", dir]);
+    const candidateKey = apply.stdout.match(/Candidate key: (wfc_v0_[a-f0-9]{64})/)?.[1];
+    expect(candidateKey).toBeTruthy();
+    const started = await runCli([
+      "verify", "start", candidateKey!, "--quality", "held", "--path", dir
+    ]);
+    const experimentId = started.stdout.match(/experiment: (tre_v0_[a-f0-9]{64})/)?.[1];
+    expect(experimentId).toBeTruthy();
+    const interventionTimes = await explicitInterventionTimes();
+
+    const failed = await runCli([
+      "verify", "mark-applied", experimentId!,
+      "--approved-at", interventionTimes.approvedAt,
+      "--applied-at", interventionTimes.appliedAt, "--canary", "failed",
+      "--change-digest", "a".repeat(64),
+      "--rollback-digest", "b".repeat(64),
+      "--canary-digest", "c".repeat(64),
+      "--path", dir
+    ]);
+    expect(failed.exitCode).toBe(1);
+    expect(failed.stderr).toContain("Canary failed");
+    expect(failed.stdout).toContain("record that separate boundary");
+    const statePath = join(
+      dir,
+      ".ai-spend-agent",
+      "token-reduction-experiments.json"
+    );
+    const failedStateText = await readFile(statePath, "utf8");
+    const failedExperiment = JSON.parse(failedStateText).experiments[0];
+    expect(failedExperiment).toMatchObject({
+      id: experimentId,
+      lifecycle: "applied",
+      intervention: {
+        canary: { status: "failed", evidence: "user_declared" }
+      },
+      evaluation: { rollbackRecommended: true, reductionPercent: null }
+    });
+    expect(failedExperiment.intervention.rolledBackAt).toBeUndefined();
+    expect(failedExperiment.intervention.changeRef).toMatch(/^avref_[a-f0-9]{64}$/);
+    expect(failedExperiment.intervention.rollbackRef).toMatch(/^avref_[a-f0-9]{64}$/);
+    expect(failedExperiment.intervention.canary.evidenceRef).toMatch(/^avref_[a-f0-9]{64}$/);
+    expect(failedStateText).not.toContain("a".repeat(64));
+    expect(failedStateText).not.toContain("b".repeat(64));
+    expect(failedStateText).not.toContain("c".repeat(64));
+
+    const failedGlance = await runCli(["glance", "--path", dir, "--since-days", "30"]);
+    expect(failedGlance.exitCode).toBe(0);
+    expect(JSON.parse(failedGlance.stdout).tokenExperiment).toMatchObject({
+      experimentId,
+      state: "rollback",
+      reductionPercent: null
+    });
+
+    const terminalRefresh = await runCli([
+      "verify", experimentId!, "--quality", "held", "--path", dir
+    ]);
+    expect(terminalRefresh.exitCode).toBe(1);
+    expect(terminalRefresh.stderr).toContain("failed-canary token tests cannot accept new");
+    expect(await readFile(statePath, "utf8")).toBe(failedStateText);
+
+    const wrongRollback = await runCli([
+      "verify", "rollback", experimentId!,
+      "--rollback-digest", "d".repeat(64),
+      "--path", dir
+    ]);
+    expect(wrongRollback.exitCode).toBe(1);
+    expect(wrongRollback.stderr).toContain("does not match the frozen rollback reference");
+    expect(await readFile(statePath, "utf8")).toBe(failedStateText);
+
+    const rollback = await runCli([
+      "verify", "rollback", experimentId!,
+      "--rollback-digest", "b".repeat(64),
+      "--path", dir
+    ]);
+    expect(rollback.exitCode).toBe(0);
+    expect(rollback.stdout).toContain("Rollback execution was recorded");
+    const rolledBackStateText = await readFile(statePath, "utf8");
+    const rolledBack = JSON.parse(rolledBackStateText).experiments[0];
+    expect(rolledBack).toMatchObject({
+      lifecycle: "rolled_back",
+      evaluation: { status: "inconclusive", reductionPercent: null }
+    });
+    expect(rolledBack.intervention.rolledBackAt).toMatch(/^2026-/);
+
+    const rolledBackGlance = await runCli(["glance", "--path", dir, "--since-days", "30"]);
+    expect(rolledBackGlance.exitCode).toBe(0);
+    expect(JSON.parse(rolledBackGlance.stdout).tokenExperiment).toMatchObject({
+      experimentId,
+      state: "rolled_back",
+      headline: "Token test rolled back",
+      reductionPercent: null
+    });
+
+    const preservedArtifactPath = join(
+      dir,
+      ".ai-spend-agent",
+      "ai-spend-coding-agent-prompt.md"
+    );
+    await writeFile(preservedArtifactPath, "frozen rolled-back artifact\n", "utf8");
+    const rolledBackReport = await runCli(["report", "--path", dir]);
+    expect(rolledBackReport.exitCode).toBe(0);
+    expect(rolledBackReport.stdout).toContain(
+      `action artifacts: preserved · canonical token test ${experimentId} (rolled_back)`
+    );
+    expect(rolledBackReport.stdout).toContain(
+      `token result: status=inconclusive; reductionPercent=unavailable; metricEvidence=${rolledBack.evaluation.metricEvidence}; quality=${rolledBack.evaluation.qualityStatus}; qualityEvidence=${rolledBack.evaluation.qualityEvidence}; matchingEvidence=${rolledBack.evaluation.matchingEvidence}`
+    );
+    expect(rolledBackReport.stdout).toContain("cost/value evidence total:");
+    expect(rolledBackReport.stdout).not.toContain("apply --since-days");
+    expect(await readFile(preservedArtifactPath, "utf8"))
+      .toBe("frozen rolled-back artifact\n");
+    const rolledBackMarkdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const rolledBackHtml = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
+    for (const report of [rolledBackMarkdown, rolledBackHtml]) {
+      expect(report).toContain(experimentId!);
+      expect(report).toContain("status=inconclusive");
+      expect(report).toContain("lifecycle=rolled_back");
+      expect(report).toContain("measured token change=unavailable");
+      expect(report).not.toContain("apply --since-days");
+    }
+
+    const secondRollback = await runCli([
+      "verify", "rollback", experimentId!,
+      "--rollback-digest", "b".repeat(64),
+      "--path", dir
+    ]);
+    expect(secondRollback.exitCode).toBe(1);
+    expect(secondRollback.stderr).toContain("cannot record another rollback boundary");
+    expect(await readFile(statePath, "utf8")).toBe(rolledBackStateText);
+  });
+
+  it("refuses demo, stale candidate, and missing experiment token-test inputs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-token-refusal-"));
+    const sample = await runCli(["verify", "start", "wfc_v0_" + "a".repeat(64), "--sample", "--path", dir]);
+    const missing = await runCli(["verify", "tre_v0_" + "b".repeat(64), "--path", dir]);
+    expect(sample.exitCode).toBe(1);
+    expect(sample.stderr).toContain("demo sample data is never executable");
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("not found");
+  });
+
+  async function writeClaudeActionSession(
+    label: string,
+    timestamp: Date,
+    inputTokens: number,
+    outputTokens: number,
+    workingDirectory = "/private/customer-token-test"
+  ): Promise<void> {
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    const projectDir = join(logsDir, "-private-customer-token-test");
+    await mkdir(projectDir, { recursive: true });
+    const iso = timestamp.toISOString();
+    await writeFile(join(projectDir, `${label}.jsonl`), [
+      JSON.stringify({
+        type: "user",
+        timestamp: iso,
+        cwd: workingDirectory,
+        sessionId: label,
+        version: "2.1.170",
+        message: { content: "Build and test the token experiment feature" }
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: iso,
+        cwd: workingDirectory,
+        sessionId: label,
+        version: "2.1.170",
+        requestId: `request-${label}`,
+        message: {
+          id: `message-${label}`,
+          model: "claude-opus-4-8",
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_creation: {
+              ephemeral_5m_input_tokens: 0,
+              ephemeral_1h_input_tokens: 0
+            }
+          }
+        }
+      }),
+      JSON.stringify({
+        type: "system",
+        subtype: "turn_duration",
+        timestamp: new Date(timestamp.getTime() + 1).toISOString(),
+        sessionId: label,
+        version: "2.1.170",
+        durationMs: 1
+      })
+    ].join("\n"), "utf8");
+  }
 
   it("keeps a legacy mode-less bundled sample Apply artifact non-executable", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-legacy-sample-"));
@@ -741,7 +2288,7 @@ describe("zero-key evidence-first receipt", () => {
     expect(local.stdout).toContain("API-equivalent value by project");
 
     const demo = await runCli(["--sample", "--full", "--path", dir, "--no-color"]);
-    expect(demo.stdout).toContain("Cost/value evidence by model");
+    expect(demo.stdout).toContain("Illustrative evidence by model");
   });
 
   it("never injects sample dead-context onto a real (local-logs) readout", async () => {
@@ -877,7 +2424,7 @@ describe("zero-key evidence-first receipt", () => {
 
     expect(quickstart.exitCode).toBe(0);
     expect(quickstart.stdout).toContain("No supported AI usage evidence was found");
-    expect(quickstart.stdout).not.toContain("$56.60 API-equivalent/estimated");
+    expect(quickstart.stdout).not.toContain("$56.60 API-equivalent (estimated)");
     expect(quickstart.stdout).not.toContain("$4.80 provider-reported");
     expect(apply.exitCode).toBe(0);
     expect(apply.stdout).toContain("NON-EXECUTABLE DEMO");
@@ -1056,7 +2603,7 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("DATA MODE: your local agent logs");
-    expect(result.stdout).toContain("OBSERVED API-EQUIVALENT VALUE");
+    expect(result.stdout).toContain("API-EQUIVALENT VALUE");
     expect(result.stdout).toContain("gemini-2.5-pro");
     expect(result.stdout).not.toContain(opaqueProject);
     expect(sources.stdout).toMatch(/Gemini CLI local logs \(gemini-cli\)\n  validation coverage: fixture_verified\n  provider contract: current\n  financial evidence: estimated/);
@@ -2271,7 +3818,7 @@ describe("minimal CLI vertical slice", () => {
   it("preflights existing state before creating any missing init files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-preflight-"));
     const stateDir = join(dir, ".ai-spend-agent");
-    await mkdir(stateDir);
+    await mkdir(stateDir, { mode: 0o700 });
     const invalidAudit = '{"version":99,"futureAuditFormat":true}\n';
     await writeFile(join(stateDir, "audit-log.json"), invalidAudit, "utf8");
 
@@ -2286,7 +3833,8 @@ describe("minimal CLI vertical slice", () => {
   it("preserves an unsupported future cache and creates no project state", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-future-cache-"));
     const cachePath = join(process.env.AIBILL_CACHE_DIR!, activitySnapshotCacheFileName);
-    const futureCache = '{"kind":"aibill.activity_snapshot","schemaVersion":2,"future":true}\n';
+    // v2 is the current schema (C-lane §2.1); 3 is the unsupported future.
+    const futureCache = '{"kind":"aibill.activity_snapshot","schemaVersion":3,"future":true}\n';
     await writeFile(cachePath, futureCache, { mode: 0o600 });
 
     await expect(runCli(["init", "--path", dir])).rejects.toThrow(/unsupported version/);
@@ -3357,13 +4905,59 @@ describe("minimal CLI vertical slice", () => {
     expect(demoPackage).toContain("# aibill Demo Package");
     expect(demoPackage).toContain("Demo command flow");
     expect(demoPackage).toContain("npx aibill report --sample --path ./demo-workspace");
-    expect(demoPackage).toContain("npx aibill apply --sample --path ./demo-workspace");
+    expect(demoPackage).toContain(
+      "npx aibill apply --sample --path ./demo-workspace"
+    );
     expect(demoPackage).not.toContain("ai-spend-agent report");
     expect(demoPackage).not.toContain("apply-artifact");
     expect(demoPackage).toContain("QA controller checklist");
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("Executive accountability brief");
     expect(html).toContain("aibill Evidence Report");
+  });
+
+  it("creates a Git-safe private boundary before a first report write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-report-git-safe-"));
+    await execFileAsync("git", ["init", "--quiet", dir]);
+
+    const result = await runCli(["report", "--sample", "--path", dir]);
+
+    expect(result.exitCode).toBe(0);
+    expect(await readFile(join(dir, ".ai-spend-agent", ".gitignore"), "utf8")).toBe("*\n");
+    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--porcelain"]);
+    expect(stdout).toBe("");
+  });
+
+  it.each([
+    { name: "scan", args: ["scan", "--sample"] },
+    { name: "watch", args: ["watch", "--sample", "--cycles", "1"] },
+    {
+      name: "add-source",
+      args: ["add-source", "--source-path", ".", "--type", "local_folder", "--label", "local-test"]
+    },
+    { name: "connect", args: ["connect", "openai"] },
+    {
+      name: "sync-provider",
+      args: [
+        "sync-provider", "--provider", "openai",
+        "--auth-reference", "env:AIBILL_TEST_MISSING_ADMIN_KEY",
+        "--start-time", "1761955200"
+      ]
+    },
+    {
+      name: "confirm-mapping",
+      args: ["confirm-mapping", "--provider", "anthropic", "--source-id", "anthropic-provider-api"]
+    }
+  ])("keeps first $name state writes private in a fresh Git project", async ({ args }) => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-writer-git-safe-"));
+    await execFileAsync("git", ["init", "--quiet", dir]);
+    delete process.env.AIBILL_TEST_MISSING_ADMIN_KEY;
+
+    await runCli([...args, "--path", dir]);
+
+    expect(await readFile(join(dir, ".ai-spend-agent", ".gitignore"), "utf8")).toBe("*\n");
+    const { stdout } = await execFileAsync("git", ["-C", dir, "status", "--porcelain"]);
+    expect(stdout).toBe("");
   });
 
   it("keeps a positive sub-cent total nonzero across report output and artifacts", async () => {
@@ -3452,13 +5046,13 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["quickstart", "--sample", "--full", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
+    expect(result.stdout).toContain("ILLUSTRATIVE EVIDENCE");
     expect(result.stdout).toContain("$87.00");
     expect(result.stdout).toContain("combined illustrative evidence across 9 illustrative records");
     expect(result.stdout).toContain("Illustrative hypotheses only");
     expect(result.stdout).toContain("to gpt-5.5-mini");
     expect(result.stdout).toMatch(/model ~\$[\d,]+\.\d{2}\/mo/);
-    expect(result.stdout).toContain("Cost/value evidence by model");
+    expect(result.stdout).toContain("Illustrative evidence by model");
     // Human-readable terminal output, not a JSON dump.
     expect(result.stdout).not.toContain("totalUsd");
   });
@@ -3469,7 +5063,7 @@ describe("minimal CLI vertical slice", () => {
     const result = await runCli(["quickstart", "--sample", "--group-by", "client", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Cost/value evidence by client");
+    expect(result.stdout).toContain("Illustrative evidence by client");
   });
 
   it("reports baseline then deltas across watch cycles and persists snapshots", async () => {
@@ -3649,7 +5243,7 @@ describe("minimal CLI vertical slice", () => {
     expect(quick.exitCode).toBe(0);
     expect(quick.stdout).toContain("$54.50");
     expect(quick.stdout).toContain("tracked across 2 provider records");
-    expect(quick.stdout).toContain("Provider-reported cost by model");
+    expect(quick.stdout).toContain("Billed cost by model");
     expect(quick.stdout).toContain("gpt-4.1");
     expect(quick.stdout).not.toContain(fakeToken);
     expect(quick.stdout).not.toContain("87.00");
@@ -3677,5 +5271,175 @@ describe("minimal CLI vertical slice", () => {
     expect(short.exitCode).toBe(0);
     expect(short.stdout).toContain("# AI Spend Apply Artifact");
     expect(await readFile(join(dir, ".ai-spend-agent", "ai-spend-action-plan.md"), "utf8")).toContain("# AI Spend Action Plan");
+  });
+});
+
+/**
+ * C-lane §2.4: `aibill statusline expand` — renders every subscription with
+ * committed price, runways, and 7d API-equivalent FROM the canonical result
+ * card; full words `not reported` (no n/r legend needed); ~ legend mandatory.
+ */
+describe("statusline expand (C-lane §2.4)", () => {
+  const EXPAND_NOW = new Date("2026-08-09T18:00:12.000Z");
+  const EXPAND_GENERATED = "2026-08-09T17:58:12.000Z";
+  let expandCacheDir: string;
+  const priorCacheDir = process.env.AIBILL_CACHE_DIR;
+
+  beforeEach(async () => {
+    expandCacheDir = await mkdtemp(join(tmpdir(), "aibill-cli-expand-cache-"));
+    await chmod(expandCacheDir, 0o700);
+    process.env.AIBILL_CACHE_DIR = expandCacheDir;
+  });
+
+  afterEach(() => {
+    if (priorCacheDir === undefined) {
+      delete process.env.AIBILL_CACHE_DIR;
+    } else {
+      process.env.AIBILL_CACHE_DIR = priorCacheDir;
+    }
+  });
+
+  function expansionWindow(amountUsd: number | null) {
+    return {
+      amountUsd,
+      recordCount: amountUsd === null ? 0 : 1,
+      basis: "api_equivalent" as const,
+      financialEvidence: amountUsd === null ? "missing" as const : "estimated" as const,
+      coverage: amountUsd === null ? "missing" as const : "complete" as const
+    };
+  }
+
+  function expansionSnapshot(): Record<string, unknown> {
+    return {
+      kind: "aibill.activity_snapshot",
+      schemaVersion: 2,
+      currency: "USD",
+      asOf: EXPAND_GENERATED,
+      generatedAt: EXPAND_GENERATED,
+      lastAttemptAt: EXPAND_GENERATED,
+      lastSuccessAt: EXPAND_GENERATED,
+      refresh: { status: "ok" },
+      mode: "subscription",
+      subscription: {
+        agents: [
+          {
+            agent: "claude-code",
+            billing: "subscription",
+            planId: "claude-max-5x",
+            committedUsdPerMonth: 100,
+            apiEquivalent: {
+              oneDay: expansionWindow(null),
+              sevenDays: expansionWindow(96),
+              thirtyDays: expansionWindow(412.18)
+            },
+            limits: [
+              {
+                kind: "five-hour",
+                usedPercent: 62,
+                remainingPercent: 38,
+                observedAt: "2026-08-09T17:30:00.000Z",
+                resetsAt: "2026-08-09T19:00:00.000Z",
+                source: "transcript_reported"
+              },
+              {
+                kind: "weekly",
+                usedPercent: 29,
+                remainingPercent: 71,
+                observedAt: "2026-08-09T17:30:00.000Z",
+                resetsAt: "2026-08-14T19:00:00.000Z",
+                source: "transcript_reported"
+              }
+            ],
+            pressure: null
+          },
+          {
+            agent: "codex",
+            billing: "subscription",
+            planId: "chatgpt-pro",
+            committedUsdPerMonth: 200,
+            apiEquivalent: {
+              oneDay: expansionWindow(null),
+              sevenDays: expansionWindow(18),
+              thirtyDays: expansionWindow(70.02)
+            },
+            limits: [{
+              kind: "weekly",
+              usedPercent: 48,
+              remainingPercent: 52,
+              observedAt: "2026-08-09T17:30:00.000Z",
+              resetsAt: "2026-08-13T19:00:00.000Z",
+              source: "transcript_reported"
+            }],
+            pressure: null
+          }
+        ]
+      },
+      metered: null,
+      unresolved: null,
+      providers: [{
+        provider: "cursor",
+        billing: "subscription",
+        planLabel: "Pro",
+        committedUsdPerMonth: 20,
+        billed30d: {
+          amountUsd: null,
+          recordCount: 0,
+          basis: "provider_billed",
+          financialEvidence: "missing",
+          coverage: "missing"
+        }
+      }],
+      committedTotal: { amountUsd: 320, pricedSubs: 3, totalSubs: 3 },
+      overage: null,
+      coverage: {
+        agents: [],
+        providers: [],
+        recordsParsed: 0,
+        recordsPriced: 0,
+        recordsUnpriced: 0,
+        validationStatus: "complete",
+        pricingAsOf: "2026-08-01",
+        networkUploaded: false
+      },
+      networkUploaded: false
+    };
+  }
+
+  it("renders the §2.4 expansion verbatim from the result card", async () => {
+    const cachePath = join(expandCacheDir, "statusline-v2.json");
+    await writeFile(cachePath, `${JSON.stringify(expansionSnapshot())}\n`, { mode: 0o600 });
+    await chmod(cachePath, 0o600);
+
+    const result = await runCli(["statusline", "expand"], {
+      statuslineNow: EXPAND_NOW,
+      statuslineTimeZone: "UTC"
+    });
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.split("\n");
+    expect(lines[0]).toBe("aibill subscriptions · 30d window");
+    expect(lines[1]).toBe("  claude    Max 5x   $100/mo committed · 5h 38% ↻7pm · wk 71% ↻Fri · ~$96/7d");
+    expect(lines[2]).toBe("  chatgpt   Pro      $200/mo committed · wk 52% ↻Thu · ~$18/7d");
+    // Decision (f)/B2: cursor's dollars stay locked until live verification.
+    expect(lines[3]).toBe("  cursor    Pro       $20/mo committed · billed not reported (beta)");
+    // 7d values are the same basis and window, so they are summable: 96 + 18.
+    expect(lines[4]).toBe("  total     committed $320/mo · API-equivalent ~$114/7d");
+    expect(lines[5]).toBe("  ~ = usage at published API rates (estimated, never billed) · updated 2m");
+    // Design-measured: longest line 76.
+    for (const line of lines) {
+      expect([...line].length, line).toBeLessThanOrEqual(76);
+    }
+    // Full words are used here — no n/r abbreviation, no blended total.
+    expect(result.stdout).not.toContain("n/r");
+    expect(result.stdout).not.toContain("$334");
+  });
+
+  it("asks for a refresh instead of inventing an expansion without a cache", async () => {
+    const result = await runCli(["statusline", "expand"], {
+      statuslineNow: EXPAND_NOW,
+      statuslineTimeZone: "UTC"
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("statusline refresh");
+    expect(result.stdout).toBe("");
   });
 });

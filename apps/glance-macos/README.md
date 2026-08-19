@@ -102,6 +102,30 @@ projected exhaustion time when available. It is deliberately not the fuller fina
 agent, execute the prompt, run a hook command, or invent a hook's runtime token
 payload.
 
+When a local token-reduction test exists, Glance adds one separate read-only
+status line below that action. The percentage and cohort counts come directly
+from aibill's canonical matched-session evaluator; Glance never recalculates
+them. A measured result names the quality evidence explicitly (including
+`quality user-declared`), and stale or failed refreshes suppress the old
+percentage. The status line is not clickable and never changes what the Copy
+action places on the clipboard. This source-preview projection is not included
+in npm latest (`v0.8.1`) yet and is not an instruction to make a change.
+
+The token line is intentionally narrower than a financial claim. It represents
+only a calculated change in total tokens across matched completed Claude
+Code/Codex session snapshots after the CLI has recorded one approved,
+reversible intervention and its evidence. One native session contributes at
+most once to an experiment. The CLI requires user-declared pre-change and
+post-change quality; missing quality blocks a result rather than excluding a
+matched snapshot. It also requires opaque SHA-256 change/canary/rollback
+references and a separately recorded rollback after a failed canary; that
+failed canary yields no result or percentage. Once complete, the cohort and
+result are frozen. The stable experiment ID and its separate revision ID remain
+in the canonical contract; Glance presents only the compact status. Component
+evidence remains explicit (observed, partial, or not separately reported),
+calculated totals stay separate from provider-reported totals, and no Glance
+state claims verified savings, accepted outcomes, or ROI.
+
 The visible card keeps provenance beside the metric: session value says local
 tokens × API list rates; limit rows distinguish coding-agent-reported reset
 data from the local exhaustion estimate; Main focus says local activity; and
@@ -149,6 +173,9 @@ Keep these trust invariants in customized versions:
 - Render `primaryAction` from the shared contract. Keep its full `agentPrompt`
   out of the compact card and require a deliberate copy/paste before an agent
   can act. Treat `kind: session_handoff` separately from the CLI Apply plan.
+- Keep the token-test projection read-only and separate from `primaryAction`.
+  Never recalculate its counts or percentage, omit its quality-evidence label,
+  or repeat a percentage from a stale or failed snapshot.
 - Do not allow stale or failed snapshots to be copied as current evidence.
 - Render missing limits as unavailable instead of guessing.
 - Do not upload transcripts or invoke the data command through a shell.

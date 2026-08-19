@@ -534,7 +534,7 @@ describe("Gemini CLI local session parser", () => {
     });
   });
 
-  it("applies sinceMs only to source-reported message timestamps", () => {
+  it("parses window-blind so cached values stay complete; the loader narrows", () => {
     const content = JSON.stringify({
       sessionId: "windowed",
       projectHash: hashA,
@@ -560,7 +560,9 @@ describe("Gemini CLI local session parser", () => {
       filePath: `/tmp/${hashA}/chats/session-window.json`,
       sinceMs: Date.parse("2026-08-10T11:00:00.000Z")
     });
-    expect(result.calls).toHaveLength(1);
-    expect(result.calls[0]?.reportedTotalTokens).toBe(22);
+    // Window-blind by design (financial cache correctness): both messages
+    // parse; the loader's final timestamp filter performs all narrowing.
+    expect(result.calls).toHaveLength(2);
+    expect(result.calls.map((call) => call.reportedTotalTokens).sort()).toEqual([11, 22]);
   });
 });

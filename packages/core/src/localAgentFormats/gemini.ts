@@ -283,7 +283,8 @@ function processMessage(message: JsonRecord, state: MutableParseState): void {
     state.diagnostics.add("missing_timestamp");
     return;
   }
-  if (state.sinceMs !== undefined && Date.parse(timestamp) < state.sinceMs) return;
+  // Window-blind on purpose (financial cache correctness): the loader's
+  // final timestamp filter performs all narrowing.
 
   const parsedTokens = parseTokens(message.tokens);
 

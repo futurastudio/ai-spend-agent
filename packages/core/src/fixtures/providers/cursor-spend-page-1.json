@@ -2,19 +2,37 @@
   "teamMemberSpend": [
     {
       "spendCents": 2450.125487,
+      "includedSpendCents": 120000,
+      "overallSpendCents": 122450,
       "fastPremiumRequests": 1250,
       "name": "Alex",
       "email": "developer@example.com",
       "role": "member",
-      "hardLimitOverrideDollars": 100
+      "hardLimitOverrideDollars": 100,
+      "monthlyLimitDollars": null,
+      "effectivePerUserLimitDollars": 100,
+      "profilePictureUrl": "https://example.com/avatar-alex.png",
+      "billingTier": "premium",
+      "autoPercentUsed": 42.5,
+      "apiPercentUsed": 3.1,
+      "totalPercentUsed": 45.6
     },
     {
       "spendCents": 1875.5,
+      "includedSpendCents": 98000,
+      "overallSpendCents": 99875,
       "fastPremiumRequests": 980,
       "name": "Sam",
       "email": "admin@example.com",
       "role": "owner",
-      "hardLimitOverrideDollars": 0
+      "hardLimitOverrideDollars": 0,
+      "monthlyLimitDollars": 200,
+      "effectivePerUserLimitDollars": 200,
+      "profilePictureUrl": "https://example.com/avatar-sam.png",
+      "billingTier": "standard",
+      "autoPercentUsed": 12.0,
+      "apiPercentUsed": 0,
+      "totalPercentUsed": 12.0
     }
   ],
   "subscriptionCycleStart": 1785542400000,

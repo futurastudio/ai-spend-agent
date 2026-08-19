@@ -50,6 +50,16 @@
       "usageScope": "session_cumulative",
       "usageSupport": "complete",
       "reportedTotalTokens": 2750,
+      "tokenComponentEvidence": {
+        "inputTokens": "observed",
+        "outputTokens": "observed",
+        "cacheReadTokens": "observed",
+        "cacheWriteTokens": "not_separately_reported",
+        "thoughtTokens": "not_separately_reported",
+        "toolTokens": "not_separately_reported",
+        "calculatedTotalTokens": "calculated_complete",
+        "reportedTotalTokens": "provider_reported"
+      },
       "usage": {
         "inputTokens": 1500,
         "outputTokens": 250,

@@ -8,6 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   getContextHealthTool,
+  getTokenReductionTestTool,
   getUsageGlanceTool,
   getSpendReportTool,
   listSourcesTool,
@@ -34,6 +35,10 @@ const absolutePath = z.string().refine(isAbsolute, "path must be absolute");
 const envReference = z.string().regex(
   /^env:[A-Z_][A-Z0-9_]*$/,
   "Use an environment reference such as env:OPENAI_ADMIN_KEY; never pass a raw key."
+);
+const tokenReductionExperimentId = z.string().regex(
+  /^tre_v0_[a-f0-9]{64}$/,
+  "experimentId must be a canonical aibill token-reduction experiment ID."
 );
 const serverHelp = [
   `aibill MCP server ${serverVersion}`,
@@ -209,7 +214,7 @@ export function createServer(): McpServer {
     {
       title: "Get hook-aware Context Health",
       description:
-        "Return the canonical read-only Context Health result shared by aibill CLI, MCP, and Glance. Distinguishes discoverable, explicitly invoked, MCP-configured, explicit always-load requests, hook-injected, invocation-unobservable, and other lifecycle context. Configuration does not prove a schema payload was loaded. Hook commands are never run and runtime payload tokens are never inferred.",
+        "Return the canonical read-only Context Health result shared by aibill CLI, MCP, and Glance plus bounded qualitative-index coverage. A partial index never authorizes a global focus or context-change claim. Distinguishes discoverable, explicitly invoked, MCP-configured, explicit always-load requests, hook-injected, invocation-unobservable, and other lifecycle context. Configuration does not prove a schema payload was loaded. Hook commands are never run and runtime payload tokens are never inferred.",
       inputSchema: {
         path: absolutePath.describe("Absolute project root for project-scoped inventory."),
         sinceDays: z.number().int().min(1).max(365).optional().describe("Local transcript history window; defaults to 30 days."),
@@ -224,6 +229,29 @@ export function createServer(): McpServer {
     },
     async ({ path, sinceDays, project }) =>
       executeTool(() => getContextHealthTool({ path, sinceDays, project }))
+  );
+
+  server.registerTool(
+    "get_token_reduction_test",
+    {
+      title: "Get token-reduction test",
+      description:
+        "Read one local token-reduction experiment, refresh its matched result from current bounded Claude Code and Codex session evidence, and return the canonical evaluation, qualitative-index coverage, plus the same compact projection used by other aibill surfaces. This tool never writes, applies a change, infers quality, or claims cash savings or verified outcome ROI. Missing, malformed, tampered, partial, and unsafe local evidence is labeled or fails closed.",
+      inputSchema: {
+        path: absolutePath.describe("Absolute project root containing local .ai-spend-agent experiment state."),
+        experimentId: tokenReductionExperimentId.optional().describe(
+          "Optional exact experiment ID. If omitted, an active experiment is preferred, then lifecycle priority, creation time, and stable ID are used deterministically."
+        )
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ path, experimentId }) =>
+      executeTool(() => getTokenReductionTestTool({ path, experimentId }))
   );
 
   server.registerTool(
@@ -269,7 +297,7 @@ export function createServer(): McpServer {
     {
       title: "Inspect reduction candidates",
       description:
-        "Return provider-modeled candidates only when schema-validated call/invocation granularity, named workload semantics, and priced evidence support them. Billing buckets, usage aggregates, seats, user totals, and workflow ownership/concentration remain reconciliation diagnostics and never become call-level cuts. Sample state returns demo-only guidance; local transcript aggregates return observed exposure or collect-more-evidence guidance. No change, cash saving, or approval is inferred. The legacy tool name is retained for compatibility; use `npx aibill apply` for the full approval, rollback, and matched-verification plan.",
+        "Return provider-modeled candidates only when schema-validated call/invocation granularity, named workload semantics, and priced evidence support them. Billing buckets, usage aggregates, seats, user totals, and workflow ownership/concentration remain reconciliation diagnostics and never become call-level cuts. Sample state returns demo-only guidance; local transcript aggregates return observed exposure or collect-more-evidence guidance. No change, cash saving, or approval is inferred. The legacy tool name is retained for compatibility; `npx aibill apply` prints an inspection, approval, rollback, and verification plan but does not itself start or verify a token test.",
       inputSchema: {
         path: absolutePath.describe("Absolute path with existing .ai-spend-agent state.")
       },

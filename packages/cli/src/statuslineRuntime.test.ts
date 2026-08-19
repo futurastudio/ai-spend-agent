@@ -685,13 +685,21 @@ describe("standalone status-line cache reader", () => {
   });
 
   it("matches the core timestamp contract for invalid dates and high precision", async () => {
+    // The core schema is v2 (C-lane §2.1); the runtime accepts both v1 cache
+    // shapes and the v2 shape, so the contract comparison uses the v2 form.
+    const asCoreV2 = (value: StatuslineSnapshot): Record<string, unknown> => ({
+      ...value,
+      schemaVersion: 2,
+      providers: null,
+      committedTotal: { amountUsd: null, pricedSubs: 0, totalSubs: 0 }
+    });
     const directory = await cacheDirectory();
     const invalid = snapshot("empty");
     invalid.asOf = "2026-02-30T00:00:00.000Z";
     invalid.generatedAt = invalid.asOf;
     invalid.lastAttemptAt = invalid.asOf;
     invalid.lastSuccessAt = invalid.asOf;
-    expect(activitySnapshotSchema.safeParse(invalid).success).toBe(false);
+    expect(activitySnapshotSchema.safeParse(asCoreV2(invalid)).success).toBe(false);
     await put(directory, invalid);
     expect(await readStatuslineCache({ cacheDirectory: directory })).toEqual({ status: "error" });
 
@@ -700,7 +708,7 @@ describe("standalone status-line cache reader", () => {
     precise.generatedAt = precise.asOf;
     precise.lastAttemptAt = precise.asOf;
     precise.lastSuccessAt = precise.asOf;
-    expect(activitySnapshotSchema.safeParse(precise).success).toBe(true);
+    expect(activitySnapshotSchema.safeParse(asCoreV2(precise)).success).toBe(true);
     await put(directory, precise);
     expect((await readStatuslineCache({ cacheDirectory: directory })).status).toBe("ok");
   });
@@ -807,6 +815,282 @@ describe("hook safety", () => {
       "loadLocalAgent", "fetchProvider", "providerConnectors"
     ]) {
       expect(source).not.toContain(forbidden);
+    }
+  });
+});
+
+/**
+ * C-lane design §2.1-§2.3: v2 snapshot parsing and the greedy committed
+ * ladder. Line fixtures and widths reproduce the design's script-verified
+ * measurements (L1 84 · L2 75 · L3 70 · L4 54 · L5 45 · L6 28 · L7 13 ·
+ * L8 12 · aspirational billed line 111).
+ */
+describe("v2 committed ladder (C-lane §2.3)", () => {
+  const LADDER_NOW = new Date("2026-08-09T18:00:12.000Z");
+  const GENERATED = "2026-08-09T17:58:12.000Z";
+
+  function committedWindow(amountUsd: number | null) {
+    return {
+      amountUsd,
+      recordCount: amountUsd === null ? 0 : 1,
+      basis: "api_equivalent" as const,
+      financialEvidence: amountUsd === null ? "missing" as const : "estimated" as const,
+      coverage: amountUsd === null ? "missing" as const : "complete" as const
+    };
+  }
+
+  function ladderSnapshot(options: {
+    cursorCommitted?: number | null;
+    cursorBilledVerified?: number;
+    committedTotal?: { amountUsd: number | null; pricedSubs: number; totalSubs: number };
+  } = {}): StatuslineSnapshot {
+    const cursorCommitted = options.cursorCommitted === undefined ? 20 : options.cursorCommitted;
+    const base = snapshot("empty");
+    return {
+      ...base,
+      schemaVersion: 2,
+      asOf: GENERATED,
+      generatedAt: GENERATED,
+      lastAttemptAt: GENERATED,
+      lastSuccessAt: GENERATED,
+      mode: "subscription",
+      subscription: {
+        agents: [
+          {
+            agent: "claude-code",
+            billing: "subscription",
+            planId: "claude-max-5x",
+            committedUsdPerMonth: 100,
+            apiEquivalent: windows(committedWindow(null), committedWindow(96), committedWindow(412.18)),
+            limits: [
+              {
+                kind: "five-hour",
+                usedPercent: 62,
+                remainingPercent: 38,
+                observedAt: "2026-08-09T17:30:00.000Z",
+                resetsAt: "2026-08-09T19:00:00.000Z",
+                source: "transcript_reported"
+              },
+              {
+                kind: "weekly",
+                usedPercent: 29,
+                remainingPercent: 71,
+                observedAt: "2026-08-09T17:30:00.000Z",
+                resetsAt: "2026-08-14T19:00:00.000Z",
+                source: "transcript_reported"
+              }
+            ],
+            pressure: null
+          },
+          {
+            agent: "codex",
+            billing: "subscription",
+            planId: "chatgpt-pro",
+            committedUsdPerMonth: 200,
+            apiEquivalent: windows(committedWindow(null), committedWindow(18), committedWindow(70.02)),
+            limits: [],
+            pressure: null
+          }
+        ]
+      },
+      providers: [{
+        provider: "cursor",
+        billing: "subscription" as const,
+        planLabel: "Pro",
+        committedUsdPerMonth: cursorCommitted,
+        billed30d: options.cursorBilledVerified !== undefined
+          ? billedWindow(options.cursorBilledVerified)
+          : billedWindow(null)
+      }],
+      committedTotal: options.committedTotal ?? { amountUsd: 320, pricedSubs: 3, totalSubs: 3 }
+    };
+  }
+
+  function renderAt(value: StatuslineSnapshot, columns: number): string {
+    return renderStatusline(ok(value), { now: LADDER_NOW, columns, timeZone: "UTC" });
+  }
+
+  it("walks the greedy candidate ladder exactly (§2.3 L1-L9, QA-4 width sweep)", () => {
+    const value = ladderSnapshot();
+    const expectations: Array<[number, string]> = [
+      [240, "aibill · claude 5h 38% ↻7pm ~$96/7d · codex ~$18/7d · committed $320/mo · updated 2m"],
+      [84, "aibill · claude 5h 38% ↻7pm ~$96/7d · codex ~$18/7d · committed $320/mo · updated 2m"],
+      [83, "aibill · claude 5h 38% ~$96/7d · codex ~$18/7d · committed $320/mo · upd 2m"],
+      [75, "aibill · claude 5h 38% ~$96/7d · codex ~$18/7d · committed $320/mo · upd 2m"],
+      [74, "aibill · claude 5h 38% ~$96/7d · codex ~$18/7d · subs $320/mo · upd 2m"],
+      [70, "aibill · claude 5h 38% ~$96/7d · codex ~$18/7d · subs $320/mo · upd 2m"],
+      [69, "aibill · claude 5h 38% ~$96/7d · subs $320/mo · upd 2m"],
+      [54, "aibill · claude 5h 38% ~$96/7d · subs $320/mo · upd 2m"],
+      [53, "aibill · claude 5h 38% ~$96/7d · subs $320/mo"],
+      [45, "aibill · claude 5h 38% ~$96/7d · subs $320/mo"],
+      [44, "claude 5h 38% · subs $320/mo"],
+      [28, "claude 5h 38% · subs $320/mo"],
+      [27, "claude 5h 38%"],
+      [13, "claude 5h 38%"],
+      [12, "subs $320/mo"],
+      [11, "aibill"],
+      [6, "aibill"]
+    ];
+    for (const [columns, expected] of expectations) {
+      const line = renderAt(value, columns);
+      expect(line, `columns=${columns}`).toBe(expected);
+      expect([...line].length, `columns=${columns}`).toBeLessThanOrEqual(columns);
+    }
+    // Script-verified design widths.
+    expect([...renderAt(value, 240)].length).toBe(84);
+    expect([...renderAt(value, 75)].length).toBe(75);
+    expect([...renderAt(value, 70)].length).toBe(70);
+    expect([...renderAt(value, 54)].length).toBe(54);
+    expect([...renderAt(value, 45)].length).toBe(45);
+    expect([...renderAt(value, 28)].length).toBe(28);
+    expect([...renderAt(value, 13)].length).toBe(13);
+    expect([...renderAt(value, 12)].length).toBe(12);
+  });
+
+  it("never truncates money digits — below the smallest whole segment the line is aibill (D7)", () => {
+    const value = ladderSnapshot();
+    for (const columns of [11, 10, 9, 8, 7, 6]) {
+      expect(renderAt(value, columns)).toBe("aibill");
+    }
+    for (const columns of [5, 4, 3, 2, 1]) {
+      const line = renderAt(value, columns);
+      expect(line).not.toMatch(/\$\d/u);
+      expect([...line].length).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  it("keeps ~ and billed apart in every segment (QA-1 marker discipline)", () => {
+    const value = ladderSnapshot({ cursorBilledVerified: 12.4 });
+    for (const columns of [240, 111, 84, 75, 70, 54, 45, 28, 13, 12]) {
+      const line = renderAt(value, columns);
+      for (const segment of line.split(" · ")) {
+        expect(
+          segment.includes("~") && segment.includes("billed"),
+          `~/billed collision at ${columns}: ${segment}`
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("renders the verified billed provider segment wide and drops it before per-sub values (§2.3)", () => {
+    const value = ladderSnapshot({ cursorBilledVerified: 12.4 });
+    const wide = renderAt(value, 111);
+    expect(wide).toBe(
+      "aibill · claude 5h 38% ↻7pm ~$96/7d · codex ~$18/7d · cursor $12.40/30d billed · committed $320/mo · updated 2m"
+    );
+    expect([...wide].length).toBe(111);
+    // committed → subs alias happens before the billed segment drops.
+    const aliased = renderAt(value, 101);
+    expect(aliased).toContain("cursor $12.40/30d billed");
+    expect(aliased).toContain("subs $320/mo");
+    // The billed segment is the FIRST money dropped; both subs remain.
+    const dropped = renderAt(value, 96);
+    expect(dropped).not.toContain("billed");
+    expect(dropped).toContain("codex ~$18/7d");
+  });
+
+  it("drops non-verified provider dollars at the renderer even if the parser is bypassed (QA-3)", () => {
+    const value = ladderSnapshot();
+    (value.providers![0] as { billed30d: unknown }).billed30d = {
+      amountUsd: 12.4,
+      recordCount: 1,
+      basis: "provider_billed",
+      financialEvidence: "estimated",
+      coverage: "complete"
+    };
+    const line = renderAt(value, 240);
+    expect(line).not.toContain("12.4");
+    expect(line).not.toContain("billed");
+  });
+
+  it("prints a partial committed sum flagged at wide tiers and drops it below — never bare (QA-5)", () => {
+    const value = ladderSnapshot({
+      cursorCommitted: null,
+      committedTotal: { amountUsd: 300, pricedSubs: 2, totalSubs: 3 }
+    });
+    const wide = renderAt(value, 120);
+    expect(wide).toContain("committed $300/mo (2/3 priced)");
+    const narrow = renderAt(value, 74);
+    expect(narrow).not.toContain("300");
+    expect(narrow).not.toContain("committed");
+    expect(narrow).not.toContain("subs");
+    expect(narrow).toContain("claude 5h 38% ~$96/7d");
+  });
+
+  it("reads a v2 cache file preferentially and accepts a v1 cache unchanged (QA-12a)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aibill-statusline-v2-"));
+    await chmod(directory, 0o700);
+    const v2Path = join(directory, "statusline-v2.json");
+    await writeFile(v2Path, `${JSON.stringify(ladderSnapshot())}\n`, { mode: 0o600 });
+    const v2Result = await readStatuslineCache({ cacheDirectory: directory });
+    expect(v2Result.status).toBe("ok");
+    expect(renderStatusline(v2Result, { now: LADDER_NOW, columns: 240, timeZone: "UTC" }))
+      .toContain("committed $320/mo");
+
+    // v1 cache under the v2 runtime renders today's line (no committed segment).
+    const legacyDirectory = await mkdtemp(join(tmpdir(), "aibill-statusline-v1-"));
+    await chmod(legacyDirectory, 0o700);
+    await writeFile(
+      join(legacyDirectory, "statusline-v1.json"),
+      `${JSON.stringify(dualSubscriptionSnapshot())}\n`,
+      { mode: 0o600 }
+    );
+    const v1Result = await readStatuslineCache({ cacheDirectory: legacyDirectory });
+    expect(v1Result.status).toBe("ok");
+    const v1Line = renderStatusline(v1Result, { now: NOW, columns: 200, timeZone: "UTC" });
+    expect(v1Line).toContain("claude week 37%");
+    expect(v1Line).not.toContain("committed");
+    expect(v1Line).not.toContain("subs $");
+  });
+
+  it("routes a single sub WITH provider rows through the committed ladder (QA M4)", () => {
+    // The most likely cursor-user fleet state: one local agent + one cursor
+    // provider subscription. It must get the v2 ladder — committed total,
+    // no killed "7d value" vocabulary — at every width.
+    const value = ladderSnapshot({
+      committedTotal: { amountUsd: 120, pricedSubs: 2, totalSubs: 2 }
+    });
+    value.subscription = { agents: [value.subscription!.agents[0]!] };
+    const wide = renderAt(value, 240);
+    expect(wide).toBe("aibill · claude 5h 38% ↻7pm ~$96/7d · committed $120/mo · updated 2m");
+    for (const columns of [240, 84, 70, 54, 45, 28, 13, 12]) {
+      const line = renderAt(value, columns);
+      expect(line, `columns=${columns}`).not.toContain("7d value");
+      expect([...line].length, `columns=${columns}`).toBeLessThanOrEqual(columns);
+    }
+    expect(renderAt(value, 45)).toBe("aibill · claude 5h 38% ~$96/7d · subs $120/mo");
+  });
+
+  it("keeps a single sub with NO providers on today's line (QA-7)", () => {
+    const value = ladderSnapshot({
+      committedTotal: { amountUsd: 100, pricedSubs: 1, totalSubs: 1 }
+    });
+    value.subscription = { agents: [value.subscription!.agents[0]!] };
+    value.providers = null;
+    const line = renderAt(value, 240);
+    // Today's single-sub rendering: no committed segment, existing wording.
+    expect(line).not.toContain("committed");
+    expect(line).not.toContain("subs $");
+    expect(line).toContain("left");
+  });
+
+  it("rejects malformed v2 caches strictly", async () => {
+    const missingTotal = ladderSnapshot() as unknown as Record<string, unknown>;
+    delete missingTotal.committedTotal;
+    const wrongCount = ladderSnapshot();
+    wrongCount.committedTotal = { amountUsd: 320, pricedSubs: 3, totalSubs: 5 };
+    const partialLie = ladderSnapshot();
+    partialLie.committedTotal = { amountUsd: null, pricedSubs: 1, totalSubs: 3 };
+    for (const [name, invalid] of [
+      ["missing committedTotal", missingTotal],
+      ["totalSubs mismatch", wrongCount],
+      ["null amount with priced subs", partialLie]
+    ] as const) {
+      const directory = await mkdtemp(join(tmpdir(), "aibill-statusline-bad-v2-"));
+      await chmod(directory, 0o700);
+      const path = join(directory, "statusline-v2.json");
+      await writeFile(path, `${JSON.stringify(invalid)}\n`, { mode: 0o600 });
+      expect((await readStatuslineCache({ cacheDirectory: directory })).status, name).toBe("error");
     }
   });
 });

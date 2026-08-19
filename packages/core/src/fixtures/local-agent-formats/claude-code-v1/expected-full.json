@@ -2,6 +2,7 @@
   "calls": [
     {
       "agent": "claude-code",
+      "callId": "callref_19ba6d73b5f18cee28f253333fb0219f0f0e2e99579299bdcbf623e305578188",
       "model": "claude-opus-4-8",
       "timestamp": "2026-08-10T12:00:00.000Z",
       "project": "sample-project",
@@ -18,6 +19,16 @@
         "source": "assistant_message_usage"
       },
       "usageScope": "turn",
+      "tokenComponentEvidence": {
+        "inputTokens": "observed",
+        "outputTokens": "observed",
+        "cacheReadTokens": "observed",
+        "cacheWriteTokens": "observed",
+        "thoughtTokens": "not_separately_reported",
+        "toolTokens": "not_separately_reported",
+        "calculatedTotalTokens": "calculated_complete",
+        "reportedTotalTokens": "not_reported"
+      },
       "usage": {
         "inputTokens": 120,
         "outputTokens": 30,
@@ -38,6 +49,7 @@
     },
     {
       "agent": "claude-code",
+      "callId": "callref_d44b4f49d89c9630898845539d009f5d21cd9cad340d303f51d03e621a00855b",
       "model": "claude-opus-4-8",
       "timestamp": "2026-08-10T12:05:00.000Z",
       "project": "sample-project",

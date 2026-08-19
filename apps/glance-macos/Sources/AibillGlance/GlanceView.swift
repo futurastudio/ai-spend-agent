@@ -225,73 +225,95 @@ struct GlanceView: View {
     let action = store.snapshot?.primaryAction
     let refresh = store.refreshPresentation(at: now)
     let canCopy = action != nil && refresh.allowsEvidenceCopy
+    let tokenTest = GlanceTokenExperimentPresentation.build(
+      projection: store.snapshot?.tokenExperiment,
+      evidenceCurrent: refresh.allowsEvidenceCopy
+    )
     let affordance = GlancePrimaryActionPresentation.build(
       actionAvailable: action != nil,
       actionCopied: actionCopied,
       refresh: refresh,
       isRefreshing: store.isRefreshing
     )
-    return Button {
-      switch affordance.intent {
-      case .copy:
-        copyPrimaryAction()
-      case .refresh:
-        Task { await store.refresh() }
-      case .none:
-        break
+    return VStack(spacing: 0) {
+      Button {
+        switch affordance.intent {
+        case .copy:
+          copyPrimaryAction()
+        case .refresh:
+          Task { await store.refresh() }
+        case .none:
+          break
+        }
+      } label: {
+        HStack(spacing: 10) {
+          Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .shadow(color: color.opacity(0.7), radius: 6)
+
+          VStack(alignment: .leading, spacing: 2) {
+            Text(action?.label ?? health?.headline ?? "Collecting local context history")
+              .font(.system(size: 10, weight: .semibold, design: .rounded))
+              .foregroundStyle(.white.opacity(0.87))
+              .lineLimit(1)
+            Text(action?.detail ?? "Glance will suggest one evidence-backed next move.")
+              .font(.system(size: 9, weight: .medium, design: .rounded))
+              .foregroundStyle(.white.opacity(0.4))
+              .lineLimit(1)
+          }
+
+          Spacer()
+
+          HStack(spacing: 4) {
+            Image(systemName: affordance.symbol)
+            Text(affordance.label)
+          }
+          .font(.system(size: 8, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white.opacity(affordance.isEnabled ? 0.62 : 0.3))
+          .padding(.horizontal, 7)
+          .padding(.vertical, 5)
+          .background(Color.white.opacity(0.045), in: Capsule())
+          .overlay(Capsule().stroke(Color.white.opacity(0.075), lineWidth: 1))
+        }
+        .padding(.horizontal, 11)
+        .frame(height: tokenTest == nil ? 52 : 43)
       }
-    } label: {
-      HStack(spacing: 10) {
-        Circle()
-          .fill(color)
-          .frame(width: 7, height: 7)
-          .shadow(color: color.opacity(0.7), radius: 6)
+      .buttonStyle(.plain)
+      .disabled(!affordance.isEnabled)
+      .help(canCopy
+        ? primaryActionSourceHelp
+        : "Refresh Glance before copying a handoff; stale or failed snapshots are never copied as current evidence. \(refresh.help)")
+      .accessibilityLabel(canCopy
+        ? action.map { "\($0.label). \($0.detail)" } ?? "No next move available"
+        : "Refresh aibill Glance")
+      .accessibilityHint(canCopy
+        ? "Copies a project-aware handoff prompt. Nothing runs automatically."
+        : affordance.isEnabled
+          ? "Refreshes the local evidence now."
+          : "Wait for the current local refresh to finish.")
 
-        VStack(alignment: .leading, spacing: 2) {
-          Text(action?.label ?? health?.headline ?? "Collecting local context history")
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.87))
+      if let tokenTest {
+        HStack(spacing: 6) {
+          Image(systemName: "chart.line.text.clipboard")
+          Text(tokenTest.label)
             .lineLimit(1)
-          Text(action?.detail ?? "Glance will suggest one evidence-backed next move.")
-            .font(.system(size: 9, weight: .medium, design: .rounded))
-            .foregroundStyle(.white.opacity(0.4))
-            .lineLimit(1)
+          Spacer(minLength: 0)
         }
-
-        Spacer()
-
-        HStack(spacing: 4) {
-          Image(systemName: affordance.symbol)
-          Text(affordance.label)
-        }
-        .font(.system(size: 8, weight: .semibold, design: .rounded))
-        .foregroundStyle(.white.opacity(affordance.isEnabled ? 0.62 : 0.3))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
-        .background(Color.white.opacity(0.045), in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.075), lineWidth: 1))
+        .font(.system(size: 8, weight: .medium, design: .rounded))
+        .foregroundStyle(.white.opacity(0.48))
+        .padding(.horizontal, 11)
+        .frame(height: 17)
+        .help(tokenExperimentSourceHelp)
+        .accessibilityLabel("Token experiment status. \(tokenTest.label). Read only.")
       }
     }
-    .buttonStyle(.plain)
-    .disabled(!affordance.isEnabled)
-    .padding(.horizontal, 11)
-    .frame(height: 52)
+    .frame(height: tokenTest == nil ? 52 : 60)
     .background(color.opacity(health?.status == "healthy" ? 0.018 : 0.04), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 15, style: .continuous)
         .stroke(color.opacity(health?.status == "healthy" ? 0.07 : 0.14), lineWidth: 1)
     }
-    .help(canCopy
-      ? primaryActionSourceHelp
-      : "Refresh Glance before copying a handoff; stale or failed snapshots are never copied as current evidence. \(refresh.help)")
-    .accessibilityLabel(canCopy
-      ? action.map { "\($0.label). \($0.detail)" } ?? "No next move available"
-      : "Refresh aibill Glance")
-    .accessibilityHint(canCopy
-      ? "Copies a project-aware handoff prompt. Nothing runs automatically."
-      : affordance.isEnabled
-        ? "Refreshes the local evidence now."
-        : "Wait for the current local refresh to finish.")
   }
 
   private func copyPrimaryAction() {
@@ -392,7 +414,11 @@ struct GlanceView: View {
     let agents = store.snapshot?.coverage.detectedAgents
       .map(GlanceFormatting.agentName)
       .joined(separator: " + ") ?? "Local transcripts"
-    return "Local: \(agents) · \(files) files · nothing uploaded"
+    let qualitative = store.snapshot?.coverage.qualitative?.status
+    let indexLabel = qualitative == "partial"
+      ? "partial index"
+      : qualitative == "unknown" ? "index unknown" : "index current"
+    return "Local: \(agents) · \(files) files · \(indexLabel) · nothing uploaded"
   }
 
   private func footer(at now: Date) -> some View {
@@ -452,6 +478,10 @@ struct GlanceView: View {
   }
 
   private var focusSourceHelp: String {
+    if let coverage = store.snapshot?.coverage.qualitative,
+       coverage.status != "complete" {
+      return "Main focus is withheld because the bounded qualitative index is \(coverage.status). \(coverage.readCompletely)/\(coverage.selectedFiles) selected files were read completely and \(coverage.skippedForBudget) eligible files were omitted by the byte budget."
+    }
     let sessions = store.snapshot?.focus?.sessions ?? 0
     return "Derived locally from observed prompt and tool activity across \(sessions) session\(sessions == 1 ? "" : "s"). Raw prompt text is not returned by the Glance contract or uploaded."
   }
@@ -461,6 +491,11 @@ struct GlanceView: View {
       return "Glance is waiting for enough local evidence to produce a next move."
     }
     return "This is a local session handoff—not the CLI financial apply plan. It uses the canonical Context Health contract, Main focus, and transcript-reported runway also exposed to CLI and MCP. Click to copy; Glance never runs it automatically. Confidence: \(action.confidence)."
+  }
+
+  private var tokenExperimentSourceHelp: String {
+    guard store.snapshot?.tokenExperiment != nil else { return "" }
+    return "The token-test line is a read-only projection from aibill's canonical matched-session evaluator. Glance does not recalculate a percentage, run the change, or call it cash savings or verified outcome ROI."
   }
 
   private var footerSourceHelp: String {

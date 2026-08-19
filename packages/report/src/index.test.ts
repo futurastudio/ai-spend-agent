@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { analyzeSpend, buildContextHealth, normalizeOpenAiUsageResponse } from "@agent-finops/core";
+import { aibillCommandV0, analyzeSpend, buildContextHealth, normalizeOpenAiUsageResponse } from "@agent-finops/core";
 import type { SourceRegistry, UsageRecord } from "@agent-finops/core";
 import type { SpendReportInput } from "./index.js";
 import {
@@ -216,6 +216,12 @@ const input: SpendReportInput = {
   ],
   providerRecords,
   dataMode: "connected_provider",
+  qualitativeCoverage: {
+    status: "complete",
+    selectedFiles: 2,
+    readCompletely: 2,
+    skippedForBudget: 0
+  },
   providerQa: [{
     provider: "openai",
     requestedEndpoints: ["OpenAI costs API", "OpenAI usage API"],
@@ -790,11 +796,11 @@ describe("board-style report generation", () => {
     expect(markdown).toContain("Observed API-equivalent value: $80.00");
     expect(markdown).toContain("Claude Max 5x; subscription detected");
     expect(markdown).toContain("CONFIG-001");
-    expect(markdown).toContain("USAGE-001");
-    expect(markdown).toContain("Reduction and cash savings are unproven");
+    expect(markdown).toContain("No canonical action candidate is supported");
+    expect(markdown).not.toContain("USAGE-001");
     expect(markdown).toContain("explicitly approved");
     expect(markdown).toContain("at least 3 new matched sessions");
-    expect(markdown).toContain("npx aibill apply");
+    expect(markdown).toContain(aibillCommandV0("apply --since-days 30"));
     expect(markdown).not.toContain("Modeled opportunity");
     expect(markdown).not.toContain("Agency margin");
     expect(markdown).not.toContain("Priority recommendations");
@@ -1059,6 +1065,78 @@ describe("board-style report generation", () => {
     expect(verification).not.toContain("Modeled opportunity");
   });
 
+  it("binds every generated Apply entry point to the explicit evidence window", () => {
+    const localRecord: UsageRecord = {
+      id: "window-bound-local",
+      timestamp: "2026-07-29T00:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Local logs",
+        provider: "anthropic",
+        confidence: "estimated",
+        observedFrom: "test"
+      },
+      model: "claude-opus-4-8",
+      inputTokens: 100,
+      outputTokens: 10,
+      amountUsd: 0.01,
+      costConfidence: "estimated",
+      agentId: "claude-code",
+      projectId: "my-app",
+      providerCostType: "local_agent_logs",
+      operation: "claude-code sessions"
+    };
+    const windowedInput: SpendReportInput = {
+      ...input,
+      generatedAt: "2026-07-30T00:00:00.000Z",
+      evidenceWindowDays: 7,
+      dataMode: "local_logs",
+      allRecords: [localRecord],
+      providerRecords: [],
+      summary: analyzeSpend([localRecord]),
+      sessionVitals: {
+        schemaVersion: 0,
+        sessions: [],
+        coverage: {
+          inputCalls: 0,
+          deduplicatedCalls: 0,
+          eligibleCalls: 0,
+          emittedSessions: 0,
+          sessionsWithObservedTokens: 0,
+          sessionsWithMissingTokens: 0,
+          excludedCalls: {
+            unsupportedAgent: 0,
+            missingSessionIdentity: 0,
+            invalidTimestamp: 0
+          }
+        },
+        privacy: {
+          rawSessionIds: false,
+          promptOrResponseText: false,
+          absolutePaths: false,
+          uploaded: false
+        }
+      }
+    };
+
+    const apply = generateApplyArtifactMarkdown(windowedInput);
+    const action = generateActionPlanMarkdown(windowedInput);
+    const demo = generateDemoPackageMarkdown(windowedInput);
+    const markdown = generateMarkdownReport(windowedInput);
+    const html = generateHtmlReport(windowedInput);
+
+    const previewCommand = aibillCommandV0("apply --since-days 7");
+    const wrongWindowCommand = aibillCommandV0("apply --since-days 30");
+    expect(apply).toContain(previewCommand);
+    expect(action).toContain(previewCommand);
+    expect(demo).toContain(previewCommand);
+    expect(markdown).toContain(previewCommand);
+    expect(html).toContain(previewCommand);
+    for (const artifact of [apply, action, demo, markdown, html]) {
+      expect(artifact).not.toContain(wrongWindowCommand);
+    }
+  });
+
   it("omits instruction-like billing metadata from local policy drafts", () => {
     const policy = generatePolicyConfigDraftMarkdown({
       ...input,
@@ -1187,10 +1265,10 @@ describe("board-style report generation", () => {
     expect(html).toContain("context7");
     expect(html).toContain("npx aibill");
     expect(html).toContain("my-app");
-    expect(html).toContain("$80.00 observed value");
+    expect(html).toContain('<span class="label">Usage value</span><strong>$80.00</strong>');
     expect(html).toContain('class="hero-big estimated-value"');
     expect(html).toContain('class="stat estimated-card"');
-    expect(html).toContain('class="cut-v"><strong class="estimated-value">$80.00 observed value</strong>');
+    expect(html).not.toContain('class="cut-v"');
     expect(html).toContain(".estimated-value { color: #fbbf24; }");
     expect(html).toContain(".stat.estimated-card strong { color: #fbbf24; }");
     expect(html).toContain(".row .v.estimated-value { color: #fbbf24; }");
@@ -1417,5 +1495,271 @@ describe("board-style report generation", () => {
 
     expect(policy).toContain('targetOwnership: "client: risky # name / project malicious: true / agent # comment / research_summary"');
     expect(policy).not.toContain("malicious: true\n  currentCostValueEvidenceUsd");
+  });
+
+  it("suppresses qualitative conclusions and every action sidecar when indexing is partial", () => {
+    const localCall = (sessionId: string, timestamp: string, tokens: number) => ({
+      agent: "codex" as const,
+      sessionId,
+      project: "coverage-gap-project",
+      model: "gpt-5.6-sol",
+      timestamp,
+      latestTurnUsage: {
+        inputTokens: tokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        contextTokens: tokens,
+        totalTokens: tokens,
+        source: "transcript_last_token_usage" as const
+      },
+      usage: { inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0 }
+    });
+    const contextHealth = buildContextHealth({
+      now: new Date("2026-07-30T12:00:00.000Z"),
+      calls: [
+        localCall("old-1", "2026-07-29T09:00:00.000Z", 100),
+        localCall("old-2", "2026-07-29T10:00:00.000Z", 110),
+        localCall("old-3", "2026-07-29T11:00:00.000Z", 120),
+        localCall("current", "2026-07-30T11:55:00.000Z", 330)
+      ]
+    });
+    const localRecord: UsageRecord = {
+      id: "coverage-gap-record",
+      timestamp: "2026-07-30T11:55:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "test" },
+      model: "gpt-5.6-sol",
+      inputTokens: 12_000,
+      outputTokens: 1_000,
+      amountUsd: 12,
+      costConfidence: "estimated",
+      agentId: "codex",
+      projectId: "coverage-gap-project",
+      providerCostType: "local_agent_logs",
+      operation: "codex sessions"
+    };
+    const gapInput: SpendReportInput = {
+      ...input,
+      generatedAt: "2026-07-30T12:00:00.000Z",
+      evidenceWindowDays: 7,
+      dataMode: "local_logs",
+      allRecords: [localRecord],
+      providerRecords: [],
+      summary: analyzeSpend([localRecord]),
+      contextHealth,
+      qualitativeCoverage: {
+        status: "partial",
+        selectedFiles: 4,
+        readCompletely: 2,
+        skippedForBudget: 2
+      },
+      detectedPlans: [{
+        agent: "codex",
+        provider: "openai",
+        planId: "chatgpt-pro",
+        planLabel: "ChatGPT Pro",
+        billing: "subscription",
+        source: "test"
+      }],
+      deadContext: {
+        hasData: true,
+        loadedCount: 1,
+        deadCount: 1,
+        measuredDeadCount: 0,
+        unmeasuredDeadCount: 1,
+        deadTokens: 0,
+        monthlyDeadTokens: 0,
+        wastePercent: 1,
+        monthlyUsd: 0,
+        monthlyUsdUpperBound: 0,
+        deadItems: [{
+          kind: "mcp_server",
+          name: "partial-only-config-item",
+          scope: "project",
+          activation: "mcp_configured",
+          host: "codex",
+          invocationTracking: "observable",
+          alwaysLoadedTokens: 0,
+          weightConfidence: "unmeasured"
+        }],
+        sessions: 4,
+        totalTurns: 12,
+        pricingModel: "gpt-5.6-sol",
+        windowDays: 7
+      }
+    };
+    const contextCommand = aibillCommandV0("context --json --since-days 7");
+    const applyCommand = aibillCommandV0("apply --since-days 7");
+    const localMarkdown = generateMarkdownReport(gapInput);
+    const localHtml = generateHtmlReport(gapInput);
+
+    for (const report of [localMarkdown, localHtml]) {
+      expect(report).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(report).toContain("2/4 selected files read completely");
+      expect(report).toContain(contextCommand);
+      expect(report).not.toContain(contextHealth.headline);
+      expect(report).not.toContain("partial-only-config-item");
+      expect(report).not.toContain("trimming context (below)");
+      expect(report).not.toContain(applyCommand);
+    }
+
+    const connectedGapInput: SpendReportInput = {
+      ...input,
+      contextHealth,
+      deadContext: gapInput.deadContext,
+      qualitativeCoverage: gapInput.qualitativeCoverage
+    };
+    const connectedMarkdown = generateMarkdownReport(connectedGapInput);
+    const connectedHtml = generateHtmlReport(connectedGapInput);
+    for (const report of [connectedMarkdown, connectedHtml]) {
+      expect(report).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(report).toContain("qualitative index");
+      expect(report).not.toContain("Route workloads by cost sensitivity");
+      expect(report).not.toContain("Approve a routing policy");
+      expect(report).not.toContain("$0.00 (recommended plan");
+    }
+
+    const sidecars = [
+      generateApplyArtifactMarkdown(gapInput),
+      generateActionPlanMarkdown(gapInput),
+      generatePolicyConfigDraftMarkdown(gapInput),
+      generateVerificationPlanMarkdown(gapInput),
+      generateDemoPackageMarkdown(gapInput)
+    ];
+    for (const sidecar of sidecars) {
+      expect(sidecar).toContain("NON-EXECUTABLE");
+      expect(sidecar).toContain("Qualitative indexing is partial");
+      expect(sidecar).toContain(contextCommand);
+      expect(sidecar).not.toContain(contextHealth.headline);
+      expect(sidecar).not.toContain("partial-only-config-item");
+      expect(sidecar).not.toContain("Route workloads by cost sensitivity");
+      expect(sidecar).not.toContain(applyCommand);
+    }
+  });
+
+  it("renders complete and rolled-back canonical token tests identically across Markdown, both HTML branches, and sidecars", () => {
+    const lifecycleCases: Array<{
+      label: string;
+      tokenExperiment: NonNullable<SpendReportInput["tokenExperiment"]>;
+      evidence: string[];
+    }> = [
+      {
+        label: "complete",
+        tokenExperiment: {
+          id: "token-experiment-complete-0123456789abcdef",
+          lifecycle: "complete",
+          status: "measured_token_reduction",
+          matchingEvidence: "observed",
+          projection: {
+            schemaVersion: 0,
+            experimentId: "token-experiment-complete-0123456789abcdef",
+            findingId: "finding-complete",
+            candidateKey: "candidate-complete",
+            state: "review_measured_result",
+            tone: "positive",
+            headline: "A measured token reduction is ready to review",
+            detail: "Matched session result only.",
+            evidenceLabel: "calculated",
+            qualityLabel: "held",
+            qualityEvidence: "user_declared",
+            baselineSessions: 3,
+            postChangeSessions: 3,
+            minimumSessions: 3,
+            reductionPercent: 25
+          },
+          nextCommand: aibillCommandV0("improve")
+        },
+        evidence: [
+          "status=measured_token_reduction",
+          "lifecycle=complete",
+          "measured token change=25% reduction",
+          "metric evidence=calculated",
+          "quality=held (user_declared)",
+          "matching evidence=observed"
+        ]
+      },
+      {
+        label: "rolled back",
+        tokenExperiment: {
+          id: "token-experiment-rolled-back-0123456789abcdef",
+          lifecycle: "rolled_back",
+          status: "inconclusive",
+          matchingEvidence: "missing",
+          projection: {
+            schemaVersion: 0,
+            experimentId: "token-experiment-rolled-back-0123456789abcdef",
+            findingId: "finding-rolled-back",
+            candidateKey: "candidate-rolled-back",
+            state: "rolled_back",
+            tone: "neutral",
+            headline: "Token test rolled back",
+            detail: "The rollback boundary is recorded.",
+            evidenceLabel: "missing",
+            qualityLabel: "insufficient",
+            qualityEvidence: "missing",
+            baselineSessions: 3,
+            postChangeSessions: 0,
+            minimumSessions: 3,
+            reductionPercent: null
+          },
+          nextCommand: aibillCommandV0("improve")
+        },
+        evidence: [
+          "status=inconclusive",
+          "lifecycle=rolled_back",
+          "measured token change=unavailable",
+          "metric evidence=missing",
+          "quality=insufficient (missing)",
+          "matching evidence=missing"
+        ]
+      }
+    ];
+    const localRecord: UsageRecord = {
+      id: "token-test-local-record",
+      timestamp: "2026-07-30T11:55:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "openai", confidence: "estimated", observedFrom: "test" },
+      model: "gpt-5.6-sol",
+      inputTokens: 12_000,
+      outputTokens: 1_000,
+      amountUsd: 12,
+      costConfidence: "estimated",
+      agentId: "codex",
+      projectId: "token-test-project",
+      providerCostType: "local_agent_logs",
+      operation: "codex sessions"
+    };
+
+    for (const lifecycleCase of lifecycleCases) {
+      const localInput: SpendReportInput = {
+        ...input,
+        dataMode: "local_logs",
+        allRecords: [localRecord],
+        providerRecords: [],
+        summary: analyzeSpend([localRecord]),
+        tokenExperiment: lifecycleCase.tokenExperiment
+      };
+      const connectedInput: SpendReportInput = {
+        ...input,
+        tokenExperiment: lifecycleCase.tokenExperiment
+      };
+      const outputs = [
+        generateMarkdownReport(localInput),
+        generateHtmlReport(localInput),
+        generateMarkdownReport(connectedInput),
+        generateHtmlReport(connectedInput),
+        generateApplyArtifactMarkdown(localInput),
+        generateActionPlanMarkdown(localInput),
+        generatePolicyConfigDraftMarkdown(localInput),
+        generateVerificationPlanMarkdown(localInput),
+        generateDemoPackageMarkdown(localInput)
+      ];
+      for (const output of outputs) {
+        expect(output, lifecycleCase.label).toContain(lifecycleCase.tokenExperiment.id);
+        for (const evidence of lifecycleCase.evidence) {
+          expect(output, `${lifecycleCase.label}: ${evidence}`).toContain(evidence);
+        }
+        expect(output).not.toContain("Route workloads by cost sensitivity");
+        expect(output).not.toContain(aibillCommandV0("apply --since-days 30"));
+      }
+    }
   });
 });

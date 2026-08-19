@@ -3,7 +3,10 @@ import type {
   LocalAgentLogDiagnostic,
   LocalAgentSourceScan
 } from "../localAgentLogs.js";
-import type { ParsedInvocationFile } from "../toolInvocations.js";
+import type {
+  ParsedInvocationFile,
+  ParsedInvocationWindowProof
+} from "../toolInvocations.js";
 
 /**
  * Public format identity contract. Add future parser IDs here as part of the
@@ -89,6 +92,7 @@ export type LocalAgentFormatParseContext = {
 export type LocalAgentFormatParseResult = {
   calls: LocalAgentCall[];
   invocationFile?: ParsedInvocationFile;
+  invocationWindowProof?: ParsedInvocationWindowProof;
 };
 
 export type LocalAgentFormatFinancialFileContext = {

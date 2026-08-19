@@ -20,6 +20,7 @@ import {
   normalizeAnthropicClaudeCodeUsageResponse,
   normalizeGitHubCopilotSeatResponse,
   isProviderAuthenticationError,
+  parseCursorReconciliationEnv,
   ProviderConnectorError,
   resolveTokenReference,
   selectProviderFinancialHeadlineRecords
@@ -1745,6 +1746,210 @@ describe("real provider connector implementations", () => {
     });
     expect(result.coverage).toBe("partial");
     expect(result.qa.pagination[0]).toMatchObject({ stoppedBecause: "fetch_error", note: expect.stringContaining("pagination metadata changed") });
+  });
+
+  it("accepts the documented and staff-acknowledged 2026 Cursor spend fields without drift noise", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "futura-team",
+      fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+    });
+
+    expect(result.coverage).toBe("complete");
+    expect(result.qa.responseDrift.filter((issue) => issue.issue.includes("unknown field"))).toEqual([]);
+    // Without a reconciliation request, behavior is unchanged: estimated.
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.records.every((record) => record.operation?.includes("on-demand"))).toBe(true);
+  });
+
+  it("flips Cursor evidence to verified only through a matching live reconciliation run", async () => {
+    // Fixture cycle total: 2450.125487 + 1875.5 = 4325.625487 cents.
+    // The dashboard rounds to cents, so the operator reads $43.26.
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "futura-team",
+      reconciliation: { expectedOnDemandUsd: 43.26, expectedCycleStartDate: "2026-08-01" },
+      fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+    });
+
+    expect(result.records).toHaveLength(2);
+    expect(result.records.every((record) => record.costConfidence === "verified")).toBe(true);
+    expect(result.records.every((record) => record.source.confidence === "verified")).toBe(true);
+    expect(result.records.every((record) => record.operation?.includes("reconciled to the operator-read"))).toBe(true);
+    expect(result.financials.headlineBasis).toBe("provider_reported_billed_cost");
+    expect(result.financials.headlineUsd).toBeCloseTo(43.25625487, 6);
+    expect(result.completeness).toBe("verified");
+    expect(result.source.financialEvidence).toBe("verified");
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation verified:"))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("keeps Cursor evidence estimated with an honest diagnostic when reconciliation mismatches", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      sourceId: "cursor-provider-api",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      accountId: "futura-team",
+      reconciliation: { expectedOnDemandUsd: 50, expectedCycleStartDate: "2026-08-01" },
+      fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+    });
+
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.financials.headlineBasis).toBe("provider_estimated_cost");
+    expect(result.completeness).toBe("estimated");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: "teamMemberSpend[].spendCents (cycle total)",
+        issue: expect.stringContaining("Cursor reconciliation mismatch: connector on-demand total $43.26 vs operator-read $50.00")
+      })
+    ]));
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation mismatch:"))).toBe(true);
+  });
+
+  it("refuses to verify Cursor evidence from a partial reconciliation window", async () => {
+    const first = { teamMemberSpend: [{ email: "one@example.com", spendCents: 100 }], subscriptionCycleStart: 1785542400000, totalMembers: 2, totalPages: 2 };
+    const second = { teamMemberSpend: [{ email: "two@example.com", spendCents: 100 }], subscriptionCycleStart: 1785542400000, totalMembers: 2, totalPages: 3 };
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      reconciliation: { expectedOnDemandUsd: 2, expectedCycleStartDate: "2026-08-01" },
+      fetcher: async (_url, init) => ({ ok: true, status: 200, json: async () => JSON.parse(init?.body ?? "{}").page === 1 ? first : second })
+    });
+
+    expect(result.coverage).toBe("partial");
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.qa.instructions.some((line) =>
+      line.startsWith("Reconciliation not_provable:") && line.includes("partial window cannot verify billed dollars")
+    )).toBe(true);
+  });
+
+  it("refuses to verify Cursor evidence when the declared cycle window does not match the provider's", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      reconciliation: { expectedOnDemandUsd: 43.26, expectedCycleStartDate: "2026-07-01" },
+      fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+    });
+
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issue: expect.stringContaining("declared cycle start 2026-07-01 does not match the provider-reported cycle start 2026-08-01")
+      })
+    ]));
+  });
+
+  it("clamps an oversized Cursor reconciliation tolerance so it cannot rubber-stamp a mismatch", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      reconciliation: { expectedOnDemandUsd: 40, expectedCycleStartDate: "2026-08-01", toleranceUsd: 1000 },
+      fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+    });
+
+    // Effective tolerance is clamped to 1% of $40.00 = $0.40; the $3.26 gap fails.
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation mismatch:") && line.includes("tolerance $0.40"))).toBe(true);
+  });
+
+  it("refuses to verify a zero-dollar Cursor reconciliation window", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "cursor",
+      authReference: "env:CURSOR_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      reconciliation: { expectedOnDemandUsd: 1, expectedCycleStartDate: "2026-08-01" },
+      fetcher: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ teamMemberSpend: [{ email: "one@example.com", spendCents: 0 }], subscriptionCycleStart: 1785542400000, totalMembers: 1, totalPages: 1 })
+      })
+    });
+
+    expect(result.records.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.qa.instructions.some((line) =>
+      line.startsWith("Reconciliation not_provable:") && line.includes("matching $0.00 against a dashboard figure proves nothing")
+    )).toBe(true);
+  });
+
+  it("parses the Cursor reconciliation environment fail-closed without echoing raw values", () => {
+    expect(parseCursorReconciliationEnv({})).toEqual({});
+    expect(parseCursorReconciliationEnv({
+      AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_CURSOR_RECONCILE_CYCLE_START: "2026-08-01"
+    })).toEqual({ expectation: { expectedOnDemandUsd: 43.26, expectedCycleStartDate: "2026-08-01" } });
+    expect(parseCursorReconciliationEnv({
+      AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_CURSOR_RECONCILE_CYCLE_START: "2026-08-01",
+      AI_SPEND_CURSOR_RECONCILE_TOLERANCE_USD: "0.05"
+    })).toEqual({ expectation: { expectedOnDemandUsd: 43.26, expectedCycleStartDate: "2026-08-01", toleranceUsd: 0.05 } });
+
+    const missingPair = parseCursorReconciliationEnv({ AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD: "43.26" });
+    expect(missingPair.expectation).toBeUndefined();
+    expect(missingPair.invalidReason).toContain("AI_SPEND_CURSOR_RECONCILE_CYCLE_START");
+
+    const secretish = "sk-accidentally-pasted-secret";
+    const badNumber = parseCursorReconciliationEnv({
+      AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD: secretish,
+      AI_SPEND_CURSOR_RECONCILE_CYCLE_START: "2026-08-01"
+    });
+    expect(badNumber.expectation).toBeUndefined();
+    expect(badNumber.invalidReason).toContain("must be a positive USD amount");
+    expect(JSON.stringify(badNumber)).not.toContain(secretish);
+
+    const badDate = parseCursorReconciliationEnv({
+      AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_CURSOR_RECONCILE_CYCLE_START: "August 1st"
+    });
+    expect(badDate.invalidReason).toContain("formatted YYYY-MM-DD");
+  });
+
+  it("runs the Cursor reconciliation from environment variables so the shipped CLI needs no new flags", async () => {
+    const previous = {
+      expected: process.env.AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD,
+      cycleStart: process.env.AI_SPEND_CURSOR_RECONCILE_CYCLE_START,
+      tolerance: process.env.AI_SPEND_CURSOR_RECONCILE_TOLERANCE_USD
+    };
+    process.env.AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD = "43.26";
+    process.env.AI_SPEND_CURSOR_RECONCILE_CYCLE_START = "2026-08-01";
+    delete process.env.AI_SPEND_CURSOR_RECONCILE_TOLERANCE_USD;
+    try {
+      const result = await fetchProviderUsageRecords({
+        provider: "cursor",
+        authReference: "env:CURSOR_ADMIN_KEY",
+        tokenResolver: () => fakeToken,
+        startTime: 1761955200,
+        accountId: "futura-team",
+        fetcher: async () => ({ ok: true, status: 200, json: async () => providerFixtureJson("cursor-spend-page-1.json") })
+      });
+      expect(result.records.every((record) => record.costConfidence === "verified")).toBe(true);
+      expect(result.completeness).toBe("verified");
+    } finally {
+      for (const [key, value] of [
+        ["AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD", previous.expected],
+        ["AI_SPEND_CURSOR_RECONCILE_CYCLE_START", previous.cycleStart],
+        ["AI_SPEND_CURSOR_RECONCILE_TOLERANCE_USD", previous.tolerance]
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("resolves only reference-based tokens and rejects plaintext-looking secret references", () => {

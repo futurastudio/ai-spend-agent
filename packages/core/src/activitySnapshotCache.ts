@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { execFile as execFileCallback } from "node:child_process";
 import {
   open,
   lstat,
@@ -10,25 +11,37 @@ import {
   type FileHandle
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import {
   activitySnapshotSchema,
+  activitySnapshotV1Payload,
   createActivitySnapshotError,
   type ActivitySnapshot,
   type ActivitySnapshotRefreshErrorCode
 } from "./activitySnapshot.js";
 
 export const activitySnapshotCacheEnvironmentVariable = "AIBILL_CACHE_DIR";
-export const activitySnapshotCacheFileName = "statusline-v1.json";
+/** The v2 snapshot cache (C-lane §2.1). */
+export const activitySnapshotCacheFileName = "statusline-v2.json";
+/**
+ * Deprecation-window dual-write target: installed v1 runners are frozen
+ * copies that read only this file, so every v2 write also refreshes a v1
+ * payload here (today's fields only) instead of stranding them stale.
+ */
+export const activitySnapshotLegacyCacheFileName = "statusline-v1.json";
 export const activitySnapshotCacheMaxBytes = 64 * 1_024;
 
+// The lock name is shared with pre-v2 writers on purpose: during the fleet
+// deprecation window both CLI generations serialize through one lock.
 const lockFileName = ".statusline-v1.lock";
 const defaultLockTimeoutMs = 2_000;
 const staleLockMs = 15_000;
 const lockPollMs = 20;
 const lockMetadataMaxBytes = 512;
+const execFile = promisify(execFileCallback);
 
 type WriterLockOwner = {
   pid: number;
@@ -294,7 +307,7 @@ async function readSnapshotFile(directory: string): Promise<ActivitySnapshotCach
     } catch {
       return { status: "error", code: "malformed" };
     }
-    if (isRecord(value) && value.schemaVersion !== undefined && value.schemaVersion !== 1) {
+    if (isRecord(value) && value.schemaVersion !== undefined && value.schemaVersion !== 2) {
       return { status: "error", code: "unsupported_version" };
     }
     const parsed = activitySnapshotSchema.safeParse(value);
@@ -310,11 +323,30 @@ async function readSnapshotFile(directory: string): Promise<ActivitySnapshotCach
 }
 
 async function atomicWriteSnapshot(directory: string, snapshot: ActivitySnapshot): Promise<void> {
-  const contents = `${JSON.stringify(snapshot)}\n`;
+  await atomicWriteCacheFile(
+    directory,
+    activitySnapshotCacheFileName,
+    `${JSON.stringify(snapshot)}\n`
+  );
+  // C-lane §2.1 fleet back-compat: dual-write the v1 payload so an
+  // already-installed v1 runner keeps rendering fresh data during the
+  // deprecation window instead of decaying into permanent staleness.
+  await atomicWriteCacheFile(
+    directory,
+    activitySnapshotLegacyCacheFileName,
+    `${JSON.stringify(activitySnapshotV1Payload(snapshot))}\n`
+  );
+}
+
+async function atomicWriteCacheFile(
+  directory: string,
+  fileName: string,
+  contents: string
+): Promise<void> {
   if (Buffer.byteLength(contents, "utf8") > activitySnapshotCacheMaxBytes) {
     throw new ActivitySnapshotCacheError("invalid_snapshot", "Activity snapshot exceeds the 64 KiB cache limit.");
   }
-  const filePath = join(directory, activitySnapshotCacheFileName);
+  const filePath = join(directory, fileName);
   const existing = await lstat(filePath).catch((error: unknown) => {
     if (isNodeError(error, "ENOENT")) return undefined;
     throw error;
@@ -325,7 +357,7 @@ async function atomicWriteSnapshot(directory: string, snapshot: ActivitySnapshot
 
   const temporaryPath = join(
     directory,
-    `.${activitySnapshotCacheFileName}.${process.pid}.${randomUUID()}.tmp`
+    `.${fileName}.${process.pid}.${randomUUID()}.tmp`
   );
   let handle;
   try {
@@ -418,6 +450,90 @@ async function ensureDefaultParent(homeDirectory: string, create: boolean): Prom
     throw new ActivitySnapshotCacheError("unsafe_directory", "The private aibill directory is not private.");
   }
   if (create) await chmod(parent, 0o700);
+  await ensureDefaultCacheGitPrivacy(parent, create);
+}
+
+/**
+ * When a synthetic or real HOME is itself inside a Git worktree, protect the
+ * complete top-level private state directory before any cache child is
+ * created. Explicit AIBILL_CACHE_DIR/cacheDirectory overrides intentionally
+ * remain caller-owned and never receive repository files from this helper.
+ */
+async function ensureDefaultCacheGitPrivacy(
+  aibillDirectory: string,
+  create: boolean
+): Promise<void> {
+  const gitRoot = await findEnclosingGitRoot(aibillDirectory);
+  if (!gitRoot) return;
+  const marker = join(aibillDirectory, ".gitignore");
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(marker, constants.O_RDONLY | noFollowFlag());
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) throw error;
+    if (!create) {
+      const missing = new Error("Private aibill Git privacy marker does not exist.") as NodeJS.ErrnoException;
+      missing.code = "ENOENT";
+      throw missing;
+    }
+    handle = await open(
+      marker,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+      0o600
+    );
+    await handle.writeFile("*\n", "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = await open(marker, constants.O_RDONLY | noFollowFlag());
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || !hasPrivatePermissions(info.mode) || info.size !== 2) {
+      throw new ActivitySnapshotCacheError("unsafe_directory", "Private aibill Git privacy marker is unsafe.");
+    }
+    const buffer = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(buffer, 0, 2, 0);
+    if (bytesRead !== 2 || buffer.toString("utf8") !== "*\n") {
+      throw new ActivitySnapshotCacheError("unsafe_directory", "Private aibill Git privacy marker is invalid.");
+    }
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+
+  const relativeDirectory = relative(gitRoot, aibillDirectory);
+  const tracked = await execFile("git", ["-C", gitRoot, "ls-files", "--", relativeDirectory], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024
+  }).then(({ stdout }) => stdout.trim()).catch(() => {
+    throw new ActivitySnapshotCacheError(
+      "unsafe_directory",
+      "Private aibill cache tracking status could not be verified."
+    );
+  });
+  if (tracked) {
+    throw new ActivitySnapshotCacheError("unsafe_directory", "Private aibill cache is already tracked by Git.");
+  }
+  const ignored = await execFile("git", [
+    "-C", gitRoot, "check-ignore", "--quiet", "--no-index", "--",
+    join(relativeDirectory, "cache", "privacy-probe.json")
+  ]).then(() => true).catch(() => false);
+  if (!ignored) {
+    throw new ActivitySnapshotCacheError("unsafe_directory", "Private aibill cache is not proven ignored by Git.");
+  }
+}
+
+async function findEnclosingGitRoot(path: string): Promise<string | undefined> {
+  let current = resolve(path);
+  while (true) {
+    const gitEntry = await lstat(join(current, ".git")).catch((error: unknown) => {
+      if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) return undefined;
+      throw error;
+    });
+    if (gitEntry) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
 }
 
 function configuredCacheDirectory(options: ActivitySnapshotCacheOptions): string {
