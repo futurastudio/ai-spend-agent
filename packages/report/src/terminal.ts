@@ -704,7 +704,13 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   if (lines[lines.length - 1] !== "") lines.push("");
   lines.push(...compactLabeledLines("Next", c.bold(guided?.actionHeadline ?? next.title), width, c));
   lines.push(`  ${c.dim(guided?.actionDetail ?? next.evidence)}`);
-  lines.push(`  ${c.cyan("›")} ${c.bold(guided?.command ?? next.command)}`);
+  const nextCommand = guided?.command ?? next.command;
+  if (nextCommand.includes("improve")) {
+    // improve is project-scoped; a machine-wide receipt must say where to
+    // stand before handing over a command that refuses broad roots.
+    lines.push(`  ${c.dim("run it from the project folder you want to improve")}`);
+  }
+  lines.push(`  ${c.cyan("›")} ${c.bold(nextCommand)}`);
   lines.push("");
   lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
   lines.push("");
@@ -900,7 +906,7 @@ function compactNextStep(
         ? `tool${action.recordCount === 1 ? "" : "s"}`
         : `call${action.recordCount === 1 ? "" : "s"}`;
     const value = options.mode === "local-logs"
-      ? `${formatUsd(action.affectedSpendUsd)} API-equivalent value`
+      ? `~${formatUsd(action.affectedSpendUsd)} API-equivalent value`
       : `${formatUsd(action.affectedSpendUsd)} evidence`;
     return {
       title: action.title,
