@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ApprovedSource } from "./sourceRegistry.js";
 import { createProviderConnectorStub, slugifySourceId } from "./sourceRegistry.js";
 import { redactSecrets } from "./discovery.js";
@@ -2086,16 +2087,41 @@ export function providerAccountKey(input: ProviderAccountKeyInput): string {
 }
 
 /**
+ * Deterministic short digest of the RAW account key. The slug alone is not
+ * injective — cursor `--account-id "team a"` and `--account-id "team-a"`
+ * both slug to `team-a` — so the record-id prefix carries this digest of the
+ * raw identity: distinct account keys can never share a record-id namespace,
+ * while the same key always regenerates the same digest (idempotent
+ * re-sync). Never derived from secret material: account keys are reference
+ * names and explicit account flags by construction.
+ */
+function providerAccountKeyDigest(accountKey: string): string {
+  return createHash("sha256").update(accountKey, "utf8").digest("hex").slice(0, 8);
+}
+
+/** The deterministic record-id prefix for one account slice. */
+export function providerAccountRecordIdPrefix(accountKey: string): string {
+  return `${slugifySourceId(accountKey)}-${providerAccountKeyDigest(accountKey)}`;
+}
+
+/**
  * Stamp one sync's records with their account slice. The record id gains a
- * deterministic account prefix so identical usage buckets from two accounts
- * of the same provider can never collide into one row id — and re-syncing the
+ * deterministic account prefix (slug + raw-key digest) so identical usage
+ * buckets from two accounts of the same provider can never collide into one
+ * row id — even for slug-equivalent account spellings — and re-syncing the
  * same account regenerates the same ids (idempotent replace).
+ *
+ * Migration note: slices tagged by the short-lived pre-digest format
+ * (slug-only prefix) are superseded on their next re-sync — same-account
+ * replacement keys on `source.account`, never on id shape — and any
+ * colliding pre-digest rows already persisted are excluded fail-closed by
+ * the id-conflict guard in {@link retainProviderRecordsForNewSync}.
  */
 export function tagProviderAccountRecords(
   records: readonly UsageRecord[],
   accountKey: string
 ): UsageRecord[] {
-  const prefix = slugifySourceId(accountKey);
+  const prefix = providerAccountRecordIdPrefix(accountKey);
   return records.map((record) => ({
     ...record,
     id: `${prefix}-${record.id}`,
@@ -2111,16 +2137,30 @@ export function tagProviderAccountRecords(
  * label (synced before multi-account support) are replaced too — fail-closed:
  * they cannot be proven to come from a different account, and keeping them
  * could double-count the same organization.
+ *
+ * Id-conflict guard: a retained record may never share an id with a newly
+ * synced record, nor with another retained record. Colliding ids describe
+ * the same underlying row (possible only in state written by the pre-digest
+ * prefix format, where slug-equivalent account spellings collided) — keeping
+ * both would double-count, so the copy that is not part of the fresh sync is
+ * dropped fail-closed.
  */
 export function retainProviderRecordsForNewSync(
   priorRecords: readonly UsageRecord[],
   provider: string,
-  accountKey: string
+  accountKey: string,
+  syncedRecords: readonly UsageRecord[]
 ): UsageRecord[] {
-  return priorRecords.filter((record) => (
-    record.source.provider !== provider ||
-    (typeof record.source.account === "string" && record.source.account !== accountKey)
-  ));
+  const syncedIds = new Set(syncedRecords.map((record) => record.id));
+  const seenIds = new Set<string>();
+  return priorRecords.filter((record) => {
+    const replacedSlice = record.source.provider === provider &&
+      !(typeof record.source.account === "string" && record.source.account !== accountKey);
+    if (replacedSlice) return false;
+    if (syncedIds.has(record.id) || seenIds.has(record.id)) return false;
+    seenIds.add(record.id);
+    return true;
+  });
 }
 
 export type ProviderAccountSlice = {

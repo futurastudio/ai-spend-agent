@@ -25,6 +25,7 @@ import {
   resolveTokenReference,
   selectProviderFinancialHeadlineRecords,
   providerAccountKey,
+  providerAccountRecordIdPrefix,
   tagProviderAccountRecords,
   retainProviderRecordsForNewSync,
   providerAccountSlices,
@@ -2324,10 +2325,25 @@ describe("provider account slices (multi-org accumulation)", () => {
     const [other] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY");
 
     expect(first!.source.account).toBe("env:OPENAI_ADMIN_KEY_ORG2");
-    expect(first!.id).toBe("env-openai-admin-key-org2-openai-costs-1-responses");
+    // slug + sha256(raw key) first 8 hex — pinned so the digest algorithm
+    // (and therefore every persisted record id) can never drift silently.
+    expect(first!.id).toBe("env-openai-admin-key-org2-e837306d-openai-costs-1-responses");
+    expect(providerAccountRecordIdPrefix("env:OPENAI_ADMIN_KEY_ORG2"))
+      .toBe("env-openai-admin-key-org2-e837306d");
     // Idempotent per account; distinct across accounts even for identical buckets.
     expect(again!.id).toBe(first!.id);
     expect(other!.id).not.toBe(first!.id);
+  });
+
+  it("keeps slug-equivalent account spellings in disjoint record-id namespaces (QA M3)", () => {
+    const record = accountRecord({ id: "cursor-spend-dev", provider: "cursor" });
+    const [spacey] = tagProviderAccountRecords([record], "account:team a");
+    const [dashy] = tagProviderAccountRecords([record], "account:team-a");
+
+    // Both slug to "account-team-a"; the raw-key digest keeps them apart.
+    expect(spacey!.id).toBe("account-team-a-ba2a8d48-cursor-spend-dev");
+    expect(dashy!.id).toBe("account-team-a-4035d82b-cursor-spend-dev");
+    expect(spacey!.id).not.toBe(dashy!.id);
   });
 
   it("retains other providers and other account slices; replaces the same slice and unlabeled legacy rows", () => {
@@ -2338,9 +2354,36 @@ describe("provider account slices (multi-org accumulation)", () => {
       accountRecord({ id: "d", provider: "anthropic", amountUsd: 2 })
     ];
 
-    const retained = retainProviderRecordsForNewSync(prior, "openai", "env:OPENAI_ADMIN_KEY_ORG2");
+    const retained = retainProviderRecordsForNewSync(
+      prior,
+      "openai",
+      "env:OPENAI_ADMIN_KEY_ORG2",
+      tagProviderAccountRecords([accountRecord({ id: "fresh" })], "env:OPENAI_ADMIN_KEY_ORG2")
+    );
 
     expect(retained.map((record) => record.id)).toEqual(["a", "d"]);
+  });
+
+  it("drops retained rows whose ids collide with the fresh sync or each other (fail-closed)", () => {
+    // Pre-digest state: "team a" and "team-a" slices persisted with ONE
+    // shared id — the double-count QA repro C2. The next sync of any other
+    // account must keep only one copy, and a retained row may never shadow a
+    // freshly synced id.
+    const collidingId = "account-team-a-cursor-spend-dev";
+    const prior = [
+      accountRecord({ id: collidingId, provider: "cursor", account: "account:team a", amountUsd: 12.4 }),
+      accountRecord({ id: collidingId, provider: "cursor", account: "account:team-a", amountUsd: 12.4 }),
+      accountRecord({ id: "stale-copy-of-fresh", provider: "cursor", account: "account:team-c", amountUsd: 1 })
+    ];
+    const synced = [
+      accountRecord({ id: "stale-copy-of-fresh", provider: "cursor", account: "account:team-b", amountUsd: 2 })
+    ];
+
+    const retained = retainProviderRecordsForNewSync(prior, "cursor", "account:team-b", synced);
+
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.id).toBe(collidingId);
+    expect(retained[0]!.source.account).toBe("account:team a");
   });
 
   it("groups per-account slices and prints them with record counts and billed sums", () => {

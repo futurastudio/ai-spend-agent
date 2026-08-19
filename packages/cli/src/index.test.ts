@@ -4618,6 +4618,18 @@ describe("minimal CLI vertical slice", () => {
     expect(new Set(spendState.records.map(
       (record: { source: { account?: string } }) => record.source.account
     ))).toEqual(new Set(["account:team-a", "account:team-b"]));
+
+    // QA M3 repro C2: "team a" slugs to the same prefix as "team-a" — the
+    // raw-key digest must keep the slices in disjoint record-id namespaces.
+    const spaceyTeam = await runCli(syncArgs("team a"));
+    expect(spaceyTeam.exitCode).toBe(0);
+    const collidedState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    const ids = collidedState.records.map((record: { id: string }) => record.id);
+    expect(collidedState.records).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(new Set(collidedState.records.map(
+      (record: { source: { account?: string } }) => record.source.account
+    ))).toEqual(new Set(["account:team a", "account:team-a", "account:team-b"]));
     delete process.env.CURSOR_ADMIN_KEY;
   });
 

@@ -3909,7 +3909,8 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     const retainedPriorRecords = retainProviderRecordsForNewSync(
       trustedPrior?.records ?? [],
       result.provider,
-      accountKey
+      accountKey,
+      syncedRecords
     );
     const records = applyProviderContractGate([
       ...retainedPriorRecords,
