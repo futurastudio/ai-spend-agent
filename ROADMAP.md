@@ -83,6 +83,13 @@ human acceptance gates.
   then the first sync runs automatically over a default 30-day window — no
   placeholders, no second command to compose. The agent-native loop drafts
   it conversationally where an MCP client is present.
+- **Per-basis saved reports in connected mode.** The terminal receipt already
+  shows billed and API-equivalent money side by side; the saved `report` (and
+  the input `improve` shares) still narrows connected state to billed-only
+  evidence, so its total under-discloses the local API-equivalent axis (it
+  never overclaims, and improve's waste findings are unaffected — they derive
+  from action evidence). Ride the receipt's local financial records into the
+  report's evidence section per-basis.
 
 ## Later — the paid accountability system
 

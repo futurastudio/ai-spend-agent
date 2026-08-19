@@ -1218,7 +1218,12 @@ export async function syncProviderSpendTool(
       [result.provider]: result.qa
     };
     // Fail-closed coverage: a provider is complete only when this sync AND
-    // every retained slice were complete.
+    // every retained slice were complete. Known ratchet (QA m4): per-slice
+    // coverage is not persisted, so with other slices retained a prior
+    // "partial" sticks even after the offending slice re-syncs complete —
+    // it only UNDER-claims, and recovers when the provider merges with no
+    // other slices retained (single-slice re-sync), after `aibill
+    // drop-slice` removes the stale slice, or after `aibill reset`.
     const mergedProviderCoverage: ProviderCoverageStatus =
       retainedSameProviderSlices &&
       trustedPrior?.coverageByProvider?.[result.provider] === "partial"
@@ -1230,10 +1235,12 @@ export async function syncProviderSpendTool(
     };
     // Freshness stays conservative: a retained slice keeps its older check
     // time, so an old account slice is never claimed as freshly checked.
+    // Same m4 ratchet and recovery direction as coverage above.
     const priorProviderCheckedAt = trustedPrior?.checkedAtByProvider?.[result.provider];
     const mergedProviderCheckedAt =
       retainedSameProviderSlices &&
       typeof priorProviderCheckedAt === "string" &&
+      validIsoString(priorProviderCheckedAt) &&
       priorProviderCheckedAt < result.fetchedAt
         ? priorProviderCheckedAt
         : result.fetchedAt;
