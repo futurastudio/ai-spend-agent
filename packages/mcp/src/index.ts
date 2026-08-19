@@ -69,6 +69,8 @@ import {
   tagProviderAccountRecords,
   retainProviderRecordsForNewSync,
   intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -1138,6 +1140,10 @@ export async function syncProviderSpendTool(
   syncedTotalUsd: number | null;
   combinedSummary: SpendSummary;
   qa: unknown;
+  /** QA M2: prior slices this sync superseded, named with billed sums. */
+  replacedSliceNotices?: string[];
+  /** QA M1: slices holding identical records — likely one org, two references. */
+  duplicateSliceWarnings?: string[];
 }> {
   const rootPath = await resolveSafeScanRoot(input.path);
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
@@ -1317,6 +1323,19 @@ export async function syncProviderSpendTool(
       { sourceRegistryContents: await readSafeStateText(stateDir, "sources.json") }
     );
 
+    // QA M2/M1: billed dollars never disappear without a word, and identical
+    // twin slices (one org under two references) are called out on the sync
+    // result itself, mirroring the CLI's printed notice lines.
+    const replacedSliceNotices = providerSliceReplacementNotices({
+      provider: result.provider,
+      accountKey,
+      priorRecords: trustedPrior?.records ?? [],
+      retainedRecords: retainedPriorRecords,
+      syncedRecordCount: syncedRecords.length,
+      syncedBilledUsd: syncedFinancials.providerReportedBilledUsd
+    });
+    const duplicateSliceWarnings = duplicateProviderAccountSliceWarnings(records, result.provider);
+
     return {
       provider: result.provider,
       sourceId: syncedSource.id,
@@ -1332,7 +1351,9 @@ export async function syncProviderSpendTool(
       combinedRecordCount: records.length,
       syncedTotalUsd: syncedFinancials.headlineUsd,
       combinedSummary,
-      qa: result.qa
+      qa: result.qa,
+      ...(replacedSliceNotices.length > 0 ? { replacedSliceNotices } : {}),
+      ...(duplicateSliceWarnings.length > 0 ? { duplicateSliceWarnings } : {})
     };
   } catch (error) {
     const message = sanitizeProviderSyncError(error, input.authReference)

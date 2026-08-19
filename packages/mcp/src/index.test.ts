@@ -1789,9 +1789,31 @@ describe("MCP analyst tools", () => {
     expect(secondSync.syncedRecordCount).toBe(18);
     expect(secondSync.combinedRecordCount).toBe(24);
     expect(secondSync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
-    // Re-syncing the SAME account replaces its slice — never doubles it.
+    // Re-syncing the SAME account replaces its slice — never doubles it, and
+    // a routine same-value replace raises no replaced-slice notice.
     expect(replaySync.combinedRecordCount).toBe(24);
     expect(replaySync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
+    expect(replaySync.replacedSliceNotices).toBeUndefined();
+    expect(replaySync.duplicateSliceWarnings).toBeUndefined();
+
+    // QA M1: the same org synced under a THIRD reference produces identical
+    // inner record ids — the result must carry the duplicate-slice warning.
+    const twinSync = await syncOrg("env:OPENAI_ADMIN_KEY_B", org1Amounts);
+    expect(twinSync.combinedRecordCount).toBe(30);
+    expect(twinSync.duplicateSliceWarnings).toEqual([
+      "openai slices env:OPENAI_ADMIN_KEY and env:OPENAI_ADMIN_KEY_B contain identical records — " +
+      "likely the same organization under two references; the combined total counts it twice. " +
+      "Remove one: npx aibill drop-slice --provider openai --account \"env:OPENAI_ADMIN_KEY_B\""
+    ]);
+
+    // QA M2: an empty re-sync of that slice erases billed dollars — the
+    // result must name them.
+    const emptySync = await syncOrg("env:OPENAI_ADMIN_KEY_B", []);
+    expect(emptySync.combinedRecordCount).toBe(24);
+    expect(emptySync.replacedSliceNotices).toEqual([
+      "replaced prior slice env:OPENAI_ADMIN_KEY_B: $0.81 billed from 6 records superseded " +
+      "(this sync returned 0 records, no billed evidence)"
+    ]);
 
     const spendState = JSON.parse(
       await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8")

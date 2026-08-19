@@ -69,6 +69,8 @@ import {
   providerAccountSlices,
   formatProviderAccountSlices,
   intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -245,6 +247,8 @@ type ParsedArgs = {
   org?: string;
   enterprise?: string;
   accountId?: string;
+  /** drop-slice: the account slice key to remove (e.g. env:OPENAI_ADMIN_KEY_ORG2). */
+  account?: string;
   groupBy?: GroupByDimension;
   /** Set when --group-by was passed with a missing/unknown dimension. */
   groupByInvalid?: string;
@@ -441,6 +445,10 @@ export async function runCli(
 
   if (args.command === "sync-provider") {
     return syncProviderCommand(args);
+  }
+
+  if (args.command === "drop-slice") {
+    return dropSliceCommand(args);
   }
 
   if (args.command === "confirm-mapping") {
@@ -1705,10 +1713,16 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
     const accountSliceNote = records.some((record) => typeof record.source.account === "string")
       ? ` Account slices: ${formatProviderAccountSlices(providerAccountSlices(records, id))}.`
       : "";
+    // QA M1: two slices holding identical records are almost certainly one
+    // organization synced under two references — the combined total counts
+    // it twice, so doctor must say so where the slices are listed.
+    const duplicateSliceNote = duplicateProviderAccountSliceWarnings(records, id)
+      .map((warning) => ` WARNING: ${warning}`)
+      .join("");
     observations.push({
       id,
       financialEvidence: evidence,
-      financialEvidenceNote: `${providerFinancialEvidenceNote(records, evidence)}${accountSliceNote}`,
+      financialEvidenceNote: `${providerFinancialEvidenceNote(records, evidence)}${accountSliceNote}${duplicateSliceNote}`,
       // A connector stub is only configuration, not a source check. Older
       // successful syncs predate source-status.json, so their non-missing
       // registry approval time is the conservative migration fallback.
@@ -4060,6 +4074,20 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `records fetched: ${result.records.length}`,
       `account: ${accountKey}`,
       `provider accounts: ${formatProviderAccountSlices(providerAccountSlices(records, result.provider))}`,
+      // QA M2: billed dollars never disappear without a word — every dropped
+      // prior slice is named with its record count and billed sum.
+      ...providerSliceReplacementNotices({
+        provider: result.provider,
+        accountKey,
+        priorRecords: trustedPrior?.records ?? [],
+        retainedRecords: retainedPriorRecords,
+        syncedRecordCount: syncedRecords.length,
+        syncedBilledUsd: syncedFinancials.providerReportedBilledUsd
+      }).map((notice) => `notice: ${notice}`),
+      // QA M1: identical inner record ids across two named slices are the
+      // signature of one organization synced under two references.
+      ...duplicateProviderAccountSliceWarnings(records, result.provider)
+        .map((warning) => `warning: ${warning}`),
       provider === "cursor"
         ? "source window: current team subscription cycle returned by Cursor"
         : provider === "github-copilot"
@@ -4085,6 +4113,149 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       stderr: sanitizedError
     };
   }
+}
+
+/**
+ * `aibill drop-slice --provider X --account KEY` — remove one named account
+ * slice from trusted connected state. This is the prune path for the
+ * duplicate-slice diagnostic (one organization synced under two references)
+ * and for a slice whose credential reference was renamed: without it the only
+ * cleanup is a full `aibill reset` plus re-sync of every org. Local-only; no
+ * provider is contacted; the re-signed state can only shrink totals.
+ */
+async function dropSliceCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootPath = resolve(args.path);
+  const requestedProvider = (args.provider ?? "").trim().toLowerCase();
+  const provider = providerAliases[requestedProvider] ?? requestedProvider;
+  const accountKey = (args.account ?? "").trim();
+  if (!provider || !supportedAdminProviders.has(provider) || !accountKey) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "drop-slice requires --provider (openai, anthropic, cursor, github-copilot) and --account <slice key>.",
+        "List the slices first: npx aibill doctor --sources",
+        "example: npx aibill drop-slice --provider openai --account env:OPENAI_ADMIN_KEY_ORG2"
+      ].join("\n")
+    };
+  }
+
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+  const persisted = await readPersistedSpend(rootPath);
+  if (!persisted || persisted.mode !== "connected_provider" || persisted.connectedTrust?.trusted !== true) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "drop-slice requires trusted connected provider state. Run `npx aibill sync-provider ...` first, or `npx aibill reset` to clear all local state."
+    };
+  }
+
+  const droppedRecords = persisted.records.filter((record) => (
+    record.source.provider === provider && record.source.account === accountKey
+  ));
+  if (droppedRecords.length === 0) {
+    const slices = providerAccountSlices(persisted.records, provider);
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `No ${provider} slice matches account "${sanitizeSecretishError(accountKey)}".`,
+        slices.length > 0
+          ? `Known ${provider} slices: ${formatProviderAccountSlices(slices)}`
+          : `No ${provider} slices exist in local state.`,
+        "Unlabeled legacy rows cannot be dropped by account; re-syncing the provider replaces them."
+      ].join("\n")
+    };
+  }
+
+  const records = persisted.records.filter((record) => !(
+    record.source.provider === provider && record.source.account === accountKey
+  ));
+  const summary = analyzeSpend(selectProviderFinancialHeadlineRecords(records));
+  const mappings = attributeUsageRecords(records);
+  const providerRemaining = records.filter((record) => record.source.provider === provider);
+
+  // Rebuild the provider-keyed accounting maps. Financials are recomputed
+  // over the remaining slices; coverage/checkedAt/intervals are left as-is —
+  // they can only UNDER-claim after a drop (partial stays partial, windows
+  // stay narrow) and recover on the provider's next sync. A provider with no
+  // remaining records loses its map entries entirely.
+  const accounting: Record<string, unknown> = isPlainObject(persisted.accounting)
+    ? { ...persisted.accounting }
+    : {};
+  for (const mapName of [
+    "coverageByProvider",
+    "checkedAtByProvider",
+    "coverageIntervalsByProvider",
+    "qaByProvider",
+    "financialsByProvider"
+  ]) {
+    const prior = trustedAccountingMap<unknown>(persisted.accounting, mapName);
+    if (Object.keys(prior).length === 0) continue;
+    const next: Record<string, unknown> = { ...prior };
+    if (providerRemaining.length === 0) {
+      delete next[provider];
+    } else if (mapName === "financialsByProvider") {
+      next[provider] = summarizeProviderFinancials(providerRemaining);
+    }
+    if (Object.keys(next).length > 0) accounting[mapName] = next;
+    else delete accounting[mapName];
+  }
+
+  const droppedFinancials = summarizeProviderFinancials(droppedRecords);
+  const droppedBilled = droppedFinancials.providerReportedBilledUsd;
+
+  await invalidateConnectedSpendTrustReceipt(rootPath);
+  await writeLocalSpendState(
+    stateDir,
+    records,
+    summary,
+    mappings,
+    "connected_provider",
+    accounting,
+    persisted.checkedAt ?? new Date().toISOString()
+  );
+  // Keep provider-records.json consistent with the receipt-bound spend state
+  // (same records + maps); a missing file is tolerable — spend.json is the
+  // receipt-bound truth.
+  try {
+    const providerFile = await readJson<Record<string, unknown>>(join(stateDir, "provider-records.json"));
+    await writeJson(join(stateDir, "provider-records.json"), {
+      ...providerFile,
+      records,
+      ...(accounting.qaByProvider !== undefined ? { qaByProvider: accounting.qaByProvider } : {}),
+      ...(accounting.checkedAtByProvider !== undefined ? { checkedAtByProvider: accounting.checkedAtByProvider } : {}),
+      ...(accounting.coverageByProvider !== undefined ? { coverageByProvider: accounting.coverageByProvider } : {}),
+      ...(accounting.coverageIntervalsByProvider !== undefined
+        ? { coverageIntervalsByProvider: accounting.coverageIntervalsByProvider }
+        : {}),
+      ...(accounting.financialsByProvider !== undefined ? { financialsByProvider: accounting.financialsByProvider } : {})
+    });
+  } catch {
+    // Diagnostic mirror only; never block the drop on it.
+  }
+  await appendAuditEvent(stateDir, {
+    timestamp: new Date().toISOString(),
+    action: "source_scanned",
+    sourceId: `${provider}-provider-api`,
+    detail: `drop-slice removed the ${provider} account slice "${accountKey}" (${droppedRecords.length} record(s), ${droppedBilled === null ? "no billed evidence" : `billed ${formatOptionalUsd(droppedBilled)}`}). Local state maintenance only; no provider was contacted.`
+  });
+  await writeConnectedSpendTrustReceipt(
+    rootPath,
+    await readSafeStateText(stateDir, "spend.json"),
+    { sourceRegistryContents: await readSafeStateText(stateDir, "sources.json") }
+  );
+
+  const remainingSlices = providerAccountSlices(records, provider);
+  return ok([
+    "aibill drop-slice",
+    `provider: ${provider}`,
+    `dropped account: ${accountKey}`,
+    `records removed: ${droppedRecords.length} (${droppedBilled === null ? "no billed evidence" : `billed ${formatOptionalUsd(droppedBilled)}`})`,
+    `remaining provider accounts: ${remainingSlices.length > 0 ? formatProviderAccountSlices(remainingSlices) : "none"}`,
+    `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
+    "note: coverage and freshness labels stay conservative until the provider is re-synced"
+  ].join("\n"));
 }
 
 function formatOptionalUsd(value: number | null): string {
@@ -6943,7 +7114,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--source-path", "--type", "--provider", "--source-id", "--team",
     "--person", "--client", "--cost-center", "--role", "--project", "--agent", "--workflow",
     "--evidence", "--confidence", "--label", "--auth-reference",
-    "--start-time", "--end-time", "--org", "--enterprise", "--account-id",
+    "--start-time", "--end-time", "--org", "--enterprise", "--account-id", "--account",
     "--interval", "--cycles", "--canary", "--quality", "--change-digest",
     "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
     "--pr", "--business-outcome",
@@ -7313,6 +7484,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       const next = rest[index + 1];
       if (next) {
         parsed.enterprise = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--account") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.account = next;
         index += 1;
       }
       continue;

@@ -2193,6 +2193,106 @@ export function providerAccountSlices(
 }
 
 /**
+ * A slice's record ids with their account prefix stripped — the provider-side
+ * bucket identity. Understands the current slug+digest prefix and the
+ * short-lived pre-digest slug-only prefix; unprefixed ids pass through.
+ */
+function sliceInnerRecordId(id: string, accountKey: string): string {
+  const digestPrefix = `${providerAccountRecordIdPrefix(accountKey)}-`;
+  if (id.startsWith(digestPrefix)) return id.slice(digestPrefix.length);
+  const slugPrefix = `${slugifySourceId(accountKey)}-`;
+  if (id.startsWith(slugPrefix)) return id.slice(slugPrefix.length);
+  return id;
+}
+
+/**
+ * Detect the same organization synced under two different references: when
+ * two named slices of one provider hold IDENTICAL inner record ids (the ids
+ * modulo their account prefixes), the provider almost certainly returned the
+ * same data twice and the combined total double-counts. This is an honest
+ * diagnostic, not a silent fix — the user chose both identities, so the user
+ * removes one.
+ */
+export function duplicateProviderAccountSliceWarnings(
+  records: readonly UsageRecord[],
+  provider: string
+): string[] {
+  const innerIdsByAccount = new Map<string, Set<string>>();
+  for (const record of records) {
+    if (record.source.provider !== provider) continue;
+    const account = record.source.account;
+    if (typeof account !== "string") continue;
+    const inner = innerIdsByAccount.get(account) ?? new Set<string>();
+    inner.add(sliceInnerRecordId(record.id, account));
+    innerIdsByAccount.set(account, inner);
+  }
+  const accounts = [...innerIdsByAccount.keys()].sort();
+  const warnings: string[] = [];
+  for (let leftIndex = 0; leftIndex < accounts.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < accounts.length; rightIndex += 1) {
+      const left = innerIdsByAccount.get(accounts[leftIndex]!)!;
+      const right = innerIdsByAccount.get(accounts[rightIndex]!)!;
+      if (left.size === 0 || left.size !== right.size) continue;
+      if (![...left].every((id) => right.has(id))) continue;
+      warnings.push(
+        `${provider} slices ${accounts[leftIndex]} and ${accounts[rightIndex]} contain identical records — ` +
+        "likely the same organization under two references; the combined total counts it twice. " +
+        `Remove one: npx aibill drop-slice --provider ${provider} --account "${accounts[rightIndex]}"`
+      );
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Honest notices for prior records a sync removed. Replacement is fail-closed
+ * by design (unlabeled legacy rows, same-slice re-sync, id-collision guard),
+ * but billed dollars must never disappear without a word: each dropped slice
+ * is named with its record count and billed sum. A routine same-slice re-sync
+ * that returns the same or more billed evidence stays quiet.
+ */
+export function providerSliceReplacementNotices(input: {
+  provider: string;
+  accountKey: string;
+  priorRecords: readonly UsageRecord[];
+  retainedRecords: readonly UsageRecord[];
+  syncedRecordCount: number;
+  syncedBilledUsd: number | null;
+}): string[] {
+  const retained = new Set(input.retainedRecords);
+  const dropped = input.priorRecords.filter((record) => !retained.has(record));
+  if (dropped.length === 0) return [];
+  const notices: string[] = [];
+  for (const slice of providerAccountSlices(dropped, input.provider)) {
+    const billed = slice.billedUsd === null
+      ? "no billed evidence"
+      : `${formatProviderUsd(slice.billedUsd)} billed`;
+    const rows = `${slice.recordCount} record${slice.recordCount === 1 ? "" : "s"}`;
+    if (slice.account === null) {
+      notices.push(`replaced prior unlabeled slice: ${billed} from ${rows} superseded`);
+      continue;
+    }
+    if (slice.account === input.accountKey) {
+      const reducesBilledEvidence = slice.billedUsd !== null &&
+        (input.syncedBilledUsd === null || input.syncedBilledUsd + 0.005 < slice.billedUsd);
+      if (!reducesBilledEvidence) continue;
+      const newBilled = input.syncedBilledUsd === null
+        ? "no billed evidence"
+        : `billed ${formatProviderUsd(input.syncedBilledUsd)}`;
+      notices.push(
+        `replaced prior slice ${slice.account}: ${billed} from ${rows} superseded ` +
+        `(this sync returned ${input.syncedRecordCount} record${input.syncedRecordCount === 1 ? "" : "s"}, ${newBilled})`
+      );
+      continue;
+    }
+    notices.push(
+      `replaced prior slice ${slice.account}: ${billed} from ${rows} superseded (record ids collided with newer state)`
+    );
+  }
+  return notices;
+}
+
+/**
  * Intersection of two claimed coverage windows — the interval every account
  * slice of a provider actually covers. Returns undefined when either window
  * is absent/malformed or the windows do not overlap (fail-closed: no window

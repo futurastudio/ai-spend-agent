@@ -30,7 +30,9 @@ import {
   retainProviderRecordsForNewSync,
   providerAccountSlices,
   formatProviderAccountSlices,
-  intersectProviderCoverageIntervals
+  intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
@@ -2441,5 +2443,128 @@ describe("provider account slices (multi-org accumulation)", () => {
       january,
       { coverageStart: 5, coverageEnd: "2026-01-31T00:00:00.000Z" } as never
     )).toBeUndefined();
+  });
+});
+
+describe("duplicate-slice diagnostics and replacement notices (QA M1/M2)", () => {
+  const sliceRecord = (input: {
+    innerId: string;
+    account: string;
+    amountUsd: number;
+    provider?: string;
+  }) => tagProviderAccountRecords([{
+    id: input.innerId,
+    timestamp: "2026-08-01T00:00:00.000Z",
+    source: {
+      id: `${input.provider ?? "openai"}-provider-api`,
+      name: "Provider API",
+      provider: input.provider ?? "openai",
+      confidence: "verified" as const,
+      observedFrom: "provider API"
+    },
+    model: "billing",
+    inputTokens: 0,
+    outputTokens: 0,
+    amountUsd: input.amountUsd,
+    costConfidence: "verified" as const,
+    providerCostType: "openai_cost",
+    usageGranularity: "billing_bucket" as const
+  }], input.account)[0]!;
+
+  it("warns when two slices of one provider hold identical inner record ids", () => {
+    const records = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.41 }),
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY_B", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY_B", amountUsd: 0.41 })
+    ];
+
+    const warnings = duplicateProviderAccountSliceWarnings(records, "openai");
+
+    expect(warnings).toEqual([
+      "openai slices env:OPENAI_ADMIN_KEY and env:OPENAI_ADMIN_KEY_B contain identical records — " +
+      "likely the same organization under two references; the combined total counts it twice. " +
+      "Remove one: npx aibill drop-slice --provider openai --account \"env:OPENAI_ADMIN_KEY_B\""
+    ]);
+  });
+
+  it("stays quiet for genuinely different orgs and unnamed legacy rows", () => {
+    const records = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-2-z", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 8.66 })
+    ];
+
+    expect(duplicateProviderAccountSliceWarnings(records, "openai")).toEqual([]);
+    // Subset overlap is not identity — no warning on partial overlap either.
+    expect(duplicateProviderAccountSliceWarnings([
+      ...records,
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 0.4 })
+    ], "openai")).toEqual([]);
+  });
+
+  it("names dropped slices with billed sums in replacement notices", () => {
+    const legacy = {
+      id: "legacy-openai-cost",
+      timestamp: "2026-08-01T00:00:00.000Z",
+      source: {
+        id: "openai-provider-api",
+        name: "Provider API",
+        provider: "openai",
+        confidence: "verified" as const,
+        observedFrom: "provider API"
+      },
+      model: "billing",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 123.45,
+      costConfidence: "verified" as const,
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket" as const
+    };
+    const synced = sliceRecord({ innerId: "fresh", account: "env:OPENAI_ADMIN_KEY", amountUsd: 8.66 });
+
+    const notices = providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: [legacy],
+      retainedRecords: [],
+      syncedRecordCount: 1,
+      syncedBilledUsd: 8.66
+    });
+
+    expect(notices).toEqual([
+      "replaced prior unlabeled slice: $123.45 billed from 1 record superseded"
+    ]);
+    expect(synced.source.account).toBe("env:OPENAI_ADMIN_KEY");
+  });
+
+  it("reports a same-slice re-sync only when it removes billed evidence", () => {
+    const prior = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 3 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY", amountUsd: 1 })
+    ];
+
+    // Empty re-sync erases the slice: must say so.
+    expect(providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: prior,
+      retainedRecords: [],
+      syncedRecordCount: 0,
+      syncedBilledUsd: null
+    })).toEqual([
+      "replaced prior slice env:OPENAI_ADMIN_KEY: $4.00 billed from 2 records superseded " +
+      "(this sync returned 0 records, no billed evidence)"
+    ]);
+
+    // Routine idempotent re-sync at the same or higher billed total: silent.
+    expect(providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: prior,
+      retainedRecords: [],
+      syncedRecordCount: 2,
+      syncedBilledUsd: 4
+    })).toEqual([]);
   });
 });
