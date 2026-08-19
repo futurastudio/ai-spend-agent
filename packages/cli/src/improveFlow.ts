@@ -82,6 +82,13 @@ type AskSpec = {
   emptyKeepsValue?: string;
   /** "Current answer" for revisits, "Suggested" for machine drafts. */
   emptyKeepsLabel?: string;
+  /**
+   * Navigation default: Enter answers this token. ONLY for questions that
+   * mint no user-declared evidence (start/resume/identity-confirm) — the
+   * testimony answers (baseline quality, canary, quality, APPROVE) must
+   * always be typed deliberately.
+   */
+  enterDefault?: string;
 };
 
 async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<AskOutcome> {
@@ -97,7 +104,7 @@ async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<As
       }),
       ""
     ];
-    if (spec.emptyKeepsValue !== undefined) {
+    if (spec.emptyKeepsValue !== undefined && spec.enterDefault === undefined) {
       const label = spec.emptyKeepsLabel ?? "Current answer";
       parts.push(`${label}: "${spec.emptyKeepsValue}"`);
       // Any label other than a revisit of the user's own answer is a
@@ -134,7 +141,11 @@ async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<As
       ? { maxIdenticalRejections: io.maxIdenticalRejections }
       : {}),
     ...(io.nowMs !== undefined ? { nowMs: io.nowMs } : {}),
-    ...(spec.emptyKeepsValue !== undefined ? { emptyKeepsValue: spec.emptyKeepsValue } : {})
+    ...(spec.enterDefault !== undefined
+      ? { emptyKeepsValue: spec.enterDefault }
+      : spec.emptyKeepsValue !== undefined
+        ? { emptyKeepsValue: spec.emptyKeepsValue }
+        : {})
   });
 }
 
@@ -174,8 +185,9 @@ export async function runStartSitting(
       step: 1,
       totalSteps: 2,
       question: "Start this token test?",
-      guidance: "Answer y or n. Type cancel to stop safely.",
+      guidance: "Enter = y · n stops · cancel stops safely.",
       context: { choiceTokens: ["y", "n"] },
+      enterDefault: "y",
       sittingHint: shortSittingHint
     });
     if (first.outcome === "cancelled" || first.outcome === "back") return { action: "cancelled" };
@@ -486,8 +498,9 @@ export async function runPlanSitting(
         kind: "choice",
         step: 1,
         totalSteps,
-        question: "Resume where you left off? Answer y to resume, n to start the plan over (saved answers are discarded).",
+        question: "Resume where you left off? Enter = y · n starts the plan over (saved answers are discarded).",
         context: { choiceTokens: ["y", "n"] },
+        enterDefault: "y",
         sittingHint: planSittingHint
       });
       if (resume.outcome === "cancelled" || resume.outcome === "back") {
@@ -577,8 +590,9 @@ export async function runPlanSitting(
           kind: "choice",
           step: 4,
           totalSteps,
-          question: "Approve as this identity? Answer y to continue, or n to stop here and run identify again first.",
+          question: "Approve as this identity? Enter = y · n stops here so you can run identify again first.",
           context: { choiceTokens: ["y", "n"] },
+          enterDefault: "y",
           sittingHint: planSittingHint
         });
         if (confirm.outcome === "cancelled") return { action: "cancelled" };
