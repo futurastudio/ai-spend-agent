@@ -2529,6 +2529,8 @@ describe("minimal CLI vertical slice", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.OPENAI_ADMIN_KEY;
+    delete process.env.OPENAI_ADMIN_KEY_ORG2;
+    delete process.env.CURSOR_ADMIN_KEY;
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
@@ -4417,6 +4419,200 @@ describe("minimal CLI vertical slice", () => {
     } finally {
       openAiDefinition!.contractState = priorContractState;
     }
+  });
+
+  it("accumulates two OpenAI org account slices and stays idempotent per account", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-multiorg-"));
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "org1-admin-fake-token-do-not-store";
+    process.env.OPENAI_ADMIN_KEY_ORG2 = "sk-" + "org2-admin-fake-token-do-not-store";
+    // Org 1: 6 records totaling $0.81. Org 2: 18 records totaling $8.66.
+    // Line items 0-5 deliberately overlap across orgs (same bucket times) so
+    // colliding provider bucket identities cannot merge across account slices.
+    const costPage = (amounts: number[]) => ({
+      data: [{
+        start_time: 1761955200,
+        end_time: 1762041600,
+        results: amounts.map((value, index) => ({
+          amount: { value, currency: "usd" },
+          line_item: `Responses API ${index}`
+        }))
+      }],
+      has_more: false
+    });
+    const org1Costs = costPage(Array.from({ length: 6 }, () => 0.135));
+    const org2Costs = costPage(Array.from({ length: 18 }, (_, index) => index === 0 ? 0.5 : 0.48));
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ((init?.headers?.Authorization ?? "").includes("org2") ? org2Costs : org1Costs)
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = (reference: string) => [
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", reference, "--start-time", "1761955200", "--end-time", "1762041600"
+    ];
+
+    const firstSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY"));
+    const secondSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY_ORG2"));
+
+    expect(firstSync.exitCode).toBe(0);
+    expect(firstSync.stdout).toContain("records fetched: 6");
+    expect(firstSync.stdout).toContain("account: env:OPENAI_ADMIN_KEY");
+    expect(firstSync.stdout).toContain("synced provider headline: $0.81");
+    expect(firstSync.stdout).toContain("combined headline spend: $0.81");
+    expect(firstSync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY (6 records, billed $0.81)"
+    );
+    expect(secondSync.exitCode).toBe(0);
+    expect(secondSync.stdout).toContain("records fetched: 18");
+    expect(secondSync.stdout).toContain("account: env:OPENAI_ADMIN_KEY_ORG2");
+    expect(secondSync.stdout).toContain("synced provider headline: $8.66");
+    // The founder repro: org 1 must NOT be replaced by org 2 — the combined
+    // headline accumulates both org slices.
+    expect(secondSync.stdout).toContain("combined headline spend: $9.47");
+    expect(secondSync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY (6 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)"
+    );
+
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spendState.records).toHaveLength(24);
+    expect(new Set(spendState.records.map((record: { id: string }) => record.id)).size).toBe(24);
+    expect(spendState.records.every(
+      (record: { source: { account?: string } }) => typeof record.source.account === "string"
+    )).toBe(true);
+    expect(spendState.summary.totalUsd).toBeCloseTo(9.47, 6);
+
+    // Re-syncing the SAME account replaces its slice — never doubles it.
+    const idempotentSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY_ORG2"));
+    expect(idempotentSync.exitCode).toBe(0);
+    expect(idempotentSync.stdout).toContain("combined headline spend: $9.47");
+    const resyncedState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(resyncedState.records).toHaveLength(24);
+
+    // doctor --sources names each account slice for the provider.
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+    expect(doctor.exitCode).toBe(0);
+    expect(doctor.stdout).toContain(
+      "Account slices: env:OPENAI_ADMIN_KEY (6 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)."
+    );
+  });
+
+  it("replaces unlabeled legacy provider rows fail-closed while keeping other providers' slices", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-legacy-slice-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const legacyRecord = (provider: string, amountUsd: number, costType: string) => ({
+      id: `legacy-${provider}-cost`,
+      timestamp: "2026-08-07T00:00:00.000Z",
+      source: {
+        id: `${provider}-provider-api`,
+        name: `${provider} provider API`,
+        provider,
+        confidence: "verified",
+        observedFrom: "provider API"
+      },
+      model: "billing",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd,
+      costConfidence: "verified",
+      providerCostType: costType,
+      usageGranularity: "billing_bucket"
+    });
+    // Pre-multi-account state: one unnamed openai slice + one anthropic slice.
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [
+        legacyRecord("openai", 5, "openai_cost"),
+        legacyRecord("anthropic", 2, "anthropic_cost")
+      ]
+    }));
+    await trustConnectedSpendFixture(dir);
+    process.env.OPENAI_ADMIN_KEY_ORG2 = "sk-" + "org2-admin-fake-token-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: Array.from({ length: 18 }, (_, index) => ({
+                amount: { value: index === 0 ? 0.5 : 0.48, currency: "usd" },
+                line_item: `Responses API ${index}`
+              }))
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+
+    const sync = await runCli([
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY_ORG2",
+      "--start-time", "1761955200", "--end-time", "1762041600"
+    ]);
+
+    expect(sync.exitCode).toBe(0);
+    // The unnamed openai slice cannot be proven to be a different org, so it
+    // is replaced (never double-counted); anthropic's slice is retained.
+    expect(sync.stdout).toContain("combined headline spend: $10.66");
+    expect(sync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)"
+    );
+    const spendState = JSON.parse(await readFile(join(stateDir, "spend.json"), "utf8"));
+    const openAiRecords = spendState.records.filter(
+      (record: { source: { provider: string } }) => record.source.provider === "openai"
+    );
+    expect(openAiRecords).toHaveLength(18);
+    expect(openAiRecords.every(
+      (record: { source: { account?: string } }) => record.source.account === "env:OPENAI_ADMIN_KEY_ORG2"
+    )).toBe(true);
+    expect(spendState.records.filter(
+      (record: { source: { provider: string } }) => record.source.provider === "anthropic"
+    )).toHaveLength(1);
+  });
+
+  it("accumulates cursor team slices across different --account-id values", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-cursor-teams-"));
+    process.env.CURSOR_ADMIN_KEY = "key_" + "cursor-team-admin-fake-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        teamMemberSpend: [{ email: "dev@example.com", spendCents: 1240 }],
+        subscriptionCycleStart: 1754956800000,
+        totalMembers: 1,
+        totalPages: 1
+      })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = (team: string) => [
+      "sync-provider", "--path", dir, "--provider", "cursor",
+      "--auth-reference", "env:CURSOR_ADMIN_KEY", "--account-id", team
+    ];
+
+    const teamA = await runCli(syncArgs("team-a"));
+    const teamB = await runCli(syncArgs("team-b"));
+    const teamAReplay = await runCli(syncArgs("team-a"));
+
+    expect(teamA.exitCode).toBe(0);
+    expect(teamA.stdout).toContain("account: account:team-a");
+    expect(teamB.exitCode).toBe(0);
+    expect(teamB.stdout).toContain(
+      "provider accounts: account:team-a (1 record) + account:team-b (1 record)"
+    );
+    expect(teamAReplay.exitCode).toBe(0);
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spendState.records).toHaveLength(2);
+    expect(new Set(spendState.records.map(
+      (record: { source: { account?: string } }) => record.source.account
+    ))).toEqual(new Set(["account:team-a", "account:team-b"]));
+    delete process.env.CURSOR_ADMIN_KEY;
   });
 
   it("keeps inclusive OpenAI multimodal totals identical in persisted CLI JSON and the saved report", async () => {

@@ -15,7 +15,15 @@ export const spendSourceSchema = z.object({
   name: z.string().min(1),
   provider: z.string().min(1),
   confidence: costConfidenceSchema,
-  observedFrom: z.string().min(1)
+  observedFrom: z.string().min(1),
+  /**
+   * Stable per-account identity within one provider (an organization, team,
+   * or enterprise slice). Derived from the user-chosen credential reference
+   * or an explicit --org/--enterprise/--account-id flag — never from secret
+   * material. Absent on local-agent records and on provider records synced
+   * before multi-account support (treated as one unnamed legacy slice).
+   */
+  account: z.string().min(1).optional()
 });
 export type SpendSource = z.infer<typeof spendSourceSchema>;
 

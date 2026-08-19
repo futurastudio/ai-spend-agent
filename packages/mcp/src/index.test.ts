@@ -1745,6 +1745,70 @@ describe("MCP analyst tools", () => {
     expect(JSON.stringify(report)).not.toContain("999999");
   });
 
+  it("accumulates two OpenAI org account slices through MCP sync and stays idempotent per account", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-multiorg-"));
+    const startTime = 1_761_955_200;
+    const costPage = (amounts: number[]) => ({
+      data: [{
+        start_time: startTime,
+        end_time: startTime + 86_400,
+        results: amounts.map((value, index) => ({
+          amount: { value, currency: "usd" },
+          line_item: `Responses API ${index}`
+        }))
+      }],
+      has_more: false
+    });
+    const syncOrg = (reference: string, amounts: number[]) => syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: reference,
+      startTime,
+      endTime: startTime + 86_400
+    }, {
+      tokenResolver: () => `synthetic-${reference}-secret`,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => url.includes("/organization/costs")
+          ? costPage(amounts)
+          : { data: [], has_more: false }
+      })
+    });
+    const org1Amounts = Array.from({ length: 6 }, () => 0.135);
+    const org2Amounts = Array.from({ length: 18 }, (_, index) => index === 0 ? 0.5 : 0.48);
+
+    const firstSync = await syncOrg("env:OPENAI_ADMIN_KEY", org1Amounts);
+    const secondSync = await syncOrg("env:OPENAI_ADMIN_KEY_ORG2", org2Amounts);
+    const replaySync = await syncOrg("env:OPENAI_ADMIN_KEY_ORG2", org2Amounts);
+
+    // The founder repro: org 1 must NOT be replaced by org 2.
+    expect(firstSync.combinedRecordCount).toBe(6);
+    expect(firstSync.combinedSummary.totalUsd).toBeCloseTo(0.81, 6);
+    expect(secondSync.syncedRecordCount).toBe(18);
+    expect(secondSync.combinedRecordCount).toBe(24);
+    expect(secondSync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
+    // Re-syncing the SAME account replaces its slice — never doubles it.
+    expect(replaySync.combinedRecordCount).toBe(24);
+    expect(replaySync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
+
+    const spendState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8")
+    ) as {
+      records: Array<{ id: string; source: { account?: string } }>;
+      accounting: { financialsByProvider?: Record<string, { providerReportedBilledUsd: number | null }> };
+    };
+    expect(spendState.records).toHaveLength(24);
+    expect(new Set(spendState.records.map((record) => record.id)).size).toBe(24);
+    expect(new Set(spendState.records.map((record) => record.source.account))).toEqual(
+      new Set(["env:OPENAI_ADMIN_KEY", "env:OPENAI_ADMIN_KEY_ORG2"])
+    );
+    // Provider-keyed financials span BOTH slices, not just the latest sync.
+    expect(spendState.accounting.financialsByProvider?.openai?.providerReportedBilledUsd)
+      .toBeCloseTo(9.47, 6);
+  });
+
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-providers-"));
     const startTime = 1_750_000_000;

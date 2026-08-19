@@ -23,7 +23,13 @@ import {
   parseCursorReconciliationEnv,
   ProviderConnectorError,
   resolveTokenReference,
-  selectProviderFinancialHeadlineRecords
+  selectProviderFinancialHeadlineRecords,
+  providerAccountKey,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  providerAccountSlices,
+  formatProviderAccountSlices,
+  intersectProviderCoverageIntervals
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
@@ -2268,5 +2274,129 @@ describe("real provider connector implementations", () => {
       "user_aggregate"
     ]));
     expect(generateCutList(records)).toEqual([]);
+  });
+});
+
+describe("provider account slices (multi-org accumulation)", () => {
+  const accountRecord = (overrides: {
+    id: string;
+    provider?: string;
+    account?: string;
+    amountUsd?: number;
+    costConfidence?: "verified" | "estimated";
+  }) => ({
+    id: overrides.id,
+    timestamp: "2026-08-01T00:00:00.000Z",
+    source: {
+      id: `${overrides.provider ?? "openai"}-provider-api`,
+      name: "Provider API",
+      provider: overrides.provider ?? "openai",
+      confidence: overrides.costConfidence ?? "verified" as const,
+      observedFrom: "provider API",
+      ...(overrides.account ? { account: overrides.account } : {})
+    },
+    model: "billing",
+    inputTokens: 0,
+    outputTokens: 0,
+    amountUsd: overrides.amountUsd ?? 1,
+    costConfidence: overrides.costConfidence ?? "verified" as const,
+    providerCostType: "openai_cost",
+    usageGranularity: "billing_bucket" as const
+  });
+
+  it("keys the account by explicit org/enterprise/account flags before the auth reference", () => {
+    expect(providerAccountKey({ provider: "github-copilot", authReference: "env:GITHUB_TOKEN", org: "acme" }))
+      .toBe("org:acme");
+    expect(providerAccountKey({ provider: "github-copilot", authReference: "env:GITHUB_TOKEN", enterprise: "globex" }))
+      .toBe("enterprise:globex");
+    expect(providerAccountKey({ provider: "cursor", authReference: "env:CURSOR_ADMIN_KEY", accountId: "team-a" }))
+      .toBe("account:team-a");
+    // OpenAI/Anthropic admin keys are org-scoped; the user-chosen reference
+    // NAME is the account identity (never any part of the secret).
+    expect(providerAccountKey({ provider: "openai", authReference: "env:OPENAI_ADMIN_KEY_ORG2" }))
+      .toBe("env:OPENAI_ADMIN_KEY_ORG2");
+  });
+
+  it("tags records with the account slice and account-prefixed deterministic ids", () => {
+    const record = accountRecord({ id: "openai-costs-1-responses" });
+    const [first] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY_ORG2");
+    const [again] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY_ORG2");
+    const [other] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY");
+
+    expect(first!.source.account).toBe("env:OPENAI_ADMIN_KEY_ORG2");
+    expect(first!.id).toBe("env-openai-admin-key-org2-openai-costs-1-responses");
+    // Idempotent per account; distinct across accounts even for identical buckets.
+    expect(again!.id).toBe(first!.id);
+    expect(other!.id).not.toBe(first!.id);
+  });
+
+  it("retains other providers and other account slices; replaces the same slice and unlabeled legacy rows", () => {
+    const prior = [
+      accountRecord({ id: "a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.81 }),
+      accountRecord({ id: "b", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 8.66 }),
+      accountRecord({ id: "c", amountUsd: 5 }), // legacy: unnamed openai slice
+      accountRecord({ id: "d", provider: "anthropic", amountUsd: 2 })
+    ];
+
+    const retained = retainProviderRecordsForNewSync(prior, "openai", "env:OPENAI_ADMIN_KEY_ORG2");
+
+    expect(retained.map((record) => record.id)).toEqual(["a", "d"]);
+  });
+
+  it("groups per-account slices and prints them with record counts and billed sums", () => {
+    const records = [
+      ...tagProviderAccountRecords(
+        [accountRecord({ id: "a1", amountUsd: 0.4 }), accountRecord({ id: "a2", amountUsd: 0.41 })],
+        "env:OPENAI_ADMIN_KEY"
+      ),
+      ...tagProviderAccountRecords(
+        [accountRecord({ id: "b1", amountUsd: 8.66 })],
+        "env:OPENAI_ADMIN_KEY_ORG2"
+      ),
+      accountRecord({ id: "legacy", amountUsd: 1 }),
+      accountRecord({ id: "other", provider: "anthropic", amountUsd: 2 })
+    ];
+
+    const slices = providerAccountSlices(records, "openai");
+
+    expect(slices).toEqual([
+      { account: null, recordCount: 1, billedUsd: 1 },
+      { account: "env:OPENAI_ADMIN_KEY", recordCount: 2, billedUsd: 0.81 },
+      { account: "env:OPENAI_ADMIN_KEY_ORG2", recordCount: 1, billedUsd: 8.66 }
+    ]);
+    expect(formatProviderAccountSlices(slices)).toBe(
+      "earlier sync (unlabeled account) (1 record, billed $1.00) + " +
+      "env:OPENAI_ADMIN_KEY (2 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (1 record, billed $8.66)"
+    );
+  });
+
+  it("omits billed sums for slices without verified rows (beta connectors stay honest)", () => {
+    const slices = providerAccountSlices(
+      tagProviderAccountRecords(
+        [accountRecord({ id: "c1", provider: "cursor", amountUsd: 12.4, costConfidence: "estimated" })],
+        "account:team-a"
+      ),
+      "cursor"
+    );
+
+    expect(formatProviderAccountSlices(slices)).toBe("account:team-a (1 record)");
+  });
+
+  it("intersects coverage intervals and fails closed on disjoint or malformed windows", () => {
+    const january = { coverageStart: "2026-01-01T00:00:00.000Z", coverageEnd: "2026-01-31T00:00:00.000Z" };
+    const midJanuary = { coverageStart: "2026-01-10T00:00:00.000Z", coverageEnd: "2026-02-10T00:00:00.000Z" };
+    const march = { coverageStart: "2026-03-01T00:00:00.000Z", coverageEnd: "2026-03-31T00:00:00.000Z" };
+
+    expect(intersectProviderCoverageIntervals(january, midJanuary)).toEqual({
+      coverageStart: "2026-01-10T00:00:00.000Z",
+      coverageEnd: "2026-01-31T00:00:00.000Z"
+    });
+    expect(intersectProviderCoverageIntervals(january, march)).toBeUndefined();
+    expect(intersectProviderCoverageIntervals(january, undefined)).toBeUndefined();
+    expect(intersectProviderCoverageIntervals(
+      january,
+      { coverageStart: 5, coverageEnd: "2026-01-31T00:00:00.000Z" } as never
+    )).toBeUndefined();
   });
 });

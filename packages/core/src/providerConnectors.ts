@@ -2054,6 +2054,142 @@ export function selectProviderFinancialHeadlineRecords(records: UsageRecord[]): 
   });
 }
 
+/** Inputs that determine which provider account (org/team) one sync reads. */
+export type ProviderAccountKeyInput = {
+  provider: string;
+  authReference: string;
+  org?: string;
+  enterprise?: string;
+  accountId?: string;
+};
+
+/**
+ * Stable identity for one provider account (an OpenAI/Anthropic organization,
+ * a Cursor team, a GitHub org/enterprise). Admin credentials are account-
+ * scoped and multi-account setups are common, so records from different
+ * accounts of one provider must coexist instead of replacing each other.
+ *
+ * The key prefers the explicit account flag the connector already requires
+ * (--org/--enterprise/--account-id, which can share one credential); it
+ * otherwise falls back to the user-chosen credential REFERENCE NAME
+ * (e.g. "env:OPENAI_ADMIN_KEY_ORG2") — stable, printable, and never derived
+ * from secret material. A provider-reported organization id would be
+ * preferable, but the cost APIs aibill calls do not reliably return one
+ * (the OpenAI costs request groups by project/line-item/api-key only), and a
+ * sometimes-present key would split one account into two slices.
+ */
+export function providerAccountKey(input: ProviderAccountKeyInput): string {
+  if (input.org) return `org:${input.org}`;
+  if (input.enterprise) return `enterprise:${input.enterprise}`;
+  if (input.accountId) return `account:${input.accountId}`;
+  return input.authReference;
+}
+
+/**
+ * Stamp one sync's records with their account slice. The record id gains a
+ * deterministic account prefix so identical usage buckets from two accounts
+ * of the same provider can never collide into one row id — and re-syncing the
+ * same account regenerates the same ids (idempotent replace).
+ */
+export function tagProviderAccountRecords(
+  records: readonly UsageRecord[],
+  accountKey: string
+): UsageRecord[] {
+  const prefix = slugifySourceId(accountKey);
+  return records.map((record) => ({
+    ...record,
+    id: `${prefix}-${record.id}`,
+    source: { ...record.source, account: accountKey }
+  }));
+}
+
+/**
+ * Records from a prior trusted snapshot that must survive a new sync of
+ * `provider` + `accountKey`: every other provider's records, plus this
+ * provider's records that belong to a DIFFERENT named account slice.
+ * Re-syncing the same account replaces its own slice. Records with no account
+ * label (synced before multi-account support) are replaced too — fail-closed:
+ * they cannot be proven to come from a different account, and keeping them
+ * could double-count the same organization.
+ */
+export function retainProviderRecordsForNewSync(
+  priorRecords: readonly UsageRecord[],
+  provider: string,
+  accountKey: string
+): UsageRecord[] {
+  return priorRecords.filter((record) => (
+    record.source.provider !== provider ||
+    (typeof record.source.account === "string" && record.source.account !== accountKey)
+  ));
+}
+
+export type ProviderAccountSlice = {
+  /** Account key, or null for records synced before multi-account support. */
+  account: string | null;
+  recordCount: number;
+  /** Sum of this slice's verified provider-billed rows; null when none. */
+  billedUsd: number | null;
+};
+
+/** Group one provider's records into per-account slices for honest display. */
+export function providerAccountSlices(
+  records: readonly UsageRecord[],
+  provider: string
+): ProviderAccountSlice[] {
+  const slices = new Map<string | null, { recordCount: number; billedUsd: number | null }>();
+  for (const record of records) {
+    if (record.source.provider !== provider) continue;
+    const key = record.source.account ?? null;
+    const slice = slices.get(key) ?? { recordCount: 0, billedUsd: null };
+    slice.recordCount += 1;
+    if (record.costConfidence === "verified" && typeof record.amountUsd === "number") {
+      slice.billedUsd = (slice.billedUsd ?? 0) + record.amountUsd;
+    }
+    slices.set(key, slice);
+  }
+  return [...slices.entries()]
+    .map(([account, slice]) => ({ account, ...slice }))
+    .sort((left, right) => (left.account ?? "").localeCompare(right.account ?? ""));
+}
+
+/**
+ * Intersection of two claimed coverage windows — the interval every account
+ * slice of a provider actually covers. Returns undefined when either window
+ * is absent/malformed or the windows do not overlap (fail-closed: no window
+ * is claimed rather than an overstated one).
+ */
+export function intersectProviderCoverageIntervals(
+  left: ProviderCoverageInterval | undefined,
+  right: ProviderCoverageInterval | undefined
+): ProviderCoverageInterval | undefined {
+  if (!left || !right) return undefined;
+  if (
+    typeof left.coverageStart !== "string" || typeof left.coverageEnd !== "string" ||
+    typeof right.coverageStart !== "string" || typeof right.coverageEnd !== "string"
+  ) {
+    return undefined;
+  }
+  const coverageStart = left.coverageStart > right.coverageStart
+    ? left.coverageStart
+    : right.coverageStart;
+  const coverageEnd = left.coverageEnd < right.coverageEnd
+    ? left.coverageEnd
+    : right.coverageEnd;
+  return coverageStart <= coverageEnd ? { coverageStart, coverageEnd } : undefined;
+}
+
+/**
+ * Printable slice list, e.g.
+ * `env:OPENAI_ADMIN_KEY (6 records, billed $0.81) + env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)`.
+ */
+export function formatProviderAccountSlices(slices: readonly ProviderAccountSlice[]): string {
+  return slices.map((slice) => {
+    const label = slice.account ?? "earlier sync (unlabeled account)";
+    const billed = slice.billedUsd === null ? "" : `, billed ${formatProviderUsd(slice.billedUsd)}`;
+    return `${label} (${slice.recordCount} record${slice.recordCount === 1 ? "" : "s"}${billed})`;
+  }).join(" + ");
+}
+
 function sumAmounts(records: UsageRecord[]): number | null {
   const amounts = records
     .map((record) => record.amountUsd)

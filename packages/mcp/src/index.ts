@@ -65,6 +65,10 @@ import {
   selectProviderFinancialHeadlineRecords,
   summarizeProviderFinancials,
   providerFinancialCompleteness,
+  providerAccountKey,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  intersectProviderCoverageIntervals,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -1158,7 +1162,21 @@ export async function syncProviderSpendTool(
       fetcher: overrides.fetcher,
       tokenResolver: overrides.tokenResolver
     });
-    const syncedRecords = applyProviderContractGate(result.records);
+    // Admin credentials are account-scoped (an OpenAI Admin key covers ONE
+    // organization). Each sync belongs to one account slice: different slices
+    // of the same provider accumulate, re-syncing the same slice replaces it,
+    // and unlabeled legacy rows are replaced fail-closed (never double-count).
+    const accountKey = providerAccountKey({
+      provider: input.provider,
+      authReference: input.authReference,
+      org: input.org,
+      enterprise: input.enterprise,
+      accountId: input.accountId
+    });
+    const syncedRecords = tagProviderAccountRecords(
+      applyProviderContractGate(result.records),
+      accountKey
+    );
     const syncedFinancials = summarizeProviderFinancials(syncedRecords);
     const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
     const syncedSource = createProviderConnection({
@@ -1170,35 +1188,74 @@ export async function syncProviderSpendTool(
       completeness: syncedCompleteness,
       fetchedAt: new Date(result.fetchedAt)
     });
+    const retainedPriorRecords = retainProviderRecordsForNewSync(
+      trustedPrior?.records ?? [],
+      result.provider,
+      accountKey
+    );
     const records = applyProviderContractGate([
-      ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
+      ...retainedPriorRecords,
       ...syncedRecords
     ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const combinedSummary = analyzeSpend(selectProviderFinancialHeadlineRecords(records));
     const mappings = attributeUsageRecords(records);
     const nextRegistry = addApprovedSource(registry, syncedSource);
+    // Whether prior account slices of THIS provider survived the merge. When
+    // they did, the provider-keyed accounting maps below must stay honest for
+    // the union of slices, not just the slice this run fetched.
+    const retainedSameProviderSlices = retainedPriorRecords.some(
+      (record) => record.source.provider === result.provider
+    );
     const qaByProvider = {
       ...(trustedPrior?.qaByProvider ?? {}),
       [result.provider]: result.qa
     };
+    // Fail-closed coverage: a provider is complete only when this sync AND
+    // every retained slice were complete.
+    const mergedProviderCoverage: ProviderCoverageStatus =
+      retainedSameProviderSlices &&
+      trustedPrior?.coverageByProvider?.[result.provider] === "partial"
+        ? "partial"
+        : result.coverage;
     const coverageByProvider = {
       ...(trustedPrior?.coverageByProvider ?? {}),
-      [result.provider]: result.coverage
+      [result.provider]: mergedProviderCoverage
     };
+    // Freshness stays conservative: a retained slice keeps its older check
+    // time, so an old account slice is never claimed as freshly checked.
+    const priorProviderCheckedAt = trustedPrior?.checkedAtByProvider?.[result.provider];
+    const mergedProviderCheckedAt =
+      retainedSameProviderSlices &&
+      typeof priorProviderCheckedAt === "string" &&
+      priorProviderCheckedAt < result.fetchedAt
+        ? priorProviderCheckedAt
+        : result.fetchedAt;
     const checkedAtByProvider = {
       ...(trustedPrior?.checkedAtByProvider ?? {}),
-      [result.provider]: result.fetchedAt
+      [result.provider]: mergedProviderCheckedAt
     };
     const coverageIntervalsByProvider = Object.fromEntries(
       Object.entries(trustedPrior?.coverageIntervalsByProvider ?? {})
         .filter(([provider]) => provider !== result.provider)
     ) as Record<string, ProviderCoverageInterval>;
-    if (result.coverageInterval) {
-      coverageIntervalsByProvider[result.provider] = result.coverageInterval;
+    // The provider's claimed window must hold for EVERY retained slice, so it
+    // shrinks to the intersection — and disappears when slices do not overlap.
+    const mergedProviderInterval = retainedSameProviderSlices
+      ? intersectProviderCoverageIntervals(
+          trustedPrior?.coverageIntervalsByProvider?.[result.provider],
+          result.coverageInterval
+        )
+      : result.coverageInterval;
+    if (mergedProviderInterval) {
+      coverageIntervalsByProvider[result.provider] = mergedProviderInterval;
     }
+    // Financials span every retained slice of the provider plus this sync —
+    // never just the account this run happened to fetch.
     const financialsByProvider = {
       ...(trustedPrior?.financialsByProvider ?? {}),
-      [result.provider]: syncedFinancials
+      [result.provider]: summarizeProviderFinancials(
+        records.filter((record) => record.source.provider === result.provider)
+      )
     };
 
     await invalidateConnectedSpendTrustReceipt(rootPath);

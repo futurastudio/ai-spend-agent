@@ -63,6 +63,12 @@ import {
   SAFE_QUALITATIVE_SCAN_POLICY,
   summarizeProviderFinancials,
   providerFinancialCompleteness,
+  providerAccountKey,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  providerAccountSlices,
+  formatProviderAccountSlices,
+  intersectProviderCoverageIntervals,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -1672,10 +1678,16 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
       .sort((left, right) => right.approvedAt.localeCompare(left.approvedAt))[0];
     const stateCheckedAt = attempt?.checkedAt
       ?? (providerState.provider === id ? providerState.fetchedAt : undefined);
+    // Multi-account honesty: when this provider's records carry account
+    // slices (one Admin key covers ONE organization), name every slice so a
+    // second org's sync is visibly accumulated rather than silently merged.
+    const accountSliceNote = records.some((record) => typeof record.source.account === "string")
+      ? ` Account slices: ${formatProviderAccountSlices(providerAccountSlices(records, id))}.`
+      : "";
     observations.push({
       id,
       financialEvidence: evidence,
-      financialEvidenceNote: providerFinancialEvidenceNote(records, evidence),
+      financialEvidenceNote: `${providerFinancialEvidenceNote(records, evidence)}${accountSliceNote}`,
       // A connector stub is only configuration, not a source check. Older
       // successful syncs predate source-status.json, so their non-missing
       // registry approval time is the conservative migration fallback.
@@ -3841,7 +3853,21 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       enterprise: args.enterprise,
       accountId: args.accountId
     });
-    const syncedRecords = applyProviderContractGate(result.records);
+    // Admin credentials are account-scoped (an OpenAI Admin key covers ONE
+    // organization). Each sync belongs to one account slice: different slices
+    // of the same provider accumulate, re-syncing the same slice replaces it,
+    // and unlabeled legacy rows are replaced fail-closed (never double-count).
+    const accountKey = providerAccountKey({
+      provider,
+      authReference: args.authReference,
+      org: args.org,
+      enterprise: args.enterprise,
+      accountId: args.accountId
+    });
+    const syncedRecords = tagProviderAccountRecords(
+      applyProviderContractGate(result.records),
+      accountKey
+    );
     const syncedFinancials = summarizeProviderFinancials(syncedRecords);
     const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
     const syncedSource = createProviderConnection({
@@ -3853,8 +3879,13 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       completeness: syncedCompleteness,
       fetchedAt: new Date(result.fetchedAt)
     });
+    const retainedPriorRecords = retainProviderRecordsForNewSync(
+      trustedPrior?.records ?? [],
+      result.provider,
+      accountKey
+    );
     const records = applyProviderContractGate([
-      ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
+      ...retainedPriorRecords,
       ...syncedRecords
     ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const registry = await readSourceRegistry(stateDir, rootPath);
@@ -3862,21 +3893,55 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     const headlineRecords = selectProviderFinancialHeadlineRecords(records);
     const summary = analyzeSpend(headlineRecords);
     const mappings = attributeUsageRecords(records);
+    // Whether prior account slices of THIS provider survived the merge. When
+    // they did, the provider-keyed accounting maps below must stay honest for
+    // the union of slices, not just the slice this run fetched.
+    const retainedSameProviderSlices = retainedPriorRecords.some(
+      (record) => record.source.provider === result.provider
+    );
     const qaByProvider = {
       ...trustedAccountingMap<ProviderQaSummary>(trustedPrior?.accounting, "qaByProvider"),
       [result.provider]: result.qa
     };
+    const priorProviderCoverage = trustedAccountingMap<ProviderCoverageStatus>(
+      trustedPrior?.accounting,
+      "coverageByProvider"
+    )[result.provider];
+    // Fail-closed coverage: a provider is complete only when this sync AND
+    // every retained slice were complete. (A retained partial slice can keep
+    // the provider partial until that slice is re-synced.)
+    const mergedProviderCoverage: ProviderCoverageStatus =
+      retainedSameProviderSlices && priorProviderCoverage === "partial"
+        ? "partial"
+        : result.coverage;
     const coverageByProvider = {
       ...trustedAccountingMap<ProviderCoverageStatus>(trustedPrior?.accounting, "coverageByProvider"),
-      [result.provider]: result.coverage
+      [result.provider]: mergedProviderCoverage
     };
+    // Financials span every retained slice of the provider plus this sync —
+    // never just the account this run happened to fetch.
     const financialsByProvider = {
       ...trustedAccountingMap<unknown>(trustedPrior?.accounting, "financialsByProvider"),
-      [result.provider]: syncedFinancials
+      [result.provider]: summarizeProviderFinancials(
+        records.filter((record) => record.source.provider === result.provider)
+      )
     };
+    const priorProviderCheckedAt = trustedAccountingMap<string>(
+      trustedPrior?.accounting,
+      "checkedAtByProvider"
+    )[result.provider];
+    // Freshness stays conservative: a retained slice keeps its older check
+    // time, so an old account slice is never claimed as freshly checked.
+    const mergedProviderCheckedAt =
+      retainedSameProviderSlices &&
+      typeof priorProviderCheckedAt === "string" &&
+      validIsoString(priorProviderCheckedAt) &&
+      priorProviderCheckedAt < result.fetchedAt
+        ? priorProviderCheckedAt
+        : result.fetchedAt;
     const checkedAtByProvider = {
       ...trustedAccountingMap<string>(trustedPrior?.accounting, "checkedAtByProvider"),
-      [result.provider]: result.fetchedAt
+      [result.provider]: mergedProviderCheckedAt
     };
     const priorCoverageIntervals = trustedAccountingMap<ProviderCoverageInterval>(
       trustedPrior?.accounting,
@@ -3886,8 +3951,16 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       Object.entries(priorCoverageIntervals).filter(([provider]) => provider !== result.provider)
     ) as Record<string, ProviderCoverageInterval>;
     const requestedCoverageInterval = result.coverageInterval;
-    if (requestedCoverageInterval) {
-      coverageIntervalsByProvider[result.provider] = requestedCoverageInterval;
+    // The provider's claimed window must hold for EVERY retained slice, so it
+    // shrinks to the intersection — and disappears when slices do not overlap.
+    const mergedProviderInterval = retainedSameProviderSlices
+      ? intersectProviderCoverageIntervals(
+          priorCoverageIntervals[result.provider],
+          requestedCoverageInterval
+        )
+      : requestedCoverageInterval;
+    if (mergedProviderInterval) {
+      coverageIntervalsByProvider[result.provider] = mergedProviderInterval;
     }
     // Invalidate any earlier receipt before the first mutation. If a later
     // local write fails, the partially updated repository state stays
@@ -3957,6 +4030,8 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `financial evidence: ${syncedSource.financialEvidence}`,
       `coverage: ${result.coverage}`,
       `records fetched: ${result.records.length}`,
+      `account: ${accountKey}`,
+      `provider accounts: ${formatProviderAccountSlices(providerAccountSlices(records, result.provider))}`,
       provider === "cursor"
         ? "source window: current team subscription cycle returned by Cursor"
         : provider === "github-copilot"
