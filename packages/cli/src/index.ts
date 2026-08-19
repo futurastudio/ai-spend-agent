@@ -3763,6 +3763,12 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     lines.push("  (that start time is 30 days ago; change it to widen the window)");
   }
 
+  if (provider === "openai") {
+    lines.push(
+      "multi-org: an Admin API key covers ONE organization; repeat the sync with a separate env reference per org (e.g. env:OPENAI_ADMIN_KEY_ORG2) — org totals accumulate"
+    );
+  }
+
   lines.push(`missing: ${source.fieldsMissing.join(", ")}`);
 
   return ok(lines.join("\n"));

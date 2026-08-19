@@ -2549,6 +2549,11 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("tier: self-serve");
     expect(result.stdout).toContain("cost data is ADMIN-gated");
+    // Multi-org accounts are common and Admin keys are org-scoped: the setup
+    // output must say so next to the sync command it hands out.
+    expect(result.stdout).toContain(
+      "multi-org: an Admin API key covers ONE organization; repeat the sync with a separate env reference per org (e.g. env:OPENAI_ADMIN_KEY_ORG2) — org totals accumulate"
+    );
   });
 
   it("labels cursor as an admin-upgrade provider", async () => {
@@ -2560,6 +2565,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("ADMIN UPGRADE");
     expect(result.stdout).toContain("TEAM-ADMIN");
+    expect(result.stdout).not.toContain("multi-org:");
   });
 
   it("auto-detects a local key on connect without printing the raw secret", async () => {
