@@ -3633,7 +3633,8 @@ function providerSyncSetupCommand(provider: string, adminRef: string): string {
   if (provider === "github-copilot") {
     return `npx aibill sync-provider --provider github-copilot --auth-reference ${adminRef} --org <organization>`;
   }
-  return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`;
+  const thirtyDaysAgoUnix = Math.floor(Date.now() / 1_000) - 30 * 24 * 60 * 60;
+  return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time ${thirtyDaysAgoUnix}`;
 }
 
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
@@ -3726,6 +3727,7 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     lines.push("");
     lines.push(`next: export an admin key reference, e.g. ${adminRef}, then run:`);
     lines.push(`  ${providerSyncSetupCommand(provider, adminRef)}`);
+    lines.push("  (that start time is 30 days ago; change it to widen the window)");
   }
 
   lines.push(`missing: ${source.fieldsMissing.join(", ")}`);
@@ -5870,7 +5872,8 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
       );
       if (active) {
         return tokenVerificationResult(active, false, [
-          "An active token test already owns this project; Apply handed off to it and generated no conflicting candidate or artifacts."
+          "An active token test already owns this project; Apply handed off to it and generated no conflicting candidate or artifacts.",
+          `Use your agent normally on this project, then: ${improveRuntimeCommand}`
         ]);
       }
     }

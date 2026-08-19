@@ -77,6 +77,13 @@ human acceptance gates.
    allocation, and approval history. This is a foundation, not Workspace
    general availability.
 
+- **Guided provider connect.** `connect <provider>` becomes a short guided
+  sitting: the one console URL where the admin key is created, a wait-and-
+  verify step for the env reference (the key itself never touches aibill),
+  then the first sync runs automatically over a default 30-day window — no
+  placeholders, no second command to compose. The agent-native loop drafts
+  it conversationally where an MCP client is present.
+
 ## Later — the paid accountability system
 
 The intended Workspace is an opt-in, permissioned layer over approved Agent
