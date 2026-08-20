@@ -23,7 +23,16 @@ import {
   parseCursorReconciliationEnv,
   ProviderConnectorError,
   resolveTokenReference,
-  selectProviderFinancialHeadlineRecords
+  selectProviderFinancialHeadlineRecords,
+  providerAccountKey,
+  providerAccountRecordIdPrefix,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  providerAccountSlices,
+  formatProviderAccountSlices,
+  intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices
 } from "./providerConnectors.js";
 
 const fakeToken = "sk-" + "admin-realistic-fake-token-do-not-store";
@@ -2268,5 +2277,294 @@ describe("real provider connector implementations", () => {
       "user_aggregate"
     ]));
     expect(generateCutList(records)).toEqual([]);
+  });
+});
+
+describe("provider account slices (multi-org accumulation)", () => {
+  const accountRecord = (overrides: {
+    id: string;
+    provider?: string;
+    account?: string;
+    amountUsd?: number;
+    costConfidence?: "verified" | "estimated";
+  }) => ({
+    id: overrides.id,
+    timestamp: "2026-08-01T00:00:00.000Z",
+    source: {
+      id: `${overrides.provider ?? "openai"}-provider-api`,
+      name: "Provider API",
+      provider: overrides.provider ?? "openai",
+      confidence: overrides.costConfidence ?? "verified" as const,
+      observedFrom: "provider API",
+      ...(overrides.account ? { account: overrides.account } : {})
+    },
+    model: "billing",
+    inputTokens: 0,
+    outputTokens: 0,
+    amountUsd: overrides.amountUsd ?? 1,
+    costConfidence: overrides.costConfidence ?? "verified" as const,
+    providerCostType: "openai_cost",
+    usageGranularity: "billing_bucket" as const
+  });
+
+  it("keys the account by explicit org/enterprise/account flags before the auth reference", () => {
+    expect(providerAccountKey({ provider: "github-copilot", authReference: "env:GITHUB_TOKEN", org: "acme" }))
+      .toBe("org:acme");
+    expect(providerAccountKey({ provider: "github-copilot", authReference: "env:GITHUB_TOKEN", enterprise: "globex" }))
+      .toBe("enterprise:globex");
+    expect(providerAccountKey({ provider: "cursor", authReference: "env:CURSOR_ADMIN_KEY", accountId: "team-a" }))
+      .toBe("account:team-a");
+    // OpenAI/Anthropic admin keys are org-scoped; the user-chosen reference
+    // NAME is the account identity (never any part of the secret).
+    expect(providerAccountKey({ provider: "openai", authReference: "env:OPENAI_ADMIN_KEY_ORG2" }))
+      .toBe("env:OPENAI_ADMIN_KEY_ORG2");
+  });
+
+  it("tags records with the account slice and account-prefixed deterministic ids", () => {
+    const record = accountRecord({ id: "openai-costs-1-responses" });
+    const [first] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY_ORG2");
+    const [again] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY_ORG2");
+    const [other] = tagProviderAccountRecords([record], "env:OPENAI_ADMIN_KEY");
+
+    expect(first!.source.account).toBe("env:OPENAI_ADMIN_KEY_ORG2");
+    // slug + sha256(raw key) first 8 hex — pinned so the digest algorithm
+    // (and therefore every persisted record id) can never drift silently.
+    expect(first!.id).toBe("env-openai-admin-key-org2-e837306d-openai-costs-1-responses");
+    expect(providerAccountRecordIdPrefix("env:OPENAI_ADMIN_KEY_ORG2"))
+      .toBe("env-openai-admin-key-org2-e837306d");
+    // Idempotent per account; distinct across accounts even for identical buckets.
+    expect(again!.id).toBe(first!.id);
+    expect(other!.id).not.toBe(first!.id);
+  });
+
+  it("keeps slug-equivalent account spellings in disjoint record-id namespaces (QA M3)", () => {
+    const record = accountRecord({ id: "cursor-spend-dev", provider: "cursor" });
+    const [spacey] = tagProviderAccountRecords([record], "account:team a");
+    const [dashy] = tagProviderAccountRecords([record], "account:team-a");
+
+    // Both slug to "account-team-a"; the raw-key digest keeps them apart.
+    expect(spacey!.id).toBe("account-team-a-ba2a8d48-cursor-spend-dev");
+    expect(dashy!.id).toBe("account-team-a-4035d82b-cursor-spend-dev");
+    expect(spacey!.id).not.toBe(dashy!.id);
+  });
+
+  it("retains other providers and other account slices; replaces the same slice and unlabeled legacy rows", () => {
+    const prior = [
+      accountRecord({ id: "a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.81 }),
+      accountRecord({ id: "b", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 8.66 }),
+      accountRecord({ id: "c", amountUsd: 5 }), // legacy: unnamed openai slice
+      accountRecord({ id: "d", provider: "anthropic", amountUsd: 2 })
+    ];
+
+    const retained = retainProviderRecordsForNewSync(
+      prior,
+      "openai",
+      "env:OPENAI_ADMIN_KEY_ORG2",
+      tagProviderAccountRecords([accountRecord({ id: "fresh" })], "env:OPENAI_ADMIN_KEY_ORG2")
+    );
+
+    expect(retained.map((record) => record.id)).toEqual(["a", "d"]);
+  });
+
+  it("drops retained rows whose ids collide with the fresh sync or each other (fail-closed)", () => {
+    // Pre-digest state: "team a" and "team-a" slices persisted with ONE
+    // shared id — the double-count QA repro C2. The next sync of any other
+    // account must keep only one copy, and a retained row may never shadow a
+    // freshly synced id.
+    const collidingId = "account-team-a-cursor-spend-dev";
+    const prior = [
+      accountRecord({ id: collidingId, provider: "cursor", account: "account:team a", amountUsd: 12.4 }),
+      accountRecord({ id: collidingId, provider: "cursor", account: "account:team-a", amountUsd: 12.4 }),
+      accountRecord({ id: "stale-copy-of-fresh", provider: "cursor", account: "account:team-c", amountUsd: 1 })
+    ];
+    const synced = [
+      accountRecord({ id: "stale-copy-of-fresh", provider: "cursor", account: "account:team-b", amountUsd: 2 })
+    ];
+
+    const retained = retainProviderRecordsForNewSync(prior, "cursor", "account:team-b", synced);
+
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.id).toBe(collidingId);
+    expect(retained[0]!.source.account).toBe("account:team a");
+  });
+
+  it("groups per-account slices and prints them with record counts and billed sums", () => {
+    const records = [
+      ...tagProviderAccountRecords(
+        [accountRecord({ id: "a1", amountUsd: 0.4 }), accountRecord({ id: "a2", amountUsd: 0.41 })],
+        "env:OPENAI_ADMIN_KEY"
+      ),
+      ...tagProviderAccountRecords(
+        [accountRecord({ id: "b1", amountUsd: 8.66 })],
+        "env:OPENAI_ADMIN_KEY_ORG2"
+      ),
+      accountRecord({ id: "legacy", amountUsd: 1 }),
+      accountRecord({ id: "other", provider: "anthropic", amountUsd: 2 })
+    ];
+
+    const slices = providerAccountSlices(records, "openai");
+
+    expect(slices).toEqual([
+      { account: null, recordCount: 1, billedUsd: 1 },
+      { account: "env:OPENAI_ADMIN_KEY", recordCount: 2, billedUsd: 0.81 },
+      { account: "env:OPENAI_ADMIN_KEY_ORG2", recordCount: 1, billedUsd: 8.66 }
+    ]);
+    expect(formatProviderAccountSlices(slices)).toBe(
+      "earlier sync (unlabeled account) (1 record, billed $1.00) + " +
+      "env:OPENAI_ADMIN_KEY (2 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (1 record, billed $8.66)"
+    );
+  });
+
+  it("omits billed sums for slices without verified rows (beta connectors stay honest)", () => {
+    const slices = providerAccountSlices(
+      tagProviderAccountRecords(
+        [accountRecord({ id: "c1", provider: "cursor", amountUsd: 12.4, costConfidence: "estimated" })],
+        "account:team-a"
+      ),
+      "cursor"
+    );
+
+    expect(formatProviderAccountSlices(slices)).toBe("account:team-a (1 record)");
+  });
+
+  it("intersects coverage intervals and fails closed on disjoint or malformed windows", () => {
+    const january = { coverageStart: "2026-01-01T00:00:00.000Z", coverageEnd: "2026-01-31T00:00:00.000Z" };
+    const midJanuary = { coverageStart: "2026-01-10T00:00:00.000Z", coverageEnd: "2026-02-10T00:00:00.000Z" };
+    const march = { coverageStart: "2026-03-01T00:00:00.000Z", coverageEnd: "2026-03-31T00:00:00.000Z" };
+
+    expect(intersectProviderCoverageIntervals(january, midJanuary)).toEqual({
+      coverageStart: "2026-01-10T00:00:00.000Z",
+      coverageEnd: "2026-01-31T00:00:00.000Z"
+    });
+    expect(intersectProviderCoverageIntervals(january, march)).toBeUndefined();
+    expect(intersectProviderCoverageIntervals(january, undefined)).toBeUndefined();
+    expect(intersectProviderCoverageIntervals(
+      january,
+      { coverageStart: 5, coverageEnd: "2026-01-31T00:00:00.000Z" } as never
+    )).toBeUndefined();
+  });
+});
+
+describe("duplicate-slice diagnostics and replacement notices (QA M1/M2)", () => {
+  const sliceRecord = (input: {
+    innerId: string;
+    account: string;
+    amountUsd: number;
+    provider?: string;
+  }) => tagProviderAccountRecords([{
+    id: input.innerId,
+    timestamp: "2026-08-01T00:00:00.000Z",
+    source: {
+      id: `${input.provider ?? "openai"}-provider-api`,
+      name: "Provider API",
+      provider: input.provider ?? "openai",
+      confidence: "verified" as const,
+      observedFrom: "provider API"
+    },
+    model: "billing",
+    inputTokens: 0,
+    outputTokens: 0,
+    amountUsd: input.amountUsd,
+    costConfidence: "verified" as const,
+    providerCostType: "openai_cost",
+    usageGranularity: "billing_bucket" as const
+  }], input.account)[0]!;
+
+  it("warns when two slices of one provider hold identical inner record ids", () => {
+    const records = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.41 }),
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY_B", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY_B", amountUsd: 0.41 })
+    ];
+
+    const warnings = duplicateProviderAccountSliceWarnings(records, "openai");
+
+    expect(warnings).toEqual([
+      "openai slices env:OPENAI_ADMIN_KEY and env:OPENAI_ADMIN_KEY_B contain identical records — " +
+      "likely the same organization under two references; the combined total counts it twice. " +
+      "Remove one: npx aibill drop-slice --provider openai --account \"env:OPENAI_ADMIN_KEY_B\""
+    ]);
+  });
+
+  it("stays quiet for genuinely different orgs and unnamed legacy rows", () => {
+    const records = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 0.4 }),
+      sliceRecord({ innerId: "openai-costs-2-z", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 8.66 })
+    ];
+
+    expect(duplicateProviderAccountSliceWarnings(records, "openai")).toEqual([]);
+    // Subset overlap is not identity — no warning on partial overlap either.
+    expect(duplicateProviderAccountSliceWarnings([
+      ...records,
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY_ORG2", amountUsd: 0.4 })
+    ], "openai")).toEqual([]);
+  });
+
+  it("names dropped slices with billed sums in replacement notices", () => {
+    const legacy = {
+      id: "legacy-openai-cost",
+      timestamp: "2026-08-01T00:00:00.000Z",
+      source: {
+        id: "openai-provider-api",
+        name: "Provider API",
+        provider: "openai",
+        confidence: "verified" as const,
+        observedFrom: "provider API"
+      },
+      model: "billing",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: 123.45,
+      costConfidence: "verified" as const,
+      providerCostType: "openai_cost",
+      usageGranularity: "billing_bucket" as const
+    };
+    const synced = sliceRecord({ innerId: "fresh", account: "env:OPENAI_ADMIN_KEY", amountUsd: 8.66 });
+
+    const notices = providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: [legacy],
+      retainedRecords: [],
+      syncedRecordCount: 1,
+      syncedBilledUsd: 8.66
+    });
+
+    expect(notices).toEqual([
+      "replaced prior unlabeled slice: $123.45 billed from 1 record superseded"
+    ]);
+    expect(synced.source.account).toBe("env:OPENAI_ADMIN_KEY");
+  });
+
+  it("reports a same-slice re-sync only when it removes billed evidence", () => {
+    const prior = [
+      sliceRecord({ innerId: "openai-costs-1-a", account: "env:OPENAI_ADMIN_KEY", amountUsd: 3 }),
+      sliceRecord({ innerId: "openai-costs-1-b", account: "env:OPENAI_ADMIN_KEY", amountUsd: 1 })
+    ];
+
+    // Empty re-sync erases the slice: must say so.
+    expect(providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: prior,
+      retainedRecords: [],
+      syncedRecordCount: 0,
+      syncedBilledUsd: null
+    })).toEqual([
+      "replaced prior slice env:OPENAI_ADMIN_KEY: $4.00 billed from 2 records superseded " +
+      "(this sync returned 0 records, no billed evidence)"
+    ]);
+
+    // Routine idempotent re-sync at the same or higher billed total: silent.
+    expect(providerSliceReplacementNotices({
+      provider: "openai",
+      accountKey: "env:OPENAI_ADMIN_KEY",
+      priorRecords: prior,
+      retainedRecords: [],
+      syncedRecordCount: 2,
+      syncedBilledUsd: 4
+    })).toEqual([]);
   });
 });

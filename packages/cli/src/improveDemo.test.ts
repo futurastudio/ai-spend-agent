@@ -17,6 +17,29 @@ async function makeEmptyProject(): Promise<string> {
 }
 
 describe("B4 improve --sample demo sitting", () => {
+  it("Enter answers the navigation questions but never the quality attestation", async () => {
+    const dir = await makeEmptyProject();
+    const screens: string[] = [];
+    // Enter at start q1 = y (navigation default); Enter at the baseline
+    // quality question must REPROMPT (testimony is always typed); then a
+    // typed y proceeds and cancel exits cleanly.
+    const responses = ["", "", "y", "cancel"];
+    const result = await runCli(["improve", "--sample", "--path", dir], {
+      interactive: true,
+      prompt: async (question) => {
+        screens.push(question);
+        return responses.shift() ?? "";
+      }
+    });
+    expect(result.exitCode).toBe(0);
+    const all = screens.join("\n");
+    expect(all).toContain("Enter = y");
+    // The attestation reprompted on the empty answer instead of minting a y.
+    expect(all).toContain("This step needs an answer in words");
+    expect(result.stdout).toContain("DEMO ENDED");
+    expect(await readdir(dir)).toEqual([]);
+  });
+
   it("explains itself and stays read-only when non-interactive", async () => {
     const dir = await makeEmptyProject();
     const result = await runCli(["improve", "--sample", "--path", dir]);

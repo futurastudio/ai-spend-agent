@@ -674,7 +674,7 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("API-equivalent value · not billed spend");
     expect(text).toContain("Primary driver");
     expect(text).toContain("Evidence");
-    expect(normalized).toMatch(/\d+ calls? · \$[\d.]+ API-equivalent value · (estimated|detected\/unverified)/u);
+    expect(normalized).toMatch(/\d+ calls? · ~\$[\d.]+ API-equivalent value · (estimated|detected\/unverified)/u);
     expect(text.match(/^  Next\s/gmu)).toHaveLength(1);
     expect(text.match(/^  › npx aibill apply$/gmu)).toHaveLength(1);
     expect(text.match(/npx aibill --full/gu)).toHaveLength(1);

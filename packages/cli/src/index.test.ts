@@ -210,7 +210,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.0$/);
+    expect(result.stdout).toMatch(/^0\.9\.1$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -228,6 +228,53 @@ describe("zero-key evidence-first receipt", () => {
     expect(swallowedShortFlag.exitCode).toBe(1);
     expect(swallowedShortFlag.stderr).toContain("--path requires a value");
     expect(swallowedShortFlag.stderr).toContain('unknown flag "-x"');
+  });
+
+  it("rejects malformed, quoted, and duplicated agent-draft flags at parse (QA 3, 11, 20, A11)", async () => {
+    const badCharset = await runCli(["improve", "--draft", "ab1.has.dots+and=equals"]);
+    expect(badCharset.exitCode).toBe(1);
+    expect(badCharset.stderr).toContain(
+      "--draft must be the single ab1.… token from draft_improve_command"
+    );
+
+    const oversized = await runCli(["improve", "--draft", `ab1.${"A".repeat(20_000)}`]);
+    expect(oversized.exitCode).toBe(1);
+    expect(oversized.stderr).toContain("--draft must be the single ab1.… token");
+
+    const duplicated = await runCli([
+      "improve", "--draft", `ab1.${"A".repeat(24)}`, "--draft", `ab1.${"B".repeat(24)}`
+    ]);
+    expect(duplicated.exitCode).toBe(1);
+    expect(duplicated.stderr).toContain("--draft may appear once");
+
+    const offsetTime = await runCli([
+      "improve", "--record-applied-at", "2026-08-18T09:12:00+02:00"
+    ]);
+    expect(offsetTime.exitCode).toBe(1);
+    expect(offsetTime.stderr).toContain(
+      "--record-applied-at must be a UTC Z time, e.g. 2026-08-18T09:12:00Z"
+    );
+
+    const duplicatedTime = await runCli([
+      "improve",
+      "--record-applied-at", "2026-08-18T09:12:00Z",
+      "--record-applied-at", "2026-08-18T09:13:00Z"
+    ]);
+    expect(duplicatedTime.exitCode).toBe(1);
+    expect(duplicatedTime.stderr).toContain("--record-applied-at may appear once");
+
+    const badCanary = await runCli(["improve", "--record-canary", "maybe"]);
+    expect(badCanary.exitCode).toBe(1);
+    expect(badCanary.stderr).toContain("--record-canary must be passed or failed");
+
+    const quotedSentenceFlag = await runCli([
+      "improve", "--draft-change", "Start with fewer files."
+    ]);
+    expect(quotedSentenceFlag.exitCode).toBe(1);
+    expect(quotedSentenceFlag.stderr).toContain('unknown flag "--draft-change"');
+    expect(quotedSentenceFlag.stderr).toContain(
+      "agent drafts travel as one --draft token from draft_improve_command, not as quoted sentences"
+    );
   });
 
   it("sanitizes hostile unknown arguments", async () => {
@@ -2482,6 +2529,9 @@ describe("minimal CLI vertical slice", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.OPENAI_ADMIN_KEY;
+    delete process.env.OPENAI_ADMIN_KEY_ORG2;
+    delete process.env.OPENAI_ADMIN_KEY_B;
+    delete process.env.CURSOR_ADMIN_KEY;
     delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
     delete process.env.AI_SPEND_CODEX_LOGS_DIR;
     delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
@@ -2500,6 +2550,11 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("tier: self-serve");
     expect(result.stdout).toContain("cost data is ADMIN-gated");
+    // Multi-org accounts are common and Admin keys are org-scoped: the setup
+    // output must say so next to the sync command it hands out.
+    expect(result.stdout).toContain(
+      "multi-org: an Admin API key covers ONE organization; repeat the sync with a separate env reference per org (e.g. env:OPENAI_ADMIN_KEY_ORG2) — org totals accumulate"
+    );
   });
 
   it("labels cursor as an admin-upgrade provider", async () => {
@@ -2511,6 +2566,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("ADMIN UPGRADE");
     expect(result.stdout).toContain("TEAM-ADMIN");
+    expect(result.stdout).not.toContain("multi-org:");
   });
 
   it("auto-detects a local key on connect without printing the raw secret", async () => {
@@ -4370,6 +4426,418 @@ describe("minimal CLI vertical slice", () => {
     } finally {
       openAiDefinition!.contractState = priorContractState;
     }
+  });
+
+  it("accumulates two OpenAI org account slices and stays idempotent per account", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-multiorg-"));
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "org1-admin-fake-token-do-not-store";
+    process.env.OPENAI_ADMIN_KEY_ORG2 = "sk-" + "org2-admin-fake-token-do-not-store";
+    // Org 1: 6 records totaling $0.81. Org 2: 18 records totaling $8.66.
+    // Line items 0-5 deliberately overlap across orgs (same bucket times) so
+    // colliding provider bucket identities cannot merge across account slices.
+    const costPage = (amounts: number[]) => ({
+      data: [{
+        start_time: 1761955200,
+        end_time: 1762041600,
+        results: amounts.map((value, index) => ({
+          amount: { value, currency: "usd" },
+          line_item: `Responses API ${index}`
+        }))
+      }],
+      has_more: false
+    });
+    const org1Costs = costPage(Array.from({ length: 6 }, () => 0.135));
+    const org2Costs = costPage(Array.from({ length: 18 }, (_, index) => index === 0 ? 0.5 : 0.48));
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ((init?.headers?.Authorization ?? "").includes("org2") ? org2Costs : org1Costs)
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = (reference: string) => [
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", reference, "--start-time", "1761955200", "--end-time", "1762041600"
+    ];
+
+    const firstSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY"));
+    const secondSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY_ORG2"));
+
+    expect(firstSync.exitCode).toBe(0);
+    expect(firstSync.stdout).toContain("records fetched: 6");
+    expect(firstSync.stdout).toContain("account: env:OPENAI_ADMIN_KEY");
+    expect(firstSync.stdout).toContain("synced provider headline: $0.81");
+    expect(firstSync.stdout).toContain("combined headline spend: $0.81");
+    expect(firstSync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY (6 records, billed $0.81)"
+    );
+    expect(secondSync.exitCode).toBe(0);
+    expect(secondSync.stdout).toContain("records fetched: 18");
+    expect(secondSync.stdout).toContain("account: env:OPENAI_ADMIN_KEY_ORG2");
+    expect(secondSync.stdout).toContain("synced provider headline: $8.66");
+    // The founder repro: org 1 must NOT be replaced by org 2 — the combined
+    // headline accumulates both org slices.
+    expect(secondSync.stdout).toContain("combined headline spend: $9.47");
+    expect(secondSync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY (6 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)"
+    );
+
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spendState.records).toHaveLength(24);
+    expect(new Set(spendState.records.map((record: { id: string }) => record.id)).size).toBe(24);
+    expect(spendState.records.every(
+      (record: { source: { account?: string } }) => typeof record.source.account === "string"
+    )).toBe(true);
+    expect(spendState.summary.totalUsd).toBeCloseTo(9.47, 6);
+
+    // Re-syncing the SAME account replaces its slice — never doubles it.
+    const idempotentSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY_ORG2"));
+    expect(idempotentSync.exitCode).toBe(0);
+    expect(idempotentSync.stdout).toContain("combined headline spend: $9.47");
+    const resyncedState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(resyncedState.records).toHaveLength(24);
+
+    // doctor --sources names each account slice for the provider.
+    const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+    expect(doctor.exitCode).toBe(0);
+    expect(doctor.stdout).toContain(
+      "Account slices: env:OPENAI_ADMIN_KEY (6 records, billed $0.81) + " +
+      "env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)."
+    );
+  });
+
+  it("replaces unlabeled legacy provider rows fail-closed while keeping other providers' slices", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-legacy-slice-"));
+    const stateDir = join(dir, ".ai-spend-agent");
+    await mkdir(stateDir, { recursive: true });
+    const legacyRecord = (provider: string, amountUsd: number, costType: string) => ({
+      id: `legacy-${provider}-cost`,
+      timestamp: "2026-08-07T00:00:00.000Z",
+      source: {
+        id: `${provider}-provider-api`,
+        name: `${provider} provider API`,
+        provider,
+        confidence: "verified",
+        observedFrom: "provider API"
+      },
+      model: "billing",
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd,
+      costConfidence: "verified",
+      providerCostType: costType,
+      usageGranularity: "billing_bucket"
+    });
+    // Pre-multi-account state: one unnamed openai slice + one anthropic slice.
+    await writeFile(join(stateDir, "spend.json"), JSON.stringify({
+      mode: "connected_provider",
+      records: [
+        legacyRecord("openai", 5, "openai_cost"),
+        legacyRecord("anthropic", 2, "anthropic_cost")
+      ]
+    }));
+    await trustConnectedSpendFixture(dir);
+    process.env.OPENAI_ADMIN_KEY_ORG2 = "sk-" + "org2-admin-fake-token-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: Array.from({ length: 18 }, (_, index) => ({
+                amount: { value: index === 0 ? 0.5 : 0.48, currency: "usd" },
+                line_item: `Responses API ${index}`
+              }))
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+
+    const sync = await runCli([
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY_ORG2",
+      "--start-time", "1761955200", "--end-time", "1762041600"
+    ]);
+
+    expect(sync.exitCode).toBe(0);
+    // The unnamed openai slice cannot be proven to be a different org, so it
+    // is replaced (never double-counted); anthropic's slice is retained.
+    expect(sync.stdout).toContain("combined headline spend: $10.66");
+    // QA M2: the superseded billed dollars are named, never silently dropped.
+    expect(sync.stdout).toContain(
+      "notice: replaced prior unlabeled slice: $5.00 billed from 1 record superseded"
+    );
+    expect(sync.stdout).toContain(
+      "provider accounts: env:OPENAI_ADMIN_KEY_ORG2 (18 records, billed $8.66)"
+    );
+    const spendState = JSON.parse(await readFile(join(stateDir, "spend.json"), "utf8"));
+    const openAiRecords = spendState.records.filter(
+      (record: { source: { provider: string } }) => record.source.provider === "openai"
+    );
+    expect(openAiRecords).toHaveLength(18);
+    expect(openAiRecords.every(
+      (record: { source: { account?: string } }) => record.source.account === "env:OPENAI_ADMIN_KEY_ORG2"
+    )).toBe(true);
+    expect(spendState.records.filter(
+      (record: { source: { provider: string } }) => record.source.provider === "anthropic"
+    )).toHaveLength(1);
+  });
+
+  it("accumulates cursor team slices across different --account-id values", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-cursor-teams-"));
+    process.env.CURSOR_ADMIN_KEY = "key_" + "cursor-team-admin-fake-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        teamMemberSpend: [{ email: "dev@example.com", spendCents: 1240 }],
+        subscriptionCycleStart: 1754956800000,
+        totalMembers: 1,
+        totalPages: 1
+      })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = (team: string) => [
+      "sync-provider", "--path", dir, "--provider", "cursor",
+      "--auth-reference", "env:CURSOR_ADMIN_KEY", "--account-id", team
+    ];
+
+    const teamA = await runCli(syncArgs("team-a"));
+    const teamB = await runCli(syncArgs("team-b"));
+    const teamAReplay = await runCli(syncArgs("team-a"));
+
+    expect(teamA.exitCode).toBe(0);
+    expect(teamA.stdout).toContain("account: account:team-a");
+    expect(teamB.exitCode).toBe(0);
+    expect(teamB.stdout).toContain(
+      "provider accounts: account:team-a (1 record) + account:team-b (1 record)"
+    );
+    expect(teamAReplay.exitCode).toBe(0);
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spendState.records).toHaveLength(2);
+    expect(new Set(spendState.records.map(
+      (record: { source: { account?: string } }) => record.source.account
+    ))).toEqual(new Set(["account:team-a", "account:team-b"]));
+
+    // QA M3 repro C2: "team a" slugs to the same prefix as "team-a" — the
+    // raw-key digest must keep the slices in disjoint record-id namespaces.
+    const spaceyTeam = await runCli(syncArgs("team a"));
+    expect(spaceyTeam.exitCode).toBe(0);
+    const collidedState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    const ids = collidedState.records.map((record: { id: string }) => record.id);
+    expect(collidedState.records).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(new Set(collidedState.records.map(
+      (record: { source: { account?: string } }) => record.source.account
+    ))).toEqual(new Set(["account:team a", "account:team-a", "account:team-b"]));
+    delete process.env.CURSOR_ADMIN_KEY;
+  });
+
+  it("keeps local per-sub API-equivalent estimates on the connected receipt (founder mixed state)", async () => {
+    // Founder live-testing repro (2026-08-19): openai billed records synced +
+    // detected claude Max 20x and chatgpt Pro subscriptions + real local
+    // transcripts. The receipt must stay billed-primary WITHOUT erasing the
+    // estimated axis: sub rows keep their ~ figures from local evidence and
+    // only genuinely absent evidence reads n/r.
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connected-mixed-"));
+    // Detected plans: claude Max 20x ($200/mo) + chatgpt Pro ($200/mo).
+    await writeFile(process.env.AI_SPEND_CLAUDE_CONFIG!, JSON.stringify({
+      oauthAccount: {
+        billingType: "stripe_subscription",
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x"
+      }
+    }));
+    const codexClaims = Buffer.from(JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_plan_type: "pro" }
+    })).toString("base64url");
+    await writeFile(process.env.AI_SPEND_CODEX_AUTH!, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { id_token: `header.${codexClaims}.signature` }
+    }));
+    // Local claude transcript: 1M in @$5 + 100k out @$25 = ~$7.50 estimated.
+    const logsDir = process.env.AI_SPEND_CLAUDE_LOGS_DIR!;
+    await mkdir(join(logsDir, "-Users-jose-myproject"), { recursive: true });
+    await writeFile(join(logsDir, "-Users-jose-myproject", "session.jsonl"), JSON.stringify({
+      type: "assistant",
+      timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      cwd: "/Users/testuser/myproject",
+      sessionId: "sess-mixed-1",
+      requestId: "req-mixed-1",
+      message: { id: "msg-mixed-1", model: "claude-opus-4-8", usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }
+    }), "utf8");
+    // Connected billing: openai $8.66 across two cost rows.
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "founder-admin-fake-token-do-not-store";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: [
+                { amount: { value: 0.5, currency: "usd" }, line_item: "Responses API" },
+                { amount: { value: 8.16, currency: "usd" }, line_item: "GPT-5.1 input" }
+              ]
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    await runCli([
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200", "--end-time", "1762041600"
+    ]);
+
+    const receipt = await runCli(["--path", dir, "--no-color"]);
+
+    expect(receipt.exitCode).toBe(0);
+    expect(receipt.stdout).toContain("CONNECTED · MIXED EVIDENCE");
+    // The claude sub row keeps its ~ figure from local transcripts.
+    expect(receipt.stdout).toContain(
+      "    claude    Max 20x     $200/mo committed       ~$8 API-equivalent"
+    );
+    // chatgpt has genuinely no local codex evidence — n/r stays honest there.
+    expect(receipt.stdout).toContain(
+      "    chatgpt   Pro         $200/mo committed     API-equivalent n/r"
+    );
+    // The Total carries all three bases labeled — billed never erases the
+    // estimated axis, and nothing is blended.
+    expect(receipt.stdout).toContain(
+      "  Total   committed $400/mo · API-equivalent ~$8 · billed $8.66"
+    );
+    expect(receipt.stdout).toContain("includes $8.66 billed from sources without a subscription row");
+    expect(receipt.stdout).toContain("$8.66 billed (provider-reported, verified)");
+    expect(receipt.stdout).not.toContain("$16.16");
+  });
+
+  it("warns on identical twin slices and prunes one with drop-slice (QA M1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-twin-slices-"));
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "org1-admin-fake-token-do-not-store";
+    process.env.OPENAI_ADMIN_KEY_B = "sk-" + "org1-again-fake-token-do-not-store";
+    // Both references reach the SAME organization: the provider returns the
+    // identical costs page for either token.
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs")
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: [
+                { amount: { value: 0.4, currency: "usd" }, line_item: "Responses API 0" },
+                { amount: { value: 0.41, currency: "usd" }, line_item: "Responses API 1" }
+              ]
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = (reference: string) => [
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", reference, "--start-time", "1761955200", "--end-time", "1762041600"
+    ];
+    const expectedWarning =
+      "openai slices env:OPENAI_ADMIN_KEY and env:OPENAI_ADMIN_KEY_B contain identical records — " +
+      "likely the same organization under two references; the combined total counts it twice. " +
+      "Remove one: npx aibill drop-slice --provider openai --account \"env:OPENAI_ADMIN_KEY_B\"";
+
+    const firstSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY"));
+    const secondSync = await runCli(syncArgs("env:OPENAI_ADMIN_KEY_B"));
+    const doctorWithTwins = await runCli(["doctor", "--sources", "--path", dir]);
+
+    expect(firstSync.exitCode).toBe(0);
+    expect(firstSync.stdout).not.toContain("warning:");
+    expect(secondSync.exitCode).toBe(0);
+    expect(secondSync.stdout).toContain("combined headline spend: $1.62");
+    expect(secondSync.stdout).toContain(`warning: ${expectedWarning}`);
+    expect(doctorWithTwins.stdout).toContain(`WARNING: ${expectedWarning}`);
+
+    // The prescribed prune path removes the duplicate slice and re-signs state.
+    const drop = await runCli([
+      "drop-slice", "--path", dir, "--provider", "openai",
+      "--account", "env:OPENAI_ADMIN_KEY_B"
+    ]);
+    expect(drop.exitCode).toBe(0);
+    expect(drop.stdout).toContain("dropped account: env:OPENAI_ADMIN_KEY_B");
+    expect(drop.stdout).toContain("records removed: 2 (billed $0.81)");
+    expect(drop.stdout).toContain(
+      "remaining provider accounts: env:OPENAI_ADMIN_KEY (2 records, billed $0.81)"
+    );
+    expect(drop.stdout).toContain("combined headline spend: $0.81");
+
+    const spendState = JSON.parse(await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8"));
+    expect(spendState.records).toHaveLength(2);
+    expect(spendState.summary.totalUsd).toBeCloseTo(0.81, 6);
+    const doctorAfterDrop = await runCli(["doctor", "--sources", "--path", dir]);
+    expect(doctorAfterDrop.stdout).not.toContain("WARNING:");
+    // The dropped state stays trusted: the receipt still serves it.
+    expect(doctorAfterDrop.stdout).toContain(
+      "Account slices: env:OPENAI_ADMIN_KEY (2 records, billed $0.81)."
+    );
+
+    // Dropping an unknown slice fails with the known-slice inventory.
+    const dropAgain = await runCli([
+      "drop-slice", "--path", dir, "--provider", "openai",
+      "--account", "env:OPENAI_ADMIN_KEY_B"
+    ]);
+    expect(dropAgain.exitCode).toBe(1);
+    expect(dropAgain.stderr).toContain('No openai slice matches account "env:OPENAI_ADMIN_KEY_B"');
+    expect(dropAgain.stderr).toContain(
+      "Known openai slices: env:OPENAI_ADMIN_KEY (2 records, billed $0.81)"
+    );
+    delete process.env.OPENAI_ADMIN_KEY_B;
+  });
+
+  it("names the erased billed dollars when a re-synced slice comes back empty (QA M2)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-provider-empty-resync-"));
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "org1-admin-fake-token-do-not-store";
+    let costsEmpty = false;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => String(url).includes("/costs") && !costsEmpty
+        ? ({
+            data: [{
+              start_time: 1761955200,
+              end_time: 1762041600,
+              results: [
+                { amount: { value: 0.4, currency: "usd" }, line_item: "Responses API 0" },
+                { amount: { value: 0.41, currency: "usd" }, line_item: "Responses API 1" }
+              ]
+            }],
+            has_more: false
+          })
+        : ({ data: [], has_more: false })
+    })));
+    await runCli(["init", "--path", dir]);
+    const syncArgs = [
+      "sync-provider", "--path", dir, "--provider", "openai",
+      "--auth-reference", "env:OPENAI_ADMIN_KEY",
+      "--start-time", "1761955200", "--end-time", "1762041600"
+    ];
+
+    const firstSync = await runCli(syncArgs);
+    costsEmpty = true;
+    const emptySync = await runCli(syncArgs);
+
+    expect(firstSync.exitCode).toBe(0);
+    expect(firstSync.stdout).not.toContain("notice:");
+    expect(emptySync.exitCode).toBe(0);
+    expect(emptySync.stdout).toContain(
+      "notice: replaced prior slice env:OPENAI_ADMIN_KEY: $0.81 billed from 2 records superseded " +
+      "(this sync returned 0 records, no billed evidence)"
+    );
   });
 
   it("keeps inclusive OpenAI multimodal totals identical in persisted CLI JSON and the saved report", async () => {

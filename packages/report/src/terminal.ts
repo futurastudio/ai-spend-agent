@@ -169,7 +169,7 @@ function renderPlainEnglishSummary(
   // raw confidence words — an estimated dollar is API-equivalent ONLY when it
   // was priced at published API rates; other priced-but-unverified dollars
   // (beta connectors) are detected (unverified) and never join these bars.
-  const cardBasisMode = resultCardModeFor(options.mode);
+  const cardBasisMode = resultCardModeFor(options.mode, options.records);
   const verifiedRecords = options.records.filter((record) => (
     classifyResultCardRecordBasis(record, cardBasisMode) === "provider_billed"
   ));
@@ -704,7 +704,13 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   if (lines[lines.length - 1] !== "") lines.push("");
   lines.push(...compactLabeledLines("Next", c.bold(guided?.actionHeadline ?? next.title), width, c));
   lines.push(`  ${c.dim(guided?.actionDetail ?? next.evidence)}`);
-  lines.push(`  ${c.cyan("›")} ${c.bold(guided?.command ?? next.command)}`);
+  const nextCommand = guided?.command ?? next.command;
+  if (nextCommand.includes("improve")) {
+    // improve is project-scoped; a machine-wide receipt must say where to
+    // stand before handing over a command that refuses broad roots.
+    lines.push(`  ${c.dim("run it from the project folder you want to improve")}`);
+  }
+  lines.push(`  ${c.cyan("›")} ${c.bold(nextCommand)}`);
   lines.push("");
   lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
   lines.push("");
@@ -900,7 +906,7 @@ function compactNextStep(
         ? `tool${action.recordCount === 1 ? "" : "s"}`
         : `call${action.recordCount === 1 ? "" : "s"}`;
     const value = options.mode === "local-logs"
-      ? `${formatUsd(action.affectedSpendUsd)} API-equivalent value`
+      ? `~${formatUsd(action.affectedSpendUsd)} API-equivalent value`
       : `${formatUsd(action.affectedSpendUsd)} evidence`;
     return {
       title: action.title,
@@ -953,13 +959,30 @@ function compactLabeledLines(label: string, value: string, width: number, c: Col
 
 // --- canonical result card blocks (C-lane design §1.4/§1.5/§3) -------------
 
-function resultCardModeFor(mode: PlainEnglishSummaryOptions["mode"]): ResultCardMode {
-  return mode === "connected" ? "connected" : mode === "local-logs" ? "local-logs" : "demo";
+function resultCardModeFor(
+  mode: PlainEnglishSummaryOptions["mode"],
+  records: readonly UsageRecord[]
+): ResultCardMode {
+  if (mode === "connected") {
+    // C-lane §1.4 connected/mixed variants + QA M3: billed provider evidence
+    // alongside local API-equivalent transcripts is the MIXED state — billed
+    // leads the headline while the estimated axis (per-subscription ~ figures,
+    // local by-project attribution) is never erased. Evidence that is purely
+    // provider-reported stays "connected".
+    const hasBilled = records.some((record) => (
+      classifyResultCardRecordBasis(record, "connected") === "provider_billed"
+    ));
+    const hasApiEquivalent = records.some((record) => (
+      classifyResultCardRecordBasis(record, "connected") === "api_equivalent"
+    ));
+    return hasBilled && hasApiEquivalent ? "mixed" : "connected";
+  }
+  return mode === "local-logs" ? "local-logs" : "demo";
 }
 
 function buildResultCardForOptions(options: PlainEnglishSummaryOptions): ResultCard {
   return buildResultCard({
-    mode: resultCardModeFor(options.mode),
+    mode: resultCardModeFor(options.mode, options.records),
     windowDays: options.windowDays ?? 30,
     records: options.records,
     detectedPlans: options.detectedPlans ?? [],

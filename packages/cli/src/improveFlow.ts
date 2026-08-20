@@ -82,6 +82,13 @@ type AskSpec = {
   emptyKeepsValue?: string;
   /** "Current answer" for revisits, "Suggested" for machine drafts. */
   emptyKeepsLabel?: string;
+  /**
+   * Navigation default: Enter answers this token. ONLY for questions that
+   * mint no user-declared evidence (start/resume/identity-confirm) — the
+   * testimony answers (baseline quality, canary, quality, APPROVE) must
+   * always be typed deliberately.
+   */
+  enterDefault?: string;
 };
 
 async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<AskOutcome> {
@@ -97,12 +104,16 @@ async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<As
       }),
       ""
     ];
-    if (spec.emptyKeepsValue !== undefined) {
+    if (spec.emptyKeepsValue !== undefined && spec.enterDefault === undefined) {
       const label = spec.emptyKeepsLabel ?? "Current answer";
       parts.push(`${label}: "${spec.emptyKeepsValue}"`);
-      parts.push(label === "Suggested"
-        ? "Press Enter to accept it, or type your own."
-        : "Press Enter to keep it, or type a replacement.");
+      // Any label other than a revisit of the user's own answer is a
+      // machine suggestion — "Suggested" (aibill's) or "Drafted with your
+      // agent" (B1: the label is computed per field from real provenance,
+      // never sitting-wide, so it can never sit over the wrong author).
+      parts.push(label === "Current answer"
+        ? "Press Enter to keep it, or type a replacement."
+        : "Press Enter to accept it, or type your own.");
       parts.push("");
     }
     parts.push(renderGuidedQuestion({
@@ -130,7 +141,11 @@ async function ask(io: FlowIo, header: SittingHeader, spec: AskSpec): Promise<As
       ? { maxIdenticalRejections: io.maxIdenticalRejections }
       : {}),
     ...(io.nowMs !== undefined ? { nowMs: io.nowMs } : {}),
-    ...(spec.emptyKeepsValue !== undefined ? { emptyKeepsValue: spec.emptyKeepsValue } : {})
+    ...(spec.enterDefault !== undefined
+      ? { emptyKeepsValue: spec.enterDefault }
+      : spec.emptyKeepsValue !== undefined
+        ? { emptyKeepsValue: spec.emptyKeepsValue }
+        : {})
   });
 }
 
@@ -170,8 +185,9 @@ export async function runStartSitting(
       step: 1,
       totalSteps: 2,
       question: "Start this token test?",
-      guidance: "Answer y or n. Type cancel to stop safely.",
+      guidance: "Enter = y · n stops · cancel stops safely.",
       context: { choiceTokens: ["y", "n"] },
+      enterDefault: "y",
       sittingHint: shortSittingHint
     });
     if (first.outcome === "cancelled" || first.outcome === "back") return { action: "cancelled" };
@@ -379,6 +395,18 @@ export function parsePlanDraft(value: unknown): PlanDraftV1 | undefined {
   return parsed;
 }
 
+export type SuggestedPlanAnswer = {
+  value: string;
+  /**
+   * Who actually wrote this suggestion. Drives the per-field prefill label:
+   * "agent" renders `Drafted with your agent`, "aibill" renders `Suggested`.
+   * Acceptance converts provenance (m9): the moment the user Enter-accepts
+   * or types a sentence it is the USER'S answer — revisits show
+   * `Current answer:` and no provenance is stored anywhere.
+   */
+  provenance: "aibill" | "agent";
+};
+
 export type PlanResult =
   | { action: "cancelled" }
   | { action: "backedOut" }
@@ -429,9 +457,16 @@ export async function runPlanSitting(
     /**
      * Machine-drafted plan sentences, accepted with Enter. The human still
      * approves the exact recorded plan; a saved draft (the user's own words)
-     * always outranks a suggestion.
+     * always outranks a suggestion. Provenance travels WITH each value so
+     * the on-screen label is derived per field at render — there is no
+     * sitting-wide label option, so a mixed sitting (agent change + aibill
+     * rollback fallback) can never mislabel (B1, QA 17).
      */
-    suggestedAnswers?: { change?: string; rollback?: string; canary?: string };
+    suggestedAnswers?: {
+      change?: SuggestedPlanAnswer;
+      rollback?: SuggestedPlanAnswer;
+      canary?: SuggestedPlanAnswer;
+    };
   }
 ): Promise<PlanResult> {
   const header: SittingHeader = { ...options.header, sitting: "PLAN & APPROVE" };
@@ -463,8 +498,9 @@ export async function runPlanSitting(
         kind: "choice",
         step: 1,
         totalSteps,
-        question: "Resume where you left off? Answer y to resume, n to start the plan over (saved answers are discarded).",
+        question: "Resume where you left off? Enter = y · n starts the plan over (saved answers are discarded).",
         context: { choiceTokens: ["y", "n"] },
+        enterDefault: "y",
         sittingHint: planSittingHint
       });
       if (resume.outcome === "cancelled" || resume.outcome === "back") {
@@ -495,7 +531,7 @@ export async function runPlanSitting(
       const prose = planProse[stepIndex]!;
       const existing = answers[prose.key];
       const suggested = options.suggestedAnswers?.[prose.key];
-      const prefill = existing ?? suggested;
+      const prefill = existing ?? suggested?.value;
       const outcome = await ask(io, header, {
         kind: "prose",
         step: stepIndex + 1,
@@ -508,8 +544,15 @@ export async function runPlanSitting(
         navigationHint: "Type back to return, or cancel to stop safely.",
         sittingHint: planSittingHint,
         ...(prefill !== undefined ? { emptyKeepsValue: prefill } : {}),
-        ...(prefill !== undefined && existing === undefined
-          ? { emptyKeepsLabel: "Suggested" }
+        // A saved/typed answer outranks any suggestion and shows the
+        // default "Current answer" revisit label; a suggestion's label is
+        // computed from ITS OWN provenance, per field (B1, m9).
+        ...(prefill !== undefined && existing === undefined && suggested !== undefined
+          ? {
+              emptyKeepsLabel: suggested.provenance === "agent"
+                ? "Drafted with your agent"
+                : "Suggested"
+            }
           : {})
       });
       if (outcome.outcome === "cancelled") return { action: "cancelled" };
@@ -547,8 +590,9 @@ export async function runPlanSitting(
           kind: "choice",
           step: 4,
           totalSteps,
-          question: "Approve as this identity? Answer y to continue, or n to stop here and run identify again first.",
+          question: "Approve as this identity? Enter = y · n stops here so you can run identify again first.",
           context: { choiceTokens: ["y", "n"] },
+          enterDefault: "y",
           sittingHint: planSittingHint
         });
         if (confirm.outcome === "cancelled") return { action: "cancelled" };
@@ -648,6 +692,20 @@ export async function runRecordSitting(
     header: Omit<SittingHeader, "sitting">;
     approvedAtIso: string;
     approvedByLine: string;
+    /**
+     * Agent-drafted applied-at prefill. Enter-keep re-classifies it with
+     * the approvedAtIso context (defense in depth), so a time before the
+     * approval or in the future can never be Enter-accepted.
+     */
+    suggested?: { appliedAtIso?: string };
+    /**
+     * The agent's REPORTED canary result. Renders only as a claim line
+     * above the unchanged p/f/n question — it never prefills anything, and
+     * Enter on an empty line reprompts exactly as today (M6, QA 18). The
+     * most fakeable financial input in the loop keeps a mandatory human
+     * keystroke.
+     */
+    agentCanaryReport?: "passed" | "failed";
   }
 ): Promise<RecordResult> {
   const header: SittingHeader = { ...options.header, sitting: "RECORD WHAT HAPPENED" };
@@ -667,7 +725,13 @@ export async function runRecordSitting(
       example: "2026-08-17T14:03:00Z",
       navigationHint: "Type back if the change has not been applied yet, or cancel to stop safely.",
       context: { example: "2026-08-17T14:03:00Z", approvedAtIso: options.approvedAtIso },
-      sittingHint: recordSittingHint
+      sittingHint: recordSittingHint,
+      ...(options.suggested?.appliedAtIso !== undefined
+        ? {
+            emptyKeepsValue: options.suggested.appliedAtIso,
+            emptyKeepsLabel: "Drafted with your agent"
+          }
+        : {})
     });
     if (time.outcome === "cancelled") return { action: "cancelled" };
     if (time.outcome === "back") return { action: "backedOut" };
@@ -676,7 +740,9 @@ export async function runRecordSitting(
       kind: "choice",
       step: 2,
       totalSteps: 2,
-      question: "Did the approved canary pass?",
+      question: options.agentCanaryReport !== undefined
+        ? `Your agent reports: canary ${options.agentCanaryReport} — not yet recorded; your\nanswer below is what counts.\nDid the approved canary pass?`
+        : "Did the approved canary pass?",
       guidance: "Answer p (passed) · f (failed) · n (not run yet)",
       context: { choiceTokens: ["p", "f", "n"] },
       sittingHint: recordSittingHint

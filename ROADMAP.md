@@ -77,6 +77,20 @@ human acceptance gates.
    allocation, and approval history. This is a foundation, not Workspace
    general availability.
 
+- **Guided provider connect.** `connect <provider>` becomes a short guided
+  sitting: the one console URL where the admin key is created, a wait-and-
+  verify step for the env reference (the key itself never touches aibill),
+  then the first sync runs automatically over a default 30-day window — no
+  placeholders, no second command to compose. The agent-native loop drafts
+  it conversationally where an MCP client is present.
+- **Per-basis saved reports in connected mode.** The terminal receipt already
+  shows billed and API-equivalent money side by side; the saved `report` (and
+  the input `improve` shares) still narrows connected state to billed-only
+  evidence, so its total under-discloses the local API-equivalent axis (it
+  never overclaims, and improve's waste findings are unaffected — they derive
+  from action evidence). Ride the receipt's local financial records into the
+  report's evidence section per-basis.
+
 ## Later — the paid accountability system
 
 The intended Workspace is an opt-in, permissioned layer over approved Agent

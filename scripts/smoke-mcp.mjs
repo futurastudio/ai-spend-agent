@@ -20,6 +20,7 @@ const expectedTools = [
   "get_usage_glance",
   "get_context_health",
   "get_token_reduction_test",
+  "draft_improve_command",
   "list_sources",
   "get_spend_report",
   "recommend_cuts"

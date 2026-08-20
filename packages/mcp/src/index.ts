@@ -1,9 +1,17 @@
 import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   addApprovedSource,
   aibillCommandV0,
   aibillImproveCommandV0,
+  aibillPinnedCommandV0,
+  classifyGuidedAnswer,
+  encodeAgentDraftTokenV1,
+  IMPROVE_AGENT_DRAFT_PROVENANCE_V1,
+  IMPROVE_CONVERSATION_CONTRACT_V1,
+  IMPROVE_USER_SAFETY_LINE_V1,
+  screenAgentDraftSentence,
   analyzeSpend,
   attributeUsageRecords,
   buildSourceStatuses,
@@ -57,6 +65,12 @@ import {
   selectProviderFinancialHeadlineRecords,
   summarizeProviderFinancials,
   providerFinancialCompleteness,
+  providerAccountKey,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -208,6 +222,352 @@ export type GetTokenReductionTestInput = {
   experimentId?: string;
 };
 
+/**
+ * The MCP package's own published version, used to pin composed commands
+ * (M4c). Falls back to unpinned composition when unreadable — never throws.
+ */
+const mcpPackageVersion: string = (() => {
+  try {
+    const metadata = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8")
+    ) as { version?: unknown };
+    return typeof metadata.version === "string" ? metadata.version : "";
+  } catch {
+    return "";
+  }
+})();
+
+/**
+ * The read-only teaching block for AI clients (design §1a): states the
+ * agent's role, the drafting rules, the conversation contract, and the one
+ * phase-appropriate command template. Nothing in it can approve, start,
+ * apply, or record anything.
+ */
+export type ImproveAgentLoopV1 = {
+  role: "draft_only";
+  phase: "no_test" | "planning" | "observing" | "rollback" | "terminal";
+  /** Binding the agent must echo into draft_improve_command. Null before a baseline. */
+  binding: { experimentId: string; revisionId: string } | null;
+  /**
+   * Honest scope (m8): the PRE-RECORD approval state is not readable over
+   * MCP (approval persists only into the private accountability store,
+   * which packages/mcp never imports). After the record step the experiment
+   * itself carries intervention.approval and is returned verbatim. An agent
+   * can still ASSERT approval at any time — the contract makes that a false
+   * statement, and the terminal remains the only truth surface; nothing
+   * here prevents the claim, it only never confirms it.
+   */
+  approvalVisibility: "pre_record_approval_not_readable_over_mcp";
+  draftRules: {
+    sentences: readonly ["change", "rollback", "canary"];
+    style: string;
+    maxChars: 1000;
+    rejectedShapes: readonly ["shell_command", "file_path", "credential", "control_characters", "single_word"];
+  };
+  composeTool: "draft_improve_command";
+  /** Exactly one command line, phase-appropriate; placeholder text in angle brackets. */
+  commandTemplate: string;
+  /** M4a: the one-rule user check the agent MUST show next to any relayed command. */
+  userSafetyLine: string;
+  conversationContract: readonly string[];
+  provenance: string;
+};
+
+const improveAgentLoopDraftRules: ImproveAgentLoopV1["draftRules"] = {
+  sentences: ["change", "rollback", "canary"],
+  style: "one short plain-English sentence each; words, not commands, paths, or credentials",
+  maxChars: 1000,
+  rejectedShapes: ["shell_command", "file_path", "credential", "control_characters", "single_word"]
+};
+
+/**
+ * Phase mapping derived from `projection.state` — the vocabulary that
+ * actually exists (m7) — never from invented lifecycle labels. n3: a draft
+ * composed during `collect_baseline` would almost certainly go stale at
+ * freeze (revisionId is a body digest), so that state keeps phase
+ * "planning" but hands out the plain rerun template instead of the draft
+ * template — no wasted drafting round trip.
+ */
+export function buildImproveAgentLoopV1(
+  projectionState: ActionVerificationProjectionV0["state"] | null,
+  binding: { experimentId: string; revisionId: string } | null
+): ImproveAgentLoopV1 {
+  const rerunTemplate = aibillImproveCommandV0();
+  const draftTemplate = aibillPinnedCommandV0(
+    "improve --draft <token from draft_improve_command>",
+    mcpPackageVersion
+  );
+  let phase: ImproveAgentLoopV1["phase"];
+  let commandTemplate = rerunTemplate;
+  switch (projectionState) {
+    case "approve_one_change":
+      phase = "planning";
+      commandTemplate = draftTemplate;
+      break;
+    case "collect_baseline":
+      phase = "planning";
+      break;
+    case "collect_post_change":
+    case "review_measured_result":
+    case "resolve_evidence":
+      phase = "observing";
+      break;
+    case "rollback":
+      phase = "rollback";
+      break;
+    case "rolled_back":
+    case "cancelled":
+      phase = "terminal";
+      break;
+    case null:
+    default:
+      phase = "no_test";
+      break;
+  }
+  return {
+    role: "draft_only",
+    phase,
+    binding: phase === "no_test" ? null : binding,
+    approvalVisibility: "pre_record_approval_not_readable_over_mcp",
+    draftRules: improveAgentLoopDraftRules,
+    composeTool: "draft_improve_command",
+    commandTemplate,
+    userSafetyLine: IMPROVE_USER_SAFETY_LINE_V1,
+    conversationContract: IMPROVE_CONVERSATION_CONTRACT_V1,
+    provenance: IMPROVE_AGENT_DRAFT_PROVENANCE_V1
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* draft_improve_command (§1b) — read-only command composition          */
+/* ------------------------------------------------------------------ */
+
+export type DraftImproveCommandInput = {
+  path: string;
+  leg: "plan" | "record";
+  experimentId: string;
+  revisionId: string;
+  change?: string;
+  rollback?: string;
+  canary?: string;
+  appliedAt?: string;
+  canaryResult?: "passed" | "failed";
+};
+
+export type DraftImproveCommandResult = {
+  status: "composed" | "rejected" | "stale_binding";
+  leg: "plan" | "record";
+  binding: { experimentId: string; revisionId: string };
+  fieldVerdicts: Partial<Record<
+    "change" | "rollback" | "canary" | "appliedAt" | "canaryResult",
+    { ok: boolean; reason?: string }
+  >>;
+  /** Exactly one line, or null when not composed. */
+  command: string | null;
+  runFrom: "the project root (the command reads the current directory)";
+  humanGates: readonly [string, string, string, string, string];
+  userSafetyLine: string;
+  deferredChecks?: readonly string[];
+  rejectReason?: string;
+  provenance: {
+    state: "composed_locally_from_caller_input";
+    readOnly: true;
+    uploaded: false;
+    authorizes: "nothing";
+  };
+  nextStep: string;
+};
+
+const draftImproveHumanGates: DraftImproveCommandResult["humanGates"] = [
+  "The user presses Enter on each prefilled sentence (or types their own); each is labeled by who wrote it.",
+  "The user confirms who approves.",
+  "The user types APPROVE, all capitals, in their own terminal.",
+  "Record times are re-validated after-approval and not-in-future at answer time.",
+  "The canary result is never prefilled: the user types passed/failed/not-run themselves."
+];
+
+const staleBindingRejectReason =
+  "This draft is bound to a test or revision that no longer matches this project's state. Re-read get_token_reduction_test, show the user the current finding, and draft again against the new binding.";
+
+/** UTC Z-form only — offsets/naive local times are rejected here, like the flag. */
+const recordAppliedAtPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z$/;
+const recordAppliedAtReason = "appliedAt must be UTC Z-form, e.g. 2026-08-18T09:12:00Z";
+
+/**
+ * QA 2: the safe-charset lint enforced on every composed line, so a
+ * composing bug can never emit a command that violates the taught one-rule
+ * check (no quotes, $, ;, &, |, backtick, newline).
+ */
+const composedCommandLint = /^[A-Za-z0-9@ ._:-]+$/;
+
+/**
+ * The only sanctioned producer of the `--draft` token and the record
+ * command line. Composing a string writes nothing: this function reads
+ * experiment state through the same read-only loader as
+ * `get_token_reduction_test` and returns strings; every failure is an
+ * in-band status (composed/rejected/stale_binding), never an MCP error.
+ */
+export async function draftImproveCommandTool(
+  input: DraftImproveCommandInput
+): Promise<DraftImproveCommandResult> {
+  const rootPath = await resolveSafeScanRoot(input.path);
+  const binding = { experimentId: input.experimentId, revisionId: input.revisionId };
+  const base = {
+    leg: input.leg,
+    binding,
+    runFrom: "the project root (the command reads the current directory)" as const,
+    humanGates: draftImproveHumanGates,
+    userSafetyLine: IMPROVE_USER_SAFETY_LINE_V1,
+    provenance: {
+      state: "composed_locally_from_caller_input" as const,
+      readOnly: true as const,
+      uploaded: false as const,
+      authorizes: "nothing" as const
+    }
+  };
+
+  // Binding check: the experiment must exist, be ACTIVE, and carry exactly
+  // this revision. Failure is guidance for the agent, never an MCP error.
+  const stored = await readTokenReductionExperiments(rootPath);
+  const experiment = stored?.find((candidate) => candidate.id === input.experimentId);
+  const active = experiment !== undefined &&
+    experiment.lifecycle !== "complete" &&
+    experiment.lifecycle !== "rolled_back" &&
+    experiment.lifecycle !== "invalidated";
+  if (!active || experiment.revisionId !== input.revisionId) {
+    return {
+      ...base,
+      status: "stale_binding",
+      fieldVerdicts: {},
+      command: null,
+      rejectReason: staleBindingRejectReason,
+      nextStep: "Re-read get_token_reduction_test and draft again against the current binding."
+    };
+  }
+
+  if (input.leg === "plan") {
+    // Screening runs through the SAME shared core path the CLI uses at
+    // Enter-accept (`screenAgentDraftSentence`), so preview and gate
+    // verdicts cannot diverge (QA 12). A missing sentence screens as the
+    // empty answer and carries the terminal's own reprompt copy.
+    const fieldVerdicts: DraftImproveCommandResult["fieldVerdicts"] = {};
+    const accepted: Record<"change" | "rollback" | "canary", string> = {
+      change: "", rollback: "", canary: ""
+    };
+    let allOk = true;
+    for (const field of ["change", "rollback", "canary"] as const) {
+      const verdict = screenAgentDraftSentence(input[field] ?? "");
+      if (verdict.ok) {
+        fieldVerdicts[field] = { ok: true };
+        accepted[field] = verdict.value;
+      } else {
+        fieldVerdicts[field] = { ok: false, reason: verdict.reason };
+        allOk = false;
+      }
+    }
+    if (!allOk) {
+      return {
+        ...base,
+        status: "rejected",
+        fieldVerdicts,
+        command: null,
+        nextStep: "Fix the rejected fields with the user and call draft_improve_command again; nothing was composed and nothing was recorded."
+      };
+    }
+    const encoded = encodeAgentDraftTokenV1({
+      experimentId: input.experimentId,
+      revisionId: input.revisionId,
+      ...accepted
+    });
+    if (!encoded.ok) {
+      // Structural encode failure after screening is a composing bug shape
+      // (e.g. oversize); return it as a rejection, never a crash.
+      return {
+        ...base,
+        status: "rejected",
+        fieldVerdicts: { change: { ok: false, reason: `draft could not be encoded (${encoded.reason})` } },
+        command: null,
+        nextStep: "Shorten the sentences with the user and call draft_improve_command again."
+      };
+    }
+    const command = aibillPinnedCommandV0(
+      `improve --draft ${encoded.token}`,
+      mcpPackageVersion
+    );
+    assertComposedLineIsPasteSafe(command);
+    return {
+      ...base,
+      status: "composed",
+      fieldVerdicts,
+      command,
+      nextStep: "Show the user the three sentences, this exact command, unmodified, and the userSafetyLine, and ask them to run it in their terminal from the project root. It only pre-fills questions. Nothing is approved until the user types APPROVE there themselves."
+    };
+  }
+
+  // leg === "record": require appliedAt + canaryResult. After-approval
+  // CANNOT be checked here (pre-record approval is not readable over MCP);
+  // the terminal enforces it — deferredChecks says so. The canaryResult is
+  // accepted as the AGENT'S REPORT only (M6): the composed flag never
+  // prefills the terminal's canary question. There is deliberately no
+  // not_run value: a canary that has not run means NOT calling leg=record.
+  const fieldVerdicts: DraftImproveCommandResult["fieldVerdicts"] = {};
+  let appliedAtOk = false;
+  if (input.appliedAt === undefined || !recordAppliedAtPattern.test(input.appliedAt)) {
+    fieldVerdicts.appliedAt = { ok: false, reason: recordAppliedAtReason };
+  } else {
+    const timeVerdict = classifyGuidedAnswer("time", input.appliedAt);
+    if (timeVerdict.outcome === "accept") {
+      fieldVerdicts.appliedAt = { ok: true };
+      appliedAtOk = true;
+    } else {
+      fieldVerdicts.appliedAt = {
+        ok: false,
+        reason: timeVerdict.outcome === "reject"
+          ? timeVerdict.message
+          : recordAppliedAtReason
+      };
+    }
+  }
+  const canaryResultOk = input.canaryResult === "passed" || input.canaryResult === "failed";
+  fieldVerdicts.canaryResult = canaryResultOk
+    ? { ok: true }
+    : {
+        ok: false,
+        reason: "canaryResult must be passed or failed — report only a canary that actually ran; if it has not run, do not compose a record command (the user records not-run themselves in the terminal)."
+      };
+  if (!appliedAtOk || !canaryResultOk) {
+    return {
+      ...base,
+      status: "rejected",
+      fieldVerdicts,
+      command: null,
+      nextStep: "Correct the record values and call draft_improve_command again; nothing was composed and nothing was recorded."
+    };
+  }
+  const command = aibillPinnedCommandV0(
+    `improve --record-applied-at ${input.appliedAt} --record-canary ${input.canaryResult}`,
+    mcpPackageVersion
+  );
+  assertComposedLineIsPasteSafe(command);
+  return {
+    ...base,
+    status: "composed",
+    fieldVerdicts,
+    command,
+    deferredChecks: ["after-approval ordering is checked in the terminal"],
+    nextStep: "Show the user this exact command, unmodified, and the userSafetyLine. It only pre-fills the applied-at question; the terminal re-checks that the time is after the approval and not in the future, and the user types the canary answer themselves."
+  };
+}
+
+function assertComposedLineIsPasteSafe(command: string): void {
+  if (!composedCommandLint.test(command)) {
+    throw new McpToolError(
+      "tool_error",
+      "Composed command failed the paste-safety lint; nothing was returned."
+    );
+  }
+}
+
 export type GetTokenReductionTestResult = {
   status: "no_test" | "not_found" | "available";
   experiment: TokenReductionExperimentV0 | null;
@@ -228,6 +588,8 @@ export type GetTokenReductionTestResult = {
     uploaded: false;
   };
   nextStep: string;
+  /** Additive teaching block for AI clients (design §1a); existing consumers unaffected. */
+  agentLoop: ImproveAgentLoopV1;
 };
 
 const tokenVerificationStateFile = "token-reduction-experiments.json";
@@ -778,6 +1140,10 @@ export async function syncProviderSpendTool(
   syncedTotalUsd: number | null;
   combinedSummary: SpendSummary;
   qa: unknown;
+  /** QA M2: prior slices this sync superseded, named with billed sums. */
+  replacedSliceNotices?: string[];
+  /** QA M1: slices holding identical records — likely one org, two references. */
+  duplicateSliceWarnings?: string[];
 }> {
   const rootPath = await resolveSafeScanRoot(input.path);
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
@@ -802,7 +1168,21 @@ export async function syncProviderSpendTool(
       fetcher: overrides.fetcher,
       tokenResolver: overrides.tokenResolver
     });
-    const syncedRecords = applyProviderContractGate(result.records);
+    // Admin credentials are account-scoped (an OpenAI Admin key covers ONE
+    // organization). Each sync belongs to one account slice: different slices
+    // of the same provider accumulate, re-syncing the same slice replaces it,
+    // and unlabeled legacy rows are replaced fail-closed (never double-count).
+    const accountKey = providerAccountKey({
+      provider: input.provider,
+      authReference: input.authReference,
+      org: input.org,
+      enterprise: input.enterprise,
+      accountId: input.accountId
+    });
+    const syncedRecords = tagProviderAccountRecords(
+      applyProviderContractGate(result.records),
+      accountKey
+    );
     const syncedFinancials = summarizeProviderFinancials(syncedRecords);
     const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
     const syncedSource = createProviderConnection({
@@ -814,35 +1194,82 @@ export async function syncProviderSpendTool(
       completeness: syncedCompleteness,
       fetchedAt: new Date(result.fetchedAt)
     });
+    const retainedPriorRecords = retainProviderRecordsForNewSync(
+      trustedPrior?.records ?? [],
+      result.provider,
+      accountKey,
+      syncedRecords
+    );
     const records = applyProviderContractGate([
-      ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
+      ...retainedPriorRecords,
       ...syncedRecords
     ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const combinedSummary = analyzeSpend(selectProviderFinancialHeadlineRecords(records));
     const mappings = attributeUsageRecords(records);
     const nextRegistry = addApprovedSource(registry, syncedSource);
+    // Whether prior account slices of THIS provider survived the merge. When
+    // they did, the provider-keyed accounting maps below must stay honest for
+    // the union of slices, not just the slice this run fetched.
+    const retainedSameProviderSlices = retainedPriorRecords.some(
+      (record) => record.source.provider === result.provider
+    );
     const qaByProvider = {
       ...(trustedPrior?.qaByProvider ?? {}),
       [result.provider]: result.qa
     };
+    // Fail-closed coverage: a provider is complete only when this sync AND
+    // every retained slice were complete. Known ratchet (QA m4): per-slice
+    // coverage is not persisted, so with other slices retained a prior
+    // "partial" sticks even after the offending slice re-syncs complete —
+    // it only UNDER-claims, and recovers when the provider merges with no
+    // other slices retained (single-slice re-sync), after `aibill
+    // drop-slice` removes the stale slice, or after `aibill reset`.
+    const mergedProviderCoverage: ProviderCoverageStatus =
+      retainedSameProviderSlices &&
+      trustedPrior?.coverageByProvider?.[result.provider] === "partial"
+        ? "partial"
+        : result.coverage;
     const coverageByProvider = {
       ...(trustedPrior?.coverageByProvider ?? {}),
-      [result.provider]: result.coverage
+      [result.provider]: mergedProviderCoverage
     };
+    // Freshness stays conservative: a retained slice keeps its older check
+    // time, so an old account slice is never claimed as freshly checked.
+    // Same m4 ratchet and recovery direction as coverage above.
+    const priorProviderCheckedAt = trustedPrior?.checkedAtByProvider?.[result.provider];
+    const mergedProviderCheckedAt =
+      retainedSameProviderSlices &&
+      typeof priorProviderCheckedAt === "string" &&
+      validIsoString(priorProviderCheckedAt) &&
+      priorProviderCheckedAt < result.fetchedAt
+        ? priorProviderCheckedAt
+        : result.fetchedAt;
     const checkedAtByProvider = {
       ...(trustedPrior?.checkedAtByProvider ?? {}),
-      [result.provider]: result.fetchedAt
+      [result.provider]: mergedProviderCheckedAt
     };
     const coverageIntervalsByProvider = Object.fromEntries(
       Object.entries(trustedPrior?.coverageIntervalsByProvider ?? {})
         .filter(([provider]) => provider !== result.provider)
     ) as Record<string, ProviderCoverageInterval>;
-    if (result.coverageInterval) {
-      coverageIntervalsByProvider[result.provider] = result.coverageInterval;
+    // The provider's claimed window must hold for EVERY retained slice, so it
+    // shrinks to the intersection — and disappears when slices do not overlap.
+    const mergedProviderInterval = retainedSameProviderSlices
+      ? intersectProviderCoverageIntervals(
+          trustedPrior?.coverageIntervalsByProvider?.[result.provider],
+          result.coverageInterval
+        )
+      : result.coverageInterval;
+    if (mergedProviderInterval) {
+      coverageIntervalsByProvider[result.provider] = mergedProviderInterval;
     }
+    // Financials span every retained slice of the provider plus this sync —
+    // never just the account this run happened to fetch.
     const financialsByProvider = {
       ...(trustedPrior?.financialsByProvider ?? {}),
-      [result.provider]: syncedFinancials
+      [result.provider]: summarizeProviderFinancials(
+        records.filter((record) => record.source.provider === result.provider)
+      )
     };
 
     await invalidateConnectedSpendTrustReceipt(rootPath);
@@ -903,6 +1330,19 @@ export async function syncProviderSpendTool(
       { sourceRegistryContents: await readSafeStateText(stateDir, "sources.json") }
     );
 
+    // QA M2/M1: billed dollars never disappear without a word, and identical
+    // twin slices (one org under two references) are called out on the sync
+    // result itself, mirroring the CLI's printed notice lines.
+    const replacedSliceNotices = providerSliceReplacementNotices({
+      provider: result.provider,
+      accountKey,
+      priorRecords: trustedPrior?.records ?? [],
+      retainedRecords: retainedPriorRecords,
+      syncedRecordCount: syncedRecords.length,
+      syncedBilledUsd: syncedFinancials.providerReportedBilledUsd
+    });
+    const duplicateSliceWarnings = duplicateProviderAccountSliceWarnings(records, result.provider);
+
     return {
       provider: result.provider,
       sourceId: syncedSource.id,
@@ -918,7 +1358,9 @@ export async function syncProviderSpendTool(
       combinedRecordCount: records.length,
       syncedTotalUsd: syncedFinancials.headlineUsd,
       combinedSummary,
-      qa: result.qa
+      qa: result.qa,
+      ...(replacedSliceNotices.length > 0 ? { replacedSliceNotices } : {}),
+      ...(duplicateSliceWarnings.length > 0 ? { duplicateSliceWarnings } : {})
     };
   } catch (error) {
     const message = sanitizeProviderSyncError(error, input.authReference)
@@ -1352,7 +1794,11 @@ export async function getTokenReductionTestTool(
         readOnly: true,
         uploaded: false
       },
-      nextStep: projection.detail
+      nextStep: projection.detail,
+      agentLoop: buildImproveAgentLoopV1(projection.state, {
+        experimentId: experiment.id,
+        revisionId: experiment.revisionId
+      })
     };
   }
 
@@ -1418,7 +1864,11 @@ export async function getTokenReductionTestTool(
       readOnly: true,
       uploaded: false
     },
-    nextStep: projection.detail
+    nextStep: projection.detail,
+    agentLoop: buildImproveAgentLoopV1(projection.state, {
+      experimentId: refreshed.id,
+      revisionId: refreshed.revisionId
+    })
   };
 }
 
@@ -1558,7 +2008,8 @@ function emptyTokenReductionTest(
     provenance: { state, readOnly: true, uploaded: false },
     nextStep: status === "no_test"
       ? `The guided test is source-preview-only: from the built checkout root run \`${aibillImproveCommandV0()}\`.`
-      : "The requested token-reduction test was not found in this local project."
+      : "The requested token-reduction test was not found in this local project.",
+    agentLoop: buildImproveAgentLoopV1(null, null)
   };
 }
 

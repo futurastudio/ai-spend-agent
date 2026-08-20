@@ -1745,6 +1745,92 @@ describe("MCP analyst tools", () => {
     expect(JSON.stringify(report)).not.toContain("999999");
   });
 
+  it("accumulates two OpenAI org account slices through MCP sync and stays idempotent per account", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-multiorg-"));
+    const startTime = 1_761_955_200;
+    const costPage = (amounts: number[]) => ({
+      data: [{
+        start_time: startTime,
+        end_time: startTime + 86_400,
+        results: amounts.map((value, index) => ({
+          amount: { value, currency: "usd" },
+          line_item: `Responses API ${index}`
+        }))
+      }],
+      has_more: false
+    });
+    const syncOrg = (reference: string, amounts: number[]) => syncProviderSpendTool({
+      path: dir,
+      provider: "openai",
+      authReference: reference,
+      startTime,
+      endTime: startTime + 86_400
+    }, {
+      tokenResolver: () => `synthetic-${reference}-secret`,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => url.includes("/organization/costs")
+          ? costPage(amounts)
+          : { data: [], has_more: false }
+      })
+    });
+    const org1Amounts = Array.from({ length: 6 }, () => 0.135);
+    const org2Amounts = Array.from({ length: 18 }, (_, index) => index === 0 ? 0.5 : 0.48);
+
+    const firstSync = await syncOrg("env:OPENAI_ADMIN_KEY", org1Amounts);
+    const secondSync = await syncOrg("env:OPENAI_ADMIN_KEY_ORG2", org2Amounts);
+    const replaySync = await syncOrg("env:OPENAI_ADMIN_KEY_ORG2", org2Amounts);
+
+    // The founder repro: org 1 must NOT be replaced by org 2.
+    expect(firstSync.combinedRecordCount).toBe(6);
+    expect(firstSync.combinedSummary.totalUsd).toBeCloseTo(0.81, 6);
+    expect(secondSync.syncedRecordCount).toBe(18);
+    expect(secondSync.combinedRecordCount).toBe(24);
+    expect(secondSync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
+    // Re-syncing the SAME account replaces its slice — never doubles it, and
+    // a routine same-value replace raises no replaced-slice notice.
+    expect(replaySync.combinedRecordCount).toBe(24);
+    expect(replaySync.combinedSummary.totalUsd).toBeCloseTo(9.47, 6);
+    expect(replaySync.replacedSliceNotices).toBeUndefined();
+    expect(replaySync.duplicateSliceWarnings).toBeUndefined();
+
+    // QA M1: the same org synced under a THIRD reference produces identical
+    // inner record ids — the result must carry the duplicate-slice warning.
+    const twinSync = await syncOrg("env:OPENAI_ADMIN_KEY_B", org1Amounts);
+    expect(twinSync.combinedRecordCount).toBe(30);
+    expect(twinSync.duplicateSliceWarnings).toEqual([
+      "openai slices env:OPENAI_ADMIN_KEY and env:OPENAI_ADMIN_KEY_B contain identical records — " +
+      "likely the same organization under two references; the combined total counts it twice. " +
+      "Remove one: npx aibill drop-slice --provider openai --account \"env:OPENAI_ADMIN_KEY_B\""
+    ]);
+
+    // QA M2: an empty re-sync of that slice erases billed dollars — the
+    // result must name them.
+    const emptySync = await syncOrg("env:OPENAI_ADMIN_KEY_B", []);
+    expect(emptySync.combinedRecordCount).toBe(24);
+    expect(emptySync.replacedSliceNotices).toEqual([
+      "replaced prior slice env:OPENAI_ADMIN_KEY_B: $0.81 billed from 6 records superseded " +
+      "(this sync returned 0 records, no billed evidence)"
+    ]);
+
+    const spendState = JSON.parse(
+      await readFile(join(dir, ".ai-spend-agent", "spend.json"), "utf8")
+    ) as {
+      records: Array<{ id: string; source: { account?: string } }>;
+      accounting: { financialsByProvider?: Record<string, { providerReportedBilledUsd: number | null }> };
+    };
+    expect(spendState.records).toHaveLength(24);
+    expect(new Set(spendState.records.map((record) => record.id)).size).toBe(24);
+    expect(new Set(spendState.records.map((record) => record.source.account))).toEqual(
+      new Set(["env:OPENAI_ADMIN_KEY", "env:OPENAI_ADMIN_KEY_ORG2"])
+    );
+    // Provider-keyed financials span BOTH slices, not just the latest sync.
+    expect(spendState.accounting.financialsByProvider?.openai?.providerReportedBilledUsd)
+      .toBeCloseTo(9.47, 6);
+  });
+
   it("syncs and combines OpenAI and Anthropic provider records without persisting raw tokens", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-mcp-providers-"));
     const startTime = 1_750_000_000;
@@ -2562,8 +2648,8 @@ describe("MCP protocol contract", () => {
     expect(serverCliOutput(["--help"])).toContain("Usage:\n  ai-spend-mcp");
     expect(serverCliOutput(["--help"])).toContain("invoking AI client");
     expect(serverCliOutput(["-h"])).toBe(serverCliOutput(["--help"]));
-    expect(serverCliOutput(["--version"])).toBe("0.9.0\n");
-    expect(serverCliOutput(["-v"])).toBe("0.9.0\n");
+    expect(serverCliOutput(["--version"])).toBe("0.9.1\n");
+    expect(serverCliOutput(["-v"])).toBe("0.9.1\n");
     expect(serverCliOutput([])).toBeNull();
     expect(serverCliOutput(["--unknown"])).toBeNull();
   });
@@ -2583,7 +2669,7 @@ describe("MCP protocol contract", () => {
       arguments: { path: homedir() }
     });
 
-    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.9.0" });
+    expect(client.getServerVersion()).toEqual({ name: "aibill", version: "0.9.1" });
     expect(tools.tools.map((tool) => tool.name)).toEqual([
       "scan_ai_spend",
       "sync_local_agent_spend",
@@ -2591,10 +2677,18 @@ describe("MCP protocol contract", () => {
       "get_usage_glance",
       "get_context_health",
       "get_token_reduction_test",
+      "draft_improve_command",
       "list_sources",
       "get_spend_report",
       "recommend_cuts"
     ]);
+    expect(tools.tools.find((tool) => tool.name === "draft_improve_command")?.annotations)
+      .toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
     expect(tools.tools.find((tool) => tool.name === "sync_provider_spend")?.annotations).toMatchObject({
       destructiveHint: false,
       openWorldHint: true

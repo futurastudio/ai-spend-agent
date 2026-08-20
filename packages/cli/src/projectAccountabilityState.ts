@@ -16,6 +16,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import {
   CONFIRMED_OWNERSHIP_V0_KIND,
+  isCredentialLike,
+  isPathLike,
   MAX_APPROVAL_EVENTS_V0,
   PROJECT_ECONOMICS_V0_VERSION,
   appendApprovalEventV0,
@@ -1108,22 +1110,12 @@ function noFollowFlag(): number {
 }
 
 /**
- * Exported as the classification FLOOR for the guided-prompt engine: the
- * per-prompt classifier must reject at least everything these predicates
- * reject, so `parseDisplayLabel` can never abort on an answer the prompt
- * already accepted (the Aug 17 incident class).
+ * The classification FLOOR predicates for the guided-prompt engine live in
+ * core (`guidedAnswer.ts`) so the CLI classifier, the MCP draft preview,
+ * and this accountability backstop can never drift apart. Re-exported here
+ * for existing CLI imports.
  */
-export function isPathLike(value: string): boolean {
-  return /^(?:~?[\\/]|\.{1,2}(?:[\\/]|$)|[A-Za-z]:[\\/]|\\\\)/u.test(value) ||
-    /(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(value) || value.includes("\\");
-}
-
-export function isCredentialLike(value: string): boolean {
-  return /(?:sk-(?:ant-|proj-)?|sk_|gh[pousr]_|github_pat_|npm_|AIza|xox[baprs]-|glpat-|AKIA)[A-Za-z0-9_-]{8,}/i
-      .test(value) ||
-    /(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|secret|password)\s*[:=]\s*\S+/i
-      .test(value);
-}
+export { isCredentialLike, isPathLike };
 
 function hasUnpairedSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

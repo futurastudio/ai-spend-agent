@@ -22,7 +22,8 @@ import {
   runStartSitting,
   shortSittingHint,
   type FlowIo,
-  type PlanDraftStore
+  type PlanDraftStore,
+  type SuggestedPlanAnswer
 } from "./improveFlow.js";
 import {
   analyzeSpend,
@@ -33,6 +34,11 @@ import {
   buildTokenReductionBaselineV0,
   aibillCommandV0,
   aibillImproveCommandV0,
+  decodeAgentDraftTokenV1,
+  IMPROVE_USER_SAFETY_LINE_V1,
+  looksLikeAgentDraftToken,
+  screenAgentDraftSentence,
+  type AgentDraftV1,
   attributeUsageRecords,
   buildUsageGlance,
   buildActivitySnapshot,
@@ -57,6 +63,14 @@ import {
   SAFE_QUALITATIVE_SCAN_POLICY,
   summarizeProviderFinancials,
   providerFinancialCompleteness,
+  providerAccountKey,
+  tagProviderAccountRecords,
+  retainProviderRecordsForNewSync,
+  providerAccountSlices,
+  formatProviderAccountSlices,
+  intersectProviderCoverageIntervals,
+  duplicateProviderAccountSliceWarnings,
+  providerSliceReplacementNotices,
   writeSafeStateText,
   verifyConnectedSpendTrustReceipt,
   verifyConnectedSourceRegistryTrustReceipt,
@@ -233,6 +247,8 @@ type ParsedArgs = {
   org?: string;
   enterprise?: string;
   accountId?: string;
+  /** drop-slice: the account slice key to remove (e.g. env:OPENAI_ADMIN_KEY_ORG2). */
+  account?: string;
   groupBy?: GroupByDimension;
   /** Set when --group-by was passed with a missing/unknown dimension. */
   groupByInvalid?: string;
@@ -254,6 +270,12 @@ type ParsedArgs = {
   quality?: "held" | "regressed" | "missing";
   approvedAt?: string;
   appliedAt?: string;
+  /** Raw ab1.… token from draft_improve_command (improve only; prefill only). */
+  agentDraftToken?: string;
+  /** Strict UTC Z-form time prefill for the record sitting (improve only). */
+  recordAppliedAt?: string;
+  /** The agent's REPORTED canary result — a claim line, never a prefill. */
+  recordCanary?: "passed" | "failed";
   changeDigest?: string;
   rollbackDigest?: string;
   canaryDigest?: string;
@@ -425,6 +447,10 @@ export async function runCli(
     return syncProviderCommand(args);
   }
 
+  if (args.command === "drop-slice") {
+    return dropSliceCommand(args);
+  }
+
   if (args.command === "confirm-mapping") {
     return confirmMappingCommand(args);
   }
@@ -446,6 +472,13 @@ type InstantReadData = {
   codexInvocationFiles?: ParsedInvocationFile[];
   /** Bounded local evidence used only for why/action/progress projections. */
   actionEvidence?: LocalAgentLogResult;
+  /**
+   * Connected mode only: the machine's local transcript records priced at
+   * API-equivalent rates. Billed provider records stay the headline, but this
+   * estimated axis must never be erased from the receipt (C-lane §1.4
+   * connected/mixed variants) — subscription rows keep their ~ figures.
+   */
+  localFinancialRecords?: UsageRecord[];
   /** Whether the supported financial sources had no unreadable/malformed/missing-token rows. */
   financialCoverageComplete?: boolean;
 };
@@ -470,6 +503,7 @@ async function quickstartCommand(
     providerCoverage,
     codexInvocationFiles,
     actionEvidence,
+    localFinancialRecords,
     financialCoverageComplete
   } = await loadInstantReadData(args);
   if (records.length === 0) {
@@ -479,6 +513,13 @@ async function quickstartCommand(
     ? selectProviderFinancialHeadlineRecords(records)
     : records;
   const summary = analyzeSpend(summaryRecords);
+  // Connected receipts stay billed-primary but never ERASE the estimated
+  // axis: local transcript records ride along so subscription rows keep
+  // their ~ API-equivalent figures next to billed money (C-lane §1.4). The
+  // renderer classifies each record by basis and never blends the totals.
+  const receiptRecords = mode === "connected" && (localFinancialRecords?.length ?? 0) > 0
+    ? [...summaryRecords, ...localFinancialRecords!]
+    : summaryRecords;
   // For real local-log users the by-project view is the flagship table
   // ("which project burns my plan"); demo/connected keep by-model.
   const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
@@ -562,7 +603,7 @@ async function quickstartCommand(
     : undefined;
 
   const summaryText = generatePlainEnglishSummary(summary, {
-    records: summaryRecords,
+    records: receiptRecords,
     groupBy,
     color,
     mode,
@@ -1113,6 +1154,12 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
         actionEvidence,
         codexInvocationFiles: actionEvidence.codexInvocationFiles
       } : {}),
+      // Billed provider records are the headline, but the machine's local
+      // API-equivalent evidence is a separate axis the receipt must keep
+      // (per-subscription ~ figures) — connected mode never erases it.
+      ...(financialLogs && financialLogs.records.length > 0
+        ? { localFinancialRecords: financialLogs.records }
+        : {}),
       ...(persisted.providerCoverage ? { providerCoverage: persisted.providerCoverage } : {}),
       financialCoverageComplete: persisted.providerCoverage === "complete" &&
         connectedHeadlineRecords.length > 0 &&
@@ -1660,10 +1707,22 @@ async function doctorSourcesCommand(args: ParsedArgs): Promise<CliResult> {
       .sort((left, right) => right.approvedAt.localeCompare(left.approvedAt))[0];
     const stateCheckedAt = attempt?.checkedAt
       ?? (providerState.provider === id ? providerState.fetchedAt : undefined);
+    // Multi-account honesty: when this provider's records carry account
+    // slices (one Admin key covers ONE organization), name every slice so a
+    // second org's sync is visibly accumulated rather than silently merged.
+    const accountSliceNote = records.some((record) => typeof record.source.account === "string")
+      ? ` Account slices: ${formatProviderAccountSlices(providerAccountSlices(records, id))}.`
+      : "";
+    // QA M1: two slices holding identical records are almost certainly one
+    // organization synced under two references — the combined total counts
+    // it twice, so doctor must say so where the slices are listed.
+    const duplicateSliceNote = duplicateProviderAccountSliceWarnings(records, id)
+      .map((warning) => ` WARNING: ${warning}`)
+      .join("");
     observations.push({
       id,
       financialEvidence: evidence,
-      financialEvidenceNote: providerFinancialEvidenceNote(records, evidence),
+      financialEvidenceNote: `${providerFinancialEvidenceNote(records, evidence)}${accountSliceNote}${duplicateSliceNote}`,
       // A connector stub is only configuration, not a source check. Older
       // successful syncs predate source-status.json, so their non-missing
       // registry approval time is the conservative migration fallback.
@@ -3621,7 +3680,8 @@ function providerSyncSetupCommand(provider: string, adminRef: string): string {
   if (provider === "github-copilot") {
     return `npx aibill sync-provider --provider github-copilot --auth-reference ${adminRef} --org <organization>`;
   }
-  return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time <unix>`;
+  const thirtyDaysAgoUnix = Math.floor(Date.now() / 1_000) - 30 * 24 * 60 * 60;
+  return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time ${thirtyDaysAgoUnix}`;
 }
 
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
@@ -3714,6 +3774,13 @@ async function connectCommand(args: ParsedArgs): Promise<CliResult> {
     lines.push("");
     lines.push(`next: export an admin key reference, e.g. ${adminRef}, then run:`);
     lines.push(`  ${providerSyncSetupCommand(provider, adminRef)}`);
+    lines.push("  (that start time is 30 days ago; change it to widen the window)");
+  }
+
+  if (provider === "openai") {
+    lines.push(
+      "multi-org: an Admin API key covers ONE organization; repeat the sync with a separate env reference per org (e.g. env:OPENAI_ADMIN_KEY_ORG2) — org totals accumulate"
+    );
   }
 
   lines.push(`missing: ${source.fieldsMissing.join(", ")}`);
@@ -3827,7 +3894,21 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       enterprise: args.enterprise,
       accountId: args.accountId
     });
-    const syncedRecords = applyProviderContractGate(result.records);
+    // Admin credentials are account-scoped (an OpenAI Admin key covers ONE
+    // organization). Each sync belongs to one account slice: different slices
+    // of the same provider accumulate, re-syncing the same slice replaces it,
+    // and unlabeled legacy rows are replaced fail-closed (never double-count).
+    const accountKey = providerAccountKey({
+      provider,
+      authReference: args.authReference,
+      org: args.org,
+      enterprise: args.enterprise,
+      accountId: args.accountId
+    });
+    const syncedRecords = tagProviderAccountRecords(
+      applyProviderContractGate(result.records),
+      accountKey
+    );
     const syncedFinancials = summarizeProviderFinancials(syncedRecords);
     const syncedCompleteness = providerFinancialCompleteness(syncedRecords, result.coverage);
     const syncedSource = createProviderConnection({
@@ -3839,8 +3920,14 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       completeness: syncedCompleteness,
       fetchedAt: new Date(result.fetchedAt)
     });
+    const retainedPriorRecords = retainProviderRecordsForNewSync(
+      trustedPrior?.records ?? [],
+      result.provider,
+      accountKey,
+      syncedRecords
+    );
     const records = applyProviderContractGate([
-      ...(trustedPrior?.records ?? []).filter((record) => record.source.provider !== result.provider),
+      ...retainedPriorRecords,
       ...syncedRecords
     ]).sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     const registry = await readSourceRegistry(stateDir, rootPath);
@@ -3848,21 +3935,60 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
     const headlineRecords = selectProviderFinancialHeadlineRecords(records);
     const summary = analyzeSpend(headlineRecords);
     const mappings = attributeUsageRecords(records);
+    // Whether prior account slices of THIS provider survived the merge. When
+    // they did, the provider-keyed accounting maps below must stay honest for
+    // the union of slices, not just the slice this run fetched.
+    const retainedSameProviderSlices = retainedPriorRecords.some(
+      (record) => record.source.provider === result.provider
+    );
     const qaByProvider = {
       ...trustedAccountingMap<ProviderQaSummary>(trustedPrior?.accounting, "qaByProvider"),
       [result.provider]: result.qa
     };
+    const priorProviderCoverage = trustedAccountingMap<ProviderCoverageStatus>(
+      trustedPrior?.accounting,
+      "coverageByProvider"
+    )[result.provider];
+    // Fail-closed coverage: a provider is complete only when this sync AND
+    // every retained slice were complete. Known ratchet (QA m4): per-slice
+    // coverage is not persisted, so with other slices retained a prior
+    // "partial" sticks even after the offending slice re-syncs complete —
+    // it only UNDER-claims, and recovers when the provider merges with no
+    // other slices retained (single-slice re-sync), after `aibill
+    // drop-slice` removes the stale slice, or after `aibill reset`. The
+    // checkedAt merge below shares the same ratchet and recovery direction.
+    const mergedProviderCoverage: ProviderCoverageStatus =
+      retainedSameProviderSlices && priorProviderCoverage === "partial"
+        ? "partial"
+        : result.coverage;
     const coverageByProvider = {
       ...trustedAccountingMap<ProviderCoverageStatus>(trustedPrior?.accounting, "coverageByProvider"),
-      [result.provider]: result.coverage
+      [result.provider]: mergedProviderCoverage
     };
+    // Financials span every retained slice of the provider plus this sync —
+    // never just the account this run happened to fetch.
     const financialsByProvider = {
       ...trustedAccountingMap<unknown>(trustedPrior?.accounting, "financialsByProvider"),
-      [result.provider]: syncedFinancials
+      [result.provider]: summarizeProviderFinancials(
+        records.filter((record) => record.source.provider === result.provider)
+      )
     };
+    const priorProviderCheckedAt = trustedAccountingMap<string>(
+      trustedPrior?.accounting,
+      "checkedAtByProvider"
+    )[result.provider];
+    // Freshness stays conservative: a retained slice keeps its older check
+    // time, so an old account slice is never claimed as freshly checked.
+    const mergedProviderCheckedAt =
+      retainedSameProviderSlices &&
+      typeof priorProviderCheckedAt === "string" &&
+      validIsoString(priorProviderCheckedAt) &&
+      priorProviderCheckedAt < result.fetchedAt
+        ? priorProviderCheckedAt
+        : result.fetchedAt;
     const checkedAtByProvider = {
       ...trustedAccountingMap<string>(trustedPrior?.accounting, "checkedAtByProvider"),
-      [result.provider]: result.fetchedAt
+      [result.provider]: mergedProviderCheckedAt
     };
     const priorCoverageIntervals = trustedAccountingMap<ProviderCoverageInterval>(
       trustedPrior?.accounting,
@@ -3872,8 +3998,16 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       Object.entries(priorCoverageIntervals).filter(([provider]) => provider !== result.provider)
     ) as Record<string, ProviderCoverageInterval>;
     const requestedCoverageInterval = result.coverageInterval;
-    if (requestedCoverageInterval) {
-      coverageIntervalsByProvider[result.provider] = requestedCoverageInterval;
+    // The provider's claimed window must hold for EVERY retained slice, so it
+    // shrinks to the intersection — and disappears when slices do not overlap.
+    const mergedProviderInterval = retainedSameProviderSlices
+      ? intersectProviderCoverageIntervals(
+          priorCoverageIntervals[result.provider],
+          requestedCoverageInterval
+        )
+      : requestedCoverageInterval;
+    if (mergedProviderInterval) {
+      coverageIntervalsByProvider[result.provider] = mergedProviderInterval;
     }
     // Invalidate any earlier receipt before the first mutation. If a later
     // local write fails, the partially updated repository state stays
@@ -3943,6 +4077,22 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       `financial evidence: ${syncedSource.financialEvidence}`,
       `coverage: ${result.coverage}`,
       `records fetched: ${result.records.length}`,
+      `account: ${accountKey}`,
+      `provider accounts: ${formatProviderAccountSlices(providerAccountSlices(records, result.provider))}`,
+      // QA M2: billed dollars never disappear without a word — every dropped
+      // prior slice is named with its record count and billed sum.
+      ...providerSliceReplacementNotices({
+        provider: result.provider,
+        accountKey,
+        priorRecords: trustedPrior?.records ?? [],
+        retainedRecords: retainedPriorRecords,
+        syncedRecordCount: syncedRecords.length,
+        syncedBilledUsd: syncedFinancials.providerReportedBilledUsd
+      }).map((notice) => `notice: ${notice}`),
+      // QA M1: identical inner record ids across two named slices are the
+      // signature of one organization synced under two references.
+      ...duplicateProviderAccountSliceWarnings(records, result.provider)
+        .map((warning) => `warning: ${warning}`),
       provider === "cursor"
         ? "source window: current team subscription cycle returned by Cursor"
         : provider === "github-copilot"
@@ -3968,6 +4118,149 @@ async function syncProviderCommand(args: ParsedArgs): Promise<CliResult> {
       stderr: sanitizedError
     };
   }
+}
+
+/**
+ * `aibill drop-slice --provider X --account KEY` — remove one named account
+ * slice from trusted connected state. This is the prune path for the
+ * duplicate-slice diagnostic (one organization synced under two references)
+ * and for a slice whose credential reference was renamed: without it the only
+ * cleanup is a full `aibill reset` plus re-sync of every org. Local-only; no
+ * provider is contacted; the re-signed state can only shrink totals.
+ */
+async function dropSliceCommand(args: ParsedArgs): Promise<CliResult> {
+  const rootPath = resolve(args.path);
+  const requestedProvider = (args.provider ?? "").trim().toLowerCase();
+  const provider = providerAliases[requestedProvider] ?? requestedProvider;
+  const accountKey = (args.account ?? "").trim();
+  if (!provider || !supportedAdminProviders.has(provider) || !accountKey) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "drop-slice requires --provider (openai, anthropic, cursor, github-copilot) and --account <slice key>.",
+        "List the slices first: npx aibill doctor --sources",
+        "example: npx aibill drop-slice --provider openai --account env:OPENAI_ADMIN_KEY_ORG2"
+      ].join("\n")
+    };
+  }
+
+  const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+  const persisted = await readPersistedSpend(rootPath);
+  if (!persisted || persisted.mode !== "connected_provider" || persisted.connectedTrust?.trusted !== true) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "drop-slice requires trusted connected provider state. Run `npx aibill sync-provider ...` first, or `npx aibill reset` to clear all local state."
+    };
+  }
+
+  const droppedRecords = persisted.records.filter((record) => (
+    record.source.provider === provider && record.source.account === accountKey
+  ));
+  if (droppedRecords.length === 0) {
+    const slices = providerAccountSlices(persisted.records, provider);
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        `No ${provider} slice matches account "${sanitizeSecretishError(accountKey)}".`,
+        slices.length > 0
+          ? `Known ${provider} slices: ${formatProviderAccountSlices(slices)}`
+          : `No ${provider} slices exist in local state.`,
+        "Unlabeled legacy rows cannot be dropped by account; re-syncing the provider replaces them."
+      ].join("\n")
+    };
+  }
+
+  const records = persisted.records.filter((record) => !(
+    record.source.provider === provider && record.source.account === accountKey
+  ));
+  const summary = analyzeSpend(selectProviderFinancialHeadlineRecords(records));
+  const mappings = attributeUsageRecords(records);
+  const providerRemaining = records.filter((record) => record.source.provider === provider);
+
+  // Rebuild the provider-keyed accounting maps. Financials are recomputed
+  // over the remaining slices; coverage/checkedAt/intervals are left as-is —
+  // they can only UNDER-claim after a drop (partial stays partial, windows
+  // stay narrow) and recover on the provider's next sync. A provider with no
+  // remaining records loses its map entries entirely.
+  const accounting: Record<string, unknown> = isPlainObject(persisted.accounting)
+    ? { ...persisted.accounting }
+    : {};
+  for (const mapName of [
+    "coverageByProvider",
+    "checkedAtByProvider",
+    "coverageIntervalsByProvider",
+    "qaByProvider",
+    "financialsByProvider"
+  ]) {
+    const prior = trustedAccountingMap<unknown>(persisted.accounting, mapName);
+    if (Object.keys(prior).length === 0) continue;
+    const next: Record<string, unknown> = { ...prior };
+    if (providerRemaining.length === 0) {
+      delete next[provider];
+    } else if (mapName === "financialsByProvider") {
+      next[provider] = summarizeProviderFinancials(providerRemaining);
+    }
+    if (Object.keys(next).length > 0) accounting[mapName] = next;
+    else delete accounting[mapName];
+  }
+
+  const droppedFinancials = summarizeProviderFinancials(droppedRecords);
+  const droppedBilled = droppedFinancials.providerReportedBilledUsd;
+
+  await invalidateConnectedSpendTrustReceipt(rootPath);
+  await writeLocalSpendState(
+    stateDir,
+    records,
+    summary,
+    mappings,
+    "connected_provider",
+    accounting,
+    persisted.checkedAt ?? new Date().toISOString()
+  );
+  // Keep provider-records.json consistent with the receipt-bound spend state
+  // (same records + maps); a missing file is tolerable — spend.json is the
+  // receipt-bound truth.
+  try {
+    const providerFile = await readJson<Record<string, unknown>>(join(stateDir, "provider-records.json"));
+    await writeJson(join(stateDir, "provider-records.json"), {
+      ...providerFile,
+      records,
+      ...(accounting.qaByProvider !== undefined ? { qaByProvider: accounting.qaByProvider } : {}),
+      ...(accounting.checkedAtByProvider !== undefined ? { checkedAtByProvider: accounting.checkedAtByProvider } : {}),
+      ...(accounting.coverageByProvider !== undefined ? { coverageByProvider: accounting.coverageByProvider } : {}),
+      ...(accounting.coverageIntervalsByProvider !== undefined
+        ? { coverageIntervalsByProvider: accounting.coverageIntervalsByProvider }
+        : {}),
+      ...(accounting.financialsByProvider !== undefined ? { financialsByProvider: accounting.financialsByProvider } : {})
+    });
+  } catch {
+    // Diagnostic mirror only; never block the drop on it.
+  }
+  await appendAuditEvent(stateDir, {
+    timestamp: new Date().toISOString(),
+    action: "source_scanned",
+    sourceId: `${provider}-provider-api`,
+    detail: `drop-slice removed the ${provider} account slice "${accountKey}" (${droppedRecords.length} record(s), ${droppedBilled === null ? "no billed evidence" : `billed ${formatOptionalUsd(droppedBilled)}`}). Local state maintenance only; no provider was contacted.`
+  });
+  await writeConnectedSpendTrustReceipt(
+    rootPath,
+    await readSafeStateText(stateDir, "spend.json"),
+    { sourceRegistryContents: await readSafeStateText(stateDir, "sources.json") }
+  );
+
+  const remainingSlices = providerAccountSlices(records, provider);
+  return ok([
+    "aibill drop-slice",
+    `provider: ${provider}`,
+    `dropped account: ${accountKey}`,
+    `records removed: ${droppedRecords.length} (${droppedBilled === null ? "no billed evidence" : `billed ${formatOptionalUsd(droppedBilled)}`})`,
+    `remaining provider accounts: ${remainingSlices.length > 0 ? formatProviderAccountSlices(remainingSlices) : "none"}`,
+    `combined headline spend: ${selectProviderFinancialHeadlineRecords(records).some((record) => typeof record.amountUsd === "number") ? formatOptionalUsd(summary.totalUsd) : "unavailable"}`,
+    "note: coverage and freshness labels stay conservative until the provider is re-synced"
+  ].join("\n"));
 }
 
 function formatOptionalUsd(value: number | null): string {
@@ -4298,23 +4591,145 @@ async function guardExactProjectRoot(
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Agent-draft screening copy (AGENT_NATIVE_LOOP_DESIGN.md §5, A1-A11)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A1 · plan banner, printed once before step 1 when at least one
+ * agent-drafted sentence survived screening. The final line IS the shared
+ * `userSafetyLine` constant, rendered verbatim and unwrapped (n1) so QA 25
+ * can assert byte-identity across the CLI banner, `agentLoop`, and
+ * `draft_improve_command`.
+ */
+const agentDraftPlanBanner = [
+  "Your agent helped draft this plan. Nothing is approved yet: review each",
+  "sentence, press Enter to accept it or type your own, and only the APPROVE",
+  "you type at the end authorizes anything.",
+  IMPROVE_USER_SAFETY_LINE_V1
+].join("\n");
+
+/** A4 · whole-draft set-asides. */
+const agentDraftUnreadableNotice = [
+  "Your agent's draft could not be read (not a valid ab1 draft token).",
+  "Continuing with aibill's own suggestions. Ask your agent to call",
+  "draft_improve_command again and hand you the exact command it returns."
+].join("\n");
+const agentDraftStaleNotice = [
+  "Your agent's draft was made for a different test or an older revision of",
+  "this one, so it was set aside. Ask your agent to re-read",
+  "get_token_reduction_test and draft again."
+].join("\n");
+const agentDraftNoTestNotice = [
+  "There is no frozen baseline yet, so a drafted plan cannot attach to a test.",
+  "Finish the two start questions first; then ask your agent to draft against",
+  "the new test id."
+].join("\n");
+
+/** A5 · --draft while a plan awaits its record. */
+const agentDraftAfterApprovalNotice = [
+  "A plan is already approved and waiting for its result, so the draft was",
+  "not used. Record what happened below."
+].join("\n");
+
+/** A7 · record flags with no approved plan. */
+const recordFlagsNoApprovalNotice = [
+  "No plan is approved yet, so --record-applied-at/--record-canary were not",
+  "used. Approve a plan first."
+].join("\n");
+
+/** A7 · applied-at prefill set aside (reason = exact time-classifier copy). */
+function recordTimeSetAsideNotice(reason: string): string {
+  return [
+    `Your agent's applied-at time was set aside: ${reason}`,
+    "Answer the question yourself below."
+  ].join("\n");
+}
+
+/** A8 · non-interactive run with any draft/record flag. */
+const agentFlagsNonInteractiveNote = [
+  "Agent drafts and record values only pre-fill the interactive flow; nothing",
+  "was recorded. Run this command in an interactive terminal."
+].join("\n");
+
+/** A10 · verify-flag confusion on improve. */
+const verifyFlagConfusionNote = [
+  "Note: --applied-at/--canary belong to the advanced verify commands. With",
+  "improve, use --record-applied-at and --record-canary."
+].join("\n");
+
+/** A9 · demo variant banner (binding is checked only in a real run). */
+const demoDraftBanner = [
+  "DEMO: your agent's draft is used for practice only. Draft binding to a real",
+  "test id and revision is checked only in a real run. Nothing is recorded."
+].join("\n");
+
+type ScreenedAgentDraft = {
+  /** Surviving sentences, each carrying agent provenance (B1). */
+  answers: {
+    change?: SuggestedPlanAnswer;
+    rollback?: SuggestedPlanAnswer;
+    canary?: SuggestedPlanAnswer;
+  };
+  /** A3 lines for set-aside fields, in field order; secrets never echoed. */
+  setAsideNotices: string[];
+  survivors: number;
+};
+
+/**
+ * Screen a decoded draft with the SAME shared core path the MCP composition
+ * preview uses (`screenAgentDraftSentence`), field by field. A rejected
+ * field falls back to aibill's own suggestion — and to aibill's label; a
+ * surviving field carries `provenance: "agent"` so only genuinely
+ * agent-authored words ever render `Drafted with your agent` (B1, QA 17).
+ */
+function screenAgentDraftSentences(draft: AgentDraftV1): ScreenedAgentDraft {
+  const answers: ScreenedAgentDraft["answers"] = {};
+  const setAsideNotices: string[] = [];
+  let survivors = 0;
+  for (const field of ["change", "rollback", "canary"] as const) {
+    const verdict = screenAgentDraftSentence(draft[field]);
+    if (verdict.ok) {
+      answers[field] = { value: verdict.value, provenance: "agent" };
+      survivors += 1;
+    } else {
+      // A3 · the reason is the classifier's exact reprompt message; the
+      // credential path's message never contains the rejected text.
+      setAsideNotices.push([
+        `Your agent's ${field} draft was set aside: ${verdict.reason}`,
+        "aibill's own suggestion is shown for that step instead, labeled Suggested."
+      ].join("\n"));
+    }
+  }
+  return { answers, setAsideNotices, survivors };
+}
+
 /**
  * `improve --sample`: the full guided questionnaire against synthetic
  * evidence so a new user can practice every step safely. Fail-closed by
  * construction: this function never receives a draft store or persistence
  * path — no experiment, ownership, approval, draft, or file is written.
+ * With `--draft` (A9) the demo decodes and screens the token exactly like a
+ * real run — practicing the screening is the point — but skips the binding
+ * check, because there is no real test to bind to.
  */
-async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+async function demoImproveCommand(
+  args: ParsedArgs,
+  runtime: CliRuntimeOptions
+): Promise<CliResult> {
   const demoNext = {
     reason: "run the real flow from inside one exact project",
     command: improveRuntimeCommand
   };
+  const hasAgentFlags = args.agentDraftToken !== undefined ||
+    args.recordAppliedAt !== undefined || args.recordCanary !== undefined;
   const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
   if (!runtime.interactive || !guidedIo) {
     return ok(renderCleanExit({
       lines: [
         "aibill improve · DEMO · synthetic sample — practice run, nothing is recorded",
-        "Demo sample data can never start a token test."
+        "Demo sample data can never start a token test.",
+        ...(hasAgentFlags ? [agentFlagsNonInteractiveNote] : [])
       ],
       next: {
         reason: "practice the guided token test safely in an interactive terminal",
@@ -4328,6 +4743,33 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
     demo: true
   };
   guidedIo.write("Demo sample data can never start a token test.");
+  // A9 · decode + screen exactly like a real run; binding is not checked.
+  const demoDraft = args.agentDraftToken !== undefined
+    ? decodeAgentDraftTokenV1(args.agentDraftToken)
+    : undefined;
+  let demoSuggestedAnswers: ScreenedAgentDraft["answers"] = {
+    change: {
+      value: "Start with only the files and instructions this task needs.",
+      provenance: "aibill"
+    },
+    rollback: { value: "Restore the prior session workflow.", provenance: "aibill" },
+    canary: {
+      value: "The project tests pass and the requested output is accepted.",
+      provenance: "aibill"
+    }
+  };
+  const demoDraftNotices: string[] = [];
+  if (demoDraft !== undefined) {
+    guidedIo.write(demoDraftBanner);
+    if (!demoDraft.ok) {
+      demoDraftNotices.push(agentDraftUnreadableNotice);
+    } else {
+      const screened = screenAgentDraftSentences(demoDraft.draft);
+      if (screened.survivors > 0) demoDraftNotices.push(agentDraftPlanBanner);
+      demoDraftNotices.push(...screened.setAsideNotices);
+      demoSuggestedAnswers = { ...demoSuggestedAnswers, ...screened.answers };
+    }
+  }
   const demoComplete = (firstLine: string): CliResult => ok(renderCleanExit({
     lines: [
       firstLine,
@@ -4344,6 +4786,9 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
   if (start.action !== "start") {
     return demoComplete("DEMO ENDED · nothing was created or stored");
   }
+  if (demoDraftNotices.length > 0) {
+    guidedIo.write(demoDraftNotices.join("\n\n"));
+  }
   const plan = await runPlanSitting(guidedIo, {
     header,
     experimentId: "DEMO-tre_v0_0000000000000000",
@@ -4351,11 +4796,7 @@ async function demoImproveCommand(runtime: CliRuntimeOptions): Promise<CliResult
     sanitize: (value) => value,
     nowIso: () => new Date().toISOString(),
     approveExtraLine: "This is a practice approval. It is not recorded and creates no claim.",
-    suggestedAnswers: {
-      change: "Start with only the files and instructions this task needs.",
-      rollback: "Restore the prior session workflow.",
-      canary: "The project tests pass and the requested output is accepted."
-    }
+    suggestedAnswers: demoSuggestedAnswers
   });
   return demoComplete(plan.action === "approved"
     ? "DEMO COMPLETE · nothing was created or stored"
@@ -4426,24 +4867,53 @@ function createPlanDraftStore(rootPath: string): PlanDraftStore {
   };
 }
 
+/**
+ * The approved-plan agent handoff (§2e): symmetric with the record leg. The
+ * record command placeholder line lives INSIDE the quoted agent text, not in
+ * a NEXT COMMAND block, so the one-command exit contract is untouched.
+ */
 function improveAgentInstruction(changeSentence: string): string {
   return [
     `"Execute only the pre-approved reversible plan: ${changeSentence}`,
-    "Make no other optimization, preserve the approved rollback, run the",
-    "approved canary, and report the exact UTC ISO-8601 time the change was",
-    'applied plus whether that exact canary passed or failed."'
+    "Make no other optimization, preserve the approved rollback, and run the",
+    "approved canary. Then report the exact UTC ISO-8601 time the change was",
+    "applied and whether that exact canary passed or failed — if the canary has",
+    "not run, say so instead. Give the user this one command with the time",
+    "filled in:",
+    `  ${actionRuntimeCommand("improve --record-applied-at <time> --record-canary <passed|failed>")}`,
+    "That command only pre-fills the applied-at question; the user types the",
+    'canary answer themselves in their terminal."'
   ].join("\n");
 }
+
+/**
+ * m12c: the record-backedOut re-show restates the FINDING label — the exact
+ * approved sentence is unrecoverable by design (hash-only persistence) — and
+ * must say so under the quoted text.
+ */
+const improveAgentInstructionHashCaveat = [
+  "(aibill keeps only hashes of your approved sentences; the plan above",
+  "restates the finding, not your exact approved wording.)"
+].join("\n");
 
 async function improveCommand(
   args: ParsedArgs,
   runtime: CliRuntimeOptions
 ): Promise<CliResult> {
   if (args.sample) {
-    return demoImproveCommand(runtime);
+    return demoImproveCommand(args, runtime);
   }
   const rootGuard = await guardExactProjectRoot("improve", args.path);
   if (rootGuard) return rootGuard;
+  // §2c dispatch inputs. Decoding never throws; every set-aside prints one
+  // notice and CONTINUES — a bad draft never ends the run (P0B principle 2).
+  let agentDraft = args.agentDraftToken !== undefined
+    ? decodeAgentDraftTokenV1(args.agentDraftToken)
+    : undefined;
+  const hasRecordFlags =
+    args.recordAppliedAt !== undefined || args.recordCanary !== undefined;
+  const hasAgentFlags = agentDraft !== undefined || hasRecordFlags;
+  let recordFlagsNoticed = false;
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const rootPath = resolve(args.path);
@@ -4523,8 +4993,13 @@ async function improveCommand(
 
     const guidedIo = runtime.interactive ? await createGuidedIo(runtime) : undefined;
     if (!runtime.interactive || !guidedIo) {
+      // A8 · drafts and record values are prefills for the interactive flow
+      // only; the read-only render must say nothing was recorded.
+      const readOnlyNote =
+        "No experiment, approval, or project state changed. The private local evidence cache may refresh. Run this command in an interactive terminal to start or record a test." +
+        (hasAgentFlags ? `\n${agentFlagsNonInteractiveNote}` : "");
       return ok(renderImproveExperience(model, {
-        note: "No experiment, approval, or project state changed. The private local evidence cache may refresh. Run this command in an interactive terminal to start or record a test.",
+        note: readOnlyNote,
         ...(improveProjectLine ? { projectLine: improveProjectLine } : {})
       }));
     }
@@ -4532,7 +5007,31 @@ async function improveCommand(
     const experimentTag = (id?: string): string =>
       id ? `test ${id.slice(0, 15)}` : "test: none yet";
 
+    // A10 · the verify flags do not belong to improve; say so and ignore.
+    if (args.appliedAt !== undefined || args.canary !== undefined) {
+      guidedIo.write(verifyFlagConfusionNote);
+    }
+    // Phases past plan/record (collecting, rollback, terminal): the flags
+    // have no question to pre-fill; say so once instead of failing.
+    if (hasAgentFlags &&
+        model.phase !== "start" && model.phase !== "awaiting_intervention") {
+      guidedIo.write(
+        "The current step needs no draft or record values, so they were not used."
+      );
+    }
+
     if (model.phase === "start" && !preferred) {
+      // §2c dispatch 2: a plan draft cannot bind before the freeze — the
+      // experimentId is created at freeze. The draft is set aside NOW; after
+      // the freeze the plan sitting uses aibill's own suggestions.
+      if (agentDraft !== undefined) {
+        guidedIo.write(agentDraftNoTestNotice);
+        agentDraft = undefined;
+      }
+      if (hasRecordFlags && !recordFlagsNoticed) {
+        guidedIo.write(recordFlagsNoApprovalNotice);
+        recordFlagsNoticed = true;
+      }
       const start = await runStartSitting(guidedIo, {
         header: { commandTitle, experimentLabel: experimentTag() },
         findingLabel: model.oneChange.label,
@@ -4608,6 +5107,53 @@ async function improveCommand(
             }
           : undefined;
         const draftStore = createPlanDraftStore(rootPath);
+        // §2c dispatch 3: record flags cannot apply before an approval.
+        if (hasRecordFlags && !recordFlagsNoticed) {
+          guidedIo.write(recordFlagsNoApprovalNotice);
+          recordFlagsNoticed = true;
+        }
+        // The machine drafts; the human approves. aibill already knows the
+        // change it found — never make the user re-type a worse version.
+        // Every fallback field carries aibill's OWN provenance so it can
+        // never render under the agent label (B1).
+        const aibillSuggestions: NonNullable<
+          Parameters<typeof runPlanSitting>[1]["suggestedAnswers"]
+        > = {
+          change: {
+            value: model.oneChange.label.endsWith(".")
+              ? model.oneChange.label
+              : `${model.oneChange.label}.`,
+            provenance: "aibill"
+          },
+          rollback: {
+            value: "Restore the prior session workflow.",
+            provenance: "aibill"
+          },
+          canary: {
+            value: "The project tests pass and the requested output is accepted.",
+            provenance: "aibill"
+          }
+        };
+        let suggestedAnswers = aibillSuggestions;
+        const draftNotices: string[] = [];
+        if (agentDraft !== undefined) {
+          if (!agentDraft.ok) {
+            draftNotices.push(agentDraftUnreadableNotice);
+          } else if (agentDraft.draft.experimentId !== preferred.id ||
+              agentDraft.draft.revisionId !== preferred.revisionId) {
+            // Stale revision, wrong test, or a token replayed from another
+            // project — the id simply does not match this project's test.
+            draftNotices.push(agentDraftStaleNotice);
+          } else {
+            const screened = screenAgentDraftSentences(agentDraft.draft);
+            if (screened.survivors > 0) draftNotices.push(agentDraftPlanBanner);
+            draftNotices.push(...screened.setAsideNotices);
+            suggestedAnswers = { ...aibillSuggestions, ...screened.answers };
+          }
+        }
+        if (draftNotices.length > 0) {
+          guidedIo.write(draftNotices.join("\n\n"));
+        }
         const plan = await runPlanSitting(guidedIo, {
           header,
           experimentId: preferred.id,
@@ -4616,15 +5162,7 @@ async function improveCommand(
           draftStore,
           sanitize: sanitizeLocalActivityText,
           nowIso: () => new Date().toISOString(),
-          // The machine drafts; the human approves. aibill already knows the
-          // change it found — never make the user re-type a worse version.
-          suggestedAnswers: {
-            change: model.oneChange.label.endsWith(".")
-              ? model.oneChange.label
-              : `${model.oneChange.label}.`,
-            rollback: "Restore the prior session workflow.",
-            canary: "The project tests pass and the requested output is accepted."
-          }
+          suggestedAnswers
         });
         const rerunNext = { reason: "run this again to continue the plan", command: improveRuntimeCommand };
         if (plan.action === "cancelled" || plan.action === "backedOut") {
@@ -4734,10 +5272,41 @@ async function improveCommand(
       const approvedByLine = accountabilityState.ownership
         ? `Approved ${approvedPlan.approvedAt} by ${accountabilityState.ownership.displayLabels.humanOwner} (${accountabilityState.ownership.approverRole.roleLabel})`
         : `Approved ${approvedPlan.approvedAt}`;
+      // §2c dispatch 4: a plan is pre-approved — the draft (if any) is set
+      // aside (A5); the applied-at prefill is pre-screened with the FULL
+      // time classifier (approvedAtIso context) so before-approval/future
+      // values are set aside honestly NOW instead of at Enter (A7); the
+      // canary report NEVER prefills — claim line only, typed p/f/n (M6).
+      const recordNotices: string[] = [];
+      if (agentDraft !== undefined) {
+        recordNotices.push(agentDraftAfterApprovalNotice);
+      }
+      let suggestedRecord: { appliedAtIso: string } | undefined;
+      if (args.recordAppliedAt !== undefined) {
+        const timeVerdict = classifyGuidedAnswer("time", args.recordAppliedAt, {
+          approvedAtIso: approvedPlan.approvedAt
+        });
+        if (timeVerdict.outcome === "accept") {
+          suggestedRecord = { appliedAtIso: args.recordAppliedAt };
+        } else {
+          recordNotices.push(recordTimeSetAsideNotice(
+            timeVerdict.outcome === "reject"
+              ? timeVerdict.message
+              : "the time could not be read"
+          ));
+        }
+      }
+      if (recordNotices.length > 0) {
+        guidedIo.write(recordNotices.join("\n\n"));
+      }
       const record = await runRecordSitting(guidedIo, {
         header,
         approvedAtIso: approvedPlan.approvedAt,
-        approvedByLine
+        approvedByLine,
+        ...(suggestedRecord !== undefined ? { suggested: suggestedRecord } : {}),
+        ...(args.recordCanary !== undefined
+          ? { agentCanaryReport: args.recordCanary }
+          : {})
       });
       if (record.action === "cancelled") {
         return ok(renderCleanExit({
@@ -4749,9 +5318,14 @@ async function improveCommand(
         }));
       }
       if (record.action === "backedOut") {
+        // m12c: this path restates the FINDING label, not the approved
+        // sentence (hash-only persistence) — the caveat says so, indented
+        // inside the quoted block by renderForYourAgent.
         return ok(renderCleanExit({
           lines: [`${experimentTag(preferred.id)} · waiting for the applied change`],
-          extraBlocks: [renderForYourAgent(improveAgentInstruction(model.oneChange.label))],
+          extraBlocks: [renderForYourAgent(
+            `${improveAgentInstruction(model.oneChange.label)}\n${improveAgentInstructionHashCaveat}`
+          )],
           next: { reason: "after the agent reports back, run exactly this", command: improveRuntimeCommand }
         }));
       }
@@ -5577,7 +6151,8 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
       );
       if (active) {
         return tokenVerificationResult(active, false, [
-          "An active token test already owns this project; Apply handed off to it and generated no conflicting candidate or artifacts."
+          "An active token test already owns this project; Apply handed off to it and generated no conflicting candidate or artifacts.",
+          `Use your agent normally on this project, then: ${improveRuntimeCommand}`
         ]);
       }
     }
@@ -6148,6 +6723,14 @@ async function buildReportInput(
   sinceDays = 30,
   options: { persistLocalFinancialState?: boolean } = {}
 ) {
+  // Known residual (QA m6, shipped documented in 0.9.1): in connected mode
+  // this input stays billed-only — the saved report's evidence total omits
+  // the local API-equivalent axis that the terminal receipt shows (it
+  // under-discloses, never overclaims, and improve's waste lane is
+  // unaffected because it derives from action evidence, not these records).
+  // 0.9.2 (ROADMAP): ride localFinancialRecords into the report's evidence
+  // section per-basis, exactly as the receipt does.
+  //
   // One anchor for logs, Context Health, the paste-ready prompt, and every
   // supporting Apply artifact. This prevents millisecond window drift between
   // files generated by the same command.
@@ -6544,14 +7127,26 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--source-path", "--type", "--provider", "--source-id", "--team",
     "--person", "--client", "--cost-center", "--role", "--project", "--agent", "--workflow",
     "--evidence", "--confidence", "--label", "--auth-reference",
-    "--start-time", "--end-time", "--org", "--enterprise", "--account-id",
+    "--start-time", "--end-time", "--org", "--enterprise", "--account-id", "--account",
     "--interval", "--cycles", "--canary", "--quality", "--change-digest",
     "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
-    "--pr", "--business-outcome"
+    "--pr", "--business-outcome",
+    "--draft", "--record-applied-at", "--record-canary"
   ]);
   const numericValueFlags = new Set([
     "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles", "--pr"
   ]);
+  // A repeated --draft/--record-* flag means the pasted line was assembled
+  // from two commands: a parse error, never a silent last-wins (§2b, m11).
+  const seenOnceOnlyFlags = new Set<string>();
+  const onceOnly = (flag: string): boolean => {
+    if (seenOnceOnlyFlags.has(flag)) {
+      parsed.parseErrors.push(`${flag} may appear once`);
+      return false;
+    }
+    seenOnceOnlyFlags.add(flag);
+    return true;
+  };
 
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -6617,6 +7212,52 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (next) {
         if (arg === "--approved-at") parsed.approvedAt = next;
         else parsed.appliedAt = next;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--draft") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--draft")) {
+          if (looksLikeAgentDraftToken(next)) {
+            parsed.agentDraftToken = next;
+          } else {
+            parsed.parseErrors.push(
+              "--draft must be the single ab1.… token from draft_improve_command; do not hand-build or quote it"
+            );
+          }
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--record-applied-at") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--record-applied-at")) {
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z$/.test(next)) {
+            parsed.recordAppliedAt = next;
+          } else {
+            parsed.parseErrors.push(
+              "--record-applied-at must be a UTC Z time, e.g. 2026-08-18T09:12:00Z"
+            );
+          }
+        }
+        index += 1;
+      }
+      continue;
+    }
+    if (arg === "--record-canary") {
+      const next = rest[index + 1];
+      if (next) {
+        if (onceOnly("--record-canary")) {
+          if (next === "passed" || next === "failed") {
+            parsed.recordCanary = next;
+          } else {
+            parsed.parseErrors.push("--record-canary must be passed or failed");
+          }
+        }
         index += 1;
       }
       continue;
@@ -6860,6 +7501,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
+    if (arg === "--account") {
+      const next = rest[index + 1];
+      if (next) {
+        parsed.account = next;
+        index += 1;
+      }
+      continue;
+    }
     if (arg === "--account-id") {
       const next = rest[index + 1];
       if (next) {
@@ -6909,9 +7558,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       }
       continue;
     }
+    // A11 (copy polish on the existing unknown-flag rejection): quoted
+    // per-sentence draft flags never existed — point at the one-token design.
+    const draftFlagHint =
+      arg === "--draft-change" || arg === "--draft-rollback" || arg === "--draft-canary"
+        ? " — agent drafts travel as one --draft token from draft_improve_command, not as quoted sentences"
+        : "";
     parsed.parseErrors.push(
       arg.startsWith("-")
-        ? `unknown flag "${arg}"`
+        ? `unknown flag "${arg}"${draftFlagHint}`
         : `unexpected argument "${arg}"`
     );
   }

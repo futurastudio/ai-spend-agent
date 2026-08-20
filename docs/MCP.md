@@ -128,9 +128,10 @@ Use the JSON server definition above wherever that client stores its
 path and restart behavior.
 
 The published npm package (`v0.8.1`) exposes the first eight tools below. A
-built source checkout adds the ninth, `get_token_reduction_test`, as an
-unreleased read-only preview. Restart the client and confirm the tool set for
-the package you intentionally configured:
+built source checkout adds the ninth and tenth — `get_token_reduction_test`
+and its read-only drafting sibling `draft_improve_command` — as unreleased
+previews. Restart the client and confirm the tool set for the package you
+intentionally configured:
 
 1. `scan_ai_spend`
 2. `sync_local_agent_spend`
@@ -141,6 +142,7 @@ the package you intentionally configured:
 7. `get_spend_report`
 8. `recommend_cuts`
 9. `get_token_reduction_test` (source preview only)
+10. `draft_improve_command` (source preview only)
 
 ## Optional on-demand Codex plugin
 
@@ -197,6 +199,12 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   index populated by the local CLI, but never creates or updates that cache or
   any experiment/project state. It never applies a change or
   turns a measured percentage into a savings, accepted-outcome, or ROI claim.
+- `draft_improve_command` is read-only: it validates drafted plan sentences
+  with the terminal's own shared classifier and composes exactly one
+  paste-safe command string. It writes nothing and authorizes nothing; no
+  aibill MCP tool can approve, start, apply, or record anything — approval
+  exists only as the word APPROVE typed by the human in their own terminal,
+  and the pre-record approval state is not readable over MCP.
 - Project reports and source state are written to `<path>/.ai-spend-agent/`.
   After a successful provider sync, aibill also writes one hash-only trust
   receipt outside the repository at `~/.aibill/state-receipts/` (override with
@@ -430,6 +438,53 @@ distinguish observed, partial, and not-separately-reported data; calculated
 component totals and provider-reported totals remain distinct. `projection` is
 the compact read-only CLI/MCP/Glance view; it does not re-run a different
 calculation or authorize an action.
+
+The response also carries an additive `agentLoop` block that teaches an AI
+client how to DRAFT a plan conversationally: the current phase (derived from
+the projection state), the experiment/revision binding a draft must echo, the
+drafting rules, the conversation contract, the one-rule `userSafetyLine`, and
+the phase-appropriate command template. Nothing in `agentLoop` — or in any
+aibill MCP tool — can approve, start, apply, or record anything; those actions
+exist only as typed human answers inside the terminal flow, and the pre-record
+approval state is deliberately not readable over MCP.
+
+### `draft_improve_command`
+
+Read-only sibling of `get_token_reduction_test` and the only sanctioned
+producer of the `improve --draft` token and the record command line. With
+`leg: "plan"` it validates the three drafted sentences (change, rollback,
+canary) with the SAME shared classifier the terminal re-runs at Enter-accept,
+then composes exactly one version-pinned, paste-safe command:
+`npx aibill@<version> improve --draft ab1.<base64url>`. With `leg: "record"`
+it validates a UTC Z-form `appliedAt` (not in the future) plus the agent's
+reported `canaryResult` and composes
+`npx aibill@<version> improve --record-applied-at <iso> --record-canary
+<passed|failed>`. Composing a string writes nothing and authorizes nothing.
+
+```json
+{
+  "path": "/Users/you/projects/your-project",
+  "leg": "plan",
+  "experimentId": "tre_v0_<64 lowercase hex characters>",
+  "revisionId": "trev_v0_<64 lowercase hex characters>",
+  "change": "Start the next task with only its required files and instructions.",
+  "rollback": "Restore the prior session workflow.",
+  "canary": "The project tests pass and the requested output is accepted."
+}
+```
+
+Every failure is an in-band status, never an MCP error: `rejected` carries a
+per-field verdict with the terminal's own reprompt copy; `stale_binding` means
+the experiment or revision no longer matches this project's state and the
+agent must re-read `get_token_reduction_test` and draft again. The composed
+line is lint-enforced to the safe charset (no quotes, `$`, `;`, `&`, `|`,
+backtick, or newline), matching the `userSafetyLine` the agent must show next
+to it. The returned command only pre-fills terminal questions: each prefilled
+sentence is labeled by who actually wrote it, Enter-accept re-classifies it,
+the applied-at time is re-checked after-approval/not-future at answer time,
+the canary answer is always typed by the human, and only a typed APPROVE
+authorizes anything. There is deliberately no `not_run` canary value — a
+canary that has not run means not composing a record command at all.
 
 ### `sync_provider_spend`
 
