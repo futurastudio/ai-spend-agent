@@ -341,6 +341,7 @@
         "Copilot seats and organization metrics APIs"
       ],
       "implementedEndpoints": [
+        "GET /organizations/{org}/settings/billing/ai_credit/usage",
         "Copilot seats and organization metrics APIs"
       ],
       "pagination": "AI-credit reports are period/filter scoped; seats and metrics retain their own pagination/completeness contracts",

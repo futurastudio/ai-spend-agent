@@ -174,6 +174,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - `GET /organizations/{org}/settings/billing/usage`
   - `Copilot seats and organization metrics APIs`
 - Implemented connector coverage:
+  - `GET /organizations/{org}/settings/billing/ai_credit/usage`
   - `Copilot seats and organization metrics APIs`
 - Exclusions:
   - User-level endpoints when the organization or enterprise pays
