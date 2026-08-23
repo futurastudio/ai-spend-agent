@@ -21,6 +21,7 @@ import {
   normalizeGitHubCopilotSeatResponse,
   isProviderAuthenticationError,
   parseCursorReconciliationEnv,
+  parseGitHubCopilotReconciliationEnv,
   ProviderConnectorError,
   resolveTokenReference,
   selectProviderFinancialHeadlineRecords,
@@ -1520,6 +1521,9 @@ describe("real provider connector implementations", () => {
           json: async () => ({ total_seats: 2, seats: [{ assignee: { login: "bob" }, plan_type: "enterprise" }] })
         };
       }
+      if (url.includes("/settings/billing/ai_credit/usage")) {
+        return { ok: true, status: 200, json: async () => providerFixtureJson("github-copilot-ai-credit-usage.json") };
+      }
       throw new Error(`Unexpected fixture URL: ${url}`);
     };
 
@@ -1539,7 +1543,8 @@ describe("real provider connector implementations", () => {
       expect.stringContaining("reports.example.com/copilot/part-1.ndjson"),
       expect.stringContaining("reports.example.com/copilot/part-2.ndjson"),
       expect.stringContaining("/copilot/billing/seats?per_page=100"),
-      expect.stringContaining("page=2")
+      expect.stringContaining("page=2"),
+      expect.stringMatching(/https:\/\/api\.github\.com\/organizations\/futurastudio\/settings\/billing\/ai_credit\/usage\?year=\d{4}&month=\d{1,2}/)
     ]));
     expect(calls[0].headers.Authorization).toBe(`Bearer ${fakeToken}`);
     expect(calls.filter((call) => call.url.includes("reports.example.com")).every((call) => call.headers.Authorization === undefined)).toBe(true);
@@ -1547,7 +1552,19 @@ describe("real provider connector implementations", () => {
       expect.objectContaining({ model: "gpt-5", providerCostType: "copilot_usage_metrics" }),
       expect.objectContaining({ model: "claude-sonnet-4.5", providerCostType: "copilot_usage_metrics" }),
       expect.objectContaining({ userId: "alice", providerCostType: "copilot_seat_reconciliation" }),
-      expect.objectContaining({ userId: "bob", amountUsd: 39, providerCostType: "copilot_seat_reconciliation" })
+      expect.objectContaining({ userId: "bob", amountUsd: 39, providerCostType: "copilot_seat_reconciliation" }),
+      // The 2026 AI-credit usage report carries billed net dollars, but this
+      // fixture-verified connector labels them estimated until a reconciliation
+      // run proves the total against the billing page.
+      expect.objectContaining({
+        model: "gpt-5",
+        providerCostType: "copilot_ai_credit_billing",
+        amountUsd: 26.2,
+        costConfidence: "estimated",
+        usageGranularity: "billing_bucket",
+        timestamp: "2026-08-01T00:00:00.000Z"
+      }),
+      expect.objectContaining({ model: "claude-sonnet-4.5", providerCostType: "copilot_ai_credit_billing", amountUsd: 17.06, costConfidence: "estimated" })
     ]));
     expect(result.qa.pagination).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "GitHub Copilot metrics reports", pagesFetched: 2, stoppedBecause: "complete" }),
@@ -1586,6 +1603,11 @@ describe("real provider connector implementations", () => {
           json: async () => ({ total_seats: 1, seats: [{ assignee: { login: "alice" }, plan_type: "business" }] })
         };
       }
+      if (url.includes("/settings/billing/ai_credit/usage")) {
+        // Token lacks the billing permission: the sync must degrade honestly
+        // instead of discarding metrics/seat evidence.
+        return { ok: false, status: 403, statusText: "Forbidden", json: async () => ({ message: "Resource not accessible" }) };
+      }
       throw new Error(`Unexpected fixture URL: ${url}`);
     };
 
@@ -1602,6 +1624,10 @@ describe("real provider connector implementations", () => {
     expect(calls.some((call) => call.url.startsWith("https://evil.example"))).toBe(false);
     expect(result.coverage).toBe("partial");
     expect(result.completeness).toBe("detected_unverified");
+    expect(result.records.some((record) => record.providerCostType === "copilot_ai_credit_billing")).toBe(false);
+    expect(result.qa.instructions.some((line) =>
+      line.includes("GitHub AI-credit usage report was unavailable (HTTP 403)") && line.includes("Administration: read")
+    )).toBe(true);
     expect(result.qa.pagination).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "GitHub Copilot seats", stoppedBecause: "unsafe_next_link" })
     ]));
@@ -1961,6 +1987,257 @@ describe("real provider connector implementations", () => {
     }
   });
 
+  const copilotReconciliationFetcher = (overrides?: {
+    aiCredit?: () => Promise<{ ok: boolean; status: number; statusText?: string; json: () => Promise<unknown> }> | { ok: boolean; status: number; statusText?: string; json: () => Promise<unknown> };
+  }) => async (url: string) => {
+    if (url.includes("/copilot/metrics/reports/")) {
+      return { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/metrics.ndjson"], report_start_day: "2026-07-05", report_end_day: "2026-08-01" }) };
+    }
+    if (url.includes("reports.example.com/copilot/metrics.ndjson")) {
+      return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+    }
+    if (url.includes("/copilot/billing/seats")) {
+      return { ok: true, status: 200, json: async () => ({ total_seats: 1, seats: [{ assignee: { login: "alice" }, plan_type: "business" }] }) };
+    }
+    if (url.includes("/settings/billing/ai_credit/usage")) {
+      if (overrides?.aiCredit) return overrides.aiCredit();
+      return { ok: true, status: 200, json: async () => providerFixtureJson("github-copilot-ai-credit-usage.json") };
+    }
+    throw new Error(`Unexpected fixture URL: ${url}`);
+  };
+
+  it("flips only GitHub Copilot AI-credit evidence to verified through a matching live reconciliation run", async () => {
+    // Fixture AI-credit net total: $26.20 + $17.06 = $43.26 for 2026-08.
+    const calls: string[] = [];
+    const inner = copilotReconciliationFetcher();
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      sourceId: "github-copilot-provider-api",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08" },
+      fetcher: async (url) => {
+        calls.push(url);
+        return inner(url);
+      }
+    });
+
+    // The declared month drives the requested report window.
+    expect(calls.some((url) => url.includes("/settings/billing/ai_credit/usage?year=2026&month=8"))).toBe(true);
+    const aiCreditRecords = result.records.filter((record) => record.providerCostType === "copilot_ai_credit_billing");
+    expect(aiCreditRecords).toHaveLength(2);
+    expect(aiCreditRecords.every((record) => record.costConfidence === "verified")).toBe(true);
+    expect(aiCreditRecords.every((record) => record.source.confidence === "verified")).toBe(true);
+    expect(aiCreditRecords.every((record) => record.operation?.includes("reconciled to the operator-read"))).toBe(true);
+    // Seat list-price estimates never inherit the reconciliation stamp.
+    const seatRecords = result.records.filter((record) => record.providerCostType === "copilot_seat_reconciliation");
+    expect(seatRecords.every((record) => record.costConfidence === "estimated")).toBe(true);
+    expect(result.financials.headlineBasis).toBe("provider_reported_billed_cost");
+    expect(result.financials.headlineUsd).toBeCloseTo(43.26, 6);
+    expect(result.completeness).toBe("verified");
+    expect(result.source.financialEvidence).toBe("verified");
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation verified:"))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(fakeToken);
+  });
+
+  it("keeps GitHub Copilot evidence estimated with an honest diagnostic when reconciliation mismatches", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 50, expectedBillingMonth: "2026-08" },
+      fetcher: copilotReconciliationFetcher()
+    });
+
+    expect(result.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(result.completeness).toBe("estimated");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: "usageItems[].netAmount (billing month total)",
+        issue: expect.stringContaining("GitHub Copilot reconciliation mismatch: connector AI-credit net total $43.26 vs operator-read $50.00")
+      })
+    ]));
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation mismatch:"))).toBe(true);
+  });
+
+  it("refuses to verify GitHub Copilot evidence when the declared billing month does not match the provider's", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      // The fixture report echoes timePeriod 2026-08.
+      copilotReconciliation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-07" },
+      fetcher: copilotReconciliationFetcher()
+    });
+
+    expect(result.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issue: expect.stringContaining("declared billing month 2026-07 does not match the provider-reported time period 2026-08")
+      })
+    ]));
+  });
+
+  it("clamps an oversized GitHub Copilot reconciliation tolerance so it cannot rubber-stamp a mismatch", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 40, expectedBillingMonth: "2026-08", toleranceUsd: 1000 },
+      fetcher: copilotReconciliationFetcher()
+    });
+
+    // Effective tolerance is clamped to 1% of $40.00 = $0.40; the $3.26 gap fails.
+    expect(result.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(result.qa.instructions.some((line) => line.startsWith("Reconciliation mismatch:") && line.includes("tolerance $0.40"))).toBe(true);
+  });
+
+  it("refuses to verify a zero-dollar GitHub Copilot billing month (promo credits can discount to zero)", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 1, expectedBillingMonth: "2026-08" },
+      fetcher: copilotReconciliationFetcher({
+        aiCredit: () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            timePeriod: { year: 2026, month: 8 },
+            usageItems: [{ product: "copilot", sku: "copilot_ai_credits", model: "gpt-5", unitType: "credits", pricePerUnit: 0.01, grossQuantity: 3000, grossAmount: 30, discountQuantity: 3000, discountAmount: 30, netQuantity: 0, netAmount: 0 }]
+          })
+        })
+      })
+    });
+
+    expect(result.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(result.qa.instructions.some((line) =>
+      line.startsWith("Reconciliation not_provable:") && line.includes("matching $0.00 against a billing page figure proves nothing")
+    )).toBe(true);
+  });
+
+  it("fails a GitHub Copilot reconciliation closed when the AI-credit report is unavailable or malformed", async () => {
+    const unavailable = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08" },
+      fetcher: copilotReconciliationFetcher({
+        aiCredit: () => ({ ok: false, status: 403, statusText: "Forbidden", json: async () => ({ message: "denied" }) })
+      })
+    });
+    expect(unavailable.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(unavailable.qa.instructions.some((line) =>
+      line.startsWith("Reconciliation not_provable:") && line.includes("requires the AI-credit usage report")
+    )).toBe(true);
+
+    const malformed = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08" },
+      fetcher: copilotReconciliationFetcher({
+        aiCredit: () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            timePeriod: { year: 2026, month: 8 },
+            usageItems: [
+              { product: "copilot", sku: "copilot_ai_credits", model: "gpt-5", netQuantity: 4326, netAmount: 43.26 },
+              { product: "copilot", sku: "copilot_ai_credits", model: "mystery", netAmount: "not-a-number" }
+            ]
+          })
+        })
+      })
+    });
+    // A partially malformed report can never verify, even when the valid rows
+    // happen to sum to the expected figure.
+    expect(malformed.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    expect(malformed.coverage).toBe("partial");
+    expect(malformed.qa.instructions.some((line) =>
+      line.startsWith("Reconciliation not_provable:") && line.includes("incomplete or partially malformed")
+    )).toBe(true);
+  });
+
+  it("parses the GitHub Copilot reconciliation environment fail-closed without echoing raw values", () => {
+    expect(parseGitHubCopilotReconciliationEnv({})).toEqual({});
+    expect(parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "2026-08"
+    })).toEqual({ expectation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08" } });
+    expect(parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "2026-08",
+      AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD: "0.05"
+    })).toEqual({ expectation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08", toleranceUsd: 0.05 } });
+
+    const missingPair = parseGitHubCopilotReconciliationEnv({ AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26" });
+    expect(missingPair.expectation).toBeUndefined();
+    expect(missingPair.invalidReason).toContain("AI_SPEND_COPILOT_RECONCILE_MONTH");
+
+    const secretish = "ghp_accidentally_pasted_secret";
+    const badNumber = parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: secretish,
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "2026-08"
+    });
+    expect(badNumber.expectation).toBeUndefined();
+    expect(badNumber.invalidReason).toContain("must be a positive USD amount");
+    expect(JSON.stringify(badNumber)).not.toContain(secretish);
+
+    const badMonth = parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "August 2026"
+    });
+    expect(badMonth.invalidReason).toContain("formatted YYYY-MM");
+  });
+
+  it("runs the GitHub Copilot reconciliation from environment variables so the shipped CLI needs no new flags", async () => {
+    const previous = {
+      expected: process.env.AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD,
+      month: process.env.AI_SPEND_COPILOT_RECONCILE_MONTH,
+      tolerance: process.env.AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD
+    };
+    process.env.AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD = "43.26";
+    process.env.AI_SPEND_COPILOT_RECONCILE_MONTH = "2026-08";
+    delete process.env.AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD;
+    try {
+      const result = await fetchProviderUsageRecords({
+        provider: "github-copilot",
+        authReference: "env:GITHUB_COPILOT_TOKEN",
+        tokenResolver: () => fakeToken,
+        startTime: 1761955200,
+        org: "futurastudio",
+        fetcher: copilotReconciliationFetcher()
+      });
+      expect(result.records.filter((record) => record.providerCostType === "copilot_ai_credit_billing")
+        .every((record) => record.costConfidence === "verified")).toBe(true);
+      expect(result.completeness).toBe("verified");
+    } finally {
+      for (const [key, value] of [
+        ["AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD", previous.expected],
+        ["AI_SPEND_COPILOT_RECONCILE_MONTH", previous.month],
+        ["AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD", previous.tolerance]
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("resolves only reference-based tokens and rejects plaintext-looking secret references", () => {
     expect(resolveTokenReference("env:OPENAI_ADMIN_KEY", { OPENAI_ADMIN_KEY: fakeToken })).toBe(fakeToken);
     expect(() => resolveTokenReference(fakeToken, {})).toThrow(/must be a local reference/);
@@ -2229,6 +2506,9 @@ describe("real provider connector implementations", () => {
       }
       if (url.includes("/copilot/billing/seats")) {
         return { ok: true, status: 200, json: async () => ({ total_seats: 1, seats: [{ assignee: { login: "alice" }, last_activity_at: "2026-06-30T00:00:00Z", plan_type: "business" }] }) };
+      }
+      if (url.includes("/settings/billing/ai_credit/usage")) {
+        return { ok: true, status: 200, json: async () => providerFixtureJson("github-copilot-ai-credit-usage.json") };
       }
       throw new Error(`Unexpected fixture URL: ${url}`);
     };

@@ -133,6 +133,13 @@ export type ProviderConnectorInput = {
    * shipped CLI can run a reconciliation without new flags.
    */
   reconciliation?: CursorReconciliationExpectation;
+  /**
+   * Operator-declared reconciliation anchor for a GitHub Copilot sync. When
+   * absent, the Copilot connector also accepts the
+   * AI_SPEND_COPILOT_RECONCILE_* environment variables so the shipped CLI can
+   * run a reconciliation without new flags.
+   */
+  copilotReconciliation?: GitHubCopilotReconciliationExpectation;
 };
 
 /**
@@ -225,6 +232,105 @@ function invalidCursorReconciliationExpectationReason(
     return `${cursorReconciliationEnvVars.toleranceUsd} must be a non-negative USD amount when set`;
   }
   return undefined;
+}
+
+/**
+ * A human-read billing anchor for one GitHub Copilot reconciliation run: the
+ * AI-credit NET total the operator read off the organization's Billing &
+ * Licensing usage page for one calendar billing month (GitHub moved every
+ * Copilot Business/Enterprise account to usage-based AI-credit billing on
+ * 2026-06-01; 1 AI credit bills as $0.01). The connector compares its summed
+ * netAmount from the AI-credit usage report against this figure; only an
+ * in-run match within tolerance can produce verified financial evidence.
+ */
+export type GitHubCopilotReconciliationExpectation = {
+  /** Billing-page AI-credit net total for the declared month, in USD. */
+  expectedNetUsd: number;
+  /** The billing month shown next to that figure (YYYY-MM, UTC calendar month). */
+  expectedBillingMonth: string;
+  /**
+   * Optional absolute comparison tolerance in USD. Defaults to $0.01 (the
+   * billing page rounds to cents). Clamped to at most 1% of the expected total
+   * so a huge tolerance can never rubber-stamp a mismatch.
+   */
+  toleranceUsd?: number;
+};
+
+export type GitHubCopilotReconciliationOutcome = {
+  status: "verified" | "mismatch" | "not_provable";
+  /** Product-authored, terminal-safe explanation of the outcome. */
+  note: string;
+  connectorTotalUsd?: number;
+  expectedNetUsd?: number;
+  differenceUsd?: number;
+  toleranceUsd?: number;
+  /** The billing month the reconciliation was declared for (YYYY-MM). */
+  billingMonth?: string;
+};
+
+/** Environment variables the GitHub Copilot connector reads for a reconciliation run. */
+export const gitHubCopilotReconciliationEnvVars = {
+  expectedUsd: "AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD",
+  billingMonth: "AI_SPEND_COPILOT_RECONCILE_MONTH",
+  toleranceUsd: "AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD"
+} as const;
+
+/**
+ * Read an operator-declared GitHub Copilot reconciliation anchor from the
+ * local environment. Absent variables mean "no reconciliation requested";
+ * present but invalid variables fail closed with a reason (records stay
+ * estimated) instead of throwing, so a typo can never abort or silently
+ * verify a sync. Raw variable values are never echoed into the reason.
+ */
+export function parseGitHubCopilotReconciliationEnv(
+  env: Record<string, string | undefined> = process.env
+): { expectation?: GitHubCopilotReconciliationExpectation; invalidReason?: string } {
+  const rawExpected = env[gitHubCopilotReconciliationEnvVars.expectedUsd];
+  const rawMonth = env[gitHubCopilotReconciliationEnvVars.billingMonth];
+  const rawTolerance = env[gitHubCopilotReconciliationEnvVars.toleranceUsd];
+  if (rawExpected === undefined && rawMonth === undefined && rawTolerance === undefined) {
+    return {};
+  }
+  if (rawExpected === undefined || rawMonth === undefined) {
+    return {
+      invalidReason: `both ${gitHubCopilotReconciliationEnvVars.expectedUsd} and ${gitHubCopilotReconciliationEnvVars.billingMonth} are required to request a reconciliation`
+    };
+  }
+  const expectedNetUsd = Number(rawExpected.trim());
+  const toleranceUsd = rawTolerance === undefined ? undefined : Number(rawTolerance.trim());
+  const expectation: GitHubCopilotReconciliationExpectation = {
+    expectedNetUsd,
+    expectedBillingMonth: rawMonth.trim(),
+    ...(toleranceUsd === undefined ? {} : { toleranceUsd })
+  };
+  const invalidReason = invalidGitHubCopilotReconciliationExpectationReason(expectation);
+  return invalidReason ? { invalidReason } : { expectation };
+}
+
+function invalidGitHubCopilotReconciliationExpectationReason(
+  expectation: GitHubCopilotReconciliationExpectation
+): string | undefined {
+  if (!Number.isFinite(expectation.expectedNetUsd) || expectation.expectedNetUsd <= 0) {
+    return `${gitHubCopilotReconciliationEnvVars.expectedUsd} must be a positive USD amount read off the GitHub billing usage page`;
+  }
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(expectation.expectedBillingMonth)) {
+    return `${gitHubCopilotReconciliationEnvVars.billingMonth} must be the billing month shown on the usage page, formatted YYYY-MM`;
+  }
+  if (expectation.toleranceUsd !== undefined &&
+      (!Number.isFinite(expectation.toleranceUsd) || expectation.toleranceUsd < 0)) {
+    return `${gitHubCopilotReconciliationEnvVars.toleranceUsd} must be a non-negative USD amount when set`;
+  }
+  return undefined;
+}
+
+/**
+ * Shared reconciliation tolerance rule: default $0.01 (billing pages round to
+ * cents) and clamp to at most 1% of the expected figure so an oversized
+ * tolerance can never manufacture a match.
+ */
+function clampReconciliationToleranceUsd(expectedUsd: number, requestedToleranceUsd?: number): number {
+  const requested = Math.max(requestedToleranceUsd ?? 0.01, 0.01);
+  return Math.min(requested, Math.max(0.01, expectedUsd * 0.01));
 }
 
 export type ProviderConnectorResult = {
@@ -680,6 +786,74 @@ export function normalizeGitHubCopilotMetricsResponse(response: unknown, options
   return records;
 }
 
+/**
+ * Normalize one GitHub AI-credit usage report (the 2026 usage-based billing
+ * model: GET /organizations/{org}/settings/billing/ai_credit/usage) into
+ * billed-dollar evidence records. Rows are NET provider-reported dollars, but
+ * this connector is fixture-verified, so — exactly like the Cursor connector —
+ * the records stay "estimated" until an in-run reconciliation proves the
+ * connector total against the operator-read billing page figure for the same
+ * billing month. Legacy premium-request units are deliberately not fetched or
+ * blended here (provider-contract exclusion).
+ */
+export function normalizeGitHubCopilotAiCreditUsageResponse(
+  response: unknown,
+  options: NormalizerOptions,
+  reconciliation?: GitHubCopilotReconciliationOutcome
+): UsageRecord[] {
+  const items = extractArray(response, "usageItems");
+  const timePeriod = isRecord(response) && isRecord(response.timePeriod) ? response.timePeriod : undefined;
+  const year = nonNegativeIntegerValue(timePeriod?.year);
+  const month = nonNegativeIntegerValue(timePeriod?.month);
+  const day = nonNegativeIntegerValue(timePeriod?.day);
+  const monthKey = typeof year === "number" && typeof month === "number" && month >= 1 && month <= 12
+    ? `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`
+    : undefined;
+  const timestampDate = monthKey && typeof day === "number" && day >= 1 && day <= 31
+    ? `${monthKey}-${String(day).padStart(2, "0")}`
+    : monthKey
+      ? `${monthKey}-01`
+      : undefined;
+  const timestamp = timestampDate && Number.isFinite(Date.parse(`${timestampDate}T00:00:00Z`))
+    ? new Date(`${timestampDate}T00:00:00Z`).toISOString()
+    : new Date().toISOString();
+  // Fail-closed stamping mirror of the Cursor connector: only an in-run
+  // reconciliation match may flip these records to "verified"; a mismatched or
+  // unprovable reconciliation keeps them estimated.
+  const reconciled = reconciliation?.status === "verified";
+  const confidence = reconciled ? "verified" as const : "estimated" as const;
+  return items.flatMap((item, index) => {
+    if (!isRecord(item)) return [];
+    const product = stringValue(item.product);
+    const sku = stringValue(item.sku);
+    const netAmountUsd = parseDollarUsd(item.netAmount);
+    if (!product || !sku || typeof netAmountUsd !== "number") return [];
+    const model = stringValue(item.model);
+    const grossAmountUsd = parseDollarUsd(item.grossAmount);
+    const discountAmountUsd = parseDollarUsd(item.discountAmount);
+    const netQuantity = nonNegativeNumberValue(item.netQuantity);
+    const amounts = typeof grossAmountUsd === "number" && typeof discountAmountUsd === "number"
+      ? `gross $${grossAmountUsd.toFixed(2)} - discounts $${discountAmountUsd.toFixed(2)} = net $${netAmountUsd.toFixed(2)}`
+      : `net $${netAmountUsd.toFixed(2)}`;
+    const baseOperation = `GitHub AI-credit billed usage${monthKey ? ` for ${monthKey}` : ""} (${sku}; ${amounts}; metered spend, excludes seat license fees)`;
+    return [{
+      id: slugifySourceId(["github-copilot-ai-credit", monthKey ?? "unknown-month", options.accountId, product, sku, model, String(index)].filter(Boolean).join("-")),
+      timestamp,
+      source: { id: options.sourceId, name: "GitHub AI-credit usage report", provider: "github-copilot", confidence, observedFrom: options.observedFrom },
+      model: model ?? sku,
+      inputTokens: 0,
+      outputTokens: 0,
+      amountUsd: netAmountUsd,
+      costConfidence: confidence,
+      projectId: options.accountId,
+      providerCostType: "copilot_ai_credit_billing",
+      usageGranularity: "billing_bucket" as const,
+      ...(netQuantity === undefined ? {} : { quantity: netQuantity }),
+      operation: reconciled ? `${baseOperation}; ${reconciliation.note}` : baseOperation
+    }];
+  });
+}
+
 export function normalizeCursorSpendResponse(
   response: unknown,
   options: NormalizerOptions,
@@ -897,15 +1071,239 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
   markMalformedUsageRows(metricsFetch, "github-copilot", "GitHub Copilot metrics reports");
   const seatFetch = input.org ? await fetchPaginatedJson(fetcher, buildGitHubCopilotSeatsUrl(input.org), request, "github-copilot", "GitHub Copilot seats") : undefined;
   if (seatFetch) assessGitHubCopilotSeatCompleteness(seatFetch);
+  const requested = input.copilotReconciliation
+    ? { expectation: input.copilotReconciliation, invalidReason: invalidGitHubCopilotReconciliationExpectationReason(input.copilotReconciliation) }
+    : parseGitHubCopilotReconciliationEnv();
+  const aiCredit = await fetchGitHubCopilotAiCreditUsage(fetcher, input, request, requested.expectation);
+  const reconciliation = assessGitHubCopilotReconciliation(aiCredit, requested.expectation, requested.invalidReason);
   const metricsRecords = metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId }));
   const seatRecords = seatFetch ? seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })) : [];
+  const aiCreditRecords = aiCredit.fetch
+    ? aiCredit.fetch.pages.flatMap((page) => normalizeGitHubCopilotAiCreditUsageResponse(page, { sourceId, observedFrom: "GitHub AI-credit usage report", accountId }, reconciliation))
+    : [];
+  const qa = qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : []), ...(aiCredit.fetch ? [aiCredit.fetch] : [])]);
+  if (aiCredit.unavailableReason) {
+    // A token scoped to Copilot metrics/seats alone still yields honest usage
+    // evidence, so a missing billing permission degrades to estimated records
+    // with an explicit diagnostic instead of failing the whole sync.
+    qa.instructions = [...qa.instructions, aiCredit.unavailableReason];
+    qa.responseDrift.push({
+      label: "GitHub Copilot AI-credit usage report",
+      field: "usageItems",
+      issue: aiCredit.unavailableReason
+    });
+  }
+  if (reconciliation) {
+    // The outcome must survive the persisted-QA round trip, so it rides in
+    // instructions (kept verbatim) and, on failure, in responseDrift.
+    qa.instructions = [...qa.instructions, `Reconciliation ${reconciliation.status}: ${reconciliation.note}`];
+    if (reconciliation.status !== "verified") {
+      qa.responseDrift.push({
+        label: "GitHub Copilot AI-credit usage report",
+        field: "usageItems[].netAmount (billing month total)",
+        issue: reconciliation.note
+      });
+    }
+  }
   return providerResult(
     "github-copilot",
     sourceId,
     input.authReference,
-    [...metricsRecords, ...seatRecords],
-    qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : [])])
+    [...metricsRecords, ...seatRecords, ...aiCreditRecords],
+    qa
   );
+}
+
+type GitHubCopilotAiCreditUsage = {
+  fetch?: FetchPagesResult;
+  /** Product-authored reason the report could not be read (permission/availability). */
+  unavailableReason?: string;
+  /** The UTC calendar month the report was requested for. */
+  billingMonth: { year: number; month: number };
+};
+
+function resolveGitHubCopilotBillingMonth(
+  expectation: GitHubCopilotReconciliationExpectation | undefined
+): { year: number; month: number } {
+  if (expectation && /^\d{4}-(0[1-9]|1[0-2])$/.test(expectation.expectedBillingMonth)) {
+    const [year, month] = expectation.expectedBillingMonth.split("-").map(Number);
+    return { year: year!, month: month! };
+  }
+  const now = new Date();
+  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+}
+
+/**
+ * Read the org/enterprise AI-credit usage report for one billing month (the
+ * declared reconciliation month, else the current UTC month). The endpoint
+ * needs the fine-grained "Administration: read" organization permission
+ * (enterprise reads: billing read); a 401/403/404 therefore degrades with an
+ * honest note instead of failing metrics/seat evidence, while transport and
+ * schema failures still fail closed.
+ */
+async function fetchGitHubCopilotAiCreditUsage(
+  fetcher: Fetcher,
+  input: ProviderConnectorInput,
+  request: { method?: string; headers?: Record<string, string> },
+  expectation: GitHubCopilotReconciliationExpectation | undefined
+): Promise<GitHubCopilotAiCreditUsage> {
+  const label = "GitHub Copilot AI-credit usage report";
+  const billingMonth = resolveGitHubCopilotBillingMonth(expectation);
+  try {
+    const response = await fetchJsonOrThrow(fetcher, buildGitHubCopilotAiCreditUsageUrl(input, billingMonth), request, "github-copilot", label);
+    const fetchResult: FetchPagesResult = {
+      pages: [response.payload],
+      pagination: { label, pagesFetched: 1, stoppedBecause: "complete", maxPages: 1 },
+      rateLimits: response.rateLimit ? [response.rateLimit] : [],
+      responseDrift: detectResponseDrift(response.payload, "github-copilot", label)
+    };
+    markMalformedGitHubCopilotAiCreditRows(fetchResult, label);
+    return { fetch: fetchResult, billingMonth };
+  } catch (error) {
+    const status = error instanceof ProviderConnectorError ? error.status : undefined;
+    if (error instanceof ProviderConnectorError && (error.code === "authentication_error" || status === 404)) {
+      return {
+        billingMonth,
+        unavailableReason: `GitHub AI-credit usage report was unavailable (HTTP ${status ?? "error"}); billed dollars were skipped. Grant the fine-grained "Administration: read" organization permission (enterprise: billing read) to include them.`
+      };
+    }
+    throw error;
+  }
+}
+
+function buildGitHubCopilotAiCreditUsageUrl(
+  input: ProviderConnectorInput,
+  billingMonth: { year: number; month: number }
+): string {
+  const base = input.enterprise
+    ? `https://api.github.com/enterprises/${encodeURIComponent(input.enterprise)}/settings/billing/ai_credit/usage`
+    : input.org
+      ? `https://api.github.com/organizations/${encodeURIComponent(input.org)}/settings/billing/ai_credit/usage`
+      : undefined;
+  if (!base) throw new Error("GitHub Copilot connector requires --org or --enterprise.");
+  const url = new URL(base);
+  url.searchParams.set("year", String(billingMonth.year));
+  url.searchParams.set("month", String(billingMonth.month));
+  return url.toString();
+}
+
+function markMalformedGitHubCopilotAiCreditRows(fetchResult: FetchPagesResult, label: string): void {
+  const issues: ProviderQaDriftIssue[] = [];
+  const report = (field: string, issue: string) => issues.push({ label, field, issue });
+  for (const page of fetchResult.pages) {
+    if (!isRecord(page) || !Array.isArray(page.usageItems)) {
+      report("usageItems", "AI-credit usage response omitted the canonical usageItems array; completeness cannot be proven");
+      continue;
+    }
+    if (!isRecord(page.timePeriod) || typeof nonNegativeIntegerValue(page.timePeriod.year) !== "number") {
+      report("timePeriod", "AI-credit usage response omitted the documented timePeriod object; the billing month cannot be proven");
+    }
+    for (const [index, item] of page.usageItems.entries()) {
+      const itemPath = `usageItems[${index}]`;
+      if (!isRecord(item)) {
+        report(itemPath, "AI-credit usage response contained a non-object usage row; the row was excluded");
+        continue;
+      }
+      if (!stringValue(item.product) || !stringValue(item.sku)) {
+        report(`${itemPath}.product/sku`, "AI-credit usage row is missing its product or sku label; the row was excluded");
+      }
+      if (typeof parseDollarUsd(item.netAmount) !== "number") {
+        report(`${itemPath}.netAmount`, "AI-credit usage row requires a non-negative USD netAmount; the row was excluded");
+      }
+      for (const field of ["grossAmount", "discountAmount", "pricePerUnit", "grossQuantity", "discountQuantity", "netQuantity"] as const) {
+        if (item[field] !== undefined && typeof nonNegativeNumberValue(item[field]) !== "number") {
+          report(`${itemPath}.${field}`, "AI-credit usage amounts and quantities must be non-negative numbers; the invalid value was excluded");
+        }
+      }
+    }
+  }
+  if (issues.length === 0) return;
+  fetchResult.coverageIncomplete = true;
+  fetchResult.responseDrift.push(...issues);
+}
+
+/**
+ * Compare the connector's summed AI-credit net total for one billing month
+ * against the operator-read billing page figure. Every exit that is not a
+ * window-proven match inside the clamped tolerance fails closed: the records
+ * stay estimated and the note says exactly why. Returns undefined when no
+ * reconciliation was requested.
+ */
+function assessGitHubCopilotReconciliation(
+  aiCredit: GitHubCopilotAiCreditUsage,
+  expectation: GitHubCopilotReconciliationExpectation | undefined,
+  invalidReason: string | undefined
+): GitHubCopilotReconciliationOutcome | undefined {
+  if (!expectation && !invalidReason) return undefined;
+  if (invalidReason || !expectation) {
+    return {
+      status: "not_provable",
+      note: `GitHub Copilot reconciliation input was rejected (${invalidReason ?? "missing expectation"}); records remain estimated.`
+    };
+  }
+  const billingMonth = expectation.expectedBillingMonth;
+  if (!aiCredit.fetch) {
+    return {
+      status: "not_provable",
+      billingMonth,
+      note: `GitHub Copilot reconciliation requires the AI-credit usage report; ${aiCredit.unavailableReason ?? "the report could not be read."} Records remain estimated.`
+    };
+  }
+  if (aiCredit.fetch.pagination.stoppedBecause !== "complete" || aiCredit.fetch.coverageIncomplete === true) {
+    return {
+      status: "not_provable",
+      billingMonth,
+      note: "GitHub Copilot reconciliation requires a complete AI-credit report; the response was incomplete or partially malformed, so billed dollars cannot be verified. Records remain estimated."
+    };
+  }
+  for (const page of aiCredit.fetch.pages) {
+    const timePeriod = isRecord(page) && isRecord(page.timePeriod) ? page.timePeriod : undefined;
+    const year = nonNegativeIntegerValue(timePeriod?.year);
+    const month = nonNegativeIntegerValue(timePeriod?.month);
+    const monthKey = typeof year === "number" && typeof month === "number"
+      ? `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`
+      : undefined;
+    if (monthKey !== billingMonth || timePeriod?.day !== undefined) {
+      return {
+        status: "not_provable",
+        billingMonth,
+        note: `The declared billing month ${billingMonth} does not match the provider-reported time period${monthKey ? ` ${monthKey}` : ""}; the billing page figure and the connector read different windows. Records remain estimated.`
+      };
+    }
+  }
+  const connectorTotalUsd = aiCredit.fetch.pages.reduce<number>((sum, page) =>
+    sum + extractArray(page, "usageItems").reduce<number>((pageSum, item) =>
+      pageSum + (isRecord(item) ? parseDollarUsd(item.netAmount) ?? 0 : 0), 0), 0);
+  if (!(connectorTotalUsd > 0)) {
+    return {
+      status: "not_provable",
+      billingMonth,
+      connectorTotalUsd,
+      expectedNetUsd: expectation.expectedNetUsd,
+      note: "GitHub Copilot reconciliation needs a non-zero connector total; matching $0.00 against a billing page figure proves nothing (a fully promo-discounted month cannot verify). Records remain estimated."
+    };
+  }
+  const toleranceUsd = clampReconciliationToleranceUsd(expectation.expectedNetUsd, expectation.toleranceUsd);
+  const differenceUsd = Math.abs(connectorTotalUsd - expectation.expectedNetUsd);
+  const shared = {
+    connectorTotalUsd,
+    expectedNetUsd: expectation.expectedNetUsd,
+    differenceUsd,
+    toleranceUsd,
+    billingMonth
+  };
+  if (differenceUsd <= toleranceUsd + 1e-9) {
+    return {
+      status: "verified",
+      ...shared,
+      note: `reconciled to the operator-read GitHub billing usage AI-credit net total $${expectation.expectedNetUsd.toFixed(2)} for the billing month ${billingMonth}: connector total $${connectorTotalUsd.toFixed(2)}, difference $${differenceUsd.toFixed(2)} within tolerance $${toleranceUsd.toFixed(2)}`
+    };
+  }
+  return {
+    status: "mismatch",
+    ...shared,
+    note: `GitHub Copilot reconciliation mismatch: connector AI-credit net total $${connectorTotalUsd.toFixed(2)} vs operator-read $${expectation.expectedNetUsd.toFixed(2)} for the billing month ${billingMonth}; difference $${differenceUsd.toFixed(2)} exceeds tolerance $${toleranceUsd.toFixed(2)}. Records remain estimated until the totals agree.`
+  };
 }
 
 async function fetchCursor(input: ProviderConnectorInput, token: string, fetcher: Fetcher, sourceId: string): Promise<ProviderConnectorResult> {
@@ -995,10 +1393,7 @@ function assessCursorReconciliation(
       note: "Cursor reconciliation needs a non-zero connector total; matching $0.00 against a dashboard figure proves nothing. Records remain estimated."
     };
   }
-  // Default $0.01 (dashboards round to cents); clamp to at most 1% of the
-  // expected figure so an oversized tolerance cannot manufacture a match.
-  const requestedTolerance = Math.max(expectation.toleranceUsd ?? 0.01, 0.01);
-  const toleranceUsd = Math.min(requestedTolerance, Math.max(0.01, expectation.expectedOnDemandUsd * 0.01));
+  const toleranceUsd = clampReconciliationToleranceUsd(expectation.expectedOnDemandUsd, expectation.toleranceUsd);
   const differenceUsd = Math.abs(connectorTotalUsd - expectation.expectedOnDemandUsd);
   const shared = {
     connectorTotalUsd,
@@ -1866,6 +2261,11 @@ function knownProviderFields(provider: string, label: string): Set<string> {
   if (provider === "github-copilot" && label.toLowerCase().includes("metrics")) {
     return new Set([...common, "download_links", "download_links[]", "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.prompt_count", "day_totals[].totals_by_cli.session_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.token_usage.avg_tokens_per_request", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "created_at", "generated_at", "etl_id", "day_partition", "entity_id_partition", "enterprise_id", "organization_id"]);
   }
+  if (provider === "github-copilot" && label.toLowerCase().includes("ai-credit")) {
+    // Documented 2026 enhanced-billing usage report shape: a timePeriod echo
+    // plus usageItems rows (product/sku/model with gross/discount/net money).
+    return new Set([...common, "timePeriod", "timePeriod.year", "timePeriod.month", "timePeriod.day", "usageItems", "usageItems[]", "usageItems[].date", "usageItems[].product", "usageItems[].sku", "usageItems[].model", "usageItems[].unitType", "usageItems[].pricePerUnit", "usageItems[].grossQuantity", "usageItems[].grossAmount", "usageItems[].discountQuantity", "usageItems[].discountAmount", "usageItems[].netQuantity", "usageItems[].netAmount", "usageItems[].organizationName", "usageItems[].repositoryName"]);
+  }
   if (provider === "github-copilot" && label.toLowerCase().includes("seats")) {
     return new Set([...common, "total_seats", "seats", "seats[]", "seats[].created_at", "seats[].updated_at", "seats[].pending_cancellation_date", "seats[].last_activity_at", "seats[].last_activity_editor", "seats[].last_authenticated_at", "seats[].plan_type", "seats[].login", "seats[].id", "seats[].assignee", "seats[].assignee.login", "seats[].assignee.email", "seats[].assignee.id", "seats[].assignee.node_id", "seats[].assignee.avatar_url", "seats[].assignee.html_url", "seats[].assignee.type", "seats[].assignee.site_admin", "seats[].assigning_team", "seats[].organization"]);
   }
@@ -1915,8 +2315,11 @@ function providerInstructions(provider: string): string[] {
   }
   if (provider === "github-copilot") {
     return [
-      "Use a GitHub token reference with org or enterprise Copilot metrics and billing seats read access.",
-      "Seat records estimate monthly commitment; metrics records are usage evidence without direct spend allocation."
+      "Use a GitHub token reference with org or enterprise Copilot metrics, billing seats, and billing usage read access.",
+      "Fine-grained token permissions (2026): 'Organization Copilot metrics: read' for usage metrics, 'GitHub Copilot Business: read' for seats, and 'Administration: read' for the AI-credit usage report (classic PATs: read:org and/or manage_billing:copilot; enterprise reads accept read:enterprise). The org's Copilot 'usage metrics' policy must be enabled.",
+      "Seat records estimate monthly plan commitment at list price ($19 Business / $39 Enterprise); metrics records are usage evidence without direct spend allocation.",
+      "AI-credit records carry GitHub-billed net dollars (usage-based billing for every Copilot Business/Enterprise account since 2026-06-01; 1 AI credit bills as $0.01) and stay estimated until an in-sync reconciliation matches the billing page figure; set AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD and AI_SPEND_COPILOT_RECONCILE_MONTH to run one. Legacy premium-request billing is not fetched or blended.",
+      "Individual Copilot (Free/Pro/Pro+) exposes no org billing or metrics API; the personal-plan endpoints under /users/{username}/settings/billing need that user's own token with 'Plan: read' and are not implemented."
     ];
   }
   if (provider === "cursor") {
@@ -1941,7 +2344,7 @@ function providerPermissionPrompt(provider: string, label: string, response: Pro
       return `Missing Anthropic Admin read scopes for ${label} (${status}). Reconnect with organization cost report and Claude Code usage report read access. ${rawMessage}`;
     }
     if (provider === "github-copilot") {
-      return `Missing GitHub Copilot org or enterprise read scopes for ${label} (${status}). Reconnect with Copilot metrics and billing seats read access. ${rawMessage}`;
+      return `Missing GitHub Copilot org or enterprise read scopes for ${label} (${status}). Reconnect with Copilot metrics, billing seats, and billing usage (Administration: read) access. ${rawMessage}`;
     }
     if (provider === "cursor") {
       return `Missing Cursor team admin read scopes for ${label} (${status}). Use Cursor Admin API access or fall back to Browser Account UI/manual export. ${rawMessage}`;

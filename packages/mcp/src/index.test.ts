@@ -2561,6 +2561,13 @@ describe("MCP analyst tools", () => {
             ]
           });
         }
+        if (url.includes("/settings/billing/ai_credit/usage")) {
+          const requested = new URL(url);
+          return okResponse({
+            timePeriod: { year: Number(requested.searchParams.get("year")), month: Number(requested.searchParams.get("month")) },
+            usageItems: []
+          });
+        }
         return okResponse({
           download_links: [signedReportUrl],
           report_start_day: "2026-07-28",
