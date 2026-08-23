@@ -1,0 +1,31 @@
+{
+  "timePeriod": { "year": 2026, "month": 8 },
+  "usageItems": [
+    {
+      "product": "copilot",
+      "sku": "copilot_ai_credits",
+      "model": "gpt-5",
+      "unitType": "credits",
+      "pricePerUnit": 0.01,
+      "grossQuantity": 3120,
+      "grossAmount": 31.2,
+      "discountQuantity": 500,
+      "discountAmount": 5.0,
+      "netQuantity": 2620,
+      "netAmount": 26.2
+    },
+    {
+      "product": "copilot",
+      "sku": "copilot_ai_credits",
+      "model": "claude-sonnet-4.5",
+      "unitType": "credits",
+      "pricePerUnit": 0.01,
+      "grossQuantity": 1706,
+      "grossAmount": 17.06,
+      "discountQuantity": 0,
+      "discountAmount": 0.0,
+      "netQuantity": 1706,
+      "netAmount": 17.06
+    }
+  ]
+}

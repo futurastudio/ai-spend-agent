@@ -1,6 +1,6 @@
 # aibill MCP Server
 
-> **Version boundary:** npm latest is `v0.8.1` and reads supported Claude Code,
+> **Version boundary:** npm latest is `v0.9.1` and reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
 > Context Health, plan/runway, invocation evidence, recommendations, and Apply.
@@ -16,7 +16,7 @@ The MCP client and the spend provider are separate concerns:
 
 - **MCP clients:** any stdio-compatible agent can call the tools.
 - **Local usage:** Claude Code and Codex transcript metadata; both readers are
-  `live_verified` against an adversarial local corpus. v0.8.1 also reads
+  `live_verified` against an adversarial local corpus. v0.9.1 also reads
   experimental Gemini CLI financial evidence only
   from `chats/**/*.{json,jsonl}`; it remains `fixture_verified`, and
   `logs.json` is detection-only.
@@ -127,22 +127,21 @@ Use the JSON server definition above wherever that client stores its
 `ai-spend-mcp`. Consult that client's documentation for its exact config
 path and restart behavior.
 
-The published npm package (`v0.8.1`) exposes the first eight tools below. A
-built source checkout adds the ninth and tenth — `get_token_reduction_test`
-and its read-only drafting sibling `draft_improve_command` — as unreleased
-previews. Restart the client and confirm the tool set for the package you
-intentionally configured:
+The published npm package (`v0.9.1`) exposes all ten tools below, including
+`get_token_reduction_test` and its read-only drafting sibling
+`draft_improve_command`. Restart the client and confirm the tool set for the
+package you intentionally configured:
 
 1. `scan_ai_spend`
 2. `sync_local_agent_spend`
 3. `sync_provider_spend`
 4. `get_usage_glance`
 5. `get_context_health`
-6. `list_sources`
-7. `get_spend_report`
-8. `recommend_cuts`
-9. `get_token_reduction_test` (source preview only)
-10. `draft_improve_command` (source preview only)
+6. `get_token_reduction_test`
+7. `draft_improve_command`
+8. `list_sources`
+9. `get_spend_report`
+10. `recommend_cuts`
 
 ## Optional on-demand Codex plugin
 
@@ -391,14 +390,11 @@ deterministic fallback. The project `path` is always
 required and must pass the same broad-root and symlink protections as other
 state tools.
 
-> **Source-preview boundary:** this tool is present in the source checkout and
-> is not part of published npm latest (`v0.8.1`) yet. It is read-only; the CLI
+> **Read-only boundary:** this tool is read-only; the CLI
 > owns `inspect`, `start`, `mark-applied`, `rollback`, `cancel`, and result
-> recording. MCP cannot create or mutate an experiment. From the built
-> checkout root, the mutation path is
-> `node packages/cli/dist/index.js improve --path .`; generated MCP guidance
-> uses that same path-safe command and never points this preview at npm
-> `v0.8.1`.
+> recording. MCP cannot create or mutate an experiment. The mutation path is
+> the guided `npx aibill improve` flow, run from the project folder you want
+> to improve; generated MCP guidance uses that same command.
 
 ```json
 {
@@ -569,9 +565,9 @@ sample state returns demo-only guidance; local coding-agent day aggregates
 return observed API-equivalent exposure candidates—or a collect-more-evidence
 result—because they do not prove an individual call, a safe change, or a
 savings counterfactual. Discovery-only state never invents downgrade, cache,
-batch, or savings advice. Published npm `v0.8.1` can generate a read-only Apply
-artifact, but it does not start or verify a token test. In a built source
-checkout root, run `node packages/cli/dist/index.js improve --path .` for the
+batch, or savings advice. `npx aibill apply` generates a read-only Apply
+artifact, but it does not start or verify a token test. Run
+`npx aibill improve` from the project folder you want to improve for the
 explicit approval gate, one reversible change,
 matched-session progress, and quality-gated result.
 

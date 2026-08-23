@@ -108,8 +108,8 @@ from aibill's canonical matched-session evaluator; Glance never recalculates
 them. A measured result names the quality evidence explicitly (including
 `quality user-declared`), and stale or failed refreshes suppress the old
 percentage. The status line is not clickable and never changes what the Copy
-action places on the clipboard. This source-preview projection is not included
-in npm latest (`v0.8.1`) yet and is not an instruction to make a change.
+action places on the clipboard. This read-only projection ships in npm latest
+(`v0.9.1`) and is not an instruction to make a change.
 
 The token line is intentionally narrower than a financial claim. It represents
 only a calculated change in total tokens across matched completed Claude
@@ -146,7 +146,7 @@ Glance is MIT-licensed. You can use the native panel as-is, restyle it, or
 build another interface over the same JSON contract:
 
 ```bash
-node packages/cli/dist/index.js glance --since-days 30
+npx aibill glance --since-days 30
 ```
 
 The main customization points are:

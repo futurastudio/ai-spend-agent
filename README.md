@@ -16,23 +16,23 @@ Building a Node integration? The
 contract for usage-record validation, analysis, Receipt v0, pinned standards
 projections, and terminal rendering.
 
-> **Version boundary:** npm latest is `v0.8.1`. It reads supported Claude Code,
+> **Version boundary:** npm latest is `v0.9.1`. It reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
 > Context Health, plan/runway, invocation evidence, recommendations, and Apply.
 >
-> **Unreleased source-preview boundary:** this checkout also contains a
-> guided token-reduction and local accountability preview. It is not in npm
-> latest yet. From the built checkout root, run
-> `node packages/cli/dist/index.js improve --path .`; generated handoffs use
-> that same local command so they cannot silently download npm `v0.8.1`.
-> The guided flow gives one personalized test, tracks matched
+> **The guided token-reduction and local accountability loop is published.**
+> Run `npx aibill improve` from the project you want to improve — or practice
+> safely first with `npx aibill improve --sample`, a labeled demo that writes
+> nothing. The guided flow gives one personalized test, tracks matched
 > before/after completed-session snapshots, and prints a percentage only when
-> the user's declared quality held. `identify`, `outcome github`, and
-> `accountability` add explicitly confirmed ownership, a pre-change local
-> self-attestation audit,
-> and an opt-in merged-PR outcome. The preview does not certify cash savings,
-> business value, company RBAC, invoice reconciliation, productivity, or ROI.
+> the user's declared quality held. An MCP client can draft the plan
+> conversationally and hand you one `npx aibill improve --draft …` command;
+> APPROVE is still typed by you in the terminal, never by an agent.
+> `identify`, `outcome github`, and `accountability` add explicitly confirmed
+> ownership, a pre-change local self-attestation audit, and an opt-in
+> merged-PR outcome. None of this certifies cash savings, business value,
+> company RBAC, invoice reconciliation, productivity, or ROI.
 
 The launch wedge is deliberately simple:
 
@@ -56,9 +56,9 @@ becoming another misleading meter.
 If you use **Claude Code or Codex**, the published command reads supported
 financial fields from session files already on your machine and
 shows observed usage at API-equivalent rates where the token evidence is
-complete. Local cumulative usage remains observed exposure. A comparison of
-matched completed session snapshots is being built in the source preview; npm
-`v0.8.1` does not ship that lifecycle. The preview can calculate token change
+complete. Local cumulative usage remains observed exposure. The guided
+`npx aibill improve` flow compares matched completed session snapshots before
+and after one approved change; it can calculate token change
 only after matched evidence and an explicit quality guard, and it is not a
 cash-savings, accepted-outcome, or ROI conclusion. No provider connection or
 signup is required, and nothing leaves your laptop on the default local run.
@@ -89,7 +89,7 @@ terminal copy.*
 ## Get started
 
 1. **Initialize a private personal baseline:** run `npx aibill init` from a
-   project. npm v0.8.1 detects supported Claude Code, Codex, and experimental
+   project. npm v0.9.1 detects supported Claude Code, Codex, and experimental
    Gemini CLI financial evidence and backfills the last 30 days. It prints the
    first evidence-labeled
    receipt and stores only the Claude Code/Codex fields supported by the small
@@ -101,15 +101,14 @@ terminal copy.*
 3. **Open the complete private view:** `npx aibill --full` (bare `npx aibill`
    stays compact: trust, one number, one driver, one evidence gap, one action)
 4. **Get the current session decision:** `npx aibill context`
-5. **Draft one evidence-constrained action from real local evidence:**
-   `npx aibill apply`. The published `v0.8.1` command creates an inspection and
-   approval artifact; it does not run a change or verify a result. The matched
-   before/after lifecycle is an unreleased source preview documented below. In
-   sample mode, Apply is an explicitly non-executable demo.
-   From the built checkout root, run `node packages/cli/dist/index.js improve
-   --path .` for the guided flow: one safe test, progress, then
+5. **Test one evidence-constrained change and measure it:**
+   `npx aibill improve` runs the guided flow: one safe test, progress, then
    this project's measured token change when the matched evidence and
-   user-declared quality guard support it.
+   user-declared quality guard support it. Practice first with
+   `npx aibill improve --sample`, a labeled demo that writes nothing. The
+   narrower `npx aibill apply` creates the inspection and approval artifact
+   without running a change or verifying a result; in sample mode, Apply is
+   an explicitly non-executable demo.
 6. **Optional—set up official provider-reported cost:** `npx aibill connect
    openai` or `npx aibill connect anthropic` registers the connector and prints
    the exact `sync-provider` command. Only that explicit sync contacts the
@@ -143,9 +142,9 @@ developer, engineering leader, agency owner, or finance team does next:
 | --- | --- | --- |
 | Can this work finish before the reported limit? | Pair available five-hour or weekly windows with reset time, a separately labeled exhaustion projection, and one session action. | **Available** when the coding agent reports the limit metadata; missing windows are never guessed. |
 | What work is driving the available usage and cost evidence? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
-| Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Unreleased source preview:** `identify` records an explicitly confirmed human/team/client/cost-center locally; `outcome github` opt-in verifies a merged PR whose observed status checks all passed. It does not inspect branch-protection rules or claim which checks were required. npm v0.8.1 does not ship these commands. Business meaning remains user-declared. |
+| Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Published in npm v0.9.1:** `identify` records an explicitly confirmed human/team/client/cost-center locally; `outcome github` opt-in verifies a merged PR whose observed status checks all passed. It does not inspect branch-protection rules or claim which checks were required. Business meaning remains user-declared. |
 | Which subscriptions and provider charges never reach finance? | Keep local plan context, provider-reported cost, purchased credits, and API-equivalent value separate before reconciling them. | **Partial:** local plan context and optional provider reports exist. Centralized seat and invoice reconciliation is Workspace next. |
-| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Published in npm v0.8.1:** Apply drafts candidate-specific inspection, approval, and rollback steps but does not verify a result. **Unreleased source preview:** `improve` reuses one command for the matched experiment, records the named local self-attested approval before it prints the handoff, and returns progress or the quality-gated result. Shared approval routing and company history remain Workspace work. |
+| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Published in npm v0.9.1:** Apply drafts candidate-specific inspection, approval, and rollback steps but does not verify a result; `improve` reuses one command for the matched experiment, records the named local self-attested approval before it prints the handoff, and returns progress or the quality-gated result. Shared approval routing and company history remain Workspace work. |
 | Can finance defend the ROI? | Join reconciled cost to an accepted outcome and independently evidenced business value before deciding what to scale, constrain, redesign, or stop. | **Next:** the beta does not calculate productivity or ROI. |
 
 aibill's beta establishes the cost-and-capacity evidence: provider-reported
@@ -186,18 +185,21 @@ investigate and how to verify it.
   stay visibly separate.
 - **Evidence-constrained action plan (public beta)**: on real local evidence,
   `npx aibill apply` turns supported findings into candidate IDs, read-only
-  inspection steps, an approval gate, and rollback guidance. npm `v0.8.1` does
-  not run a change or verify a result; the source preview adds the separate
-  completed-session-snapshot experiment lifecycle described below. Local
+  inspection steps, an approval gate, and rollback guidance. Apply itself does
+  not run a change or verify a result; the guided `improve` flow adds the
+  separate completed-session-snapshot experiment lifecycle described below. Local
   cumulative usage is observed exposure with no invented savings. Connected
   provider buckets, daily aggregates, seats, and user totals stay reconciliation
   evidence—not call-level optimization advice. A modeled routing, cache, Batch,
   or context candidate requires an explicit schema-validated call/invocation
   record plus a named workload. Bundled sample Apply is non-executable.
-- **Bounded why/action index (source preview)**: financial fields are streamed
+- **Bounded why/action index**: financial fields are streamed
   independently, while qualitative action evidence reads only complete selected
   Claude Code/Codex files under fixed per-file and per-source byte budgets. A
-  private, path-opaque cache accelerates warm runs. Omitted files remain visible
+  private, path-opaque cache accelerates warm runs, and `npx aibill index`
+  reads very large agent histories to completion once — with resumable,
+  privacy-stripped checkpoints — so results stop saying
+  "indexing". Omitted files remain visible
   as partial coverage; they never contribute placeholder values or a global
   “main driver” claim. Exact fully read files may still support a narrowly
   labeled matched experiment.
@@ -330,27 +332,29 @@ path and never stores, prints, or proxies provider credentials.
 | Command | What it does |
 | --- | --- |
 | _(no command)_ | Zero-key compact receipt from supported local or trusted connected evidence; otherwise an honest no-evidence state (sample data is never implicit) |
-| `init [--path <dir>] [--statusline]` | On npm v0.8.1, detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
+| `init [--path <dir>] [--statusline]` | Detect supported Claude Code, Codex, and experimental Gemini CLI financial evidence, backfill 30 days, print the first private receipt, and atomically seed the Claude/Codex status-line cache; optional `--statusline` is explicit installation consent and sample data is never substituted |
 | `statusline` | Render one plan-aware line from the private cache; no scan, provider call, or network |
 | `statusline refresh` | Explicitly run the foreground local refresh, then render the cache |
 | `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
 | `statusline uninstall` | Remove only the owned setting and restore the preserved predecessor without rolling back unrelated settings |
+| `statusline expand` | Print every subscription with committed price, runways, and 7-day API-equivalent value |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Register an admin-gated local connector stub and print the required `sync-provider` command; does not fetch billing data |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
 | `context [--project <name>] [--since-days N]` | Human-readable hook-aware Context Health (`--json` emits the canonical contract) |
 | `glance [--project <name>] [--plan <id>] [--since-days N]` | Emit the local machine-readable Glance snapshot |
 | `apply [--sample] [--since-days N]` | Print a paste-ready, evidence-constrained inspection and approval prompt and save its local artifact bundle under the selected project's `.ai-spend-agent/`; explicit `--sample` is a non-executable, share-safe demo path that does not read live transcripts, account metadata, credentials, or persisted spend state |
-| `improve` | **Source preview:** reuse one guided command to start the best supported reversible token test, persist its pre-change local self-attested approval before printing any agent handoff, record the later application/canary against the same opaque references, show matched-session progress, and calculate a quality-gated result; non-interactive calls do not mutate experiment/accountability state, though the private local evidence cache may refresh |
-| `identify --person … --team … --role …` | **Source preview:** explicitly confirm the accountable human, team, approval role, and optional client/cost center in private project state; none are inferred |
-| `outcome github [--pr N] [--business-outcome …]` | **Source preview, opt-in network:** ask the installed `gh` CLI for one merged PR with exact commit evidence whose observed status checks all passed, then retain only opaque references and optional user-declared business meaning; branch-protection requirements are not inspected |
-| `accountability [--json]` | **Source preview:** answer owner, accepted outcome, local approver, measured token result, and missing bill reconciliation from one private project view |
-| `verify inspect <candidate-key>` | **Source preview:** resolve the exact fresh local target for the candidate, read-only; stale or unresolvable candidates fail closed |
-| `verify start <candidate-key> --quality held` | **Source preview:** freeze the comparable baseline only after the user declares pre-change quality held; returns a stable experiment lineage ID and a separate revision ID |
-| `verify mark-applied <experiment-id> --approved-at <ISO-8601> --applied-at <ISO-8601> --canary passed\|failed --change-digest <sha256> --rollback-digest <sha256> --canary-digest <sha256>` | **Source preview, advanced:** record user-declared actual approval/application timestamps plus three opaque SHA-256 evidence references; aibill does not invent approval chronology after the canary, and a failed canary produces no percentage and requires a separate rollback |
-| `verify rollback <experiment-id> --rollback-digest <sha256>` | **Source preview:** record execution of the same rollback reference frozen at the intervention boundary |
-| `verify cancel <experiment-id>` | **Source preview:** invalidate an un-applied baseline while retaining its local audit evidence |
-| `verify [<experiment-id>] --quality held\|regressed\|missing` | **Source preview, result (default action):** refresh and calculate the canonical completed-session-snapshot result; missing quality blocks a result, and a complete result is frozen; it never labels a measured percentage as savings, an accepted outcome, or ROI |
+| `improve [--sample] [--draft <token>]` | Reuse one guided command to start the best supported reversible token test, persist its pre-change local self-attested approval before printing any agent handoff, record the later application/canary against the same opaque references, show matched-session progress, and calculate a quality-gated result; `--sample` is a labeled guided demo that writes nothing, `--draft` accepts the one paste-safe command an MCP client composed via `draft_improve_command` (APPROVE is always typed by the human), and non-interactive calls do not mutate experiment/accountability state, though the private local evidence cache may refresh |
+| `index` | Read very large agent histories to completion with resumable, privacy-stripped checkpoints so results stop saying "indexing" |
+| `identify --person … --team … --role …` | Explicitly confirm the accountable human, team, approval role, and optional client/cost center in private project state; none are inferred |
+| `outcome github [--pr N] [--business-outcome …]` | **Opt-in network:** ask the installed `gh` CLI for one merged PR with exact commit evidence whose observed status checks all passed, then retain only opaque references and optional user-declared business meaning; branch-protection requirements are not inspected |
+| `accountability [--json]` | Answer owner, accepted outcome, local approver, measured token result, and missing bill reconciliation from one private project view |
+| `verify inspect <candidate-key>` | **Advanced** (the guided `improve` command normally handles these): resolve the exact fresh local target for the candidate, read-only; stale or unresolvable candidates fail closed |
+| `verify start <candidate-key> --quality held` | **Advanced:** freeze the comparable baseline only after the user declares pre-change quality held; returns a stable experiment lineage ID and a separate revision ID |
+| `verify mark-applied <experiment-id> --approved-at <ISO-8601> --applied-at <ISO-8601> --canary passed\|failed --change-digest <sha256> --rollback-digest <sha256> --canary-digest <sha256>` | **Advanced:** record user-declared actual approval/application timestamps plus three opaque SHA-256 evidence references; aibill does not invent approval chronology after the canary, and a failed canary produces no percentage and requires a separate rollback |
+| `verify rollback <experiment-id> --rollback-digest <sha256>` | **Advanced:** record execution of the same rollback reference frozen at the intervention boundary |
+| `verify cancel <experiment-id>` | **Advanced:** invalidate an un-applied baseline while retaining its local audit evidence |
+| `verify [<experiment-id>] --quality held\|regressed\|missing` | **Advanced, result (default action):** refresh and calculate the canonical completed-session-snapshot result; missing quality blocks a result, and a complete result is frozen; it never labels a measured percentage as savings, an accepted outcome, or ROI |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
 | `report [--sample] [--path <dir>] [--out <name>] [--since-days N]` | Generate local Markdown + HTML reports and action sidecars under an explicitly narrow project path; for a new demo folder use `mkdir -p ./demo-workspace && npx aibill report --sample --path ./demo-workspace` (a broad home/root path is intentionally refused) |
 | `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
@@ -359,10 +363,10 @@ path and never stores, prints, or proxies provider credentials.
 
 Run `npx aibill --help` for the full list.
 
-### Token-reduction verification preview (source checkout only)
+### The guided token-reduction test
 
 This is deliberately a narrow experiment loop, not an automatic optimizer. The
-public preview experience is one stateful command: define an exact reversible
+published experience is one stateful command: define an exact reversible
 plan, approve it locally before a handoff is printed, rerun after the actual
 change and canary, see progress, and read the final result. The later application
 must reuse the same opaque change, rollback, and canary references. Raw plan
@@ -370,28 +374,37 @@ contents are not persisted. The experience hides evidence hashes without
 weakening the canonical audit underneath:
 
 ```bash
-# From a built source checkout; npm latest (v0.8.1) does not include this preview.
-node packages/cli/dist/index.js improve --path .
+# Run from the project folder you want to improve.
+npx aibill improve
+
+# Practice the full guided flow first on labeled demo data; it writes nothing.
+npx aibill improve --sample
 
 # Optional local accountability and accepted GitHub outcome.
-node packages/cli/dist/index.js identify --person "Name" --team "Team" --role "Role"
-node packages/cli/dist/index.js outcome github --pr 123
-node packages/cli/dist/index.js accountability
+npx aibill identify --person "Name" --team "Team" --role "Role"
+npx aibill outcome github --pr 123
+npx aibill accountability
 ```
+
+An MCP client can also draft the plan conversationally through the read-only
+`draft_improve_command` tool and hand you one paste-safe
+`npx aibill improve --draft …` command; every prefilled sentence is labeled by
+who wrote it, Enter-accept re-validates it, and APPROVE is always typed by the
+human.
 
 The advanced commands remain available for inspection and automation:
 
 ```bash
-node packages/cli/dist/index.js apply
+npx aibill apply
 
 # 1. `apply` prints the current candidate key. Inspect it without changing anything.
-node packages/cli/dist/index.js verify inspect <candidate-key>
+npx aibill verify inspect <candidate-key>
 
 # 2. Freeze the comparable pre-change cohort after you declare its quality held.
-node packages/cli/dist/index.js verify start <candidate-key> --quality held
+npx aibill verify start <candidate-key> --quality held
 
 # 3. After you approve one reversible change and run its canary, record opaque proof.
-node packages/cli/dist/index.js verify mark-applied <experiment-id> \
+npx aibill verify mark-applied <experiment-id> \
   --approved-at <actual-approval-ISO-8601> \
   --applied-at <actual-application-ISO-8601> \
   --canary passed \
@@ -400,12 +413,12 @@ node packages/cli/dist/index.js verify mark-applied <experiment-id> \
   --canary-digest <64-character-sha256>
 
 # 4. Use normally, then label the matched post-change work and calculate the result.
-node packages/cli/dist/index.js verify <experiment-id> --quality held
+npx aibill verify <experiment-id> --quality held
 ```
 
 `<experiment-id>` is the stable lineage identifier. Every permitted state
 change also produces a distinct `revisionId`; it is not an invitation to edit
-the baseline, intervention, or prior cohort. The preview requires at least
+the baseline, intervention, or prior cohort. The evaluator requires at least
 three comparable Claude Code or Codex completed session snapshots on each side
 of the intervention, matched on agent, provider, model, project reference,
 session type, work type, and source version when the source reports one. A
@@ -433,7 +446,7 @@ percentage is calculated. Execute the frozen rollback, then record that
 separate event:
 
 ```bash
-node packages/cli/dist/index.js verify rollback <experiment-id> \
+npx aibill verify rollback <experiment-id> \
   --rollback-digest <the-same-64-character-sha256>
 ```
 
@@ -465,9 +478,9 @@ setting sources on that host.
 All four interfaces share evidence semantics. Terminal, MCP, and Glance also
 share parsers and Context Health fields where their sources overlap; the
 status line deliberately reads only the aggregate cache those data-producing
-paths publish. Their available sources and actions differ: published CLI Apply
-is an inspection and approval plan, while the source preview adds the matched
-verification lifecycle; Glance is local-only and Copy creates a current-session
+paths publish. Their available sources and actions differ: CLI Apply
+is an inspection and approval plan, while the guided `improve` flow adds the
+matched verification lifecycle; Glance is local-only and Copy creates a current-session
 handoff; MCP may also read an explicitly connected provider report.
 
 | Interface | Best for | Command / install |
@@ -487,7 +500,7 @@ The interfaces work best as one local loop:
 
 1. Run `npx aibill init` once to establish the private cross-agent cache, then
    use `npx aibill` for local Claude Code/Codex usage, attribution, plan
-   context, and API-equivalent value. npm v0.8.1 also reads supported
+   context, and API-equivalent value. npm v0.9.1 also reads supported
    experimental Gemini CLI financial evidence. Gemini
    does not enter the statusline, Glance, Context Health, or Apply activity
    surfaces.
@@ -495,10 +508,11 @@ The interfaces work best as one local loop:
    financial evidence, and freshness inside Claude Code.
 3. Run `npx aibill context` when deciding whether to continue the current
    session or start fresh before a new task.
-4. Run published `npx aibill apply` when you want the coding agent to inspect
-   ranked evidence, draft one reversible change, and wait for approval. In a
-   built source checkout only, use the separate `verify` lifecycle to compare
-   matched completed session snapshots afterward.
+4. Run `npx aibill improve` when you want the guided experiment: one
+   reversible change, an approval you type yourself, and a comparison of
+   matched completed session snapshots afterward. The narrower `npx aibill
+   apply` prints the inspection/approval plan alone, and the separate `verify`
+   lifecycle remains available for automation.
 5. Keep the optional macOS Glance companion running for current work, reported
    five-hour/weekly runway, reset or projected exhaustion, freshness, and one
    action. Click its compact action only when you want to copy a project-aware
@@ -533,8 +547,9 @@ npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 
 GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
-configuration, the eight tools in published `v0.8.1`, the ninth read-only
-source-preview tool, and the safety model.
+configuration, the ten tools in published `v0.9.1` — including the read-only
+`draft_improve_command` that lets an agent draft the improve plan — and the
+safety model.
 
 Beta problem? [Report a bug or request an agent/provider
 format](https://github.com/futurastudio/ai-spend-agent/issues/new/choose).
