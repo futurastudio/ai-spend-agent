@@ -49,10 +49,9 @@ rejected. aibill never sits in the inference path and never stores, prints, or p
 
 ## Tools
 
-The published `@agent-finops/mcp@latest` package is `v0.8.1` and exposes every
-tool below except `get_token_reduction_test`. That ninth tool is an unreleased,
-read-only source-preview surface; use the local-development configuration below
-to exercise it from this checkout.
+The published `@agent-finops/mcp@latest` package is `v0.9.1` and exposes all
+ten tools below, including the read-only experiment pair
+`get_token_reduction_test` and `draft_improve_command`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -62,9 +61,10 @@ to exercise it from this checkout.
 | `get_usage_glance` | Read current-session, exact reported limit/reset, locally derived main focus, and one copy-ready next move without guessing missing fields or auto-running an agent. Bounded qualitative coverage is explicit; partial indexing withholds a global focus/action. An explicit `path` wins; otherwise project inventory follows the latest transcript cwd, matching CLI. |
 | `get_context_health` | Distinguish discoverable, configured, explicitly invoked, hook-injected, and invocation-unobservable context without assuming MCP schemas loaded or running hook commands. Returns complete/partial qualitative-index coverage beside the canonical contract. |
 | `get_token_reduction_test` | Read one canonical local token-reduction experiment using active-preferred selection by default, refresh an eligible in-progress Claude Code/Codex comparison without writing state, and return the same compact projection plus bounded-index coverage used across aibill surfaces. Complete results stay frozen; it never infers quality or claims cash savings or verified outcome ROI. |
+| `draft_improve_command` | Validate agent-drafted change/rollback/canary sentences with the terminal's own shared classifier and compose exactly one version-pinned, paste-safe `npx aibill improve --draft …` (or `--record-applied-at …`) command. It writes nothing and authorizes nothing; APPROVE exists only as the word typed by the human in their own terminal. |
 | `list_sources` | List canonical product-authored source names/scopes, the approved local root, ingestion methods, and separate boundary/validation/financial axes without trusting persisted capability or credential metadata. |
 | `get_spend_report` | Return the active records, data mode, analyzed summary, and separate connector-validation, financial-evidence, freshness, and last-error source statuses. With no synced state, it returns `no_state`, zero records, a null financial headline, and exact sync/demo next steps. Sample rows require an explicit `scan_ai_spend(sample=true)`; malformed or untrusted real state still fails closed. |
-| `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. Published `npx aibill apply` produces an inspection/approval artifact; the matched completed-session-snapshot lifecycle remains a source preview. |
+| `recommend_cuts` | Inspect report-backed reduction candidates (legacy tool name). Only priced records explicitly marked `call`/`invocation`, with a named operation and the action-specific workload semantics needed for a counterfactual, may support modeled recommendations; provider buckets/seats do not. Sample mode is demo-only, and local transcript aggregates return observed evidence or collect-more-evidence guidance. `npx aibill apply` produces an inspection/approval artifact; the matched completed-session-snapshot lifecycle is the guided `npx aibill improve` flow. |
 
 State tools use an absolute project `path`; broad roots, state symlinks, and
 symlinked state files are refused. Project state is written to
@@ -88,10 +88,10 @@ tool result is returned to the invoking AI client under that client's
 data-handling policy. The optional repo plugin is explicit-only and adds no
 lifecycle hooks.
 
-## Token-reduction source preview
+## Token-reduction experiments over MCP
 
-`get_token_reduction_test` is a read-only view of a locally created experiment;
-it is not in the published npm latest (`v0.8.1`) yet. The CLI alone creates and
+`get_token_reduction_test` is a read-only view of a locally created
+experiment. The CLI alone creates and
 records its lifecycle: inspect an exact candidate, freeze a baseline only with
 `--quality held`, record one approved change plus passing or failed canary with
 three required opaque SHA-256 evidence digests, record the frozen rollback when

@@ -5,6 +5,66 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.1 — 2026-08-20
+
+The agent-native loop: your coding agent is now a first-class participant in
+the improve loop — it drafts, you approve.
+
+- Added agent-drafted experiments. The new read-only MCP tool
+  `draft_improve_command` (the tenth tool) lets an agent propose and refine the
+  change/rollback/canary plan conversationally, then hand over ONE command:
+  `npx aibill improve --draft ab1.…`. In the terminal every sentence shows who
+  wrote it ("Drafted with your agent" vs aibill's "Suggested"), Enter accepts
+  each, and APPROVE is typed by the human, always — no agent can authorize
+  anything. The draft travels as a single token whose alphabet contains no
+  shell metacharacter: it cannot break out of its argv slot, and a
+  credential-shaped draft is set aside unechoed.
+- Made Enter navigation and typing testimony: start/resume/identity-confirm
+  answer to Enter, while the answers that become user-declared evidence —
+  baseline quality, canary outcome, APPROVE — must always be typed.
+- Supported multiple provider organizations. OpenAI Admin keys cover one org
+  each; syncs now accumulate named per-account slices, warn when two slices
+  look like the same org twice, name any superseded billed amounts, and the
+  new `aibill drop-slice` removes a stale slice.
+- Kept the complete mixed card: with providers connected, the receipt shows
+  all three kinds of money — `committed $/mo · API-equivalent ~$ · billed $` —
+  billed leads, nothing is blended, nothing is erased.
+- Polish from founder live-testing: `~` on every API-equivalent figure, the
+  receipt says to run `improve` from the project folder you want to improve,
+  `connect` hands over a runnable sync command with a computed 30-day window,
+  and unsure answers get help instead of being recorded.
+
+## 0.9.0 — 2026-08-19
+
+The guided action loop: aibill doesn't just show where the AI money goes — it
+walks through one reversible experiment to reduce it and measures whether it
+worked.
+
+- Published `npx aibill improve`, the guided token-reduction test. aibill finds
+  a waste pattern in your own local evidence, drafts the plan (press Enter to
+  accept each sentence), records your explicit APPROVE before anything changes,
+  hands your coding agent one instruction, then measures before vs. after on
+  quality-accepted sessions only. `npx aibill improve --sample` is the safe
+  practice run.
+- Unified the result card everywhere: per-subscription rows, then a labeled
+  total stack — `committed $/mo · API-equivalent ~$ · billed $` — one figure
+  per kind of money, never summed across kinds. By-project rows reconcile
+  exactly, including the honest `unattributed` row.
+- Added `npx aibill index` to read very large agent histories to completion
+  once, so results stop saying "indexing". Multi-GB Codex histories converge
+  run-over-run with resumable, privacy-stripped checkpoints.
+- Shipped statusline v2: every subscription plus the committed total at any
+  terminal width; `npx aibill statusline expand` prints the full view.
+- Moved the evidence engine to a sharded per-transcript index (~40× faster);
+  typical warm runs land in 1–3 seconds.
+- Updated the Cursor connector to the 2026 Admin API with fail-closed
+  live-reconciliation: `billed` appears only after a real reconciliation run
+  verifies it.
+- Upgrade note: the qualitative parser contract moved to v4. Existing installs
+  re-index bounded slices over their first few runs (or run `npx aibill index`
+  once) before coverage reports complete again. Output stays honest
+  ("indexing") during the catch-up — no action required.
+
 ## 0.8.1 — 2026-08-14
 
 - Re-reviewed current OpenAI, Anthropic, and Cursor provider pages after the

@@ -10,10 +10,42 @@ stay separate. Shipped behavior is documented in the [release
 notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
 [/docs/roadmap](https://asktilden.com/docs/roadmap).
 
-Last updated: August 16, 2026.
+Last updated: August 23, 2026.
 
-## Available now — npm v0.8.1
+## Available now — npm v0.9.1
 
+The deliberately narrow launch loop shipped in v0.9.0/v0.9.1:
+
+**Why is usage high? → What one safe change should I test? → Did token usage
+change while quality held?**
+
+A percentage is allowed only for that user's calculated before/after result
+when the declared quality check held. It is not a universal saving,
+provider-bill, productivity, accepted-outcome, cash, or ROI claim.
+
+- The guided action loop: `npx aibill improve` finds a waste pattern in your
+  own local evidence, drafts one provider-aware reversible test, records your
+  typed APPROVE before anything changes, and calculates one canonical
+  matched-session result shared by CLI, MCP, report, and Glance.
+  `npx aibill improve --sample` is the labeled practice run; it writes
+  nothing.
+- The agent-native loop: the read-only `draft_improve_command` MCP tool (the
+  tenth tool) lets an AI client draft the change/rollback/canary plan
+  conversationally and hand over one paste-safe `improve --draft` command.
+  Approval is still typed by the human in the terminal, never by an agent.
+- Local contracts for explicitly confirmed human/team/role ownership, optional
+  client/cost-centre labels, pre-change local self-attestation, and an opt-in
+  merged-GitHub-PR evidence record (`identify`, `outcome github`,
+  `accountability`). Those are foundations for Workspace, not company
+  identity, RBAC, approval routing, or a reconciled Project Economics Receipt.
+- A bounded, coverage-labeled Claude Code/Codex qualitative index, with
+  `npx aibill index` to read very large agent histories to completion through
+  resumable, privacy-stripped checkpoints.
+- Statusline v2: every subscription plus the committed total at any terminal
+  width, with `npx aibill statusline expand` for the full view.
+- Multiple provider organizations per connector: named per-account slices,
+  same-org duplicate warnings, and `aibill drop-slice` to remove a stale
+  slice.
 - Claude Code, Codex, and experimental Gemini CLI financial evidence in the CLI
   and explicit MCP/plugin,
   private init/cache, and optional cache-only Claude Code statusline.
@@ -35,28 +67,6 @@ invocation evidence, recommendations, or Apply.
 
 Workspace, accepted-outcome economics, ROI measurement, and autonomous
 enforcement are not shipped.
-
-## Unreleased source preview — action and proof
-
-The current development branch is testing one deliberately narrow launch loop:
-
-**Why is usage high? → What one safe change should I test? → Did token usage
-change while quality held?**
-
-It adds a bounded, coverage-labeled Claude Code/Codex qualitative index; one
-provider-aware reversible candidate; a repeated `aibill improve` flow; and one
-canonical matched-session result shared by CLI, MCP, report, and Glance. A
-percentage is allowed only for that user's calculated before/after result when
-the declared quality check held. It is not a universal saving, provider-bill,
-productivity, accepted-outcome, cash, or ROI claim.
-
-The same source preview contains local contracts for explicitly confirmed
-human/team/role ownership, optional client/cost-centre labels, pre-change local
-self-attestation, and an opt-in merged-GitHub-PR evidence record. Those are
-foundations for Workspace, not company identity, RBAC, approval routing, or a
-reconciled Project Economics Receipt. Public npm remains `v0.8.1` until a
-separate exact-version release passes its complete technical, external, and
-human acceptance gates.
 
 ## Next 30 days — current focus areas, not an exhaustive build order
 

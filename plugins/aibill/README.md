@@ -10,7 +10,8 @@ instructions.
 - `$aibill-explain`: field-level provenance, confidence, and missing-data
   explanations.
 - `$aibill-help`: choose CLI, MCP/plugin, or macOS Glance.
-- Eight MCP tools, including `get_usage_glance` and `get_context_health`.
+- Ten MCP tools, including `get_usage_glance`, `get_context_health`, and the
+  read-only `draft_improve_command` improve-plan drafting tool.
 
 The plugin launches `@agent-finops/mcp@0.9.1` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
