@@ -133,7 +133,7 @@ describe("telemetry API", () => {
 
   it("maps free-text commands to \"other\" and never stores the raw string", async () => {
     const fetchMock = stubSupabase();
-    const freeText = "receipt --json /Users/jose/secret-project";
+    const freeText = "receipt --json /tmp/example-project";
 
     const response = await post({ events: [validEvent({ command: freeText })] });
 
