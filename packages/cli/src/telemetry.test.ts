@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "./index.js";
 import { readSignupState, signupStateFilePath, writeSignupState } from "./signup.js";
 import {
+  buildDetachedTelemetrySendScript,
+  killTelemetryForThisProcess,
   openCliTelemetry,
+  resetTelemetrySessionKillForTests,
+  sendTelemetryDetached,
   postTelemetryBatch,
   readTelemetryState,
   serializeTelemetryBatch,
@@ -26,6 +30,11 @@ import {
   type TelemetryEvent,
   type TelemetryState
 } from "./telemetry.js";
+
+afterEach(() => {
+  // The M1 kill switch is process-scoped by design; tests must not leak it.
+  resetTelemetrySessionKillForTests();
+});
 
 const creepHint =
   "telemetry payload creep — the event is exactly {installId, command, version, os, arch, ci, durationBucket, ok, ts}; see docs/TELEMETRY.md before adding anything";
@@ -504,6 +513,53 @@ describe("receipt-line truth (both states pinned)", () => {
     expect(helpOn.stdout).toContain("anonymous command counts shared · aibill telemetry off");
   });
 
+  it("doctor and report surfaces disclose in both states — including the generated md/html files (QA B1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-tel-b1-"));
+    await runCli(["scan", "--sample", "--path", dir]);
+
+    const doctorOff = await runCli(["doctor", "--path", dir]);
+    expect(doctorOff.stdout).toContain("local-first mode: enabled (no cloud upload, no telemetry)");
+    const doctorOn = await runCli(["doctor", "--path", dir], { telemetryDisclosure: true });
+    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · aibill telemetry off");
+    expect(doctorOn.stdout).not.toContain("no telemetry)");
+
+    const reportOff = await runCli(["report", "--path", dir]);
+    expect(reportOff.exitCode).toBe(0);
+    expect(reportOff.stdout).toContain("privacy: report rendered locally with no aibill telemetry");
+    const markdownOff = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const htmlOff = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
+    expect(markdownOff).toContain("Report rendered locally with no aibill telemetry.");
+    expect(htmlOff).toContain("No aibill telemetry.");
+    expect(htmlOff).not.toContain("anonymous command counts");
+
+    const reportOn = await runCli(["report", "--path", dir], { telemetryDisclosure: true });
+    expect(reportOn.exitCode).toBe(0);
+    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · aibill telemetry off");
+    expect(reportOn.stdout).not.toContain("no aibill telemetry");
+    const markdownOn = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const htmlOn = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
+    // Persistent, shareable artifacts must state what their generating run did.
+    expect(markdownOn).toContain("the generating run shared anonymous command counts (aibill telemetry off to disable)");
+    expect(markdownOn).not.toContain("no aibill telemetry");
+    expect(htmlOn).toContain("The generating run shared anonymous command counts");
+    expect(htmlOn).not.toContain("No aibill telemetry.");
+
+    // The local-logs html variant carries the claim in its terminal-frame
+    // footer instead of the banner — both directions there too.
+    await writeClaudeLogFixture();
+    const logsDir = await mkdtemp(join(tmpdir(), "ai-spend-tel-b1-logs-"));
+    const localOff = await runCli(["report", "--path", logsDir]);
+    expect(localOff.exitCode).toBe(0);
+    const localHtmlOff = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
+    expect(localHtmlOff).toContain("no aibill telemetry");
+    expect(localHtmlOff).not.toContain("anonymous command counts");
+    const localOn = await runCli(["report", "--path", logsDir], { telemetryDisclosure: true });
+    expect(localOn.exitCode).toBe(0);
+    const localHtmlOn = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
+    expect(localHtmlOn).toContain("anonymous command counts shared · aibill telemetry off");
+    expect(localHtmlOn).not.toContain("no aibill telemetry<");
+  });
+
   it("embedded runCli emits nothing and creates no telemetry state (bin-entry-only wiring)", async () => {
     await writeClaudeLogFixture();
     const home = await tempHome();
@@ -511,6 +567,173 @@ describe("receipt-line truth (both states pinned)", () => {
     const result = await runCli(["--path", dir, "--no-color"], { homeDirectory: home });
     expect(result.exitCode).toBe(0);
     expect(await readTelemetryState(telemetryStateFilePath(home))).toEqual({ kind: "fresh" });
+  });
+});
+
+describe("fail-closed off switch (QA M1)", () => {
+  afterEach(() => {
+    resetTelemetrySessionKillForTests();
+  });
+
+  it("a failed off-persist silences the current process and points at the env kills", async () => {
+    const home = await tempHome();
+    // Notice first so the state is enabled+noticed.
+    const first = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await first.finish({ argv: [], ok: true, durationMs: 5, interactive: true, version: "0.9.2", printNotice: () => {} });
+
+    // Make the state dir readable but unwritable, then try to turn off.
+    const stateDir = join(telemetryStateFilePath(home), "..");
+    await chmod(stateDir, 0o555);
+    try {
+      const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+      expect(runtime.disclosureActive).toBe(true);
+      const off = await runCli(["telemetry", "off"], { homeDirectory: home });
+      expect(off.exitCode).toBe(1);
+      expect(off.stderr).toContain("telemetry off could not be persisted — nothing more will be sent by this run.");
+      expect(off.stderr).toContain("AI_SPEND_NO_TELEMETRY=1");
+      expect(off.stderr).toContain("DO_NOT_TRACK=1");
+      expect(off.stderr).not.toContain("stays off anyway");
+
+      // The very run that printed the failure must not emit its event.
+      const fetchImpl = vi.fn(async () => okResponse());
+      await runtime.finish({
+        argv: ["telemetry", "off"], ok: false, durationMs: 5, interactive: true, version: "0.9.2",
+        fetchImpl: fetchImpl as unknown as typeof fetch
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      await chmod(stateDir, 0o700);
+    }
+  });
+
+  it("a successful off also stops the in-flight process, not just later runs", async () => {
+    const home = await tempHome();
+    const first = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await first.finish({ argv: [], ok: true, durationMs: 5, interactive: true, version: "0.9.2", printNotice: () => {} });
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await runCli(["telemetry", "off"], { homeDirectory: home });
+    const fetchImpl = vi.fn(async () => okResponse());
+    await runtime.finish({
+      argv: ["telemetry", "off"], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("--json runs never receive the notice (QA m7)", () => {
+  it("prints nothing and stamps nothing on a --json first run", async () => {
+    const home = await tempHome();
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await runtime.finish({
+      argv: ["glance", "--json"], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      printNotice: () => { throw new Error("notice must not corrupt --json stdout"); }
+    });
+    expect(await readTelemetryState(telemetryStateFilePath(home))).toEqual({ kind: "fresh" });
+  });
+});
+
+describe("detached delivery never holds exit (QA M3)", () => {
+  it("wires the child exactly: node -e <script> <stateFile>, detached, stdio ignore, unref'd, prod URL baked in", async () => {
+    const home = await tempHome();
+    const stateFile = telemetryStateFilePath(home);
+    let captured: { command: string; args: string[]; options: Record<string, unknown>; unrefs: number } | undefined;
+    const spawnImpl = ((command: string, args: string[], options: Record<string, unknown>) => {
+      captured = { command, args, options, unrefs: 0 };
+      return { unref: () => { captured!.unrefs += 1; } };
+    }) as never;
+    sendTelemetryDetached(stateFile, { spawnImpl });
+    expect(captured).toBeDefined();
+    expect(captured!.command).toBe(process.execPath);
+    expect(captured!.args[0]).toBe("-e");
+    expect(captured!.args[2]).toBe(stateFile);
+    expect(captured!.args).toHaveLength(3);
+    expect(captured!.options).toMatchObject({ detached: true, stdio: "ignore" });
+    expect(captured!.unrefs).toBe(1);
+    // The destination is the baked-in production constant — never
+    // environment-controlled, and the payload never rides on argv.
+    expect(captured!.args[1]).toContain(JSON.stringify(telemetryUrl));
+    expect(captured!.args[1]).toContain("AbortSignal.timeout(1500)");
+    expect(captured!.args[1]).not.toContain("installId");
+  });
+
+  it("the child script delivers the cached payload byte-exactly to the endpoint", async () => {
+    const { createServer } = await import("node:http");
+    const received: string[] = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); });
+      request.on("end", () => {
+        received.push(body);
+        response.statusCode = 204;
+        response.end();
+      });
+    });
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const home = await tempHome();
+      const stateFile = telemetryStateFilePath(home);
+      const payload = serializeTelemetryBatch([fixedEvent])!;
+      await writeTelemetryState(stateFile, {
+        version: 1, installId: fixedEvent.installId, enabled: true,
+        noticedAt: "2026-08-24T10:00:00.000Z", lastPayload: payload
+      });
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      await promisify(execFile)(process.execPath, [
+        "-e", buildDetachedTelemetrySendScript(`http://127.0.0.1:${port}/api/telemetry`), stateFile
+      ]);
+      expect(received).toEqual([payload]);
+
+      // Disabled state: the child re-checks and sends nothing.
+      await writeTelemetryState(stateFile, {
+        version: 1, installId: fixedEvent.installId, enabled: false, lastPayload: payload
+      });
+      await promisify(execFile)(process.execPath, [
+        "-e", buildDetachedTelemetrySendScript(`http://127.0.0.1:${port}/api/telemetry`), stateFile
+      ]);
+      expect(received).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  });
+
+  it("a hanging endpoint adds ≤50ms to the parent path and never holds parent exit", async () => {
+    const { createServer } = await import("node:http");
+    const hangingServer = createServer(() => { /* never respond */ });
+    await new Promise<void>((resolvePromise) => hangingServer.listen(0, "127.0.0.1", resolvePromise));
+    const port = (hangingServer.address() as { port: number }).port;
+    try {
+      const home = await tempHome();
+      const stateFile = telemetryStateFilePath(home);
+      const payload = serializeTelemetryBatch([fixedEvent])!;
+      await writeTelemetryState(stateFile, {
+        version: 1, installId: fixedEvent.installId, enabled: true,
+        noticedAt: "2026-08-24T10:00:00.000Z", lastPayload: payload
+      });
+
+      // (a) The parent-side call is non-blocking regardless of endpoint health.
+      const spawnStarted = Date.now();
+      sendTelemetryDetached(stateFile);
+      expect(Date.now() - spawnStarted).toBeLessThanOrEqual(50);
+
+      // (b) End-to-end: a parent that fires the detached send at the HANGING
+      // endpoint and exits must not be held by the in-flight socket. The
+      // child's own abort is 1500ms; the parent must beat it decisively.
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const parentScript = [
+        'const { spawn } = require("node:child_process");',
+        `const child = spawn(process.execPath, ["-e", ${JSON.stringify(buildDetachedTelemetrySendScript(`http://127.0.0.1:${port}/api/telemetry`))}, process.argv[1]], { detached: true, stdio: "ignore" });`,
+        "child.unref();"
+      ].join("\n");
+      const started = Date.now();
+      await promisify(execFile)(process.execPath, ["-e", parentScript, stateFile]);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    } finally {
+      await new Promise<void>((resolvePromise) => hangingServer.close(() => resolvePromise()));
+    }
   });
 });
 

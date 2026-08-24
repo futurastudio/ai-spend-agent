@@ -58,10 +58,13 @@ names, models, dollar amounts, transcripts, your email — none of it is in
 the payload, and a CI creep-guard test pins the serialized bytes so adding
 a field fails the build.
 
-**Unjoinable to the launch-list signup:** the telemetry `installId` lives
-only in `~/.aibill/telemetry.json`; the signup state (`signup.json`) has no
-installId and the telemetry state has no email. There is no shared field,
-so per-email usage is structurally impossible — pinned by test.
+**Unjoinable to the launch-list signup at the payload layer:** the
+telemetry `installId` lives only in `~/.aibill/telemetry.json`; the signup
+state (`signup.json`) has no installId and the telemetry state has no
+email. No shared field exists in any payload or state file — pinned by
+test. (As with any two web requests to one host, transport metadata such
+as the source IP is shared at the network layer; the no-join claim stops
+at the payload.)
 
 **Embedding:** telemetry is wired only in the `aibill` bin entrypoint.
 Library consumers of `runCli` and the MCP server never emit events.

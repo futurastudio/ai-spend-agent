@@ -31,7 +31,9 @@ local structured result.
 
 ## Privacy boundary
 
-aibill sends no telemetry or transcripts to an aibill service. CLI transcript
+The aibill MCP server and plugin skills send no telemetry or transcripts to
+an aibill service (optional CLI command-count telemetry is documented in
+docs/TELEMETRY.md and is never emitted by MCP). CLI transcript
 analysis and the source-built Glance preview run locally. Scan, sync, and report
 tools may write explicit local state under the selected project's
 `.ai-spend-agent/` directory. A successful provider sync also writes a

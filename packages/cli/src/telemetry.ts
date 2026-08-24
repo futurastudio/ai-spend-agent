@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -22,8 +23,10 @@ import { dirname, join } from "node:path";
  *   durationBucket, ok, ts} — no args, flag values, paths, content, email,
  *   or anything joinable to signup.json. The installId lives ONLY in
  *   ~/.aibill/telemetry.json; the signup state has no installId and the
- *   telemetry state has no email — per-email usage is structurally
- *   impossible, and tests pin the separation.
+ *   telemetry state has no email — no shared field exists in any payload
+ *   or state file, and tests pin that separation. (Like any two web
+ *   requests to one host, transport metadata such as the source IP is
+ *   still shared at the network layer; the claim stops at the payload.)
  * - When telemetry is enabled+noticed, every surface that printed
  *   "nothing uploaded" prints the disclosure line instead — the receipt
  *   never claims less than what leaves the machine.
@@ -259,7 +262,9 @@ export function serializeTelemetryBatch(events: readonly TelemetryEvent[]): stri
 /**
  * One fire-and-forget POST: hard 1500ms abort, no retry, no queue, total
  * silence on ANY outcome that is not a 204 (4xx/429/5xx/transport = drop
- * and forget). Resolves quickly and never throws.
+ * and forget). Resolves quickly and never throws. Used directly by tests;
+ * production sends run in a detached child (see sendTelemetryDetached) so
+ * an in-flight socket can never hold the CLI's exit open.
  */
 export async function postTelemetryBatch(
   body: string,
@@ -278,6 +283,75 @@ export async function postTelemetryBatch(
   }
 }
 
+/**
+ * Build the one-shot sender script executed by the detached child. It reads
+ * the ALREADY-CACHED lastPayload from the state file (so the payload never
+ * rides on a command line), re-checks enabled, guards the batch shape, and
+ * POSTs once with its own 1500ms abort. The URL is baked in by the caller —
+ * production passes exactly `telemetryUrl`; nothing about the destination
+ * is ever environment-controlled.
+ */
+export function buildDetachedTelemetrySendScript(url: string): string {
+  return [
+    'const { readFile } = require("node:fs/promises");',
+    "(async () => {",
+    "  try {",
+    "    const raw = await readFile(process.argv[1], \"utf8\");",
+    "    const state = JSON.parse(raw);",
+    "    if (!state || state.enabled !== true || typeof state.lastPayload !== \"string\") return;",
+    "    const body = state.lastPayload;",
+    "    if (!body.startsWith('{\"events\":[') || Buffer.byteLength(body, \"utf8\") > 4096) return;",
+    `    await fetch(${JSON.stringify(url)}, {`,
+    '      method: "POST",',
+    '      headers: { "content-type": "application/json", "user-agent": "aibill-cli" },',
+    "      body,",
+    "      signal: AbortSignal.timeout(1500)",
+    "    });",
+    "  } catch {}",
+    "})();"
+  ].join("\n");
+}
+
+/**
+ * Homebrew-model delivery (QA M3): the POST runs in a detached, unref'd
+ * one-shot child so the parent CLI's exit is NEVER held by a slow or
+ * black-holed endpoint — the parent adds only the (async) spawn call. The
+ * child carries the 1500ms abort and total silence itself; only the state
+ * file path travels on its argv.
+ */
+export function sendTelemetryDetached(
+  stateFilePath: string,
+  options: { spawnImpl?: typeof spawn } = {}
+): void {
+  try {
+    const spawnImpl = options.spawnImpl ?? spawn;
+    const child = spawnImpl(
+      process.execPath,
+      ["-e", buildDetachedTelemetrySendScript(telemetryUrl), stateFilePath],
+      { detached: true, stdio: "ignore" }
+    );
+    child.unref();
+  } catch {
+    // Telemetry must never break the CLI.
+  }
+}
+
+// M1: a failed `telemetry off` persist must silence THIS process too —
+// the state still says enabled, so without this flag the very run that
+// printed the failure would emit its event. Module-scoped is correct here:
+// one bin process, and embedded callers never emit at all.
+let sessionTelemetryKilled = false;
+
+/** Suppress any further emission from the current process (fail closed). */
+export function killTelemetryForThisProcess(): void {
+  sessionTelemetryKilled = true;
+}
+
+/** Test-only: reset the process-scoped kill flag between cases. */
+export function resetTelemetrySessionKillForTests(): void {
+  sessionTelemetryKilled = false;
+}
+
 // ---------------------------------------------------------------------------
 // The bin-entry runtime. Embedded runCli callers and the MCP server never
 // construct this — zero emission outside the CLI entrypoint by structure.
@@ -293,6 +367,8 @@ export type CliTelemetryRuntime = {
     interactive: boolean;
     version: string;
     fetchImpl?: typeof fetch;
+    /** Test override for the detached production transport. */
+    spawnImpl?: typeof spawn;
     /** Test override; production writes stdout. */
     printNotice?: (lines: readonly string[]) => void;
   }) => Promise<void>;
@@ -315,6 +391,7 @@ export async function openCliTelemetry(options: {
     disclosureActive,
     finish: async (input) => {
       try {
+        if (sessionTelemetryKilled) return;
         if (envDisabled || read.kind === "unreadable") return;
         if (read.kind === "ok" && !read.state.enabled) return;
         // The command that just ran may have CHANGED the state (`telemetry
@@ -344,15 +421,24 @@ export async function openCliTelemetry(options: {
           // The exact payload is cached verbatim BEFORE the send so
           // `aibill telemetry` can always show what left the machine.
           await writeTelemetryState(filePath, { ...current.state, lastPayload: body });
-          void postTelemetryBatch(body, {
-            ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {})
-          });
+          if (input.fetchImpl) {
+            // Test transport: in-process, awaited by the mock harness.
+            void postTelemetryBatch(body, { fetchImpl: input.fetchImpl });
+          } else {
+            // Production transport: detached one-shot child (QA M3) — the
+            // parent's exit is never held by the socket.
+            sendTelemetryDetached(filePath, {
+              ...(input.spawnImpl ? { spawnImpl: input.spawnImpl } : {})
+            });
+          }
           return;
         }
         // First-notice path: interactive runs only, and only while the
         // CURRENT state is still un-noticed (an `on` this run already
         // stamped its own notice; an `off` must never be overwritten).
-        if (!input.interactive) return;
+        // --json outputs must stay machine-parseable, so those runs never
+        // print (or stamp) the notice either (QA m7).
+        if (!input.interactive || input.argv.includes("--json")) return;
         if (current.kind === "ok" && current.state.noticedAt !== undefined) return;
         const stamped: TelemetryState = {
           version: 1,

@@ -27,6 +27,7 @@ import {
   type SignupDnsResolver
 } from "./signup.js";
 import {
+  killTelemetryForThisProcess,
   readTelemetryState,
   telemetryDisclosureLine,
   telemetryNoticeLines,
@@ -404,7 +405,7 @@ export async function runCli(
   }
 
   if (args.command === "doctor") {
-    return doctorCommand(args);
+    return doctorCommand(args, runtime);
   }
 
   if (args.command === "reset") {
@@ -440,7 +441,7 @@ export async function runCli(
   }
 
   if (args.command === "report") {
-    return reportCommand(args);
+    return reportCommand(args, runtime);
   }
 
   if (args.command === "report-card") {
@@ -1602,12 +1603,20 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       ...(read.kind === "ok" && read.state.lastPayload !== undefined ? { lastPayload: read.state.lastPayload } : {})
     };
     if (!await writeTelemetryState(filePath, state)) {
+      // FAIL CLOSED (QA M1): the off could not be persisted and the stored
+      // state may still say enabled — silence THIS process and point at the
+      // env kill-switches for a durable off.
+      killTelemetryForThisProcess();
       return {
         exitCode: 1,
         stdout: "",
-        stderr: "telemetry state could not be written — telemetry stays off anyway (unreadable state fails closed)"
+        stderr: [
+          "telemetry off could not be persisted — nothing more will be sent by this run.",
+          "For a durable off, set AI_SPEND_NO_TELEMETRY=1 or DO_NOT_TRACK=1, then fix ~/.aibill permissions."
+        ].join("\n")
       };
     }
+    killTelemetryForThisProcess();
     return ok("telemetry off · nothing is sent");
   }
 
@@ -1751,7 +1760,7 @@ function dataModeBanner(mode: InstantReadMode, records: readonly UsageRecord[]):
   return "DATA MODE: demo sample (illustrative — not your real spend)";
 }
 
-async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
+async function doctorCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   if (args.sources) {
     return doctorSourcesCommand(args);
   }
@@ -1822,7 +1831,9 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
     "aibill doctor",
     `node version: ${process.version}`,
     `cli version: ${await cliVersion()}`,
-    "local-first mode: enabled (no cloud upload, no telemetry)",
+    runtime.telemetryDisclosure === true
+      ? "local-first mode: enabled (evidence stays local · anonymous command counts shared · aibill telemetry off)"
+      : "local-first mode: enabled (no cloud upload, no telemetry)",
     `path: ${rootPath}`,
     `state directory: ${stateDir}`,
     `state mode: ${stateMode}`,
@@ -4618,7 +4629,7 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
   ].join("\n"));
 }
 
-async function reportCommand(args: ParsedArgs): Promise<CliResult> {
+async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   const rootPath = resolve(args.path);
 
   try {
@@ -4657,9 +4668,11 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     const reportExperimentProjection = reportableExperiment
       ? buildActionVerificationProjectionV0(reportableExperiment)
       : undefined;
+    const telemetryDisclosure = runtime.telemetryDisclosure === true;
     const reportRenderInput: SpendReportInput = reportableExperiment
       ? {
           ...reportInput,
+          telemetryDisclosure,
           tokenExperiment: {
             id: reportableExperiment.id,
             lifecycle: reportableExperiment.lifecycle,
@@ -4669,7 +4682,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
             nextCommand: improveRuntimeCommand
           }
         }
-      : reportInput;
+      : { ...reportInput, telemetryDisclosure };
     const qualitativeActionsSuppressed = reportInput.dataMode !== "sample" &&
       reportInput.qualitativeCoverage?.status !== "complete";
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
@@ -4721,7 +4734,9 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
             !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
           : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
-      "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
+      runtime.telemetryDisclosure === true
+        ? "privacy: report rendered locally · anonymous command counts shared · aibill telemetry off; only explicit sync-provider contacts the selected provider"
+        : "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,

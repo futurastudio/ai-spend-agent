@@ -162,6 +162,34 @@ describe("email deliverability (MX + A fallback, fail-open DNS)", () => {
     expect(await assessEmailDeliverability("a@offline.example", { resolver: broken })).toBe("ok");
   });
 
+  it("shares ONE deadline across MX and the A fallback (QA m3)", async () => {
+    const blackHole: SignupDnsResolver = {
+      resolveMx: () => new Promise(() => {}),
+      resolve4: () => new Promise(() => {})
+    };
+    const started = Date.now();
+    expect(await assessEmailDeliverability("a@slow.example", { resolver: blackHole, timeoutMs: 60 })).toBe("ok");
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it("treats a resolver EBADNAME as provably undeliverable (QA m4)", async () => {
+    const badName: SignupDnsResolver = {
+      resolveMx: async () => { throw Object.assign(new Error("EBADNAME"), { code: "EBADNAME" }); },
+      resolve4: async () => { throw Object.assign(new Error("EBADNAME"), { code: "EBADNAME" }); }
+    };
+    expect(await assessEmailDeliverability("a@bad_name.example", { resolver: badName })).toBe("no_mx");
+  });
+
+  it("blocks disposable subdomains, not just exact matches (QA m5)", async () => {
+    const resolver: SignupDnsResolver = {
+      resolveMx: vi.fn(async () => [{ exchange: "mx", priority: 1 }]),
+      resolve4: vi.fn(async () => ["203.0.113.9"])
+    };
+    expect(await assessEmailDeliverability("x@sub.mailinator.com", { resolver })).toBe("disposable");
+    expect(await assessEmailDeliverability("x@notmailinator.com", { resolver })).toBe("ok");
+    expect(resolver.resolveMx).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects disposable-inbox domains from the static blocklist without any DNS call", async () => {
     const resolver: SignupDnsResolver = {
       resolveMx: vi.fn(async () => [{ exchange: "mx", priority: 1 }]),
@@ -426,13 +454,33 @@ describe("during-scan pre-receipt ask", () => {
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
   });
 
-  it("ends silently (no skip) after the bounded re-prompt budget", async () => {
+  it("closes the ask honestly (no skip) after the bounded re-prompt budget", async () => {
     const file = await tempStateFile();
     const scripted = scriptedIo(["bad", "bad", "bad", "bad", "bad", "bad", "never-read"]);
     const session = await openAsk(file, scripted);
     expect(await session!.outcome).toEqual({ kind: "skipped" });
     expect(scripted.questions).toHaveLength(6);
+    // QA m2: the surface says it is moving on instead of dying silently.
+    expect(scripted.written.at(-1)).toBe(`  ${signupCopy.budgetClosedLine}`);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
+  });
+
+  it("caps lifetime ask openings for perpetual walk-away users (QA m10)", async () => {
+    const file = await tempStateFile();
+    const eightDaysMs = 8 * 24 * 60 * 60 * 1_000;
+    let clock = Date.parse("2026-09-01T00:00:00Z");
+    const now = () => new Date(clock);
+    for (let opening = 0; opening < 6; opening += 1) {
+      const scripted = scriptedIo([undefined]); // walk away every time
+      const session = await openPreReceiptSignupAsk({ io: scripted.io, stateFilePath: file, now, dnsResolver: okDns });
+      expect(session, `opening ${opening + 1}`).toBeDefined();
+      await session!.outcome;
+      clock += eightDaysMs;
+    }
+    // Timeouts consumed no skips, but the stamp ceiling now ends the asks.
+    const seventh = scriptedIo(["never-read"]);
+    expect(await openPreReceiptSignupAsk({ io: seventh.io, stateFilePath: file, now, dnsResolver: okDns })).toBeUndefined();
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0, stampCount: 6 } });
   });
 
   it("never asks when the decision could not be persisted (readonly home fails closed)", async () => {
@@ -600,7 +648,7 @@ describe("during-scan orchestration", () => {
   });
 
   it("error-during-ask: the pipeline error is captured, the bounded ask still resolves, nothing hangs", async () => {
-    const { session, resolveOutcome } = manualSession();
+    const { session, resolveOutcome, readyNudges } = manualSession();
     const run = orchestratePreReceiptAsk({
       session,
       runPipeline: async () => { throw new Error("scan exploded"); }
@@ -611,6 +659,8 @@ describe("during-scan orchestration", () => {
     expect(pipeline.ok).toBe(false);
     expect((pipeline as { ok: false; error: Error }).error.message).toBe("scan exploded");
     expect(outcome).toEqual({ kind: "skipped" });
+    // QA m1: "your receipt is ready" must never announce an error.
+    expect(readyNudges).toHaveLength(0);
   });
 
   it("interrupt: an immediately-aborted read resolves as skipped with no skip consumed", async () => {

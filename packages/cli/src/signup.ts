@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { renderDrainNotice } from "./guidedPrompt.js";
 import { dirname, join } from "node:path";
 
 /**
@@ -150,6 +151,15 @@ export const disposableEmailDomains: ReadonlySet<string> = new Set([
   "emailondeck.com"
 ]);
 
+/** Exact or subdomain match against the blocklist (QA m5). */
+export function isDisposableEmailDomain(domain: string): boolean {
+  if (disposableEmailDomains.has(domain)) return true;
+  for (const blocked of disposableEmailDomains) {
+    if (domain.endsWith(`.${blocked}`)) return true;
+  }
+  return false;
+}
+
 export type SignupDnsResolver = {
   resolveMx: (domain: string) => Promise<Array<{ exchange: string; priority: number }>>;
   resolve4: (domain: string) => Promise<string[]>;
@@ -164,7 +174,9 @@ const dnsTimeoutMs = 1_500;
 
 function isDefinitiveDnsMiss(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "ENOTFOUND" || code === "ENODATA";
+  // EBADNAME: the resolver refused the name itself (invalid/homoglyph
+  // label) — as provably undeliverable as NXDOMAIN (QA m4).
+  return code === "ENOTFOUND" || code === "ENODATA" || code === "EBADNAME";
 }
 
 export async function assessEmailDeliverability(
@@ -172,17 +184,19 @@ export async function assessEmailDeliverability(
   options: { resolver?: SignupDnsResolver; timeoutMs?: number } = {}
 ): Promise<EmailDeliverability> {
   const domain = email.slice(email.lastIndexOf("@") + 1);
-  if (disposableEmailDomains.has(domain)) return "disposable";
+  if (isDisposableEmailDomain(domain)) return "disposable";
   const resolver = options.resolver ?? await defaultSignupDnsResolver().catch(() => undefined);
   if (!resolver) return "ok";
-  const budgetMs = options.timeoutMs ?? dnsTimeoutMs;
+  // ONE shared deadline for the whole check (QA m3): the MX lookup and the
+  // A-record fallback split a single 1.5s budget instead of stacking two.
+  const deadlineAt = Date.now() + (options.timeoutMs ?? dnsTimeoutMs);
   const withTimeout = async <T>(work: Promise<T>): Promise<T> => {
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         work,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("dns timeout")), budgetMs);
+          timer = setTimeout(() => reject(new Error("dns timeout")), Math.max(1, deadlineAt - Date.now()));
           timer.unref?.();
         })
       ]);
@@ -237,6 +251,12 @@ export const signupCopy = {
   /** Printed after the FIRST empty Enter; the second empty Enter skips. */
   skipNudgeLine: "one launch email · Enter again to skip, or type your email",
   scopeLine: "used only for updates · never shared",
+  /** Printed on the first Ctrl-C at the ask (the scan continues; M2). */
+  interruptLine: "ok — skipped the ask · your receipt is still being read (Ctrl-C again to quit)",
+  /** Printed when ^C lands after the ask settled but before the receipt. */
+  interruptAfterAnswerLine: "still reading your evidence · Ctrl-C again to quit",
+  /** Printed when the re-prompt budget closes the ask (no skip consumed). */
+  budgetClosedLine: "moving on · npx aibill signup <email> anytime",
   consentQuestion: (payloadJson: string): string => `send ${payloadJson} → asktilden.com/api/waitlist? [y/N] `,
   sentLine: "sent: exactly that JSON · nothing else in the payload",
   neverLine: "ok — never asking again · npx aibill signup <email> if you change your mind",
@@ -304,6 +324,12 @@ export type SignupState = {
   status: SignupStatus;
   /** Lifetime count of completed explicit skips (double-Enter / declined consent). */
   askCount: number;
+  /**
+   * Lifetime count of ask OPENINGS (stamped even when the human never
+   * answers). Timeouts consume no skip, so this cap is what ends the asks
+   * for perpetual walk-away users (QA m10).
+   */
+  stampCount?: number;
   lastAskedAt?: string;
   /** Stored only after a successful subscribe, only locally. */
   email?: string;
@@ -324,6 +350,8 @@ function isSignupState(value: unknown): value is SignupState {
   return state.version === 1 &&
     (state.status === "subscribed" || state.status === "never" || state.status === "deferred") &&
     typeof state.askCount === "number" && Number.isInteger(state.askCount) && state.askCount >= 0 &&
+    (state.stampCount === undefined ||
+      (typeof state.stampCount === "number" && Number.isInteger(state.stampCount) && state.stampCount >= 0)) &&
     (state.lastAskedAt === undefined || typeof state.lastAskedAt === "string") &&
     (state.email === undefined || typeof state.email === "string");
 }
@@ -372,6 +400,8 @@ export async function clearSignupState(filePath: string): Promise<boolean> {
 }
 
 const minimumMsBetweenAsks = 7 * 24 * 60 * 60 * 1_000;
+/** Hard lifetime ceiling on ask openings, decided answer or not (QA m10). */
+export const maximumLifetimeAskStamps = 6;
 
 /**
  * Whether the ONE ask may run. Fails closed on unreadable state; a
@@ -384,6 +414,7 @@ export function signupAskAllowed(read: SignupStateRead, now: Date): boolean {
   const state = read.state;
   if (state.status === "subscribed" || state.status === "never") return false;
   if (state.askCount >= 2) return false;
+  if ((state.stampCount ?? 0) >= maximumLifetimeAskStamps) return false;
   if (state.lastAskedAt !== undefined) {
     const askedAt = Date.parse(state.lastAskedAt);
     if (!Number.isFinite(askedAt)) return false;
@@ -454,7 +485,12 @@ export async function openPreReceiptSignupAsk(options: {
   // Stamp the ask BEFORE prompting. If home state cannot be written the ask
   // never shows (readonly home must not become an every-run nag: the decision
   // could never be persisted — fail closed to never-ask).
-  const stamped: SignupState = { ...base, status: "deferred", lastAskedAt: now().toISOString() };
+  const stamped: SignupState = {
+    ...base,
+    status: "deferred",
+    stampCount: (base.stampCount ?? 0) + 1,
+    lastAskedAt: now().toISOString()
+  };
   if (!await writeSignupState(options.stateFilePath, stamped)) return undefined;
 
   let settled = false;
@@ -513,6 +549,9 @@ export async function openPreReceiptSignupAsk(options: {
       }
       return { kind: "email", payload: { email, ref: buildWaitlistRef("receipt") }, stamped };
     }
+    // Re-prompt budget exhausted: close the surface honestly instead of a
+    // silent dead prompt (QA m2). No skip is consumed.
+    write(`  ${signupCopy.budgetClosedLine}`);
     return { kind: "skipped" };
   })().finally(() => {
     settled = true;
@@ -616,8 +655,10 @@ export async function orchestratePreReceiptAsk<T>(input: {
     askSettled = true;
     return value;
   });
-  void settledPipeline.then(() => {
-    if (!askSettled) session.notifyReceiptReady();
+  void settledPipeline.then((settled) => {
+    // The nudge announces a READY receipt — never fire it over an error
+    // (QA m1); the error voice follows once the bounded ask resolves.
+    if (settled.ok && !askSettled) session.notifyReceiptReady();
   });
   const [pipeline, outcome] = await Promise.all([settledPipeline, trackedOutcome]);
   return { pipeline, outcome };
@@ -651,29 +692,63 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
     let interrupted = false;
     let abortedRead = false;
     // Ctrl-C must SETTLE the pending read (closing the interface alone
-    // leaves question() unsettled, draining the loop before the receipt
-    // prints — the ask would eat the whole run). The interrupt signal
-    // rejects the read deterministically; the ask resolves as a
-    // no-decision and the receipt still renders.
-    const interruptController = new AbortController();
+    // leaves the waiter unsettled, draining the loop before the receipt
+    // prints — the ask would eat the whole run). The interrupt closes the
+    // read deterministically; the ask resolves as a no-decision, one ack
+    // line explains that the scan continues (QA M2), and the receipt still
+    // renders.
+    let waiter: ((line: string | undefined) => void) | undefined;
+    const settleWaiter = (line: string | undefined) => {
+      const settle = waiter;
+      waiter = undefined;
+      if (settle) settle(line);
+    };
+    // QA M4: lines that arrive while no read is armed (paste bursts landing
+    // in the gaps between questions) are buffered and then DISCARDED with
+    // the guided engine's drain notice when the next read arms — they are
+    // never used as answers, so pasted input can neither pre-answer the
+    // consent step nor strand the user in 30s of silent dead air.
+    const strayLines: string[] = [];
+    lineInterface.on("line", (line) => {
+      if (waiter) settleWaiter(line);
+      else strayLines.push(line);
+    });
+    lineInterface.on("close", () => {
+      settleWaiter(undefined);
+    });
     lineInterface.on("SIGINT", () => {
       interrupted = true;
-      interruptController.abort();
+      if (waiter) {
+        // A read was pending: skip the ask, keep the scan (QA M2).
+        process.stdout.write(`\n  ${signupCopy.interruptLine}\n`);
+        settleWaiter(undefined);
+      } else {
+        // No read pending (already answered / consent done): readline was
+        // swallowing the ^C — say so and stand aside so the NEXT ^C gets
+        // the default kill behavior.
+        process.stdout.write(`\n  ${signupCopy.interruptAfterAnswerLine}\n`);
+      }
       lineInterface.close();
     });
     const io: SignupAskIo = {
       question: async (query, timeoutMs) => {
         if (interrupted) return undefined;
+        if (strayLines.length > 0) {
+          const discarded = strayLines.length;
+          strayLines.length = 0;
+          process.stdout.write(`  ${renderDrainNotice(discarded)}\n`);
+        }
+        process.stdout.write(query);
+        const timer = setTimeout(() => settleWaiter(undefined), timeoutMs);
+        timer.unref?.();
         try {
-          const answer = await lineInterface.question(query, {
-            signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), interruptController.signal])
+          const answer = await new Promise<string | undefined>((resolvePromise) => {
+            waiter = resolvePromise;
           });
-          abortedRead = false;
+          abortedRead = answer === undefined;
           return answer;
-        } catch {
-          // Timeout, closed stream, or Ctrl-C: a no-decision, never a skip.
-          abortedRead = true;
-          return undefined;
+        } finally {
+          clearTimeout(timer);
         }
       },
       write: (line) => {
