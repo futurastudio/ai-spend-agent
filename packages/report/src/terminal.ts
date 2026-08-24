@@ -714,6 +714,13 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   lines.push("");
   lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
   lines.push("");
+  if (options.mode === "demo") {
+    // Static signup pointer on the sample exit only — never a prompt, safe
+    // to record (capture design moments map). Keep byte-identical to the
+    // CLI's signupCopy.samplePointer (pinned by cli signup tests).
+    lines.push(`  ${c.dim("launch updates: npx aibill signup <email> · optional · email only")}`);
+    lines.push("");
+  }
 
   return renderTerminalLines(lines, width);
 }

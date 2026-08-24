@@ -635,6 +635,18 @@ current form records interest, not access to a signed download.
   request.
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
+- **Launch-list signup is the sole, consent-gated exception to "uploads
+  nothing".** `npx aibill signup <email>` — and the single optional ask after
+  a real receipt — sends exactly one JSON payload,
+  `{"email":"you@work.com","ref":"cli-signup"}`, to
+  `https://asktilden.com/api/waitlist`, and only after the CLI prints that
+  literal payload and you type `y`. Enter always skips; two skips or `n`
+  means it never asks again. The decision is stored in `~/.aibill/signup.json`
+  (aibill's second home-scope file, next to the statusline cache); a failed
+  send is never retried, queued, or persisted. Like any web request, standard
+  HTTP metadata (source IP, request headers) accompanies the payload. The
+  address is used only for launch updates — the audience policy is written
+  down in [`docs/EMAIL_SEND_POLICY.md`](docs/EMAIL_SEND_POLICY.md).
 - **Estimates labeled as estimates.** Log-derived financial values with a
   supported price basis use published API rates and are tagged `estimated`;
   unsupported cost bases stay `missing`. Authenticated OpenAI and Anthropic

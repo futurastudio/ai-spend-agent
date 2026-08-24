@@ -12,6 +12,18 @@ import {
   type GuidedPromptSource
 } from "./guidedPrompt.js";
 import {
+  buildWaitlistRef,
+  normalizeWaitlistEmail,
+  postWaitlistSignup,
+  readSignupState,
+  clearSignupState,
+  sanitizeSignupRefTag,
+  serializeWaitlistPayload,
+  signupCopy,
+  signupStateFilePath,
+  writeSignupState
+} from "./signup.js";
+import {
   parsePlanDraft,
   renderCleanExit,
   runIdentitySequence,
@@ -218,6 +230,13 @@ export type CliResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Set only by a REAL receipt (local-logs/connected quickstart). The bin
+   * entrypoint may then run the one inline signup ask AFTER the complete
+   * receipt has printed — the receipt's bytes and exit code never change.
+   * See docs/qa-handoff/CLI_CAPTURE_DESIGN.md.
+   */
+  postReceiptSignupAsk?: boolean;
 };
 
 type ParsedArgs = {
@@ -282,6 +301,14 @@ type ParsedArgs = {
   outcomeAction?: "github";
   pullRequestNumber?: number;
   businessOutcome?: string;
+  /** signup: the email typed as the positional argument. */
+  signupEmail?: string;
+  /** signup: sanitized attribution tag from --ref (e.g. starfund). */
+  signupRef?: string;
+  /** signup --forget: clear local signup state. */
+  signupForget?: boolean;
+  /** signup --never: record never-ask without sending anything. */
+  signupNever?: boolean;
   parseErrors: string[];
 };
 
@@ -306,6 +333,8 @@ export type CliRuntimeOptions = {
     source: GuidedPromptSource;
     write: (text: string) => void;
   }>;
+  /** Test override for the waitlist signup POST. Production uses global fetch. */
+  waitlistFetch?: typeof fetch;
 };
 
 export async function runCli(
@@ -373,6 +402,10 @@ export async function runCli(
 
   if (args.command === "statusline") {
     return statuslineCommand(args, runtime);
+  }
+
+  if (args.command === "signup") {
+    return signupCommand(args, runtime);
   }
 
   if (args.command === "scan") {
@@ -627,7 +660,15 @@ async function quickstartCommand(
     ...(detailedView ? wrapCliHeader(dataModeBanner(mode, summaryRecords), "  ", outputWidth) : []),
     ...warnings.flatMap((warning) => wrapCliHeader(warning, "  ! ", outputWidth))
   ].join("\n");
-  return ok(header ? `${header}\n${summaryText}` : summaryText);
+  const result = ok(header ? `${header}\n${summaryText}` : summaryText);
+  // The ONE inline signup ask may follow a REAL receipt (local-logs or
+  // connected), never the sample demo and never a --group-by drill-down.
+  // The bin entrypoint runs it AFTER this stdout has fully printed; the
+  // receipt itself is byte-identical either way.
+  if (mode !== "demo" && !args.groupBy) {
+    result.postReceiptSignupAsk = true;
+  }
+  return result;
 }
 
 async function buildQuickstartGuidedExperience(input: {
@@ -1016,6 +1057,11 @@ function quickstartNextSteps(
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
   steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com");
+  if (mode === "demo") {
+    // Static pointer only — sample output is built for recordings and
+    // screenshots, so it never prompts (capture design moments map).
+    steps.push(signupCopy.samplePointer);
+  }
   return steps;
 }
 
@@ -1421,6 +1467,85 @@ function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string 
     `${coverage.skippedForBudget} eligible files skipped by budget`;
 }
 
+/**
+ * `aibill signup <email> [--ref <token>]` — the explicit, deliberate path to
+ * the launch list. Sends EXACTLY {email, ref} to the deployed waitlist route
+ * after showing the literal payload JSON and receiving a typed `y` on a real
+ * terminal. Never sends without the confirm; never retries, queues, or
+ * persists the typed email on failure. `--forget` clears local signup state;
+ * `--never` records never-ask without sending anything.
+ */
+async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const stateFile = signupStateFilePath(runtime.homeDirectory);
+
+  if (args.signupForget) {
+    const cleared = await clearSignupState(stateFile);
+    return cleared
+      ? ok(signupCopy.forgetLine)
+      : { exitCode: 1, stdout: "", stderr: "local signup state could not be cleared; check ~/.aibill permissions" };
+  }
+
+  const priorRead = await readSignupState(stateFile);
+  const priorAskCount = priorRead.kind === "ok" ? priorRead.state.askCount : 0;
+
+  if (args.signupNever) {
+    const written = await writeSignupState(stateFile, { version: 1, status: "never", askCount: priorAskCount });
+    return written
+      ? ok(signupCopy.neverLine)
+      : { exitCode: 1, stdout: "", stderr: "never-ask could not be persisted; check ~/.aibill permissions" };
+  }
+
+  if (!args.signupEmail) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "signup needs an email: npx aibill signup you@work.com [--ref <token>]",
+        "Optional: signup --never (never ask again) · signup --forget (clear local signup state)"
+      ].join("\n")
+    };
+  }
+
+  // Consent requires a human at a real terminal; there is deliberately no
+  // --yes flag and no non-TTY path (QA 2).
+  if (runtime.interactive !== true || !runtime.prompt) {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.nonInteractiveLine };
+  }
+
+  const email = normalizeWaitlistEmail(args.signupEmail);
+  if (email === undefined) {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.invalidEmailLine };
+  }
+
+  if (priorRead.kind === "ok" && priorRead.state.status === "subscribed" && priorRead.state.email === email) {
+    // Cosmetic-local dedupe; the route itself is idempotent (201 on duplicate).
+    return ok(signupCopy.alreadyLine);
+  }
+
+  const payload = { email, ref: buildWaitlistRef("signup", args.signupRef) };
+  const consent = (await runtime.prompt(
+    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`
+  )).trim().toLowerCase();
+  if (consent !== "y" && consent !== "yes") {
+    return ok(signupCopy.nothingSentLine);
+  }
+
+  const outcome = await postWaitlistSignup(payload, { fetchImpl: runtime.waitlistFetch });
+  if (outcome === "sent") {
+    await writeSignupState(stateFile, { version: 1, status: "subscribed", askCount: priorAskCount, email });
+    return ok(signupCopy.sentLine);
+  }
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: outcome === "invalid_email"
+      ? signupCopy.invalidEmailLine
+      : outcome === "rate_limited"
+        ? signupCopy.rateLimitedLine
+        : signupCopy.unreachableLine
+  };
+}
+
 function noEvidenceResult(
   surface: "receipt" | "watch" | "report-card",
   warnings: readonly string[],
@@ -1443,7 +1568,8 @@ function noEvidenceResult(
           ...warnings.map((warning) => `! ${warning}`),
           "",
           "Next",
-          "  npx aibill doctor --sources       see the exact evidence gap and setup paths"
+          "  npx aibill doctor --sources       see the exact evidence gap and setup paths",
+          `  ${signupCopy.receiptPointer}`
         ].join("\n")
       : "",
     stderr: surface === "receipt"
@@ -2208,7 +2334,9 @@ async function installStatuslineCommand(
         ? "aibill statusline is already installed in Claude user settings."
         : "aibill statusline installed in Claude user settings.",
       "Claude Code: run /status to verify the active setting and every managed source.",
-      "The renderer reads only the private aibill cache; it never reads Claude's session stdin as financial evidence."
+      "The renderer reads only the private aibill cache; it never reads Claude's session stdin as financial evidence.",
+      // Static pointer only — never a prompt (capture design moments map).
+      signupCopy.statuslinePointer
     ].join("\n"));
   } catch (error) {
     return statuslineInstallerFailure("install", error);
@@ -3142,6 +3270,9 @@ function formatInitReceipt(input: InitReceiptInput): string {
     `status cache: ${input.cacheStatus} · private local aggregate · nothing uploaded`,
     "state: .ai-spend-agent",
     "manifest: written last",
+    // Static pointer only, ABOVE the strict single next-command exit line —
+    // init's `next:` line stays last (capture design moments map).
+    signupCopy.initPointer,
     "next: npx aibill doctor --sources"
   ].filter((line) => line !== "").join("\n");
 }
@@ -7103,6 +7234,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     parsed.provider = rest[0];
     rest.shift();
   }
+  if (command === "signup" && rest[0] && !rest[0].startsWith("-")) {
+    parsed.signupEmail = rest.shift();
+  }
   if (command === "verify") {
     const first = rest[0];
     if (first === "inspect" || first === "start" || first === "mark-applied" ||
@@ -7131,7 +7265,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--interval", "--cycles", "--canary", "--quality", "--change-digest",
     "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
     "--pr", "--business-outcome",
-    "--draft", "--record-applied-at", "--record-canary"
+    "--draft", "--record-applied-at", "--record-canary",
+    "--ref"
   ]);
   const numericValueFlags = new Set([
     "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles", "--pr"
@@ -7275,6 +7410,29 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--ignore-state") {
       parsed.ignoreState = true;
+      continue;
+    }
+    if (arg === "--forget") {
+      parsed.signupForget = true;
+      continue;
+    }
+    if (arg === "--never") {
+      parsed.signupNever = true;
+      continue;
+    }
+    if (arg === "--ref") {
+      const next = rest[index + 1];
+      if (next) {
+        // Allowlist sanitization happens here so nothing outside
+        // [a-z0-9-]{1,24} can ever reach the payload builder (QA 8).
+        const tag = sanitizeSignupRefTag(next);
+        if (tag === undefined) {
+          parsed.parseErrors.push("--ref must be 1-24 lowercase letters, digits, or dashes (e.g. --ref starfund)");
+        } else {
+          parsed.signupRef = tag;
+        }
+        index += 1;
+      }
       continue;
     }
     if (arg === "--plan") {
@@ -7756,6 +7914,8 @@ function helpText(): string {
     "    [--replace]           Explicitly replace an existing statusLine while preserving it for uninstall",
     "  statusline uninstall    Remove only the owned setting and restore its preserved predecessor",
     "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
+    "  signup <email> [--ref <token>]  Join the launch list · email only · the exact payload is shown before send",
+    "    [--never]             Never ask again (nothing is sent)   [--forget]  Clear local signup state",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
@@ -7844,8 +8004,8 @@ export async function runMain(): Promise<void> {
   let result: CliResult;
   let promptInterface: import("node:readline/promises").Interface | undefined;
   let guidedInterface: import("node:readline").Interface | undefined;
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   try {
-    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     let guidedIoShared:
       | { source: GuidedPromptSource; write: (text: string) => void }
       | undefined;
@@ -7905,6 +8065,20 @@ export async function runMain(): Promise<void> {
     console.error(result.stderr);
   }
   process.exitCode = result.exitCode;
+
+  // The ONE inline signup ask, strictly AFTER the complete receipt has
+  // printed and the exit code is already settled. Interactive TTY only;
+  // CI/AI_SPEND_NO_PROMPT/piped runs never see it, and nothing here can
+  // change the receipt's bytes or exit code.
+  if (result.postReceiptSignupAsk === true && interactive &&
+      !process.env.CI && !process.env.AI_SPEND_NO_PROMPT) {
+    try {
+      const { runPostReceiptSignupAskInTerminal } = await import("./signup.js");
+      await runPostReceiptSignupAskInTerminal();
+    } catch {
+      // The ask must never break the receipt path.
+    }
+  }
 }
 
 if (invokedAsMain) {

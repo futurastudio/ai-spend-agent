@@ -86,7 +86,10 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).toContain("No sample data was substituted");
     expect(result.stdout).toContain("Looked for: Claude Code, Codex, and Gemini CLI");
     expect(result.stdout).toContain("doctor --sources");
-    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(1);
+    // Exactly two commands: the doctor next step and the optional signup
+    // pointer (static, never a prompt — capture design moments map).
+    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(2);
+    expect(result.stdout).toContain("npx aibill signup <email>");
     expect(result.stdout).not.toContain("connect openai");
     expect(result.stdout).not.toContain("connect anthropic");
     expect(result.stdout).not.toContain("$87.00");
