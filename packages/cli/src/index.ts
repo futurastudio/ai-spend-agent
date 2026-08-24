@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -25,6 +26,14 @@ import {
   writeSignupState,
   type SignupDnsResolver
 } from "./signup.js";
+import {
+  readTelemetryState,
+  telemetryDisclosureLine,
+  telemetryNoticeLines,
+  telemetryStateFilePath,
+  writeTelemetryState,
+  type TelemetryState
+} from "./telemetry.js";
 import {
   parsePlanDraft,
   renderCleanExit,
@@ -305,6 +314,8 @@ type ParsedArgs = {
   signupForget?: boolean;
   /** signup --never: record never-ask without sending anything. */
   signupNever?: boolean;
+  /** telemetry subcommand: on | off | (absent = status). */
+  telemetryAction?: string;
   parseErrors: string[];
 };
 
@@ -333,6 +344,12 @@ export type CliRuntimeOptions = {
   waitlistFetch?: typeof fetch;
   /** Test override for signup email deliverability DNS. Production uses node:dns. */
   signupDns?: SignupDnsResolver;
+  /**
+   * Set ONLY by the bin entrypoint when telemetry is enabled AND noticed:
+   * every "nothing uploaded" claim then prints the disclosure line instead.
+   * Embedded/MCP callers never set it (and never emit telemetry).
+   */
+  telemetryDisclosure?: boolean;
 };
 
 export async function runCli(
@@ -343,7 +360,7 @@ export async function runCli(
     return ok(await cliVersion());
   }
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
-    return ok(helpText());
+    return ok(helpText(runtime.telemetryDisclosure));
   }
 
   const args = parseArgs(argv);
@@ -406,6 +423,10 @@ export async function runCli(
     return signupCommand(args, runtime);
   }
 
+  if (args.command === "telemetry") {
+    return telemetryCommand(args, runtime);
+  }
+
   if (args.command === "scan") {
     return scanCommand(args);
   }
@@ -431,7 +452,7 @@ export async function runCli(
   }
 
   if (args.command === "context" || args.command === "context-health") {
-    return contextHealthCommand(args);
+    return contextHealthCommand(args, runtime);
   }
 
   if (args.command === "apply-artifact" || args.command === "apply") {
@@ -489,7 +510,7 @@ export async function runCli(
   return {
     exitCode: 1,
     stdout: "",
-    stderr: `Unknown command: ${sanitizeSecretishError(args.command)}\n${helpText()}`
+    stderr: `Unknown command: ${sanitizeSecretishError(args.command)}\n${helpText(runtime.telemetryDisclosure)}`
   };
 }
 
@@ -538,7 +559,7 @@ async function quickstartCommand(
     financialCoverageComplete
   } = await loadInstantReadData(args);
   if (records.length === 0) {
-    return noEvidenceResult("receipt", warnings, sinceDays);
+    return noEvidenceResult("receipt", warnings, sinceDays, runtime.telemetryDisclosure);
   }
   const summaryRecords = mode === "connected"
     ? selectProviderFinancialHeadlineRecords(records)
@@ -638,6 +659,10 @@ async function quickstartCommand(
     groupBy,
     color,
     mode,
+    // Receipt-line truth: with telemetry enabled+noticed the receipt's
+    // privacy claim discloses the command counts instead of "nothing
+    // uploaded".
+    ...(runtime.telemetryDisclosure === true ? { telemetryDisclosureLine } : {}),
     ...(providerCoverage ? { providerCoverage } : {}),
     nextSteps,
     deadContext,
@@ -940,7 +965,7 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   return ok(JSON.stringify(snapshot));
 }
 
-async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
+async function contextHealthCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const sinceIso = sinceIsoForDays(sinceDays);
@@ -966,10 +991,10 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
   const qualitativeCoverage = summarizeCliQualitativeCoverage(logs);
   return ok(args.json
     ? JSON.stringify({ ...health, qualitativeCoverage })
-    : `${renderContextHealth(health)}\n\n${renderCliQualitativeCoverage(qualitativeCoverage)}`);
+    : `${renderContextHealth(health, runtime.telemetryDisclosure)}\n\n${renderCliQualitativeCoverage(qualitativeCoverage)}`);
 }
 
-function renderContextHealth(health: ContextHealthResult): string {
+function renderContextHealth(health: ContextHealthResult, telemetryDisclosure?: boolean): string {
   const status = health.status.replace("_", " ").toUpperCase();
   const activation = health.activation;
   const dead = health.deadContext;
@@ -1022,7 +1047,7 @@ function renderContextHealth(health: ContextHealthResult): string {
   lines.push(
     "",
     "Data: local agent configuration + local Claude Code/Codex transcripts; hook commands were not run.",
-    "Privacy: this CLI run uploads nothing."
+    `Privacy: ${uploadsNothingLine(telemetryDisclosure, "this CLI run uploads nothing.")}`
   );
   return lines.join("\n");
 }
@@ -1550,10 +1575,104 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
   };
 }
 
+/**
+ * `aibill telemetry [on|off]` — inspect or switch anonymous command-count
+ * telemetry. Status shows the EXACT last payload verbatim; state is
+ * fail-closed (corrupt/readonly ⇒ off).
+ */
+async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const filePath = telemetryStateFilePath(runtime.homeDirectory);
+  const read = await readTelemetryState(filePath);
+  const action = args.telemetryAction;
+
+  if (action !== undefined && action !== "on" && action !== "off") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: aibill telemetry [on|off]`
+    };
+  }
+
+  if (action === "off") {
+    const state: TelemetryState = {
+      version: 1,
+      installId: read.kind === "ok" ? read.state.installId : randomUUID(),
+      enabled: false,
+      ...(read.kind === "ok" && read.state.noticedAt !== undefined ? { noticedAt: read.state.noticedAt } : {}),
+      ...(read.kind === "ok" && read.state.lastPayload !== undefined ? { lastPayload: read.state.lastPayload } : {})
+    };
+    if (!await writeTelemetryState(filePath, state)) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "telemetry state could not be written — telemetry stays off anyway (unreadable state fails closed)"
+      };
+    }
+    return ok("telemetry off · nothing is sent");
+  }
+
+  if (action === "on") {
+    // Turning telemetry on explicitly IS the notice moment: the user is
+    // reading this command's output, so noticedAt is stamped now and
+    // events begin on the next run.
+    const state: TelemetryState = {
+      version: 1,
+      installId: read.kind === "ok" ? read.state.installId : randomUUID(),
+      enabled: true,
+      noticedAt: new Date().toISOString(),
+      ...(read.kind === "ok" && read.state.lastPayload !== undefined ? { lastPayload: read.state.lastPayload } : {})
+    };
+    if (!await writeTelemetryState(filePath, state)) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "telemetry state could not be written — telemetry remains off (unreadable state fails closed)"
+      };
+    }
+    return ok([
+      "telemetry on · anonymous command counts only",
+      `counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
+      "never: arguments, paths, file contents, project names, or your email",
+      "events start with your next run · see payloads anytime: aibill telemetry"
+    ].join("\n"));
+  }
+
+  const lines = ["aibill telemetry"];
+  if (read.kind === "unreadable") {
+    lines.push("status: off (state unreadable — telemetry fails closed)");
+  } else if (read.kind === "fresh") {
+    lines.push("status: not yet noticed · nothing has ever been sent");
+    lines.push("a one-time notice prints after your next interactive run; events begin only after it");
+  } else if (!read.state.enabled) {
+    lines.push("status: off · nothing is sent");
+  } else if (read.state.noticedAt === undefined) {
+    lines.push("status: on but not yet noticed · nothing has been sent");
+  } else {
+    lines.push(`status: on · noticed ${read.state.noticedAt}`);
+  }
+  lines.push(
+    "counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp",
+    "never: arguments, paths, file contents, project names, or your email"
+  );
+  if (read.kind === "ok" && read.state.lastPayload !== undefined) {
+    lines.push("last payload sent (verbatim):", read.state.lastPayload);
+  } else {
+    lines.push("last payload sent: none");
+  }
+  lines.push("switch: aibill telemetry on · aibill telemetry off");
+  return ok(lines.join("\n"));
+}
+
+/** The run-level privacy claim: literal truth in both telemetry states. */
+function uploadsNothingLine(telemetryDisclosure: boolean | undefined, original: string): string {
+  return telemetryDisclosure === true ? telemetryDisclosureLine : original;
+}
+
 function noEvidenceResult(
   surface: "receipt" | "watch" | "report-card",
   warnings: readonly string[],
-  sinceDays: number
+  sinceDays: number,
+  telemetryDisclosure?: boolean
 ): CliResult {
   const surfaceLine = surface === "watch"
     ? "Watch has no financial baseline yet; no zero total or sample activity was recorded."
@@ -1568,7 +1687,7 @@ function noEvidenceResult(
           "",
           surfaceLine,
           "Looked for: Claude Code, Codex, and Gemini CLI local history.",
-          "Nothing was uploaded. No sample data was substituted.",
+          `${uploadsNothingLine(telemetryDisclosure, "Nothing was uploaded.")} No sample data was substituted.`,
           ...warnings.map((warning) => `! ${warning}`),
           "",
           "Next",
@@ -2492,7 +2611,8 @@ async function initCommand(
     trustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true,
     untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
     scanError,
-    cacheStatus
+    cacheStatus,
+    ...(runtime.telemetryDisclosure !== undefined ? { telemetryDisclosure: runtime.telemetryDisclosure } : {})
   });
   if (!args.statusline) {
     return ok(`${receipt}\noptional Claude Code status line: npx aibill statusline install`);
@@ -3135,6 +3255,7 @@ type InitReceiptInput = {
   untrustedProviderState: boolean;
   scanError?: string;
   cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+  telemetryDisclosure?: boolean;
 };
 
 function initProviderCoverage(
@@ -3292,7 +3413,7 @@ function formatInitReceipt(input: InitReceiptInput): string {
     ...diagnosticLines,
     input.scanError ? `  ! scan failed: ${input.scanError}` : "",
     "",
-    `status cache: ${input.cacheStatus} · private local aggregate · nothing uploaded`,
+    `status cache: ${input.cacheStatus} · private local aggregate · ${uploadsNothingLine(input.telemetryDisclosure, "nothing uploaded")}`,
     "state: .ai-spend-agent",
     "manifest: written last",
     // Static pointer only, ABOVE the strict single next-command exit line —
@@ -7264,6 +7385,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (command === "signup" && rest[0] && !rest[0].startsWith("-")) {
     parsed.signupEmail = rest.shift();
   }
+  if (command === "telemetry" && rest[0] && !rest[0].startsWith("--")) {
+    parsed.telemetryAction = rest.shift();
+  }
   if (command === "verify") {
     const first = rest[0];
     if (first === "inspect" || first === "start" || first === "mark-applied" ||
@@ -7904,7 +8028,7 @@ function ok(stdout: string): CliResult {
   return { exitCode: 0, stdout, stderr: "" };
 }
 
-function helpText(): string {
+function helpText(telemetryDisclosure?: boolean): string {
   return [
     "aibill — your AI cost and usage evidence in one private view",
     "",
@@ -7943,6 +8067,7 @@ function helpText(): string {
     "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
     "  signup <email> [--ref <token>]  Join the launch list · email only · the exact payload is shown before send",
     "    [--never]             Never ask again (nothing is sent)   [--forget]  Clear local signup state",
+    "  telemetry [on|off]      Show anonymous command-count status + the exact last payload · switch it",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
@@ -7976,7 +8101,9 @@ function helpText(): string {
     "Cron (production watch): add a crontab entry such as:",
     "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
     "",
-    "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
+    telemetryDisclosure === true
+      ? "Privacy: local analysis and reports upload nothing; anonymous command counts shared · aibill telemetry off. Only explicit sync-provider contacts the selected provider through an env: reference."
+      : "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
     "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
   ].join("\n");
 }
@@ -8016,6 +8143,18 @@ export async function runMain(): Promise<void> {
   const command = argv[0];
   const isInstantDemo = !command || command === "quickstart" || command === "demo";
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const startedAtMs = Date.now();
+
+  // Bin-entry-only telemetry (notice-before-first-byte; see telemetry.ts).
+  // Embedded runCli callers and the MCP server never construct this, so
+  // they can never emit an event.
+  let telemetry: import("./telemetry.js").CliTelemetryRuntime | undefined;
+  try {
+    const { openCliTelemetry } = await import("./telemetry.js");
+    telemetry = await openCliTelemetry();
+  } catch {
+    // Telemetry must never break the CLI.
+  }
 
   // The during-scan signup ask (capture design, placement addendum
   // 2026-08-24): on a qualifying interactive first run the ask fills the
@@ -8056,6 +8195,7 @@ export async function runMain(): Promise<void> {
       | undefined;
     const runPipeline = (): Promise<CliResult> => runCli(argv, {
       interactive,
+      ...(telemetry?.disclosureActive === true ? { telemetryDisclosure: true } : {}),
       ...(interactive ? {
         prompt: async (question: string) => {
           if (!promptInterface) {
@@ -8106,7 +8246,7 @@ export async function runMain(): Promise<void> {
       stdout: "",
       stderr: [
         `aibill hit an unexpected error: ${message}`,
-        "Nothing was uploaded. The command stopped without completing; run diagnostics before retrying.",
+        `${telemetry?.disclosureActive === true ? telemetryDisclosureLine : "Nothing was uploaded."} The command stopped without completing; run diagnostics before retrying.`,
         "Try `npx aibill doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
       ].join("\n")
     };
@@ -8136,6 +8276,22 @@ export async function runMain(): Promise<void> {
     await preAsk.runConsent(askOutcome);
   }
   preAsk?.close();
+
+  // Telemetry LAST: on the first interactive run this prints the one-time
+  // notice (and stamps it); on later noticed runs it fires ONE
+  // fire-and-forget event with a hard 1500ms abort. Never blocks the
+  // receipt, never changes the exit code.
+  try {
+    await telemetry?.finish({
+      argv,
+      ok: result.exitCode === 0,
+      durationMs: Date.now() - startedAtMs,
+      interactive,
+      version: await cliVersion()
+    });
+  } catch {
+    // Telemetry must never break the CLI.
+  }
 }
 
 if (invokedAsMain) {

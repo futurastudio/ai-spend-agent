@@ -83,6 +83,12 @@ export type PlainEnglishSummaryOptions = {
   mode?: "demo" | "connected" | "local-logs";
   /** Optional next-step CTA lines printed in the footer. */
   nextSteps?: string[];
+  /**
+   * When the CLI entrypoint runs with telemetry enabled AND noticed, the
+   * receipt's "nothing uploaded" claim is replaced by this line so the
+   * printed privacy claim never understates what leaves the machine.
+   */
+  telemetryDisclosureLine?: string;
   /** Provider response completeness; independent from row-level confidence. */
   providerCoverage?: "complete" | "partial";
   /**
@@ -636,7 +642,8 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
     summary.confidence,
     options.providerCoverage,
     presentationBasis,
-    c
+    c,
+    options.telemetryDisclosureLine
   );
   const headline = compactHeadline(
     presentationBasis,
@@ -730,7 +737,8 @@ function compactTrust(
   confidence: CostConfidence,
   providerCoverage: PlainEnglishSummaryOptions["providerCoverage"],
   basis: FinancialPresentationBasis,
-  c: Colors
+  c: Colors,
+  telemetryDisclosureLine?: string
 ): { label: string; note: string } {
   if (mode === "demo") {
     return {
@@ -741,7 +749,7 @@ function compactTrust(
   if (mode === "local-logs") {
     return {
       label: c.yellow(c.bold("LOCAL ESTIMATE")),
-      note: "private transcript evidence × published API rates · nothing uploaded"
+      note: `private transcript evidence × published API rates · ${telemetryDisclosureLine ?? "nothing uploaded"}`
     };
   }
   if (mode === "connected" && providerCoverage === "partial") {

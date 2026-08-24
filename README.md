@@ -627,8 +627,16 @@ current form records interest, not access to a signed download.
 ## Privacy & trust
 
 - **Local-first by default.** CLI and Glance transcript analysis happens on
-  your machine and sends no telemetry. An explicit `sync-provider` call uses
-  the inherited credential only with that provider's official API.
+  your machine. An explicit `sync-provider` call uses the inherited
+  credential only with that provider's official API.
+- **Anonymous command counts, notice-first.** The CLI can count which
+  commands run — never arguments, paths, content, dollars, or your email.
+  Nothing is sent before a one-time notice has been shown on an interactive
+  run; `aibill telemetry` prints the exact last payload verbatim,
+  `aibill telemetry off` (or `DO_NOT_TRACK`/`CI`/`AI_SPEND_NO_TELEMETRY`)
+  turns it off, and while it is on every receipt says so in place of
+  "nothing uploaded". Details and the full never-list:
+  [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
 - **Explicit MCP boundary.** When you invoke an MCP tool or plugin skill, its
   selected structured result is returned to that AI client and follows the
   client's data policy. The aibill process itself makes no telemetry/upload
