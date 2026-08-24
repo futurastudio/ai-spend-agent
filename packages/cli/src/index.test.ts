@@ -4726,8 +4726,12 @@ describe("minimal CLI vertical slice", () => {
     ]);
 
     const receipt = await runCli(["--path", dir, "--no-color"]);
+    const report = await runCli(["report", "--path", dir, "--out", "connected-mixed"]);
+    const reportMarkdown = await readFile(join(dir, "connected-mixed.md"), "utf8");
+    const reportHtml = await readFile(join(dir, "connected-mixed.html"), "utf8");
 
     expect(receipt.exitCode).toBe(0);
+    expect(report.exitCode).toBe(0);
     expect(receipt.stdout).toContain("CONNECTED · MIXED EVIDENCE");
     // The claude sub row keeps its ~ figure from local transcripts.
     expect(receipt.stdout).toContain(
@@ -4745,6 +4749,14 @@ describe("minimal CLI vertical slice", () => {
     expect(receipt.stdout).toContain("includes $8.66 billed from sources without a subscription row");
     expect(receipt.stdout).toContain("$8.66 billed (provider-reported, verified)");
     expect(receipt.stdout).not.toContain("$16.16");
+    for (const output of [reportMarkdown, reportHtml]) {
+      expect(output).toContain("Provider-reported cost");
+      expect(output).toContain("$8.66");
+      expect(output).toContain("Local API-equivalent value");
+      expect(output).toContain("$7.50");
+      expect(output).toContain("Never added to provider-reported cost");
+      expect(output).not.toContain("$16.16");
+    }
   });
 
   it("warns on identical twin slices and prunes one with drop-slice (QA M1)", async () => {
