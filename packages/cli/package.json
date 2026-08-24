@@ -1,6 +1,7 @@
 {
   "name": "ai-spend-agent",
-  "version": "0.9.1",
+  "version": "0.9.2",
+  "funding": "https://asktilden.com",
   "description": "Local-first financial accountability CLI: Claude Code/Codex attribution, provenance, and next actions, plus experimental Gemini CLI cost evidence.",
   "type": "module",
   "main": "./dist/index.js",
@@ -54,8 +55,8 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.9.1",
-    "@agent-finops/report": "0.9.1",
+    "@agent-finops/core": "0.9.2",
+    "@agent-finops/report": "0.9.2",
     "yocto-spinner": "^1.2.0"
   }
 }
