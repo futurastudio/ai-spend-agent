@@ -19,7 +19,7 @@ const surfaces = [
   {
     name: "CLI",
     state: "Published",
-    copy: "The complete private receipt, source diagnostics, reports, Context Health, and evidence-constrained Apply workflow.",
+    copy: "The complete private receipt, source diagnostics, reports, Context Health, the guided improve loop, and the evidence-constrained Apply workflow.",
     href: "/docs/cli",
   },
   {
@@ -108,7 +108,7 @@ npx aibill`}</CodeBlock>
 
       <DocsSection id="boundary" label="05 · Product boundary" title="What is—and is not—available">
         <DocsCallout title={`Published · npm v${NPM_STABLE_VERSION}`} tone="published">
-          Claude Code and Codex local evidence, the experimental Gemini CLI financial reader, the CLI, optional Claude Code statusline, explicit MCP/plugin, provider connectors, parser registry, generated source documentation, and the additive Receipt v0 core contract.
+          Claude Code and Codex local evidence, the experimental Gemini CLI financial reader, the CLI with the guided <code className="font-mono text-ink">improve</code> loop and local accountability commands (<code className="font-mono text-ink">identify</code>, <code className="font-mono text-ink">outcome github</code>, <code className="font-mono text-ink">accountability</code>), optional Claude Code statusline, explicit MCP/plugin with the read-only <code className="font-mono text-ink">draft_improve_command</code> tool, provider connectors, parser registry, generated source documentation, and the additive Receipt v0 core contract.
         </DocsCallout>
         <DocsCallout title="Gemini CLI · published experimental boundary" tone="preview">
           Gemini is <code className="font-mono text-ink">fixture_verified</code>, not live-verified. Its supported chat records can contribute estimated API-equivalent financial value or missing evidence, but it does not feed statusline, Glance, Context Health, Apply, plan, runway, or invocation surfaces.
