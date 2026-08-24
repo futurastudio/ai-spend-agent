@@ -650,15 +650,24 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
     const lineInterface = createInterface({ input: process.stdin, output: process.stdout });
     let interrupted = false;
     let abortedRead = false;
+    // Ctrl-C must SETTLE the pending read (closing the interface alone
+    // leaves question() unsettled, draining the loop before the receipt
+    // prints — the ask would eat the whole run). The interrupt signal
+    // rejects the read deterministically; the ask resolves as a
+    // no-decision and the receipt still renders.
+    const interruptController = new AbortController();
     lineInterface.on("SIGINT", () => {
       interrupted = true;
+      interruptController.abort();
       lineInterface.close();
     });
     const io: SignupAskIo = {
       question: async (query, timeoutMs) => {
         if (interrupted) return undefined;
         try {
-          const answer = await lineInterface.question(query, { signal: AbortSignal.timeout(timeoutMs) });
+          const answer = await lineInterface.question(query, {
+            signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), interruptController.signal])
+          });
           abortedRead = false;
           return answer;
         } catch {

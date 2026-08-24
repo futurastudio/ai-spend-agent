@@ -317,10 +317,19 @@ export async function openCliTelemetry(options: {
       try {
         if (envDisabled || read.kind === "unreadable") return;
         if (read.kind === "ok" && !read.state.enabled) return;
+        // The command that just ran may have CHANGED the state (`telemetry
+        // off`/`on`). Re-read before any write or send: a stale snapshot
+        // must never clobber the user's switch or emit after an off.
+        const current = await readTelemetryState(filePath);
+        if (current.kind === "unreadable") return;
+        if (current.kind === "ok" && !current.state.enabled) return;
         if (noticed && read.kind === "ok") {
-          // Events begin only on runs AFTER the notice was stamped.
+          // Events begin only on runs AFTER the notice was stamped (the
+          // open-time snapshot decides), and only while the CURRENT state
+          // still agrees.
+          if (current.kind !== "ok" || current.state.noticedAt === undefined) return;
           const event: TelemetryEvent = {
-            installId: read.state.installId,
+            installId: current.state.installId,
             command: telemetryCommandForArgv(input.argv),
             version: input.version,
             os: telemetryOsLabel(),
@@ -334,25 +343,29 @@ export async function openCliTelemetry(options: {
           if (body === undefined) return;
           // The exact payload is cached verbatim BEFORE the send so
           // `aibill telemetry` can always show what left the machine.
-          await writeTelemetryState(filePath, { ...read.state, lastPayload: body });
+          await writeTelemetryState(filePath, { ...current.state, lastPayload: body });
           void postTelemetryBatch(body, {
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {})
           });
           return;
         }
-        // First-notice path: interactive runs only. The notice prints ONLY
-        // when the stamp persisted — a user whose state cannot be written
-        // is simply never tracked (fail closed), never re-nagged.
+        // First-notice path: interactive runs only, and only while the
+        // CURRENT state is still un-noticed (an `on` this run already
+        // stamped its own notice; an `off` must never be overwritten).
         if (!input.interactive) return;
+        if (current.kind === "ok" && current.state.noticedAt !== undefined) return;
         const stamped: TelemetryState = {
           version: 1,
-          installId: read.kind === "ok" ? read.state.installId : randomUUID(),
+          installId: current.kind === "ok" ? current.state.installId : randomUUID(),
           enabled: true,
           noticedAt: now().toISOString(),
-          ...(read.kind === "ok" && read.state.lastPayload !== undefined
-            ? { lastPayload: read.state.lastPayload }
+          ...(current.kind === "ok" && current.state.lastPayload !== undefined
+            ? { lastPayload: current.state.lastPayload }
             : {})
         };
+        // The notice prints ONLY when the stamp persisted — a user whose
+        // state cannot be written is simply never tracked (fail closed),
+        // never re-nagged.
         if (!await writeTelemetryState(filePath, stamped)) return;
         const print = input.printNotice ?? ((lines: readonly string[]) => {
           process.stdout.write(`\n${lines.join("\n")}\n`);

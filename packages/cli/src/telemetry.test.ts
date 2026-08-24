@@ -301,6 +301,75 @@ describe("notice-before-first-byte", () => {
     }
   });
 
+  it("a `telemetry off` in the SAME run is honored: no emit, no notice, no clobber", async () => {
+    // Regression: finish() once merged its open-time snapshot back into the
+    // state file, resurrecting enabled:true after the off switch and
+    // emitting an event for the off run itself.
+    const home = await tempHome();
+    const noticedState: TelemetryState = {
+      version: 1, installId: fixedEvent.installId, enabled: true, noticedAt: "2026-08-24T10:00:00.000Z"
+    };
+    await writeTelemetryState(telemetryStateFilePath(home), noticedState);
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    expect(runtime.disclosureActive).toBe(true);
+    // The command that ran this process turned telemetry off before finish.
+    const off = await runCli(["telemetry", "off"], { homeDirectory: home });
+    expect(off.exitCode).toBe(0);
+    const fetchImpl = vi.fn(async () => okResponse());
+    await runtime.finish({
+      argv: ["telemetry", "off"], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      printNotice: () => { throw new Error("no notice after off"); }
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await readTelemetryState(telemetryStateFilePath(home))).toMatchObject({
+      kind: "ok",
+      state: { enabled: false }
+    });
+
+    // And a fresh-state `telemetry off` first run must not get the notice
+    // stamped over it either.
+    const home2 = await tempHome();
+    const fresh = await openCliTelemetry({ homeDirectory: home2, env: {} });
+    await runCli(["telemetry", "off"], { homeDirectory: home2 });
+    await fresh.finish({
+      argv: ["telemetry", "off"], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      printNotice: () => { throw new Error("no notice after off"); }
+    });
+    expect(await readTelemetryState(telemetryStateFilePath(home2))).toMatchObject({
+      kind: "ok",
+      state: { enabled: false }
+    });
+  });
+
+  it("a `telemetry on` run stamps its own notice and emits nothing until the NEXT run", async () => {
+    const home = await tempHome();
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    const on = await runCli(["telemetry", "on"], { homeDirectory: home });
+    expect(on.exitCode).toBe(0);
+    const fetchImpl = vi.fn(async () => okResponse());
+    await runtime.finish({
+      argv: ["telemetry", "on"], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      printNotice: () => { throw new Error("the on command already noticed; no extra notice") }
+    });
+    // Open-time snapshot was un-noticed, so this run emits nothing…
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // …and the on-stamp survives untouched.
+    expect(await readTelemetryState(telemetryStateFilePath(home))).toMatchObject({
+      kind: "ok",
+      state: { enabled: true }
+    });
+    // The NEXT run emits.
+    const next = await openCliTelemetry({ homeDirectory: home, env: {} });
+    expect(next.disclosureActive).toBe(true);
+    await next.finish({
+      argv: [], ok: true, durationMs: 5, interactive: true, version: "0.9.2",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("disabled state stops events and the notice", async () => {
     const home = await tempHome();
     const state: TelemetryState = { version: 1, installId: fixedEvent.installId, enabled: false };
