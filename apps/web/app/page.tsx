@@ -74,7 +74,7 @@ const faqs = [
   {
     question: "Can finance use aibill to prove ROI?",
     answer:
-      "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; those outcome and company-accountability layers are next.",
+      "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage, and now records locally confirmed ownership and accepted GitHub outcomes. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; the company-accountability layer that reconciles those at team scale is next.",
   },
 ];
 
@@ -205,7 +205,7 @@ export default function Home() {
                   Variance in our tested OpenAI Costs API reconciliation.
                 </p>
                 <p className="mt-3 max-w-[420px] text-[13px] leading-relaxed text-faint">
-                  v0.6.0 release QA — the Costs total reconciled to invoiced
+                  Release QA — the Costs total reconciled to invoiced
                   API credits, net of the provider-UI balance. Each user&apos;s
                   final invoice remains separate.
                 </p>

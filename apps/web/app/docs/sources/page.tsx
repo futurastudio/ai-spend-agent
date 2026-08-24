@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
-import { REPO_URL, localSources, providerSources } from "@/lib/docs";
+import { NPM_STABLE_VERSION, REPO_URL, localSources, providerSources } from "@/lib/docs";
 
 export const metadata: Metadata = {
   title: "aibill supported sources and evidence coverage",
@@ -67,7 +67,7 @@ export default function SourcesDocsPage() {
           ))}
         </div>
         <DocsCallout title="Gemini experimental boundary" tone="preview">
-          Gemini CLI is published in npm v0.8.1 as an experimental, <code className="font-mono text-ink">fixture_verified</code>, financial-only reader. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing. Gemini is excluded from statusline, Glance, Context Health, Apply, plan, runway, and invocation evidence.
+          Gemini CLI is published in npm v{NPM_STABLE_VERSION} as an experimental, <code className="font-mono text-ink">fixture_verified</code>, financial-only reader. Its <code className="font-mono text-ink">logs.json</code> file is presence-only; financial evidence comes only from supported chat-session JSON/JSONL records and incomplete shapes remain missing. Gemini is excluded from statusline, Glance, Context Health, Apply, plan, runway, and invocation evidence.
         </DocsCallout>
       </DocsSection>
 
@@ -99,7 +99,7 @@ export default function SourcesDocsPage() {
 
       <DocsSection id="unsupported" label="04 · Coverage gaps" title="Missing is a product answer">
         <p>
-          Cursor local session storage, Cline, Aider, and other long-tail local formats do not currently produce financial rows. The investigated Cursor local store did not provide sufficiently stable evidence for routed model, billing mode, token semantics, adjustments, or reconciled spend, so a speculative local financial parser is not planned for v0.8.x.
+          Cursor local session storage, Cline, Aider, and other long-tail local formats do not currently produce financial rows. The investigated Cursor local store did not provide sufficiently stable evidence for routed model, billing mode, token semantics, adjustments, or reconciled spend, so a speculative local financial parser is not currently planned; official admin APIs remain the financial path unless a stable, versioned local format emerges.
         </p>
         <p className="mt-4">
           New local formats enter through the public parser registry with a descriptor, synthetic recorded fixtures, conservative evidence defaults, generated source documentation, and privacy checks. Unknown models or token shapes stay <code className="font-mono text-ink">missing</code>, never estimated as zero.
