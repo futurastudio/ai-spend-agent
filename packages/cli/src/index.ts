@@ -12,6 +12,7 @@ import {
   type GuidedPromptSource
 } from "./guidedPrompt.js";
 import {
+  assessEmailDeliverability,
   buildWaitlistRef,
   normalizeWaitlistEmail,
   postWaitlistSignup,
@@ -21,7 +22,8 @@ import {
   serializeWaitlistPayload,
   signupCopy,
   signupStateFilePath,
-  writeSignupState
+  writeSignupState,
+  type SignupDnsResolver
 } from "./signup.js";
 import {
   parsePlanDraft,
@@ -231,13 +233,6 @@ export type CliResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
-  /**
-   * Set only by a REAL receipt (local-logs/connected quickstart). The bin
-   * entrypoint may then run the one inline signup ask AFTER the complete
-   * receipt has printed — the receipt's bytes and exit code never change.
-   * See docs/qa-handoff/CLI_CAPTURE_DESIGN.md.
-   */
-  postReceiptSignupAsk?: boolean;
 };
 
 type ParsedArgs = {
@@ -336,6 +331,8 @@ export type CliRuntimeOptions = {
   }>;
   /** Test override for the waitlist signup POST. Production uses global fetch. */
   waitlistFetch?: typeof fetch;
+  /** Test override for signup email deliverability DNS. Production uses node:dns. */
+  signupDns?: SignupDnsResolver;
 };
 
 export async function runCli(
@@ -661,15 +658,7 @@ async function quickstartCommand(
     ...(detailedView ? wrapCliHeader(dataModeBanner(mode, summaryRecords), "  ", outputWidth) : []),
     ...warnings.flatMap((warning) => wrapCliHeader(warning, "  ! ", outputWidth))
   ].join("\n");
-  const result = ok(header ? `${header}\n${summaryText}` : summaryText);
-  // The ONE inline signup ask may follow a REAL receipt (local-logs or
-  // connected), never the sample demo and never a --group-by drill-down.
-  // The bin entrypoint runs it AFTER this stdout has fully printed; the
-  // receipt itself is byte-identical either way.
-  if (mode !== "demo" && !args.groupBy) {
-    result.postReceiptSignupAsk = true;
-  }
-  return result;
+  return ok(header ? `${header}\n${summaryText}` : summaryText);
 }
 
 async function buildQuickstartGuidedExperience(input: {
@@ -1518,6 +1507,18 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
   const email = normalizeWaitlistEmail(args.signupEmail);
   if (email === undefined) {
     return { exitCode: 1, stdout: "", stderr: signupCopy.invalidEmailLine };
+  }
+  // Deliverability (MX with A fallback, 1.5s budget, fail-open on DNS
+  // trouble): only a provable cannot-receive domain or a throwaway inbox is
+  // refused — never a slow or offline resolver.
+  const deliverability = await assessEmailDeliverability(email, {
+    ...(runtime.signupDns ? { resolver: runtime.signupDns } : {})
+  });
+  if (deliverability === "no_mx") {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.noMxLine };
+  }
+  if (deliverability === "disposable") {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.disposableLine };
   }
 
   if (priorRead.kind === "ok" && priorRead.state.status === "subscribed" && priorRead.state.email === email) {
@@ -8014,11 +8015,29 @@ export async function runMain(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
   const isInstantDemo = !command || command === "quickstart" || command === "demo";
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
-  // Show a spinner only for the work-heavy instant-demo path, and only on a
-  // real TTY so piped output stays clean.
+  // The during-scan signup ask (capture design, placement addendum
+  // 2026-08-24): on a qualifying interactive first run the ask fills the
+  // scan wait — it prints its own wait line, so the spinner stays off. A
+  // run that does not qualify (or whose signup state disallows the ask)
+  // takes the exact fast path below, byte-identical.
+  let preAsk: import("./signup.js").TerminalPreReceiptAsk | undefined;
+  if (interactive && !process.env.CI && !process.env.AI_SPEND_NO_PROMPT) {
+    try {
+      const signup = await import("./signup.js");
+      if (signup.qualifiesForPreReceiptSignupAsk(argv)) {
+        preAsk = await signup.openPreReceiptSignupAskInTerminal();
+      }
+    } catch {
+      // The ask must never break the receipt path.
+    }
+  }
+
+  // Show a spinner only for the work-heavy instant-demo path, only on a
+  // real TTY so piped output stays clean, and never over the open ask.
   let spinner: { stop: () => void } | undefined;
-  if (isInstantDemo && process.stdout.isTTY && !process.env.NO_COLOR) {
+  if (isInstantDemo && !preAsk && process.stdout.isTTY && !process.env.NO_COLOR) {
     try {
       const { default: yoctoSpinner } = await import("yocto-spinner");
       spinner = yoctoSpinner({ text: "Reading local AI evidence…" }).start();
@@ -8028,14 +8047,14 @@ export async function runMain(): Promise<void> {
   }
 
   let result: CliResult;
+  let askOutcome: import("./signup.js").PreReceiptAskOutcome = { kind: "no_ask" };
   let promptInterface: import("node:readline/promises").Interface | undefined;
   let guidedInterface: import("node:readline").Interface | undefined;
-  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   try {
     let guidedIoShared:
       | { source: GuidedPromptSource; write: (text: string) => void }
       | undefined;
-    result = await runCli(argv, {
+    const runPipeline = (): Promise<CliResult> => runCli(argv, {
       interactive,
       ...(interactive ? {
         prompt: async (question: string) => {
@@ -8065,6 +8084,19 @@ export async function runMain(): Promise<void> {
         }
       } : {})
     });
+    if (preAsk) {
+      // Receipt renders only when BOTH the human's answer (bounded by the
+      // ask's own timeouts) and the pipeline have resolved; a pipeline
+      // error still waits for the bounded ask, then re-throws into the
+      // error voice below — never a hung prompt over a dead pipeline.
+      const { orchestratePreReceiptAsk } = await import("./signup.js");
+      const orchestrated = await orchestratePreReceiptAsk({ session: preAsk.session, runPipeline });
+      askOutcome = orchestrated.outcome;
+      if (!orchestrated.pipeline.ok) throw orchestrated.pipeline.error;
+      result = orchestrated.pipeline.value;
+    } else {
+      result = await runPipeline();
+    }
   } catch (error) {
     // The product's error voice, never a raw stack trace — and never an
     // un-redacted secret from a provider payload or file path.
@@ -8084,6 +8116,11 @@ export async function runMain(): Promise<void> {
     spinner?.stop();
   }
 
+  // A read that ended without the user pressing Enter (timeout / Ctrl-C)
+  // left the prompt line open; start the receipt on a fresh line.
+  if (preAsk?.needsFreshLine()) {
+    process.stdout.write("\n");
+  }
   if (result.stdout) {
     console.log(result.stdout);
   }
@@ -8092,19 +8129,13 @@ export async function runMain(): Promise<void> {
   }
   process.exitCode = result.exitCode;
 
-  // The ONE inline signup ask, strictly AFTER the complete receipt has
-  // printed and the exit code is already settled. Interactive TTY only;
-  // CI/AI_SPEND_NO_PROMPT/piped runs never see it, and nothing here can
-  // change the receipt's bytes or exit code.
-  if (result.postReceiptSignupAsk === true && interactive &&
-      !process.env.CI && !process.env.AI_SPEND_NO_PROMPT) {
-    try {
-      const { runPostReceiptSignupAskInTerminal } = await import("./signup.js");
-      await runPostReceiptSignupAskInTerminal();
-    } catch {
-      // The ask must never break the receipt path.
-    }
+  // Consent renders strictly AFTER the receipt: scope line, the literal
+  // payload JSON, a typed y, ONE POST. Nothing here can change the
+  // receipt's bytes or exit code.
+  if (preAsk && askOutcome.kind === "email") {
+    await preAsk.runConsent(askOutcome);
   }
+  preAsk?.close();
 }
 
 if (invokedAsMain) {

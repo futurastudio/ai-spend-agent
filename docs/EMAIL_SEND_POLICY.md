@@ -11,9 +11,9 @@ row gets no email.
 
 | `source_ref` | Capture surface | Promise made at capture | May be sent |
 |---|---|---|---|
-| `cli-receipt` | CLI post-receipt ask (`npx aibill`, real receipt) | "launch updates · your email is used only for launch updates · never shared" | Launch updates only |
-| `cli-signup` | `npx aibill signup <email>` | Same as `cli-receipt` | Launch updates only |
-| `cli-signup-<tag>` (e.g. `cli-signup-starfund`) | `npx aibill signup <email> --ref <tag>` | Same as `cli-receipt` | Launch updates only |
+| `cli-receipt` | CLI during-scan ask (`npx aibill`, real receipt path) | "Get the launch email + what ships next" (launch week) / "Get product updates" (after) · scope line "used only for updates · never shared" | Product updates only (incl. the launch email) |
+| `cli-signup` | `npx aibill signup <email>` | Same scope line as `cli-receipt` | Product updates only (incl. the launch email) |
+| `cli-signup-<tag>` (e.g. `cli-signup-starfund`) | `npx aibill signup <email> --ref <tag>` | Same scope line as `cli-receipt` | Product updates only (incl. the launch email) |
 | `starfund` | Star.fun launch page / posts → `asktilden.com/?ref=starfund` | Site waitlist form copy at capture time | Launch updates only |
 | `github-readme` | README "Workspace design partner" CTA → `asktilden.com/?ref=github-readme#beta` | Design-partner application follow-up | Design-partner fit / onboarding follow-up |
 | `github-glance-study` | Glance preview study volunteer form → `asktilden.com/?ref=github-glance-study#beta` | Study interest registration | Study timing / logistics emails |
@@ -22,10 +22,11 @@ row gets no email.
 Notes:
 
 - The CLI refs (`cli-*`) never promised weekly artifacts, beta access, or
-  Workspace anything — the printed copy is "launch updates" with the scope
-  line "your email is used only for launch updates · never shared". Sending
-  those audiences anything beyond launch updates breaks a promise printed in
-  a terminal, which is the product's brand surface.
+  Workspace anything — the printed offer is the launch email plus product
+  updates ("what ships next"), with the scope line "used only for updates ·
+  never shared". Sending those audiences anything beyond product updates
+  breaks a promise printed in a terminal, which is the product's brand
+  surface.
 - "Never shared" means the address is not given to any third party for its
   own use. Supabase (storage) and the mail tool used to send a within-policy
   email act as processors, not recipients.

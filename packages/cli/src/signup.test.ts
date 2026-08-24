@@ -4,21 +4,30 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "./index.js";
 import {
+  assessEmailDeliverability,
   buildWaitlistRef,
   clearSignupState,
   deployedRefPattern,
+  disposableEmailDomains,
   normalizeWaitlistEmail,
+  openPreReceiptSignupAsk,
+  orchestratePreReceiptAsk,
   postWaitlistSignup,
+  qualifiesForPreReceiptSignupAsk,
   readSignupState,
-  runPostReceiptSignupAsk,
+  runSignupConsentAfterReceipt,
   sanitizeSignupRefTag,
   serializeWaitlistPayload,
   signupAskAllowed,
+  signupAskBlockLines,
   signupCopy,
   signupStateFilePath,
   waitlistUrl,
   writeSignupState,
+  type PreReceiptAskOutcome,
+  type PreReceiptAskSession,
   type SignupAskIo,
+  type SignupDnsResolver,
   type SignupState
 } from "./signup.js";
 
@@ -28,6 +37,11 @@ const creepGuardHint =
 function jsonResponse(status: number): Response {
   return new Response(status === 201 ? JSON.stringify({ ok: true }) : JSON.stringify({ error: "x" }), { status });
 }
+
+const okDns: SignupDnsResolver = {
+  resolveMx: async () => [{ exchange: "mx.example.com", priority: 10 }],
+  resolve4: async () => ["203.0.113.10"]
+};
 
 async function tempStateFile(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "aibill-signup-home-"));
@@ -106,6 +120,60 @@ describe("email validation (server parity + control bytes)", () => {
   });
 });
 
+describe("email deliverability (MX + A fallback, fail-open DNS)", () => {
+  it("accepts a domain with receiving MX records", async () => {
+    expect(await assessEmailDeliverability("a@ok.example", { resolver: okDns })).toBe("ok");
+  });
+
+  it("falls back to an A record when MX is absent", async () => {
+    const resolver: SignupDnsResolver = {
+      resolveMx: async () => { throw Object.assign(new Error("ENODATA"), { code: "ENODATA" }); },
+      resolve4: async () => ["203.0.113.9"]
+    };
+    expect(await assessEmailDeliverability("a@apex.example", { resolver })).toBe("ok");
+  });
+
+  it("rejects only a provable cannot-receive domain (no MX, no A)", async () => {
+    const resolver: SignupDnsResolver = {
+      resolveMx: async () => { throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }); },
+      resolve4: async () => { throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }); }
+    };
+    expect(await assessEmailDeliverability("a@nxdomain.example", { resolver })).toBe("no_mx");
+  });
+
+  it("treats an RFC 7505 null MX as a refusal to receive", async () => {
+    const resolver: SignupDnsResolver = {
+      resolveMx: async () => [{ exchange: ".", priority: 0 }],
+      resolve4: async () => ["203.0.113.9"]
+    };
+    expect(await assessEmailDeliverability("a@nullmx.example", { resolver })).toBe("no_mx");
+  });
+
+  it("NEVER blocks capture on DNS trouble: timeout and transport errors pass format-only", async () => {
+    const slow: SignupDnsResolver = {
+      resolveMx: () => new Promise(() => { /* black hole */ }),
+      resolve4: async () => ["203.0.113.9"]
+    };
+    expect(await assessEmailDeliverability("a@slow.example", { resolver: slow, timeoutMs: 20 })).toBe("ok");
+    const broken: SignupDnsResolver = {
+      resolveMx: async () => { throw Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" }); },
+      resolve4: async () => { throw Object.assign(new Error("ETIMEOUT"), { code: "ETIMEOUT" }); }
+    };
+    expect(await assessEmailDeliverability("a@offline.example", { resolver: broken })).toBe("ok");
+  });
+
+  it("rejects disposable-inbox domains from the static blocklist without any DNS call", async () => {
+    const resolver: SignupDnsResolver = {
+      resolveMx: vi.fn(async () => [{ exchange: "mx", priority: 1 }]),
+      resolve4: vi.fn(async () => ["203.0.113.9"])
+    };
+    expect(disposableEmailDomains.size).toBeGreaterThanOrEqual(20);
+    expect(await assessEmailDeliverability("x@mailinator.com", { resolver })).toBe("disposable");
+    expect(await assessEmailDeliverability("x@10minutemail.com", { resolver })).toBe("disposable");
+    expect(resolver.resolveMx).not.toHaveBeenCalled();
+  });
+});
+
 describe("--ref sanitization (QA 8)", () => {
   it("allowlists [a-z0-9-]{1,24} and rejects injection shapes", () => {
     expect(sanitizeSignupRefTag("starfund")).toBe("starfund");
@@ -164,151 +232,207 @@ describe("signup state (fail closed)", () => {
   });
 });
 
-type ScriptedIo = { io: SignupAskIo; questions: string[]; written: string[] };
+describe("ask block copy (launch window + evergreen fallback)", () => {
+  it("pins the launch-week block and its post-launch fallback exactly", () => {
+    const launch = signupAskBlockLines(new Date("2026-08-24T12:00:00Z"), 72);
+    expect(launch).toEqual([
+      "─".repeat(72),
+      "  aibill launches Friday with Star.fun.",
+      "  Get the launch email + what ships next:",
+      "  type your email, or press Enter to skip"
+    ]);
+    const evergreen = signupAskBlockLines(new Date("2026-08-29T00:00:00Z"), 72);
+    expect(evergreen).toEqual([
+      "─".repeat(72),
+      "  Get product updates:",
+      "  type your email, or press Enter to skip"
+    ]);
+    // Boundary: the Friday line survives through launch day, not past it.
+    expect(signupAskBlockLines(new Date("2026-08-28T23:59:59Z"), 72)[1]).toContain("launches Friday");
+    expect(signupAskBlockLines(new Date("2026-08-29T00:00:01Z"), 72).join("\n")).not.toContain("Friday");
+  });
 
-function scriptedIo(answers: Array<string | undefined>): ScriptedIo {
+  it("adapts the rule to the receipt width convention", () => {
+    expect(signupAskBlockLines(new Date("2026-08-24T12:00:00Z"), 40)[0]).toBe("─".repeat(40));
+    expect(signupAskBlockLines(new Date("2026-08-24T12:00:00Z"), 4)[0]).toBe("─".repeat(8));
+  });
+});
+
+type ScriptedIo = { io: SignupAskIo; questions: string[]; written: string[]; raws: string[] };
+
+function scriptedIo(answers: Array<string | undefined | (() => Promise<string | undefined>)>): ScriptedIo {
   const questions: string[] = [];
   const written: string[] = [];
+  const raws: string[] = [];
   return {
     questions,
     written,
+    raws,
     io: {
       question: async (query) => {
         questions.push(query);
-        return answers.shift();
+        const next = answers.shift();
+        return typeof next === "function" ? next() : next;
       },
-      write: (line) => written.push(line)
+      write: (line) => written.push(line),
+      writeRaw: (text) => raws.push(text)
     }
   };
 }
 
-describe("post-receipt inline ask", () => {
-  it("Enter skips: a lifetime skip is consumed, nothing is printed, nothing is sent", async () => {
-    const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => jsonResponse(201));
-    const { io, questions, written } = scriptedIo([""]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
+const launchNow = () => new Date("2026-08-24T12:00:00Z");
+const expectedBlock = ["", ...signupAskBlockLines(launchNow(), 72)];
 
-    expect(questions).toEqual([signupCopy.askQuestion]);
-    expect(written).toEqual([]);
-    expect(fetchImpl).not.toHaveBeenCalled();
-    const read = await readSignupState(file);
-    expect(read).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
+async function openAsk(
+  file: string,
+  scripted: ScriptedIo,
+  overrides: Partial<Parameters<typeof openPreReceiptSignupAsk>[0]> = {}
+): Promise<PreReceiptAskSession | undefined> {
+  return openPreReceiptSignupAsk({
+    io: scripted.io,
+    stateFilePath: file,
+    now: launchNow,
+    dnsResolver: okDns,
+    ...overrides
+  });
+}
+
+describe("during-scan pre-receipt ask", () => {
+  it("prints the wait line, blank line, and standout block before the prompt", async () => {
+    const file = await tempStateFile();
+    const scripted = scriptedIo([""]);
+    const session = await openAsk(file, scripted, { preambleLines: [signupCopy.waitLine] });
+    expect(session).toBeDefined();
+    await session!.outcome;
+    expect(scripted.written.slice(0, 2 + signupAskBlockLines(launchNow(), 72).length)).toEqual([
+      signupCopy.waitLine,
+      ...expectedBlock
+    ]);
+    expect(scripted.questions[0]).toBe(signupCopy.askPrompt);
   });
 
-  it("stays silent forever after two lifetime skips, across runs", async () => {
+  it("skip takes TWO empty Enters with exactly one declarative nudge, consuming ONE lifetime skip", async () => {
+    const file = await tempStateFile();
+    const scripted = scriptedIo(["", ""]);
+    const session = await openAsk(file, scripted);
+    expect(await session!.outcome).toEqual({ kind: "skipped" });
+    expect(scripted.questions).toEqual([signupCopy.askPrompt, signupCopy.askPrompt]);
+    expect(scripted.written).toEqual([...expectedBlock, `  ${signupCopy.skipNudgeLine}`]);
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
+  });
+
+  it("typed input after the first Enter is treated as the email answer", async () => {
+    const file = await tempStateFile();
+    const scripted = scriptedIo(["", "you@work.com"]);
+    const session = await openAsk(file, scripted);
+    const outcome = await session!.outcome;
+    expect(outcome).toMatchObject({ kind: "email", payload: { email: "you@work.com", ref: "cli-receipt" } });
+    // The half-completed double-Enter consumed no skip.
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
+  });
+
+  it("stays silent forever after two completed skips, across runs", async () => {
     const file = await tempStateFile();
     const eightDaysMs = 8 * 24 * 60 * 60 * 1_000;
-    let clock = Date.now();
+    let clock = Date.parse("2026-09-01T00:00:00Z");
     const now = () => new Date(clock);
     for (const _ of [1, 2]) {
-      const { io } = scriptedIo([""]);
-      await runPostReceiptSignupAsk({ io, stateFilePath: file, now });
+      const scripted = scriptedIo(["", ""]);
+      const session = await openPreReceiptSignupAsk({ io: scripted.io, stateFilePath: file, now, dnsResolver: okDns });
+      await session!.outcome;
       clock += eightDaysMs;
     }
     const third = scriptedIo(["should-never-be-read"]);
-    await runPostReceiptSignupAsk({ io: third.io, stateFilePath: file, now });
+    expect(await openPreReceiptSignupAsk({ io: third.io, stateFilePath: file, now, dnsResolver: okDns })).toBeUndefined();
     expect(third.questions).toEqual([]);
+    expect(third.written).toEqual([]);
   });
 
-  it("waits at least 7 days between asks", async () => {
+  it("waits at least 7 days between asks with zero output on suppressed runs", async () => {
     const file = await tempStateFile();
-    const first = scriptedIo([""]);
-    await runPostReceiptSignupAsk({ io: first.io, stateFilePath: file });
+    const first = scriptedIo(["", ""]);
+    await (await openAsk(file, first))!.outcome;
     const sameWeek = scriptedIo(["x"]);
-    await runPostReceiptSignupAsk({ io: sameWeek.io, stateFilePath: file });
+    expect(await openAsk(file, sameWeek)).toBeUndefined();
     expect(sameWeek.questions).toEqual([]);
+    expect(sameWeek.written).toEqual([]);
   });
 
   it("a timeout consumes NO lifetime skip but still throttles re-asks (M3)", async () => {
     const file = await tempStateFile();
     const timedOut = scriptedIo([undefined]);
-    await runPostReceiptSignupAsk({ io: timedOut.io, stateFilePath: file });
-    expect(timedOut.written).toEqual([]);
-    const afterTimeout = await readSignupState(file);
-    expect(afterTimeout).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 0 } });
+    await (await openAsk(file, timedOut))!.outcome;
+    expect(timedOut.written).toEqual(expectedBlock);
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 0 } });
 
     // Within the week: throttled by the ask stamp alone.
     const sameWeek = scriptedIo(["x"]);
-    await runPostReceiptSignupAsk({ io: sameWeek.io, stateFilePath: file });
-    expect(sameWeek.questions).toEqual([]);
+    expect(await openAsk(file, sameWeek)).toBeUndefined();
 
     // Eight days on: asked again — the timeout burned no skip.
-    const later = scriptedIo([""]);
-    await runPostReceiptSignupAsk({
+    const later = scriptedIo(["", ""]);
+    const laterSession = await openPreReceiptSignupAsk({
       io: later.io,
       stateFilePath: file,
-      now: () => new Date(Date.now() + 8 * 24 * 60 * 60 * 1_000)
+      now: () => new Date(launchNow().getTime() + 8 * 24 * 60 * 60 * 1_000),
+      dnsResolver: okDns
     });
-    expect(later.questions).toEqual([signupCopy.askQuestion]);
+    expect(laterSession).toBeDefined();
+    await laterSession!.outcome;
+    expect(later.questions.length).toBeGreaterThan(0);
   });
 
-  it("n persists never-ask and says how to change your mind", async () => {
+  it("a timeout after the first Enter (nudge shown) still consumes no skip", async () => {
     const file = await tempStateFile();
-    const { io, written } = scriptedIo(["n"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file });
-    expect(written).toEqual([signupCopy.neverLine]);
+    const scripted = scriptedIo(["", undefined]);
+    const session = await openAsk(file, scripted);
+    expect(await session!.outcome).toEqual({ kind: "skipped" });
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
+  });
+
+  it("n persists never-ask and says how to change your mind — at any point in the ask", async () => {
+    const file = await tempStateFile();
+    const scripted = scriptedIo(["", "n"]);
+    const session = await openAsk(file, scripted);
+    expect(await session!.outcome).toEqual({ kind: "skipped" });
+    expect(scripted.written).toContain(`  ${signupCopy.neverLine}`);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "never" } });
     const again = scriptedIo(["x"]);
-    await runPostReceiptSignupAsk({ io: again.io, stateFilePath: file });
-    expect(again.questions).toEqual([]);
+    expect(await openAsk(file, again)).toBeUndefined();
   });
 
-  it("a typed email shows the scope line, then the LITERAL payload JSON, and sends only on y", async () => {
+  it("invalid format, dead domains, and disposable inboxes re-prompt without consuming skips", async () => {
     const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => jsonResponse(201));
-    const { io, questions, written } = scriptedIo(["  You@Work.COM ", "y"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
-
-    expect(questions[1]).toBe('send {"email":"you@work.com","ref":"cli-receipt"} → asktilden.com/api/waitlist? [y/N] ');
-    expect(written).toEqual([signupCopy.scopeLine, signupCopy.sentLine]);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
-      .toBe('{"email":"you@work.com","ref":"cli-receipt"}');
-    expect(await readSignupState(file)).toMatchObject({
-      kind: "ok",
-      state: { status: "subscribed", email: "you@work.com" }
-    });
+    const deadDns: SignupDnsResolver = {
+      resolveMx: async (domain) => {
+        if (domain === "dead.example") throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
+        return [{ exchange: "mx.example.com", priority: 10 }];
+      },
+      resolve4: async (domain) => {
+        if (domain === "dead.example") throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" });
+        return ["203.0.113.9"];
+      }
+    };
+    const scripted = scriptedIo(["not-an-email", "a@dead.example", "x@mailinator.com", "you@work.com"]);
+    const session = await openAsk(file, scripted, { dnsResolver: deadDns });
+    const outcome = await session!.outcome;
+    expect(outcome).toMatchObject({ kind: "email", payload: { email: "you@work.com" } });
+    expect(scripted.written).toEqual([
+      ...expectedBlock,
+      `  ${signupCopy.invalidEmailLine}`,
+      `  ${signupCopy.noMxLine}`,
+      `  ${signupCopy.disposableLine}`
+    ]);
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
   });
 
-  it("anything but y at the consent step is a skip: nothing is sent", async () => {
+  it("ends silently (no skip) after the bounded re-prompt budget", async () => {
     const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => jsonResponse(201));
-    const { io, written } = scriptedIo(["you@work.com", ""]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(written).toEqual([signupCopy.scopeLine]);
-    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
-  });
-
-  it("send failure prints the offline line and never persists, retries, or queues the email", async () => {
-    const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => { throw new Error("network down"); });
-    const { io, written } = scriptedIo(["you@work.com", "y"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(written).toEqual([signupCopy.scopeLine, signupCopy.unreachableLine]);
-    const stateBytes = await readFile(file, "utf8");
-    expect(stateBytes).not.toContain("you@work.com");
-    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred" } });
-  });
-
-  it("maps the deployed route's 429 distinctly from offline (M4)", async () => {
-    const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => jsonResponse(429));
-    const { io, written } = scriptedIo(["you@work.com", "y"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(written).toEqual([signupCopy.scopeLine, signupCopy.rateLimitedLine]);
-  });
-
-  it("an invalid typed email counts as a skip and points at the signup command", async () => {
-    const file = await tempStateFile();
-    const fetchImpl = vi.fn(async () => jsonResponse(201));
-    const { io, written } = scriptedIo(["not-an-email"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(written).toEqual([`${signupCopy.invalidEmailLine}: npx aibill signup <email>`]);
+    const scripted = scriptedIo(["bad", "bad", "bad", "bad", "bad", "bad", "never-read"]);
+    const session = await openAsk(file, scripted);
+    expect(await session!.outcome).toEqual({ kind: "skipped" });
+    expect(scripted.questions).toHaveLength(6);
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
   });
 
   it("never asks when the decision could not be persisted (readonly home fails closed)", async () => {
@@ -316,9 +440,10 @@ describe("post-receipt inline ask", () => {
     const file = signupStateFilePath(home);
     await chmod(home, 0o500);
     try {
-      const { io, questions } = scriptedIo(["x"]);
-      await runPostReceiptSignupAsk({ io, stateFilePath: file });
-      expect(questions).toEqual([]);
+      const scripted = scriptedIo(["x"]);
+      expect(await openAsk(file, scripted)).toBeUndefined();
+      expect(scripted.questions).toEqual([]);
+      expect(scripted.written).toEqual([]);
     } finally {
       await chmod(home, 0o700);
     }
@@ -328,38 +453,240 @@ describe("post-receipt inline ask", () => {
     const file = await tempStateFile();
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, "not json at all", "utf8");
-    const { io, questions } = scriptedIo(["x"]);
-    await runPostReceiptSignupAsk({ io, stateFilePath: file });
-    expect(questions).toEqual([]);
+    const scripted = scriptedIo(["x"]);
+    expect(await openAsk(file, scripted)).toBeUndefined();
+  });
+});
+
+describe("consent after the receipt", () => {
+  async function emailOutcome(file: string, answers: Array<string | undefined>): Promise<{
+    outcome: Extract<PreReceiptAskOutcome, { kind: "email" }>;
+    scripted: ScriptedIo;
+  }> {
+    const scripted = scriptedIo(["you@work.com", ...answers]);
+    const session = await openAsk(file, scripted);
+    const outcome = await session!.outcome as Extract<PreReceiptAskOutcome, { kind: "email" }>;
+    expect(outcome.kind).toBe("email");
+    return { outcome, scripted };
+  }
+
+  it("shows the scope line, then the LITERAL payload JSON, and sends only on y", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const { outcome, scripted } = await emailOutcome(file, ["y"]);
+    await runSignupConsentAfterReceipt({
+      io: scripted.io,
+      stateFilePath: file,
+      payload: outcome.payload,
+      stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(scripted.questions[1]).toBe('send {"email":"you@work.com","ref":"cli-receipt"} → asktilden.com/api/waitlist? [y/N] ');
+    expect(scripted.written.slice(expectedBlock.length)).toEqual(["", signupCopy.scopeLine, signupCopy.sentLine]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
+      .toBe('{"email":"you@work.com","ref":"cli-receipt"}');
+    expect(await readSignupState(file)).toMatchObject({
+      kind: "ok",
+      state: { status: "subscribed", email: "you@work.com" }
+    });
+  });
+
+  it("anything but y at the consent step is a decline: nothing sent, one skip", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const { outcome, scripted } = await emailOutcome(file, [""]);
+    await runSignupConsentAfterReceipt({
+      io: scripted.io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
+  });
+
+  it("a consent timeout decides nothing and consumes no skip", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const { outcome, scripted } = await emailOutcome(file, [undefined]);
+    await runSignupConsentAfterReceipt({
+      io: scripted.io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 0 } });
+  });
+
+  it("send failure prints the mapped line and never persists, retries, or queues the email", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => { throw new Error("network down"); });
+    const { outcome, scripted } = await emailOutcome(file, ["y"]);
+    await runSignupConsentAfterReceipt({
+      io: scripted.io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(scripted.written.at(-1)).toBe(signupCopy.unreachableLine);
+    const stateBytes = await readFile(file, "utf8");
+    expect(stateBytes).not.toContain("you@work.com");
+
+    const busy = vi.fn(async () => jsonResponse(429));
+    const second = await emailOutcome(await tempStateFile(), ["y"]);
+    await runSignupConsentAfterReceipt({
+      io: second.scripted.io, stateFilePath: file, payload: second.outcome.payload, stamped: second.outcome.stamped,
+      fetchImpl: busy as unknown as typeof fetch
+    });
+    expect(second.scripted.written.at(-1)).toBe(signupCopy.rateLimitedLine);
+  });
+});
+
+describe("during-scan orchestration", () => {
+  function manualSession(): {
+    session: PreReceiptAskSession;
+    resolveOutcome: (outcome: PreReceiptAskOutcome) => void;
+    readyNudges: number[];
+  } {
+    let resolveOutcome!: (outcome: PreReceiptAskOutcome) => void;
+    const readyNudges: number[] = [];
+    let settled = false;
+    const outcome = new Promise<PreReceiptAskOutcome>((resolve) => {
+      resolveOutcome = (value) => {
+        settled = true;
+        resolve(value);
+      };
+    });
+    return {
+      session: {
+        outcome,
+        notifyReceiptReady: () => {
+          if (!settled) readyNudges.push(Date.now());
+        }
+      },
+      resolveOutcome,
+      readyNudges
+    };
+  }
+
+  it("fast-scan-first: the ready nudge fires once and the receipt waits for the answer", async () => {
+    const { session, resolveOutcome, readyNudges } = manualSession();
+    const order: string[] = [];
+    const run = orchestratePreReceiptAsk({
+      session,
+      runPipeline: async () => {
+        order.push("pipeline-done");
+        return "receipt";
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(readyNudges).toHaveLength(1);
+    order.push("answering");
+    resolveOutcome({ kind: "skipped" });
+    const { pipeline, outcome } = await run;
+    expect(order).toEqual(["pipeline-done", "answering"]);
+    expect(pipeline).toEqual({ ok: true, value: "receipt" });
+    expect(outcome).toEqual({ kind: "skipped" });
+  });
+
+  it("slow-scan-first: the answer lands first, no nudge, and the receipt waits for the pipeline", async () => {
+    const { session, resolveOutcome, readyNudges } = manualSession();
+    resolveOutcome({ kind: "skipped" });
+    const run = orchestratePreReceiptAsk({
+      session,
+      runPipeline: () => new Promise((resolve) => setTimeout(() => resolve("late receipt"), 30))
+    });
+    const { pipeline } = await run;
+    expect(pipeline).toEqual({ ok: true, value: "late receipt" });
+    expect(readyNudges).toHaveLength(0);
+  });
+
+  it("error-during-ask: the pipeline error is captured, the bounded ask still resolves, nothing hangs", async () => {
+    const { session, resolveOutcome } = manualSession();
+    const run = orchestratePreReceiptAsk({
+      session,
+      runPipeline: async () => { throw new Error("scan exploded"); }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    resolveOutcome({ kind: "skipped" });
+    const { pipeline, outcome } = await run;
+    expect(pipeline.ok).toBe(false);
+    expect((pipeline as { ok: false; error: Error }).error.message).toBe("scan exploded");
+    expect(outcome).toEqual({ kind: "skipped" });
+  });
+
+  it("interrupt: an immediately-aborted read resolves as skipped with no skip consumed", async () => {
+    const file = await tempStateFile();
+    const scripted = scriptedIo([undefined]);
+    const session = await openAsk(file, scripted);
+    const { pipeline, outcome } = await orchestratePreReceiptAsk({
+      session,
+      runPipeline: async () => "receipt"
+    });
+    expect(pipeline).toEqual({ ok: true, value: "receipt" });
+    expect(outcome).toEqual({ kind: "skipped" });
+    expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
+  });
+
+  it("no session: pipeline result passes straight through", async () => {
+    const { pipeline, outcome } = await orchestratePreReceiptAsk({
+      session: undefined,
+      runPipeline: async () => 42
+    });
+    expect(pipeline).toEqual({ ok: true, value: 42 });
+    expect(outcome).toEqual({ kind: "no_ask" });
+  });
+
+  it("the ready nudge redraws the prompt through the io", async () => {
+    const file = await tempStateFile();
+    let answer!: (value: string | undefined) => void;
+    const pending = new Promise<string | undefined>((resolve) => { answer = resolve; });
+    const scripted = scriptedIo([() => pending]);
+    const session = await openAsk(file, scripted);
+    const run = orchestratePreReceiptAsk({ session, runPipeline: async () => "receipt" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(scripted.written).toContain(`  ${signupCopy.receiptReadyLine}`);
+    expect(scripted.raws).toEqual([signupCopy.askPrompt]);
+    answer("");
+    answer = () => undefined;
+    // Second empty Enter completes the skip.
+    const { outcome } = await run;
+    // The scripted io only had one pending answer; a nudged Enter then a
+    // bounded follow-up read that returns undefined is still a clean skip.
+    expect(["skipped"]).toContain(outcome.kind);
+  });
+});
+
+describe("argv qualification (real receipt path only)", () => {
+  it("qualifies default/quickstart/flag-form runs and nothing else", () => {
+    expect(qualifiesForPreReceiptSignupAsk([])).toBe(true);
+    expect(qualifiesForPreReceiptSignupAsk(["quickstart"])).toBe(true);
+    expect(qualifiesForPreReceiptSignupAsk(["demo"])).toBe(true);
+    expect(qualifiesForPreReceiptSignupAsk(["--full"])).toBe(true);
+    expect(qualifiesForPreReceiptSignupAsk(["--since-days", "7"])).toBe(true);
+    expect(qualifiesForPreReceiptSignupAsk(["--path", "."])).toBe(true);
+
+    expect(qualifiesForPreReceiptSignupAsk(["--sample"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["--sample", "--full"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["--group-by", "project"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["--json"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["--version"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["-v"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["--help"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["improve"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["report"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["init"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["statusline"])).toBe(false);
+    expect(qualifiesForPreReceiptSignupAsk(["signup", "a@b.co"])).toBe(false);
   });
 });
 
 describe("aibill signup command", () => {
-  beforeEach(async () => {
-    process.env.AI_SPEND_CLAUDE_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-signup-claude-"));
-    process.env.AI_SPEND_CODEX_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-signup-codex-"));
-    process.env.AI_SPEND_GEMINI_LOGS_DIR = await mkdtemp(join(tmpdir(), "ai-spend-signup-gemini-"));
-    process.env.AI_SPEND_CLAUDE_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-signup-home-"));
-    process.env.AI_SPEND_CODEX_HOME_DIR = await mkdtemp(join(tmpdir(), "ai-spend-signup-codex-home-"));
-    process.env.AI_SPEND_CLAUDE_CONFIG = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing.json");
-    process.env.AI_SPEND_CODEX_AUTH = join(process.env.AI_SPEND_CLAUDE_HOME_DIR, "missing-auth.json");
-  });
-  afterEach(() => {
-    delete process.env.AI_SPEND_CLAUDE_LOGS_DIR;
-    delete process.env.AI_SPEND_CODEX_LOGS_DIR;
-    delete process.env.AI_SPEND_GEMINI_LOGS_DIR;
-    delete process.env.AI_SPEND_CLAUDE_HOME_DIR;
-    delete process.env.AI_SPEND_CODEX_HOME_DIR;
-    delete process.env.AI_SPEND_CLAUDE_CONFIG;
-    delete process.env.AI_SPEND_CODEX_AUTH;
-  });
-
   it("refuses to send from a non-interactive terminal — no --yes flag exists (QA 2)", async () => {
     const home = await mkdtemp(join(tmpdir(), "aibill-signup-cmd-"));
     const fetchImpl = vi.fn(async () => jsonResponse(201));
     const result = await runCli(["signup", "a@b.co"], {
       homeDirectory: home,
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe(signupCopy.nonInteractiveLine);
@@ -377,7 +704,8 @@ describe("aibill signup command", () => {
         prompts.push(question);
         return "y";
       },
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     });
 
     expect(result.exitCode).toBe(0);
@@ -399,7 +727,8 @@ describe("aibill signup command", () => {
       homeDirectory: home,
       interactive: true,
       prompt: async () => "",
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(signupCopy.nothingSentLine);
@@ -413,7 +742,8 @@ describe("aibill signup command", () => {
       homeDirectory: home,
       interactive: true,
       prompt: async () => "y",
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe(signupCopy.rateLimitedLine);
@@ -425,7 +755,8 @@ describe("aibill signup command", () => {
     const result = await runCli(["signup", "a@b.co", "--ref", "$(rm -rf ~)"], {
       interactive: true,
       prompt: async () => "y",
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--ref must be 1-24 lowercase letters, digits, or dashes");
@@ -440,11 +771,35 @@ describe("aibill signup command", () => {
         homeDirectory: home,
         interactive: true,
         prompt: async () => "y",
-        waitlistFetch: fetchImpl as unknown as typeof fetch
+        waitlistFetch: fetchImpl as unknown as typeof fetch,
+        signupDns: okDns
       });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe(signupCopy.invalidEmailLine);
     }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses provably-dead and disposable domains with the exact copy", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-cmd-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const deadDns: SignupDnsResolver = {
+      resolveMx: async () => { throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }); },
+      resolve4: async () => { throw Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }); }
+    };
+    const dead = await runCli(["signup", "a@dead.example"], {
+      homeDirectory: home, interactive: true, prompt: async () => "y",
+      waitlistFetch: fetchImpl as unknown as typeof fetch, signupDns: deadDns
+    });
+    expect(dead.exitCode).toBe(1);
+    expect(dead.stderr).toBe(signupCopy.noMxLine);
+
+    const disposable = await runCli(["signup", "a@mailinator.com"], {
+      homeDirectory: home, interactive: true, prompt: async () => "y",
+      waitlistFetch: fetchImpl as unknown as typeof fetch, signupDns: okDns
+    });
+    expect(disposable.exitCode).toBe(1);
+    expect(disposable.stderr).toBe(signupCopy.disposableLine);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -455,7 +810,8 @@ describe("aibill signup command", () => {
       homeDirectory: home,
       interactive: true,
       prompt: async () => "y",
-      waitlistFetch: fetchImpl as unknown as typeof fetch
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
     };
     await runCli(["signup", "a@b.co"], runtime);
     const second = await runCli(["signup", "a@b.co"], runtime);
@@ -524,43 +880,36 @@ describe("surface contracts (QA 11-12)", () => {
     }), "utf8");
   }
 
-  it("marks the REAL receipt for the post-print ask without changing the receipt bytes", async () => {
+  it("keeps the real receipt bytes free of any ask copy (the ask lives outside runCli)", async () => {
     await writeClaudeLogFixture();
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-surface-real-"));
     const result = await runCli(["--path", dir, "--no-color"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.postReceiptSignupAsk).toBe(true);
-    // The ask itself is NOT part of the receipt: it runs after printing.
+    expect(result.stdout).toContain("aibill · LOCAL ESTIMATE");
     expect(result.stdout).not.toContain("type your email");
     expect(result.stdout).not.toContain(signupCopy.scopeLine);
+    expect(result.stdout).not.toContain("launches Friday");
+    expect(result.stdout).not.toContain("[y/N]");
   });
 
-  it("never marks --sample output and carries only the static pointer (safe to GIF)", async () => {
+  it("--sample output carries only the static pointer — no ask, no prompt (safe to GIF)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-surface-sample-"));
     for (const argv of [["--sample", "--path", dir, "--no-color"], ["--sample", "--full", "--path", dir, "--no-color"]]) {
       const result = await runCli(argv);
       expect(result.exitCode).toBe(0);
-      expect(result.postReceiptSignupAsk).toBeUndefined();
       expect(result.stdout).toContain(signupCopy.samplePointer);
       expect(result.stdout).not.toContain("type your email");
       expect(result.stdout).not.toContain("[y/N]");
     }
   });
 
-  it("never marks a --group-by drill-down", async () => {
-    await writeClaudeLogFixture();
-    const dir = await mkdtemp(join(tmpdir(), "ai-spend-surface-groupby-"));
-    const result = await runCli(["--group-by", "project", "--path", dir, "--no-color"]);
-    expect(result.postReceiptSignupAsk).toBeUndefined();
-  });
-
-  it("no-evidence receipt points at signup without asking and stays unmarked", async () => {
+  it("no-evidence receipt points at signup without asking", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-surface-empty-"));
     const result = await runCli(["--path", dir]);
     expect(result.exitCode).toBe(0);
-    expect(result.postReceiptSignupAsk).toBeUndefined();
     expect(result.stdout).toContain(signupCopy.receiptPointer);
+    expect(result.stdout).not.toContain("type your email");
   });
 
   it("keeps init's strict single next-command exit line last, pointer above", async () => {
@@ -568,28 +917,35 @@ describe("surface contracts (QA 11-12)", () => {
     const result = await runCli(["init", "--path", dir]);
     expect(result.exitCode).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
-    // Strict single next-command contract: exactly one `next:` line, with
-    // the static pointer immediately ABOVE it (never below, never a prompt).
     expect(lines.filter((line) => line.startsWith("next:"))).toEqual(["next: npx aibill doctor --sources"]);
     const nextIndex = lines.indexOf("next: npx aibill doctor --sources");
     expect(lines[nextIndex - 1]).toBe(signupCopy.initPointer);
-    expect(result.postReceiptSignupAsk).toBeUndefined();
   });
 
   it("improve exits carry no signup surface at all (one-command exit contract)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-surface-improve-"));
     const result = await runCli(["improve", "--path", dir]);
-    expect(result.postReceiptSignupAsk).toBeUndefined();
     expect(result.stdout).not.toContain("signup");
     expect(result.stdout).not.toContain("launch updates");
+    expect(result.stdout).not.toContain("launches Friday");
   });
 
-  it("keeps the copy kill-list: no urgency, savings, or Workspace-as-shipped in signup strings", () => {
-    const everyLine = Object.values(signupCopy)
-      .map((value) => typeof value === "function" ? value('{"email":"a@b.co","ref":"cli-signup"}') : value)
-      .join("\n")
-      .toLowerCase();
-    for (const banned of ["last chance", "don't miss", "free forever", "save ", "savings", "roi", "weekly receipt", "workspace access", "beta access"]) {
+  it("keeps the copy kill-list: no urgency, savings, confirm-shaming, or Workspace-as-shipped", () => {
+    const flatten = (value: unknown): string[] =>
+      typeof value === "function"
+        ? [(value as (json: string) => string)('{"email":"a@b.co","ref":"cli-signup"}')]
+        : Array.isArray(value)
+          ? value as string[]
+          : [value as string];
+    const everyLine = [
+      ...Object.values(signupCopy).flatMap(flatten),
+      ...signupAskBlockLines(new Date("2026-08-24T12:00:00Z"), 72),
+      ...signupAskBlockLines(new Date("2026-09-15T12:00:00Z"), 72)
+    ].join("\n").toLowerCase();
+    for (const banned of [
+      "last chance", "don't miss", "free forever", "save ", "savings", "roi",
+      "weekly receipt", "workspace access", "beta access", "sure?", "launch drop"
+    ]) {
       expect(everyLine).not.toContain(banned);
     }
     // The claim never overreaches the payload layer (verdict B2).
