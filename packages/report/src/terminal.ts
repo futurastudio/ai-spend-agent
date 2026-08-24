@@ -809,7 +809,11 @@ function compactHeadline(
     case "local_missing":
       return { amount: "Unavailable", label: "local activity found · financial evidence missing" };
     default:
-      return { amount: `~${amount}`, label: "illustrative evidence" };
+      // Demo sample: the window total is an exact sum of the bundled
+      // illustrative records, so it renders bare — the full receipt already
+      // prints $87.00 without a tilde and the two surfaces must agree
+      // (tilde discipline: ~ marks modeled/monthly figures only).
+      return { amount, label: "illustrative evidence" };
   }
 }
 

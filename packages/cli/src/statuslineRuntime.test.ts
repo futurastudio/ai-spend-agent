@@ -335,9 +335,11 @@ describe("standalone status-line renderer", () => {
     expect(renderStatusline(ok(value), {
       now: new Date("2026-08-09T18:05:00.000Z"), columns: 120
     })).toContain("updated 5m");
+    // Past the boundary the age is stated as fact — never "stale" for a
+    // minutes-old cache (shipped-audit cosmetic fix).
     expect(renderStatusline(ok(value), {
       now: new Date("2026-08-09T18:05:00.001Z"), columns: 120
-    })).toContain("stale 5m");
+    })).toContain("cache 5m old");
   });
 
   it("reports a future cache timestamp as a clock mismatch", () => {

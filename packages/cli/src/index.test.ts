@@ -3124,6 +3124,31 @@ describe("minimal CLI vertical slice", () => {
     await expect(readFile(settingsPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("proceeds through a pre-existing EMPTY cache dir but still aborts on one with contents", async () => {
+    // Shipped-audit fix: a user-made empty cache dir (default 0755 perms)
+    // holds nothing to preserve — init re-validates and tightens it itself.
+    const emptyCache = join(await mkdtemp(join(tmpdir(), "ai-spend-precreated-")), "cache");
+    await mkdir(emptyCache, { mode: 0o755 });
+    process.env.AIBILL_CACHE_DIR = emptyCache;
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-empty-cache-"));
+    const statuslineHome = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-empty-home-"));
+    const result = await runCli(["init", "--path", dir], { homeDirectory: statuslineHome });
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("status cache: refreshed");
+
+    // A cache dir that CONTAINS data but fails the safety read still aborts
+    // with the data preserved.
+    const unsafeCache = join(await mkdtemp(join(tmpdir(), "ai-spend-precreated-full-")), "cache");
+    await mkdir(unsafeCache, { mode: 0o755 });
+    await writeFile(join(unsafeCache, "stale-file.json"), "{}", "utf8");
+    process.env.AIBILL_CACHE_DIR = unsafeCache;
+    await expect(
+      runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe-"))], { homeDirectory: statuslineHome })
+    ).rejects.toThrow("Existing private activity cache is unsafe directory");
+    await expect(readFile(join(unsafeCache, "stale-file.json"), "utf8")).resolves.toBe("{}");
+  });
+
   it("supports explicit init installation without changing bare-init consent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-project-"));
     const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-user-"));

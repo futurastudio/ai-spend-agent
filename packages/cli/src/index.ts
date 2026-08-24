@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -129,6 +129,7 @@ import {
   markTokenReductionAppliedV0,
   invalidateTokenReductionExperimentV0,
   markTokenReductionRolledBackV0,
+  activitySnapshotCachePath,
   readActivitySnapshot,
   recordActivitySnapshotRefreshFailure,
   refreshTokenReductionExperimentV0,
@@ -1052,7 +1053,9 @@ function quickstartNextSteps(
   }
   steps.push(
     mode === "demo"
-      ? "npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
+      // Every printed command must run as printed: the demo workspace does
+      // not exist yet, so the command creates it first (shipped-audit fix).
+      ? "mkdir -p ./demo-workspace && npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
       : "npx aibill report              write a shareable Markdown + HTML report"
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
@@ -2986,16 +2989,37 @@ function expansionFreshness(snapshot: ExpansionSnapshot, now: Date): string {
       : seconds < 48 * 3_600
         ? `${Math.floor(seconds / 3_600)}h`
         : `${Math.floor(seconds / 86_400)}d`;
-  return ageMs > 5 * 60 * 1_000 ? `stale ${age}` : `updated ${age}`;
+  // Same freshness vocabulary as the statusline runner: state the cache age
+  // as fact instead of calling minutes-old data "stale".
+  return ageMs > 5 * 60 * 1_000 ? `cache ${age} old` : `updated ${age}`;
 }
 
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
   const existing = await readActivitySnapshot({ cacheDirectory });
   if (existing.status !== "error") return;
+  // A pre-created but EMPTY cache directory holds nothing to preserve —
+  // typically a user-made dir with default (non-0700) permissions. Init's
+  // own create path re-validates and tightens it to 0700, so proceeding is
+  // safe; only a directory with actual contents aborts (shipped-audit fix).
+  if (existing.code === "unsafe_directory" && await isEmptyRealDirectory(dirname(activitySnapshotCachePath({
+    ...(cacheDirectory ? { cacheDirectory } : {})
+  })))) {
+    return;
+  }
   throw new Error(
     `Existing private activity cache is ${existing.code.replaceAll("_", " ")}; ` +
     "it was preserved and init stopped. Remove the cache explicitly before rebuilding it."
   );
+}
+
+async function isEmptyRealDirectory(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isDirectory()) return false;
+    return (await readdir(path)).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function preserveOrCreateInitRegistry(
@@ -3786,7 +3810,9 @@ async function listSourcesCommand(args: ParsedArgs): Promise<CliResult> {
 // not first-run blockers.
 const selfServeProviders = new Set(["openai", "anthropic"]);
 const adminUpgradeProviders: Record<string, string> = {
-  cursor: "requires a Cursor TEAM-ADMIN key (Business plan only)",
+  // Cursor's Admin API is gated to Enterprise teams (cursor.com/docs/api);
+  // Business/Teams keys are rejected with 401/403.
+  cursor: "requires a Cursor TEAM-ADMIN key (Enterprise teams only)",
   "github-copilot": "requires a GitHub BILLING-ADMIN token (org/enterprise)",
   copilot: "requires a GitHub BILLING-ADMIN token (org/enterprise)"
 };
@@ -7887,11 +7913,11 @@ function helpText(): string {
     "  npx aibill --sample                  Show the clearly labeled illustrative demo (never implicit)",
     "  npx aibill --group-by agent          Drill down by source|model|client|project|agent|user|workspace|apiKey",
     "  npx aibill --plan <id>               Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
-    `  ${improveRuntimeCommand}    Source preview: test one personalized change and measure whether token usage fell`,
-    `  ${actionRuntimeCommand("index")}    Source preview: read very large agent histories to completion so results stop saying "indexing"`,
-    `  ${actionRuntimeCommand("identify")}    Source preview: confirm the human owner, team, client/cost center, and approval role`,
-    `  ${actionRuntimeCommand("outcome github")}    Source preview: attach one merged PR whose observed status checks passed`,
-    `  ${actionRuntimeCommand("accountability")}    Source preview: answer owner → outcome → approval → measured-result for this project`,
+    `  ${improveRuntimeCommand}    Test one personalized change and measure whether token usage fell`,
+    `  ${actionRuntimeCommand("index")}    Read very large agent histories to completion so results stop saying "indexing"`,
+    `  ${actionRuntimeCommand("identify")}    Confirm the human owner, team, client/cost center, and approval role`,
+    `  ${actionRuntimeCommand("outcome github")}    Attach one merged PR whose observed status checks passed`,
+    `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",

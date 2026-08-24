@@ -127,7 +127,7 @@ export function generateReportCardCaption(input: ReportCardInput): string {
       ? `with ${formatUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
       : "with no supported savings model in this window";
   const headline = presentationBasis === "connected_missing"
-    ? "cost/value unavailable (no priced financial evidence)"
+    ? "amounts unavailable (no priced financial evidence)"
     : `${formatUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
   return (
     `${input.mode === "demo" ? "DEMO SAMPLE — " : ""}My AI receipt: ${headline}, ` +
@@ -149,9 +149,17 @@ function summarizeOpportunity(records: UsageRecord[], cutList: CutAction[]): {
       .filter((cut) => cut.impactBasis === "observed_value_no_counterfactual")
       .flatMap((cut) => cut.recordIds)
   );
+  // The figure is labeled "API-equivalent exposure", so it sums ONLY the
+  // estimated (API-equivalent) basis. Detected/unverified rows are a
+  // different accounting basis; blending them here produced a number that
+  // matched no other surface (shipped-audit $57.90-vs-$56.60 delta).
   const observedExposureUsd = Math.round(
     records.reduce(
-      (total, record) => total + (observedRecordIds.has(record.id) ? record.amountUsd ?? 0 : 0),
+      (total, record) => total + (
+        observedRecordIds.has(record.id) && record.costConfidence === "estimated"
+          ? record.amountUsd ?? 0
+          : 0
+      ),
       0
     ) * 100
   ) / 100;
@@ -189,27 +197,29 @@ function financialPresentationBasis(
   return "connected_mixed";
 }
 
+// §1.2 vocabulary: "cost/value" is killed copy — every label carries its
+// basis word (billed / API-equivalent / detected) instead.
 function headlineLabel(basis: FinancialPresentationBasis): string {
   switch (basis) {
     case "provider_reported": return "PROVIDER-REPORTED COST (THIS WINDOW)";
-    case "connected_estimated": return "CONNECTED ESTIMATED COST / VALUE";
-    case "connected_unverified": return "CONNECTED UNVERIFIED COST / VALUE";
-    case "connected_mixed": return "MIXED CONNECTED COST / VALUE EVIDENCE";
-    case "connected_missing": return "CONNECTED COST / VALUE UNAVAILABLE";
+    case "connected_estimated": return "CONNECTED API-EQUIVALENT VALUE (ESTIMATED)";
+    case "connected_unverified": return "CONNECTED DETECTED EVIDENCE (UNVERIFIED)";
+    case "connected_mixed": return "MIXED CONNECTED EVIDENCE BASES";
+    case "connected_missing": return "CONNECTED EVIDENCE · NO PRICED AMOUNT";
     case "local_estimate": return "OBSERVED API-EQUIVALENT VALUE";
-    default: return "ILLUSTRATIVE COST / VALUE EVIDENCE";
+    default: return "ILLUSTRATIVE EVIDENCE · DEMO SAMPLE";
   }
 }
 
 function captionBasis(basis: FinancialPresentationBasis): string {
   switch (basis) {
     case "provider_reported": return "provider-reported cost";
-    case "connected_estimated": return "connected estimated cost/value";
-    case "connected_unverified": return "connected unverified cost/value";
-    case "connected_mixed": return "mixed connected cost/value evidence";
-    case "connected_missing": return "connected cost/value evidence with no priced amount";
+    case "connected_estimated": return "connected API-equivalent value (estimated)";
+    case "connected_unverified": return "connected detected evidence (unverified)";
+    case "connected_mixed": return "mixed connected evidence bases";
+    case "connected_missing": return "connected evidence with no priced amount";
     case "local_estimate": return "observed API-equivalent value";
-    default: return "illustrative cost/value evidence";
+    default: return "illustrative evidence";
   }
 }
 

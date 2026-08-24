@@ -771,8 +771,10 @@ function freshnessSegment(snapshot: StatuslineSnapshot, now: Date): string {
   }
   const ageMs = now.getTime() - Date.parse(snapshot.lastSuccessAt ?? snapshot.generatedAt);
   if (ageMs < 0) return "clock mismatch";
+  // "cache Nm old" states the fact; "stale" overclaimed at minutes-old ages
+  // next to the product's multi-day evidence windows (shipped-audit fix).
   return ageMs > STALE_AFTER_MS
-    ? `stale ${formatAge(ageMs)}`
+    ? `cache ${formatAge(ageMs)} old`
     : `updated ${formatAge(ageMs)}`;
 }
 

@@ -2203,6 +2203,26 @@ describe("real provider connector implementations", () => {
       AI_SPEND_COPILOT_RECONCILE_MONTH: "August 2026"
     });
     expect(badMonth.invalidReason).toContain("formatted YYYY-MM");
+
+    // Optional account binding (QA C3): carried through when valid, fails
+    // closed without echoing when malformed, and a dangling binding alone
+    // requests nothing.
+    expect(parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "2026-08",
+      AI_SPEND_COPILOT_RECONCILE_ACCOUNT: "org:futurastudio"
+    })).toEqual({ expectation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08", account: "org:futurastudio" } });
+    const badAccount = parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD: "43.26",
+      AI_SPEND_COPILOT_RECONCILE_MONTH: "2026-08",
+      AI_SPEND_COPILOT_RECONCILE_ACCOUNT: "org name with spaces $(x)"
+    });
+    expect(badAccount.expectation).toBeUndefined();
+    expect(badAccount.invalidReason).toContain("AI_SPEND_COPILOT_RECONCILE_ACCOUNT");
+    expect(JSON.stringify(badAccount)).not.toContain("spaces");
+    expect(parseGitHubCopilotReconciliationEnv({
+      AI_SPEND_COPILOT_RECONCILE_ACCOUNT: "org:futurastudio"
+    })).toEqual({});
   });
 
   it("runs the GitHub Copilot reconciliation from environment variables so the shipped CLI needs no new flags", async () => {
@@ -2236,6 +2256,127 @@ describe("real provider connector implementations", () => {
         else process.env[key] = value;
       }
     }
+  });
+
+  it("dedupes GitHub Copilot seat rows repeated across pagination pages and fails the total_seats check on unique identities", async () => {
+    // A GitHub page-shift during seat churn can return the same assignee on
+    // two pages: raw row count then equals total_seats while a real seat
+    // went unfetched, and the duplicate seat would bill its estimate twice.
+    const seatsPage = (extra: Record<string, unknown>) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ total_seats: 2, seats: [{ assignee: { login: "alice" }, plan_type: "business" }], ...extra })
+    });
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      fetcher: async (url: string) => {
+        if (url.includes("/copilot/metrics/reports/")) {
+          return { ok: true, status: 200, json: async () => ({ download_links: ["https://reports.example.com/copilot/metrics.ndjson"], report_start_day: "2026-07-05", report_end_day: "2026-08-01" }) };
+        }
+        if (url.includes("reports.example.com/copilot/metrics.ndjson")) {
+          return { ok: true, status: 200, json: async () => ({}), text: async () => providerFixtureText("github-copilot-metrics-part-1.ndjson") };
+        }
+        if (url.includes("/copilot/billing/seats")) {
+          return url.includes("page=2") ? seatsPage({}) : seatsPage({ has_more: true, next_page: "2" });
+        }
+        if (url.includes("/settings/billing/ai_credit/usage")) {
+          return { ok: true, status: 200, json: async () => providerFixtureJson("github-copilot-ai-credit-usage.json") };
+        }
+        throw new Error(`Unexpected fixture URL: ${url}`);
+      }
+    });
+
+    const seatRecords = result.records.filter((record) => record.providerCostType === "copilot_seat_reconciliation");
+    expect(seatRecords).toHaveLength(1);
+    expect(seatRecords[0]!.amountUsd).toBe(19);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+      expect.objectContaining({ issue: "duplicate provider record was excluded" }),
+      expect.objectContaining({
+        field: "total_seats",
+        issue: expect.stringContaining("returned 1 unique seat identity")
+      })
+    ]));
+  });
+
+  it("binds an env reconciliation anchor to one account so a second org in the same shell cannot stamp verified", async () => {
+    const previous = {
+      expected: process.env.AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD,
+      month: process.env.AI_SPEND_COPILOT_RECONCILE_MONTH,
+      account: process.env.AI_SPEND_COPILOT_RECONCILE_ACCOUNT
+    };
+    process.env.AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD = "43.26";
+    process.env.AI_SPEND_COPILOT_RECONCILE_MONTH = "2026-08";
+    process.env.AI_SPEND_COPILOT_RECONCILE_ACCOUNT = "org:first-org";
+    try {
+      // Same shell, different org, coincidence-equal total: fails closed.
+      const otherOrg = await fetchProviderUsageRecords({
+        provider: "github-copilot",
+        authReference: "env:GITHUB_COPILOT_TOKEN",
+        tokenResolver: () => fakeToken,
+        startTime: 1761955200,
+        org: "other-org",
+        fetcher: copilotReconciliationFetcher()
+      });
+      expect(otherOrg.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+      expect(otherOrg.qa.instructions.some((line) =>
+        line.startsWith("Reconciliation not_provable:") &&
+        line.includes("AI_SPEND_COPILOT_RECONCILE_ACCOUNT is bound to a different org/enterprise")
+      )).toBe(true);
+      expect(JSON.stringify(otherOrg.qa)).not.toContain("first-org");
+
+      // The bound account itself still verifies (bare slug matches too).
+      process.env.AI_SPEND_COPILOT_RECONCILE_ACCOUNT = "futurastudio";
+      const bound = await fetchProviderUsageRecords({
+        provider: "github-copilot",
+        authReference: "env:GITHUB_COPILOT_TOKEN",
+        tokenResolver: () => fakeToken,
+        startTime: 1761955200,
+        org: "futurastudio",
+        fetcher: copilotReconciliationFetcher()
+      });
+      expect(bound.completeness).toBe("verified");
+    } finally {
+      for (const [key, value] of [
+        ["AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD", previous.expected],
+        ["AI_SPEND_COPILOT_RECONCILE_MONTH", previous.month],
+        ["AI_SPEND_COPILOT_RECONCILE_ACCOUNT", previous.account]
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("explains a day-scoped AI-credit time period without the self-contradictory month wording", async () => {
+    const result = await fetchProviderUsageRecords({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_TOKEN",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      org: "futurastudio",
+      copilotReconciliation: { expectedNetUsd: 43.26, expectedBillingMonth: "2026-08" },
+      fetcher: copilotReconciliationFetcher({
+        aiCredit: () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            timePeriod: { year: 2026, month: 8, day: null },
+            usageItems: [{ product: "copilot", sku: "copilot_ai_credits", model: "gpt-5", netQuantity: 4326, netAmount: 43.26 }]
+          })
+        })
+      })
+    });
+
+    expect(result.records.every((record) => record.costConfidence !== "verified")).toBe(true);
+    const note = result.qa.instructions.find((line) => line.startsWith("Reconciliation not_provable:"));
+    expect(note).toContain("requires a whole-month AI-credit report");
+    expect(note).toContain("carries a day field");
+    expect(note).not.toContain("does not match the provider-reported time period 2026-08");
   });
 
   it("resolves only reference-based tokens and rejects plaintext-looking secret references", () => {
@@ -2290,7 +2431,7 @@ describe("real provider connector implementations", () => {
       {
         provider: "github-copilot",
         credential: "GitHub admin token reference and organization or enterprise slug",
-        gaps: ["AI-credit gross, discount, and net billing", "license invoice settlement"]
+        gaps: ["license invoice settlement"]
       }
     ] as const;
 
@@ -2305,6 +2446,17 @@ describe("real provider connector implementations", () => {
       expect(source.fieldsMissing, fixture.provider).toEqual(expect.arrayContaining([...fixture.gaps]));
       expect(source.fieldsMissing, fixture.provider).not.toContain(fixture.credential);
     }
+    // Post-hoc QA M1: a verified Copilot sync must no longer publish a
+    // source that claims the shipped AI-credit billing it just synced is
+    // missing.
+    const copilot = createProviderConnection({
+      provider: "github-copilot",
+      authReference: "env:GITHUB_COPILOT_ADMIN_KEY",
+      verifiedRecordCount: 2,
+      totalUsd: 12.5,
+      completeness: "verified"
+    });
+    expect(copilot.fieldsMissing.join(" ")).not.toContain("AI-credit");
   });
 
   it("keeps an unavailable provider headline missing instead of inventing $0.00", () => {
