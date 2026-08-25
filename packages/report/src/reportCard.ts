@@ -90,15 +90,19 @@ export function generateReportCardSvg(input: ReportCardInput): string {
     </linearGradient>
   </defs>
   <style>
+    /* 0.9.5 brand retint: the neutral text inks were blue-tinted periwinkle,
+       off the landing's warm ladder. Color-only swap to white-alpha
+       ink/muted/faint (font sizes, positions, and letter-spacing untouched;
+       the estimated-money amber stays receipt-scoped by mandate). */
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .label { fill: #7c89b3; font-size: 13px; letter-spacing: 2px; }
-    .big { fill: #e8edff; font-size: 52px; font-weight: 700; }
+    .label { fill: rgba(255,255,255,0.42); font-size: 13px; letter-spacing: 2px; }
+    .big { fill: #EDEDED; font-size: 52px; font-weight: 700; }
     .modeled { fill: #fbbf24; font-size: 30px; font-weight: 700; }
-    .unavailable { fill: #9aa6d6; font-size: 30px; font-weight: 700; }
-    .meta { fill: #9aa6d6; font-size: 14px; }
-    .cut { fill: #cdd6f7; font-size: 14px; }
+    .unavailable { fill: rgba(255,255,255,0.62); font-size: 30px; font-weight: 700; }
+    .meta { fill: rgba(255,255,255,0.62); font-size: 14px; }
+    .cut { fill: rgba(255,255,255,0.62); font-size: 14px; }
     .cutImpact { fill: #fbbf24; font-weight: 700; }
-    .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
+    .brand { fill: rgba(255,255,255,0.42); font-size: 12px; letter-spacing: 1px; }
   </style>
   <rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="18" fill="url(#bg)"/>
   <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="rgba(255,255,255,0.08)"/>

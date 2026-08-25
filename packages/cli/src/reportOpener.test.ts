@@ -30,12 +30,17 @@ describe("decideReportAutoOpen — platform openers", () => {
     expect(baseline()).toEqual({ open: true, command: "open", args: [htmlPath] });
   });
 
-  it("win32 uses `cmd /c start` with the empty title slot before the path", () => {
-    expect(baseline({ platform: "win32" })).toEqual({
+  it("win32 uses the non-reparsing rundll32/FileProtocolHandler opener, never `cmd /c start`", () => {
+    // Command-injection fix (0.9.5): the old `cmd /c start "" <path>` let
+    // cmd.exe re-parse & ^ % ( ) < > | even with shell:false. rundll32
+    // hands the path to url.dll with a discrete argv and no shell.
+    const decision = baseline({ platform: "win32" });
+    expect(decision).toEqual({
       open: true,
-      command: "cmd",
-      args: ["/c", "start", "", htmlPath]
+      command: "rundll32",
+      args: ["url.dll,FileProtocolHandler", htmlPath]
     });
+    expect(decision.open && decision.command).not.toBe("cmd");
   });
 
   it("linux uses xdg-open only when it is actually on PATH", () => {
@@ -79,6 +84,83 @@ describe("decideReportAutoOpen — every suppression path", () => {
       .toEqual({ open: false, reason: "ssh" });
     expect(baseline({ env: { SSH_TTY: "/dev/pts/1" } as NodeJS.ProcessEnv }))
       .toEqual({ open: false, reason: "ssh" });
+  });
+
+  it("a path with any cmd metacharacter or quote suppresses on EVERY platform (command-injection defense 1)", () => {
+    // The win32 vector: `C:\code\proj&calc` (all legal filename chars,
+    // no spaces) used to make cmd.exe run calc. Each of & ^ % ( ) < > |
+    // and the double-quote refuses auto-open on darwin/linux/win32 alike —
+    // a metacharacter path is a reasonable thing to decline to shell-open.
+    const metacharacters = ["&", "^", "%", "(", ")", "<", ">", "|", '"'];
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      for (const character of metacharacters) {
+        const decision = decideReportAutoOpen({
+          htmlPath: `/base/proj${character}calc/ai-spend-report.html`,
+          noOpenFlag: false,
+          env: { PATH: "/usr/bin" } as NodeJS.ProcessEnv,
+          platform,
+          stdoutIsTty: true,
+          hasCommandImpl: () => true
+        });
+        expect(decision, `${platform} ${character}`).toEqual({ open: false, reason: "unsafe-path" });
+      }
+    }
+  });
+
+  it("the win32 %VAR% info-leak shape is also refused (defense 1)", () => {
+    expect(baseline({
+      platform: "win32",
+      htmlPath: "C:\\code\\%USERNAME%\\ai-spend-report.html"
+    })).toEqual({ open: false, reason: "unsafe-path" });
+  });
+
+  it("adversary 9-hostile-name probe: no path shape reaches a shell on any branch", () => {
+    // The nine hostile cwd/--out shapes. For each we assert the decision on
+    // all three platforms is EITHER a suppression (open:false) OR an
+    // affirmative decision whose command is a known non-shell opener with
+    // the raw path as a discrete argv element — never `cmd`, never a shell,
+    // never the path spliced into a command string.
+    const nonShellOpeners = new Set(["open", "xdg-open", "rundll32"]);
+    const hostileNames = [
+      "foo & calc",              // classic injection + spaces
+      "bar;echo pwned",          // posix separator (also has a space)
+      "$(cmd)",                  // command substitution shape
+      'a"b',                     // embedded double-quote
+      "with space",             // plain spaces (must be safe to open)
+      "unicode-café-项目",        // non-ascii (must be safe to open)
+      "space\\free\\UNC",        // space-free UNC-shaped
+      "pipe|payload",            // pipe
+      "redir<in>out"             // redirection pair
+    ];
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      for (const name of hostileNames) {
+        const htmlPath = `/base/${name}/ai-spend-report.html`;
+        const decision = decideReportAutoOpen({
+          htmlPath,
+          noOpenFlag: false,
+          env: { PATH: "/usr/bin" } as NodeJS.ProcessEnv,
+          platform,
+          stdoutIsTty: true,
+          hasCommandImpl: () => true
+        });
+        const label = `${platform} :: ${name}`;
+        if (decision.open) {
+          // Affirmative only for shapes with no cmd metacharacter (spaces,
+          // unicode, plain UNC; `;`/`$` are inert without a shell). The
+          // no-shell-reachability invariant is exactly: a KNOWN non-shell
+          // opener, and the raw path carried as its OWN argv element —
+          // never `cmd`/PowerShell, never spliced into a command string.
+          expect(nonShellOpeners.has(decision.command), label).toBe(true);
+          expect(decision.command, label).not.toBe("cmd");
+          expect(decision.command.toLowerCase(), label).not.toContain("powershell");
+          expect(decision.args, label).toContain(htmlPath);
+          // The path is a discrete element, not concatenated into any arg.
+          expect(decision.args.some((arg) => arg !== htmlPath && arg.includes(name)), label).toBe(false);
+        } else {
+          expect(["unsafe-path", "no-opener"], label).toContain(decision.reason);
+        }
+      }
+    }
   });
 });
 

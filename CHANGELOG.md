@@ -54,6 +54,21 @@ scanning, or file contents.
 - Caption equal-case threshold hardened to integer cents so the exact-5¢
   boundary is deterministic at every magnitude (a float diff let
   $20.05/$20.00 keep both figures while $100.05/$100.00 collapsed).
+- Security (report auto-open, Windows): closed a command-injection hole in
+  the browser opener. The earlier win32 opener (`cmd /c start "" <path>`)
+  passed the report path through cmd.exe, which re-parses `& ^ % ( ) < > |`
+  even with `shell:false`, so a space-free path like `C:\code\proj&calc`
+  (all legal filename characters, reachable via the cwd-derived
+  machine-wide path or an absolute `--out`) could execute an arbitrary
+  program and `%VAR%` could expand. Two independent defenses: auto-open now
+  refuses any path containing a cmd metacharacter or quote on every
+  platform (falling back to the plain `open <path>` pointer), and the win32
+  opener no longer uses a shell at all — it opens via
+  `rundll32 url.dll,FileProtocolHandler` with a discrete argv. darwin and
+  linux were unaffected and stay unchanged.
+- Brand retint follow-up: the receipt SVG's neutral text inks (previously
+  blue-tinted periwinkle) now match the warm white-alpha ink/muted/faint
+  ladder; a color-only swap with sizes and positions untouched.
 
 ## 0.9.4 — 2026-08-25
 

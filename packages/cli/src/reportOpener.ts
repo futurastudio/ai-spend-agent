@@ -9,7 +9,7 @@ import { delimiter, join } from "node:path";
  *
  *   darwin  →  open <html>
  *   linux   →  xdg-open <html>   (only when xdg-open is actually on PATH)
- *   win32   →  cmd /c start "" <html>
+ *   win32   →  rundll32 url.dll,FileProtocolHandler <html>
  *
  * The decision to open is computed SYNCHRONOUSLY and truthfully before the
  * summary renders, so the summary's Next block can say what actually
@@ -22,19 +22,49 @@ import { delimiter, join } from "node:path";
  *     open on the wrong machine
  *   - the user asked not to: `--no-open` flag or AI_SPEND_NO_OPEN env
  *     (any non-empty value, same convention as AI_SPEND_NO_TELEMETRY)
+ *   - the resolved path contains a shell metacharacter (see below)
  *   - the platform has no known opener (or linux without xdg-open)
  *
  * The spawn itself follows the telemetry detached-child pattern: detached,
  * stdio ignored, unref'd, every failure (including async ENOENT) swallowed —
  * the CLI must never crash, hang, or delay exit because an opener is
  * missing or slow.
+ *
+ * SECURITY (win32 command-injection, fixed 0.9.5): the earlier
+ * `cmd /c start "" <path>` opener passed the path through cmd.exe, which
+ * re-parses `& ^ % ( ) < > |` even when spawned with shell:false — a
+ * space-free path like `C:\code\proj&calc` (all legal filename chars)
+ * would make cmd execute `calc`, and `%VAR%` would expand (info leak). The
+ * cwd-derived machine-wide path AND an absolute `--out` both reach here.
+ * Two independent defenses now stand:
+ *   1. UNSAFE_PATH_METACHARACTERS refuses auto-open (falling back to the
+ *      plain pointer) for ANY path carrying those characters or a quote,
+ *      on every platform — a metacharacter path is a reasonable thing to
+ *      decline to shell-open anywhere.
+ *   2. The win32 opener no longer touches a shell: rundll32 hands the path
+ *      straight to url.dll's FileProtocolHandler with a discrete argv, so
+ *      even a metacharacter path that slipped past (1) cannot reach cmd.
  */
+
+/**
+ * cmd.exe re-parsing set plus the double-quote (which can break out of
+ * libuv's own arg quoting). A path containing any of these is never handed
+ * to a platform opener; auto-open falls back to the plain pointer instead.
+ */
+const UNSAFE_PATH_METACHARACTERS = /[&^%()<>|"]/u;
 
 export type ReportOpenDecision =
   | { open: true; command: string; args: string[] }
   | {
       open: false;
-      reason: "no-open-flag" | "env-switch" | "not-a-tty" | "ci" | "ssh" | "no-opener";
+      reason:
+        | "no-open-flag"
+        | "env-switch"
+        | "not-a-tty"
+        | "ci"
+        | "ssh"
+        | "unsafe-path"
+        | "no-opener";
     };
 
 export function decideReportAutoOpen(input: {
@@ -56,14 +86,25 @@ export function decideReportAutoOpen(input: {
   if (!stdoutIsTty) return { open: false, reason: "not-a-tty" };
   if (env.CI) return { open: false, reason: "ci" };
   if (env.SSH_CONNECTION || env.SSH_TTY) return { open: false, reason: "ssh" };
+  // Defense (1): never shell-open a path carrying a cmd metacharacter or a
+  // quote — on any platform. This alone neutralizes the win32 vector.
+  if (UNSAFE_PATH_METACHARACTERS.test(input.htmlPath)) {
+    return { open: false, reason: "unsafe-path" };
+  }
 
   if (platform === "darwin") {
     return { open: true, command: "open", args: [input.htmlPath] };
   }
   if (platform === "win32") {
-    // The empty "" is cmd's window-title slot: without it a quoted path
-    // becomes the title and nothing opens.
-    return { open: true, command: "cmd", args: ["/c", "start", "", input.htmlPath] };
+    // Defense (2): rundll32 → url.dll,FileProtocolHandler opens the path
+    // with NO shell in the chain — cmd.exe never sees it, so its
+    // `& ^ % ( ) < > |` re-parsing (which shell:false does not prevent for
+    // `cmd /c start`) cannot fire even if defense (1) ever missed a char.
+    return {
+      open: true,
+      command: "rundll32",
+      args: ["url.dll,FileProtocolHandler", input.htmlPath]
+    };
   }
   if (platform === "linux" && hasCommand("xdg-open", env)) {
     return { open: true, command: "xdg-open", args: [input.htmlPath] };

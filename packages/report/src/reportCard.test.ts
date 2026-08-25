@@ -23,17 +23,28 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain("ILLUSTRATIVE EVIDENCE · DEMO SAMPLE");
     expect(svg).toContain("modeled API-rate opportunity");
     expect(svg).toMatch(/~\$[\d,]+\.\d{2}\/mo/);
+    // Estimated-money amber stays receipt-scoped #fbbf24 by mandate.
     expect(svg).toContain('.modeled { fill: #fbbf24;');
     expect(svg).toContain('.cutImpact { fill: #fbbf24;');
     expect(svg).not.toContain("#4ade80");
-    // 0.9.5 brand retint: the card's ground joins the landing's warm
-    // green-black ladder; text styles above are deliberately untouched.
+    // 0.9.5 brand retint: warm green-black ground ladder + white-alpha
+    // hairline stroke, and the neutral text inks recolored off the
+    // blue-tinted periwinkle to the warm white-alpha ink/muted/faint ladder.
     expect(svg).toContain('stop-color="#0C0D09"');
     expect(svg).toContain('stop-color="#12140E"');
     expect(svg).toContain('stroke="rgba(255,255,255,0.08)"');
+    expect(svg).toContain('.big { fill: #EDEDED;');
+    expect(svg).toContain('.meta { fill: rgba(255,255,255,0.62);');
+    expect(svg).toContain('.label { fill: rgba(255,255,255,0.42);');
     expect(svg).not.toContain("#0b1020");
     expect(svg).not.toContain("#121a33");
     expect(svg).not.toContain("#26304f");
+    // Periwinkle text inks are gone.
+    expect(svg).not.toContain("#e8edff");
+    expect(svg).not.toContain("#9aa6d6");
+    expect(svg).not.toContain("#7c89b3");
+    expect(svg).not.toContain("#cdd6f7");
+    expect(svg).not.toContain("#5b6790");
     expect(svg).not.toContain('class="save"');
     expect(svg).not.toContain('class="cutSave"');
     expect(svg).toContain("aibill · local-first · npx aibill");
