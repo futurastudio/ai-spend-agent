@@ -45,7 +45,7 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 > result of a tool you invoke is returned to the configured AI client and then
 > follows that client's data-handling policy. Choose the client, account, and
 > project scope accordingly. (The aibill CLI's separate anonymous command
-> counts are disclosed at first run and end with `aibill telemetry off` — see
+> counts are disclosed at first run and end with `npx aibill telemetry off` — see
 > [`TELEMETRY.md`](TELEMETRY.md).)
 
 ### Codex
@@ -217,7 +217,7 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   invalidate the receipt.
 - This MCP server does not upload local transcript contents or send
   telemetry; the aibill CLI's separate anonymous command counts are disclosed
-  at first run and end with `aibill telemetry off`. An MCP tool's selected
+  at first run and end with `npx aibill telemetry off`. An MCP tool's selected
   structured result is returned to the invoking AI client and follows that
   client's data-handling policy.
 - Provider tools are read-only against provider APIs.
