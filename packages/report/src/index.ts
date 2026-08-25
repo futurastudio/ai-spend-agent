@@ -27,8 +27,12 @@ import type {
 } from "@agent-finops/core";
 
 export {
+  generateCommandSummary,
   generatePlainEnglishSummary,
   groupByDimensions,
+  type CommandSummaryNextStep,
+  type CommandSummaryOptions,
+  type CommandSummaryRow,
   type GroupByDimension,
   type PlainEnglishSummaryOptions
 } from "./terminal.js";

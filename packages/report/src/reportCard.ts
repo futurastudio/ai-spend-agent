@@ -68,11 +68,16 @@ export function generateReportCardSvg(input: ReportCardInput): string {
 
   // Parity nit: ONE thousands style per artifact — the headline uses the
   // comma form, so every other dollar on the card (and its caption) does too.
+  // 0.9.5 dedup: when the observed exposure IS the headline value (within
+  // rounding noise), the card says so in words instead of printing the same
+  // number twice two lines apart.
   const opportunityLine = opportunity.modeledMonthlySavingsUsd > 0
     ? `<tspan class="modeled">~${escapeXml(formatBigUsd(opportunity.modeledMonthlySavingsUsd))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan>`
-    : opportunity.observedExposureUsd > 0
-      ? `<tspan class="modeled">${escapeXml(formatBigUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
-      : `<tspan class="unavailable">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
+    : observedExposureMatchesHeadline(summary.totalUsd, opportunity)
+      ? `<tspan class="modeled">All</tspan><tspan class="meta" dx="10">of the value above is exposure · savings unavailable</tspan>`
+      : opportunity.observedExposureUsd > 0
+        ? `<tspan class="modeled">${escapeXml(formatBigUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
+        : `<tspan class="unavailable">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="${ariaLabel}">
   <defs>
@@ -125,11 +130,20 @@ export function generateReportCardCaption(input: ReportCardInput): string {
   // "; $X is observed API-equivalent exposure…" appendix quoted a figure the
   // card and the receipt never display (launch-sweep finding: a sample
   // caption said $41.00 that reconciled to nothing a reader could see).
+  // 0.9.5 dedup (founder-visible): when exposure and headline value agree
+  // within rounding noise the caption keeps ONE number and says the value IS
+  // the exposure, instead of quoting two near-identical dollars ("$2,281.89
+  // value … $2,281.87 exposure"). The truth contract survives verbatim:
+  // "savings unavailable without a matched counterfactual".
   const opportunityText = opportunity.modeledMonthlySavingsUsd > 0
     ? `with ~${formatBigUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings`
-    : opportunity.observedExposureUsd > 0
-      ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
-      : "with no supported savings model in this window";
+    : observedExposureMatchesHeadline(input.summary.totalUsd, opportunity)
+      // The headline just named the basis; repeating "observed
+      // API-equivalent" here would reintroduce the noise this collapses.
+      ? "effectively all of it exposure to investigate; savings unavailable without a matched counterfactual"
+      : opportunity.observedExposureUsd > 0
+        ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
+        : "with no supported savings model in this window";
   const headline = presentationBasis === "connected_missing"
     ? "amounts unavailable (no priced financial evidence)"
     : `${formatBigUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
@@ -168,6 +182,34 @@ function summarizeOpportunity(records: UsageRecord[], cutList: CutAction[]): {
     ) * 100
   ) / 100;
   return { modeledMonthlySavingsUsd, observedExposureUsd };
+}
+
+/**
+ * 0.9.5 equal-case collapse threshold. Observed value (headline) and observed
+ * exposure are two sums over near-identical record subsets; sub-cent
+ * per-action rounding lets them drift a few cents apart while describing the
+ * same evidence (the founder's live card read "$2,281.89 value" vs
+ * "$2,281.87 exposure" — 2¢ of pure rounding noise). At or under $0.05 the
+ * card and caption print ONE number with combined phrasing; above it the two
+ * figures are treated as genuinely different and both print. A nickel sits
+ * comfortably above the observed noise floor and far below any real subset
+ * difference worth disclosing separately.
+ */
+const OBSERVED_EXPOSURE_MATCH_TOLERANCE_USD = 0.05;
+
+/**
+ * True when the card/caption would otherwise print the observed exposure as
+ * a second number that reads identical to the headline observed value.
+ * Display-level only: the underlying sums are untouched.
+ */
+function observedExposureMatchesHeadline(
+  totalUsd: number,
+  opportunity: { modeledMonthlySavingsUsd: number; observedExposureUsd: number }
+): boolean {
+  return opportunity.modeledMonthlySavingsUsd <= 0 &&
+    opportunity.observedExposureUsd > 0 &&
+    Math.abs(roundUsdCents(totalUsd) - roundUsdCents(opportunity.observedExposureUsd)) <=
+      OBSERVED_EXPOSURE_MATCH_TOLERANCE_USD;
 }
 
 type FinancialPresentationBasis =

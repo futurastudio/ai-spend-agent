@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
-import { generatePlainEnglishSummary, groupByDimensions } from "./terminal.js";
+import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions } from "./terminal.js";
 
 // Copy assertions follow the C-lane result-centralization design (§1.2/§1.5):
 // every money label routes through the basis vocabulary (committed /
@@ -1182,5 +1182,122 @@ describe("overflow-row reconciliation (0.9.4 founder fix)", () => {
     const rowAmounts = [...text.matchAll(/~\$(\d+\.\d{2})/gu)].map((match) => Number(match[1]));
     const tableSum = rowAmounts.reduce((total, value) => total + value, 0);
     expect(tableSum).toBeCloseTo(10.67, 2);
+  });
+});
+
+/**
+ * 0.9.5 founder polish: report/report-card summaries render through ONE
+ * aligned renderer. These pins hold the geometry itself — a shared label
+ * column and a shared Next description column — stable across path lengths,
+ * and pin the deliberate degradations (description-below, narrow stacking).
+ */
+describe("generateCommandSummary (aligned report/report-card summaries)", () => {
+  const shortHome = "/Users/testuser";
+  const longHome = "/Users/testuser/a-rather-long-nested-dir/Some Folder";
+
+  function summaryFor(home: string, width: number): string {
+    return generateCommandSummary({
+      title: "aibill report",
+      note: "a shareable Markdown + HTML report, written locally",
+      rows: [
+        { label: "Scope", value: `machine-wide · artifacts in ${home}` },
+        { label: "Markdown", value: `${home}/ai-spend-report.md` },
+        { label: "HTML", value: `${home}/ai-spend-report.html` },
+        { label: "Total", value: "$2281.89 · cost/value evidence" },
+        { label: "Privacy", value: "report rendered locally with no aibill telemetry" }
+      ],
+      nextSteps: [
+        { command: `open ${home}/ai-spend-report.html`, description: "view the full report in your browser" },
+        { command: `less ${home}/ai-spend-report.md`, description: "read it in the terminal" },
+        { command: "cd <project> && npx aibill apply --since-days 30", description: "per-project action plan from one exact project folder" }
+      ],
+      color: false,
+      width
+    });
+  }
+
+  it("pads every label to one shared column and every Next command to one description column", () => {
+    const text = summaryFor(shortHome, 120);
+    const lines = text.split("\n");
+
+    // Label rows: values all start on the same column (max(14, longest) + 3).
+    const valueColumns = ["Scope", "Markdown", "HTML", "Total", "Privacy"].map((label) => {
+      const row = lines.find((line) => line.startsWith(`  ${label} `));
+      expect(row, label).toBeDefined();
+      return row!.slice(2 + label.length).search(/\S/u) + 2 + label.length;
+    });
+    expect(new Set(valueColumns).size).toBe(1);
+    expect(valueColumns[0]).toBe(2 + 14 + 1);
+
+    // Next block: all three descriptions start on one shared column
+    // (widest command + 2), regardless of per-command width.
+    const nextIndex = lines.indexOf("  Next");
+    expect(nextIndex).toBeGreaterThan(0);
+    const stepLines = lines.slice(nextIndex + 1).filter((line) => line.startsWith("  › "));
+    expect(stepLines).toHaveLength(3);
+    const widest = "cd <project> && npx aibill apply --since-days 30".length;
+    for (const line of stepLines) {
+      expect(line.slice(4 + widest, 4 + widest + 2)).toBe("  ");
+      expect(line.charAt(4 + widest + 2)).not.toBe(" ");
+    }
+    expect(stepLines[0]).toBe(
+      `  › open ${shortHome}/ai-spend-report.html`.padEnd(4 + widest + 2) +
+      "view the full report in your browser"
+    );
+  });
+
+  it("keeps the label column stable for long paths and never wraps mid-path", () => {
+    const text = summaryFor(longHome, 90);
+    const lines = text.split("\n");
+    // The long markdown path exceeds the value width; it must land WHOLE
+    // (its spaces are inside quotes-free path segments, "Some Folder" may
+    // split at its space but never inside a path segment word).
+    expect(text).toContain(`${longHome}/ai-spend-report.md`);
+    const markdownRow = lines.find((line) => line.startsWith("  Markdown "));
+    expect(markdownRow).toBeDefined();
+    expect(markdownRow!.indexOf("/Users/")).toBe(2 + 14 + 1);
+    // Descriptions cannot fit beside the widest command at 90 columns:
+    // every step degrades together — command alone, description below on
+    // the "›" continuation indent.
+    const nextIndex = lines.indexOf("  Next");
+    const block = lines.slice(nextIndex + 1);
+    expect(block.some((line) => line.startsWith("  › open "))).toBe(true);
+    const openLine = block.find((line) => line.startsWith("  › open "))!;
+    expect(openLine.trimEnd().endsWith("ai-spend-report.html")).toBe(true);
+    expect(block).toContain("    view the full report in your browser");
+    expect(block).toContain("    read it in the terminal");
+  });
+
+  it("stacks label over value below 58 columns (receipt narrow behavior)", () => {
+    const text = summaryFor(shortHome, 50);
+    const lines = text.split("\n");
+    expect(lines).toContain("  TOTAL");
+    expect(lines).toContain("  $2281.89 · cost/value evidence");
+    expect(lines.some((line) => line.startsWith("  Total "))).toBe(false);
+  });
+
+  it("sets off sections as bold-heading blocks and wraps their body by words", () => {
+    const text = generateCommandSummary({
+      title: "aibill report-card",
+      badge: "Your AI Receipt",
+      note: "a shareable, redacted spend card (no client/project/user names)",
+      rows: [{ label: "Receipt", value: "/Users/testuser/ai-receipt.svg" }],
+      sections: [{
+        heading: "Caption to share",
+        body: ["My AI receipt: $2,281.89 in observed API-equivalent value, effectively all of it exposure to investigate; savings unavailable without a matched counterfactual. Local-first: npx aibill"]
+      }],
+      color: false,
+      width: 72
+    });
+    const lines = text.split("\n");
+    expect(lines[1]).toBe("  aibill report-card · Your AI Receipt");
+    expect(lines).toContain("  Caption to share");
+    const captionStart = lines.indexOf("  Caption to share");
+    expect(lines[captionStart - 1]).toBe("");
+    expect(lines[captionStart + 1]!.startsWith("  My AI receipt: $2,281.89")).toBe(true);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(72);
+    expect(normalizeWhitespace(text)).toContain(
+      "savings unavailable without a matched counterfactual. Local-first: npx aibill"
+    );
   });
 });

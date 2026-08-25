@@ -88,7 +88,9 @@ describe("report machine-wide mode (0.9.4)", () => {
       const run = await runFromHome(home, ["report"]);
       expect(run.exitCode, run.stderr || run.stdout).toBe(0);
       expect(run.stdout).toContain("aibill report");
-      expect(run.stdout).toContain("scope: machine-wide");
+      // 0.9.5 aligned summary: the scope fact rides a "Scope" label row that
+      // wraps at terminal width, so pin it whitespace-normalized.
+      expect(run.stdout.replace(/\s+/gu, " ")).toContain("Scope machine-wide · all supported local agent evidence");
       expect(run.stdout).not.toContain("needs one exact project folder");
       expect(run.stdout).not.toContain("Refusing to scan");
 
@@ -162,8 +164,8 @@ describe("report machine-wide mode (0.9.4)", () => {
       const project = await mkdtemp(join(tmpdir(), "machinewide-project-"));
       const run = await runFromHome(home, ["report", "--path", project]);
       expect(run.exitCode).toBe(0);
-      expect(run.stdout).toContain(`path: ${project}`);
-      expect(run.stdout).not.toContain("scope: machine-wide");
+      expect(run.stdout.replace(/\s+/gu, " ")).toContain(`Path ${project}`);
+      expect(run.stdout).not.toContain("machine-wide");
       expect(existsSync(join(project, ".ai-spend-agent", "report.md"))).toBe(true);
       expect(existsSync(join(project, "ai-spend-report.md"))).toBe(false);
     }
