@@ -59,6 +59,7 @@ globalThis.fetch = async (url, init) => {
 type PtyRun = {
   output: () => string;
   write: (text: string) => void;
+  endInput: () => void;
   waitFor: (needle: string, timeoutMs?: number) => Promise<void>;
   waitForExit: (timeoutMs?: number) => Promise<number | null>;
   home: string;
@@ -104,6 +105,7 @@ async function startCli(): Promise<PtyRun> {
   return {
     output: () => captured,
     write: (text) => { child.stdin.write(text); },
+    endInput: () => { child.stdin.end(); },
     waitFor: async (needle, timeoutMs = 15_000) => {
       const deadline = Date.now() + timeoutMs;
       while (!captured.includes(needle)) {
@@ -229,6 +231,77 @@ describe("signup consent PTY rhythm (founder incident end-to-end)", () => {
       expect(countOccurrences(output, signupCopy.nothingSentLine)).toBe(1);
       expect(output).not.toContain(signupCopy.sentLine);
       expect(await readFile(run.stubLog, "utf8").catch(() => "")).toBe("");
+      const state = JSON.parse(await readFile(join(run.home, ".aibill", "signup.json"), "utf8")) as {
+        status: string;
+        askCount: number;
+      };
+      expect(state.status).toBe("deferred");
+      expect(state.askCount).toBe(1);
+    }
+  );
+});
+
+describe("ask-path resilience (cold-start audit NEW-B2 / PC-4 / PC-5)", () => {
+  const drainNoticeFragment = "pasted line(s) were discarded";
+
+  it(
+    "a rapid double-Enter skip completes: nudge shown, ONE lifetime skip recorded, receipt renders, no phantom paste notice",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli();
+      await run.waitFor(signupCopy.askFooter);
+      // Both Enters in ONE chunk — the impatient double-tap that 0.9.2
+      // discarded as "paste", leaving askCount 0 and a 30s dead prompt.
+      run.write("\r\r");
+      await run.waitFor("Next");
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
+      const output = run.output();
+      expect(output).toContain(signupCopy.skipNudgeLine);
+      expect(output).not.toContain(drainNoticeFragment);
+      // PC-4a: the ready line never renders glued onto the open prompt row.
+      expect(output).not.toContain(`${signupCopy.askPrompt}  ${signupCopy.receiptReadyLine}`);
+      const state = JSON.parse(await readFile(join(run.home, ".aibill", "signup.json"), "utf8")) as {
+        status: string;
+        askCount: number;
+      };
+      expect(state.status).toBe("deferred");
+      expect(state.askCount).toBe(1);
+    }
+  );
+
+  it(
+    "EOF at the ask still renders the receipt and exits clean (skip-this-run, no lifetime skip)",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli();
+      await run.waitFor(signupCopy.askFooter);
+      run.endInput();
+      // 0.9.2 exited 0 HERE with no receipt (unsettled top-level await —
+      // the closed interface left only an unref'd timer holding the loop).
+      await run.waitFor("Next");
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
+      const state = JSON.parse(await readFile(join(run.home, ".aibill", "signup.json"), "utf8")) as {
+        status: string;
+        askCount: number;
+      };
+      expect(state.status).toBe("deferred");
+      expect(state.askCount).toBe(0);
+    }
+  );
+
+  it(
+    "double-Enter followed immediately by EOF: the completed pair still counts and the receipt renders",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli();
+      await run.waitFor(signupCopy.askFooter);
+      run.write("\r\r");
+      run.endInput();
+      await run.waitFor("Next");
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
       const state = JSON.parse(await readFile(join(run.home, ".aibill", "signup.json"), "utf8")) as {
         status: string;
         askCount: number;

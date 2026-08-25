@@ -589,6 +589,9 @@ export async function openPreReceiptSignupAsk(options: {
     outcome,
     notifyReceiptReady: () => {
       if (settled) return;
+      // Break off the pending prompt row first (PC-4a: without the leading
+      // newline the ready line rendered glued to the open "  > " prompt).
+      io.writeRaw?.("\n");
       io.write(`  ${signupCopy.receiptReadyLine}`);
       io.writeRaw?.(signupCopy.askPrompt);
     }
@@ -781,7 +784,15 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       if (waiter) settleWaiter(arrived);
       else strayLines.push(arrived);
     });
+    // NEW-B2 (cold-start audit): EOF must behave like a skip, never swallow
+    // the receipt. When stdin closes while NO read is armed (between ask
+    // reads, or before the first), the old code armed the next read against
+    // a dead interface with only an unref'd timer left — the event loop
+    // drained and the process exited 0 BEFORE the receipt printed. The
+    // closed flag makes every subsequent read resolve undefined instantly.
+    let closed = false;
     lineInterface.on("close", () => {
+      closed = true;
       settleWaiter(undefined);
     });
     lineInterface.on("SIGINT", () => {
@@ -807,7 +818,21 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
     const io: SignupAskIo = {
       question: async (query, timeoutMs) => {
         if (interrupted) return undefined;
-        drainStrayLines();
+        // PC-5/PC-4b (cold-start audit): a rapid second Enter lands while
+        // the ask loop is between reads (both keypresses can even share one
+        // stdin chunk) — discarding it as "paste" broke the double-Enter
+        // skip pair (askCount stayed 0), printed a drain notice the human
+        // never earned, and left a 30s dead prompt. Ask-phase lines typed
+        // between ask reads ARE the conversation: feed them in order (even
+        // after EOF, so a completed Enter-Enter pair still counts). The
+        // consent step never sees them — questionFresh drains + burst-guards
+        // (QA M4's actual goal).
+        const buffered = strayLines.shift();
+        if (buffered !== undefined) {
+          abortedRead = false;
+          return buffered.text;
+        }
+        if (closed) return undefined;
         process.stdout.write(query);
         const timer = setTimeout(() => settleWaiter(undefined), timeoutMs);
         timer.unref?.();
@@ -833,7 +858,7 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       //     faster than a human could have read the payload, are dropped
       //     silently while the read keeps waiting.
       questionFresh: async (query, timeoutMs) => {
-        if (interrupted) return undefined;
+        if (interrupted || closed) return undefined;
         drainStrayLines();
         try {
           // Clear readline's in-progress line buffer without a repaint —

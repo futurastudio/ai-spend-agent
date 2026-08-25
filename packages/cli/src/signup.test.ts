@@ -751,7 +751,9 @@ describe("during-scan orchestration", () => {
     const run = orchestratePreReceiptAsk({ session, runPipeline: async () => "receipt" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(scripted.written).toContain(`  ${signupCopy.receiptReadyLine}`);
-    expect(scripted.raws).toEqual([signupCopy.askPrompt]);
+    // PC-4a: the nudge first breaks off the pending prompt row, then
+    // redraws the prompt on a fresh line — never glued to the open "  > ".
+    expect(scripted.raws).toEqual(["\n", signupCopy.askPrompt]);
     answer("");
     answer = () => undefined;
     // Second empty Enter completes the skip.
