@@ -56,7 +56,7 @@ in both states.
   fields only, unknown fields reject the batch) and rejects any event whose
   `ts` is more than 48 hours in the future or more than 30 days in the past
   of receipt. The example above deliberately carries an ancient `ts` so that
-  pasting it verbatim is rejected — a replayed or fabricated timestamp never
+  pasting it verbatim is rejected — an aged or far-future timestamp never
   lands in the table.
 
 **The never-list:** arguments, flag values, paths, file contents, project
