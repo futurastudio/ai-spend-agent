@@ -67,7 +67,7 @@ type PtyRun = {
   stubLog: string;
 };
 
-async function startCli(): Promise<PtyRun> {
+async function startCli(argv: string[] = []): Promise<PtyRun> {
   expect(existsSync(cliEntry), `built CLI missing at ${cliEntry} — run npx tsc -b first`).toBe(true);
   const home = await mkdtemp(join(tmpdir(), "signup-pty-home-"));
   const preloadPath = join(home, "fake-tty-preload.mjs");
@@ -92,7 +92,7 @@ async function startCli(): Promise<PtyRun> {
   delete env.AI_SPEND_NO_TELEMETRY;
   delete env.DO_NOT_TRACK;
 
-  const child = spawn(process.execPath, ["--import", preloadPath, cliEntry], {
+  const child = spawn(process.execPath, ["--import", preloadPath, cliEntry, ...argv], {
     env: env as NodeJS.ProcessEnv,
     stdio: ["pipe", "pipe", "pipe"]
   });
@@ -371,6 +371,68 @@ describe("founder's literal repro: `npx aibill report-card` from the home direct
       expect(stderr).not.toContain("Couldn't write the report card");
       expect(stderr).not.toContain("Refusing to scan");
       expect(stdout).toBe("");
+    }
+  );
+});
+
+describe("explicit `signup <email>` consent (adversary SF1)", () => {
+  const signupEmail = "founder@gmail.com";
+  const signupPayload = `{"email":"${signupEmail}","ref":"cli-signup"}`;
+
+  it(
+    "type-ahead y before the question renders never auto-consents; a fresh y sends once",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli(["signup", signupEmail]);
+      // Type-ahead: the y lands before the consent question exists.
+      run.write("y\r");
+      await run.waitFor("[y/N]");
+      await sleep(1_300);
+      expect(run.output()).not.toContain(signupCopy.sentLine);
+      expect(await readFile(run.stubLog, "utf8").catch(() => "")).toBe("");
+
+      run.write("y\r");
+      await run.waitFor(signupCopy.sentLine);
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
+      const stubLines = (await readFile(run.stubLog, "utf8")).trim().split("\n");
+      expect(stubLines).toHaveLength(1);
+      expect(JSON.parse(stubLines[0]!)).toEqual({ body: signupPayload });
+      expect(run.output()).not.toContain("unexpected error");
+    }
+  );
+
+  it(
+    "Ctrl-D at the consent question: nothing sent, exit 0, never the crash voice",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli(["signup", signupEmail]);
+      await run.waitFor("[y/N]");
+      run.endInput();
+      await run.waitFor(signupCopy.nothingSentLine);
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
+      expect(run.output()).not.toContain("unexpected error");
+      expect(run.output()).not.toContain("Aborted with Ctrl");
+      expect(run.output()).not.toContain(signupCopy.sentLine);
+      expect(await readFile(run.stubLog, "utf8").catch(() => "")).toBe("");
+    }
+  );
+
+  it(
+    "Ctrl-C at the consent question: nothing sent, exit 0, no ask-phase interrupt copy",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli(["signup", signupEmail]);
+      await run.waitFor("[y/N]");
+      run.write("\u0003");
+      await run.waitFor(signupCopy.nothingSentLine);
+      const exitCode = await run.waitForExit();
+      expect(exitCode).toBe(0);
+      expect(run.output()).not.toContain("unexpected error");
+      expect(run.output()).not.toContain(signupCopy.interruptLine);
+      expect(run.output()).not.toContain(signupCopy.interruptAfterAnswerLine);
+      expect(await readFile(run.stubLog, "utf8").catch(() => "")).toBe("");
     }
   );
 });

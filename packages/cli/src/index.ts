@@ -21,6 +21,7 @@ import {
   clearSignupState,
   sanitizeSignupRefTag,
   serializeWaitlistPayload,
+  signupAskTimeoutMs,
   signupCopy,
   signupStateFilePath,
   writeSignupState,
@@ -332,6 +333,13 @@ export type CliRuntimeOptions = {
   interactive?: boolean;
   /** Foreground terminal prompt. Tests/embeddings must inject it explicitly. */
   prompt?: (question: string) => Promise<string>;
+  /**
+   * Consent-grade read for the explicit signup command (adversary SF1):
+   * buffered/type-ahead bytes never answer, EOF/^C resolve undefined. The
+   * bin wires signup.openTerminalConsentRead; tests inject stubs. When
+   * absent, `prompt` is the fallback with aborts mapped to "nothing sent".
+   */
+  consentRead?: (query: string, timeoutMs: number) => Promise<string | undefined>;
   /**
    * Guided-flow line IO for the improve/identify sittings. The foreground
    * terminal wires an arrival-timestamped readline source; tests inject
@@ -1553,9 +1561,26 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
   }
 
   const payload = { email, ref: buildWaitlistRef("signup", args.signupRef) };
-  const consent = (await runtime.prompt(
-    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`
-  )).trim().toLowerCase();
+  const consentQuery =
+    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`;
+  // Adversary SF1: the consent question must never be answered by a
+  // buffered byte, and EOF/^C are a quiet "nothing sent", never the crash
+  // voice — this is the exact command the receipt advertises.
+  let consentAnswer: string | undefined;
+  if (runtime.consentRead) {
+    consentAnswer = await runtime.consentRead(consentQuery, signupAskTimeoutMs);
+  } else {
+    try {
+      consentAnswer = await runtime.prompt(consentQuery);
+    } catch {
+      // readline/promises rejects on Ctrl-D/Ctrl-C ("Aborted with Ctrl+D").
+      consentAnswer = undefined;
+    }
+  }
+  if (consentAnswer === undefined) {
+    return ok(signupCopy.nothingSentLine);
+  }
+  const consent = consentAnswer.trim().toLowerCase();
   if (consent !== "y" && consent !== "yes") {
     return ok(signupCopy.nothingSentLine);
   }
@@ -8267,6 +8292,7 @@ export async function runMain(): Promise<void> {
   let askOutcome: import("./signup.js").PreReceiptAskOutcome = { kind: "no_ask" };
   let promptInterface: import("node:readline/promises").Interface | undefined;
   let guidedInterface: import("node:readline").Interface | undefined;
+  let consentReader: Awaited<ReturnType<typeof import("./signup.js").openTerminalConsentRead>> | undefined;
   try {
     let guidedIoShared:
       | { source: GuidedPromptSource; write: (text: string) => void }
@@ -8281,6 +8307,15 @@ export async function runMain(): Promise<void> {
             promptInterface = createInterface({ input: process.stdin, output: process.stdout });
           }
           return promptInterface.question(question);
+        },
+        // Consent-grade read for `signup <email>` (adversary SF1): buffered
+        // type-ahead never answers; EOF/^C resolve undefined quietly.
+        consentRead: async (query: string, timeoutMs: number) => {
+          if (!consentReader) {
+            const signup = await import("./signup.js");
+            consentReader = await signup.openTerminalConsentRead();
+          }
+          return consentReader ? consentReader.read(query, timeoutMs) : undefined;
         },
         openGuidedIo: async () => {
           if (!guidedIoShared) {
@@ -8331,6 +8366,7 @@ export async function runMain(): Promise<void> {
   } finally {
     promptInterface?.close();
     guidedInterface?.close();
+    consentReader?.close();
     spinner?.stop();
   }
 

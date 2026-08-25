@@ -737,6 +737,101 @@ export type TerminalPreReceiptAsk = {
  * the receipt still renders. Returns undefined — with zero output — when
  * signup state disallows the ask.
  */
+/**
+ * Consent-grade terminal read for the explicit `aibill signup <email>`
+ * command (adversary SF1). The plain readline prompt let a buffered
+ * type-ahead `y` auto-consent and turned Ctrl-D/Ctrl-C into the crash
+ * voice. Same discipline as the pre-receipt binding's questionFresh:
+ * drain buffered input before rendering, render once, accept only a line
+ * whose burst began after the render AND that arrived past the
+ * fresh-keypress holdoff; EOF and ^C resolve undefined SILENTLY so the
+ * command's own "nothing sent" outcome line speaks.
+ *
+ * (Deliberately a compact standalone rather than a refactor of the
+ * pre-receipt binding two days before launch — the mechanics mirror
+ * questionFresh above; change them together.)
+ */
+export async function openTerminalConsentRead(): Promise<{
+  read: (query: string, timeoutMs: number) => Promise<string | undefined>;
+  close: () => void;
+} | undefined> {
+  try {
+    const { createInterface } = await import("node:readline/promises");
+    const lineInterface = createInterface({ input: process.stdin, output: process.stdout });
+    lineInterface.setPrompt("");
+    type ArrivedLine = { text: string; arrivedAtMs: number; burstStartAtMs: number };
+    let waiter: ((line: ArrivedLine | undefined) => void) | undefined;
+    let done = false;
+    const settleWaiter = (line: ArrivedLine | undefined) => {
+      const settle = waiter;
+      waiter = undefined;
+      if (settle) settle(line);
+    };
+    const strayLines: ArrivedLine[] = [];
+    let lastArrivalMs: number | undefined;
+    let burstStartMs: number | undefined;
+    lineInterface.on("line", (line) => {
+      const arrivedAtMs = Date.now();
+      if (lastArrivalMs === undefined || arrivedAtMs - lastArrivalMs > signupConsentBurstWindowMs) {
+        burstStartMs = arrivedAtMs;
+      }
+      lastArrivalMs = arrivedAtMs;
+      const arrived: ArrivedLine = { text: line, arrivedAtMs, burstStartAtMs: burstStartMs ?? arrivedAtMs };
+      if (waiter) settleWaiter(arrived);
+      else strayLines.push(arrived);
+    });
+    lineInterface.on("close", () => {
+      done = true;
+      settleWaiter(undefined);
+    });
+    lineInterface.on("SIGINT", () => {
+      // No copy: the command's outcome line ("nothing sent") is the answer.
+      // Deliberately NO close() here — closing the interface from inside its
+      // own keypress processing leaves a piped stdin flowing (the process
+      // then never exits); the bin's finally owns the close, exactly like
+      // the answered path.
+      done = true;
+      process.stdout.write("\n");
+      settleWaiter(undefined);
+    });
+    return {
+      read: async (query, timeoutMs) => {
+        if (done) return undefined;
+        strayLines.length = 0;
+        try {
+          const editable = lineInterface as unknown as { line: string; cursor: number };
+          editable.line = "";
+          editable.cursor = 0;
+        } catch {
+          // Cosmetic only; the burst-guard below still refuses stale lines.
+        }
+        const renderedAtMs = Date.now();
+        process.stdout.write(query);
+        const timer = setTimeout(() => settleWaiter(undefined), timeoutMs);
+        timer.unref?.();
+        try {
+          for (;;) {
+            const answer = await new Promise<ArrivedLine | undefined>((resolvePromise) => {
+              waiter = resolvePromise;
+            });
+            if (answer === undefined) return undefined;
+            if (answer.burstStartAtMs <= renderedAtMs) continue;
+            if (answer.arrivedAtMs - renderedAtMs < signupConsentFreshKeypressMs) continue;
+            return answer.text;
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      close: () => {
+        lineInterface.close();
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreReceiptAsk | undefined> {
   try {
     const { createInterface } = await import("node:readline/promises");

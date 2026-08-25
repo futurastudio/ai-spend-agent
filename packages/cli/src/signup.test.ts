@@ -1079,3 +1079,56 @@ describe("home state directory permissions (cold-start audit NEW-B1)", () => {
     }
   });
 });
+
+describe("signup command consent is consent-grade (adversary SF1)", () => {
+  it("routes through consentRead when provided; undefined resolves as nothing sent, exit 0", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-fresh-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const reads: string[] = [];
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("prompt must not be used when consentRead exists"); },
+      consentRead: async (query) => { reads.push(query); return undefined; },
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.nothingSentLine);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toContain('send {"email":"a@b.co","ref":"cli-signup"}');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a fresh y through consentRead still sends exactly the payload", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-fresh-y-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("unused"); },
+      consentRead: async () => "y",
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.sentLine);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("a prompt-fallback abort (Ctrl-D/Ctrl-C rejection) is nothing sent, exit 0 — never the crash voice", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-abort-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("Aborted with Ctrl+D"); },
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.nothingSentLine);
+    expect(result.stderr).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
