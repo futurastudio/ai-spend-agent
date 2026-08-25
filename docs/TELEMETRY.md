@@ -52,6 +52,11 @@ in both states.
 - `durationBucket` is one of `lt1s | lt5s | lt30s | gte30s`.
 - One batch of one event per run, fire-and-forget: hard 1.5s abort, no
   retry, no queue, total silence on failure (any non-204 = drop).
+- Server-side, the ingest endpoint enforces the same schema (enum/pattern
+  fields only, unknown fields reject the batch) and rejects any event whose
+  `ts` is more than 48 hours in the future or more than 30 days in the past
+  of receipt — so a replayed or copy-pasted example (like the one above,
+  once it ages) never lands in the table.
 
 **The never-list:** arguments, flag values, paths, file contents, project
 names, models, dollar amounts, transcripts, your email — none of it is in

@@ -19,7 +19,7 @@ export const runtime = "nodejs";
 //     installId: uuid-v4 string, command: string (allowlisted, else "other"),
 //     version: "x.y.z", os: darwin|linux|win32|other, arch: arm64|x64|other,
 //     ci: boolean, durationBucket: lt1s|lt5s|lt30s|gte30s, ok: boolean,
-//     ts: ISO-8601 string
+//     ts: ISO-8601 string, sane relative to received time (see TS window)
 //   }
 // Responses (failures carry NO body detail — telemetry clients fire-and-forget):
 //   204 stored (or accepted-and-dropped in dev without Supabase)
@@ -69,6 +69,16 @@ const MAX_BODY_BYTES = 4096;
 const MAX_COMMAND_LENGTH = 64;
 const MAX_VERSION_LENGTH = 32;
 const MAX_TS_LENGTH = 40;
+
+// TS window — sanity clamp against received time. The CLI stamps ts moments
+// before flushing, so anything far off is a replayed, fabricated, or
+// copy-pasted-from-docs event (a curl of the documented example once landed
+// six far-future rows). Rejection, not silent clamping, keeps the route's
+// whole-batch 422 contract: >48h ahead tolerates clock skew, >30d behind
+// tolerates nothing useful — telemetry is fire-and-forget, never queued
+// that long.
+const MAX_TS_FUTURE_MS = 48 * 60 * 60 * 1000;
+const MAX_TS_PAST_MS = 30 * 24 * 60 * 60 * 1000;
 
 const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -173,14 +183,14 @@ function parseEvent(value: unknown): TelemetryRow | null {
     return null;
   }
   if (typeof ok !== "boolean") return null;
-  if (
-    typeof ts !== "string" ||
-    ts.length > MAX_TS_LENGTH ||
-    !ISO_TS_RE.test(ts) ||
-    Number.isNaN(Date.parse(ts))
-  ) {
+  if (typeof ts !== "string" || ts.length > MAX_TS_LENGTH || !ISO_TS_RE.test(ts)) {
     return null;
   }
+  const tsMs = Date.parse(ts);
+  if (Number.isNaN(tsMs)) return null;
+  // Sanity window relative to received time — see the TS window constants.
+  const skewMs = tsMs - Date.now();
+  if (skewMs > MAX_TS_FUTURE_MS || skewMs < -MAX_TS_PAST_MS) return null;
 
   return {
     install_id: installId.toLowerCase(),

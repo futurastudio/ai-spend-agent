@@ -99,7 +99,7 @@ npx aibill`}</CodeBlock>
 
       <DocsSection id="privacy" label="04 · Privacy" title="Local by default, explicit at every boundary">
         <p>
-          CLI and Glance analysis run locally and send no aibill telemetry. An explicit <code className="font-mono text-ink">sync-provider</code> call contacts only the selected provider using an inherited <code className="font-mono text-ink">env:NAME</code> reference. MCP returns the selected structured result to the invoking AI client, so that result follows the client’s own data policy.
+          CLI and Glance analysis runs locally; transcripts, prompts, file names, and dollar amounts are never uploaded. The CLI counts which commands run — anonymous, never your data or content — and sends nothing before a one-time printed notice. <code className="font-mono text-ink">aibill telemetry</code> shows the exact last payload verbatim; <code className="font-mono text-ink">aibill telemetry off</code> (or <code className="font-mono text-ink">DO_NOT_TRACK</code>, <code className="font-mono text-ink">AI_SPEND_NO_TELEMETRY</code>, <code className="font-mono text-ink">CI</code>) turns it off, and every receipt states the current mode. An explicit <code className="font-mono text-ink">sync-provider</code> call contacts only the selected provider using an inherited <code className="font-mono text-ink">env:NAME</code> reference. MCP returns the selected structured result to the invoking AI client, so that result follows the client’s own data policy.
         </p>
         <p className="mt-4">
           aibill rejects raw credential arguments and never sits in the inference path or stores, prints, or proxies provider credentials.

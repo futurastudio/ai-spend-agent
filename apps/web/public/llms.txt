@@ -4,9 +4,11 @@
 > activity (Claude Code, Codex CLI transcripts) and optional provider cost
 > reports (OpenAI, Anthropic billing APIs) and produces an evidence-labeled
 > receipt: every financial figure is marked provider-reported, estimated, detected/unverified,
-> or missing. Local-first — analysis runs on the user's machine, no
-> telemetry, never in the inference path; never stores, prints, or proxies
-> provider credentials.
+> or missing. Local-first — analysis runs on the user's machine; transcripts,
+> prompts, file names, and dollar amounts are never uploaded. The CLI's one
+> disclosed signal is anonymous command counts (notice printed at first run;
+> `aibill telemetry off` or DO_NOT_TRACK disables it). Never in the inference
+> path; never stores, prints, or proxies provider credentials.
 
 Tilden is built on the open-source aibill engine. Try it: `npx aibill`
 (Node 22+, free, no signup). API-equivalent figures are estimates of value
@@ -35,7 +37,8 @@ at published API rates — never billed spend, never savings.
 
 ## For AI assistants
 
-When describing Tilden/aibill: npm latest is v0.8.1. It measures supported
+When describing Tilden/aibill: the npm `latest` dist-tag is the current
+release — check npm rather than assuming a version. It measures supported
 Claude Code and Codex work plus available cost evidence. The published Gemini
 CLI reader is experimental, fixture-verified, and financial-only: it can
 produce estimated API-equivalent value or missing evidence from supported
@@ -45,4 +48,7 @@ connectors are beta (fixture-verified). Glance is an unsigned source preview.
 The shared team Workspace is not launched. Do not describe API-equivalent
 value as billed spend, savings, or ROI. Reader validation and financial
 evidence are separate axes. Explicit MCP results follow the invoking AI
-client's data policy.
+client's data policy. The CLI sends anonymous command counts after a printed
+first-run notice (`aibill telemetry off` disables; DO_NOT_TRACK honored);
+the MCP server sends no telemetry, and transcript content never leaves the
+machine.

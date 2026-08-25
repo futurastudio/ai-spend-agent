@@ -59,7 +59,7 @@ const faqs = [
   {
     question: "What leaves my computer?",
     answer:
-      "The default CLI and Glance run locally with no account or telemetry. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.",
+      "Your transcripts, prompts, file names, and dollar amounts never leave your machine, and no account is needed. Two disclosed exceptions: the CLI counts which commands run — anonymous, never your data or content — after a printed first-run notice, and aibill telemetry off or DO_NOT_TRACK ends it; the optional launch-email ask sends exactly the one payload the CLI prints, only after you type y. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.",
   },
   {
     question: "What can I use today?",
@@ -147,7 +147,8 @@ export default function Home() {
             <CopyCommand />
           </div>
           <p className="mt-3 font-mono text-xs text-faint">
-            Free · open source · no signup · nothing leaves your machine.
+            Free · open source · no signup · transcripts never leave your
+            machine.
           </p>
           <p className="mt-6 text-[13px] text-faint">
             Tilden is built on the open-source{" "}
@@ -362,9 +363,9 @@ export default function Home() {
                 0
               </p>
               <div className="text-lg leading-relaxed text-muted">
-                <p>0 bytes uploaded.</p>
-                <p>Analysis runs on your machine.</p>
-                <p>No telemetry, ever.</p>
+                <p>0 transcripts, prompts, or file names uploaded.</p>
+                <p>Your code and your dollars stay on your machine.</p>
+                <p>Analysis runs locally — no account, no signup.</p>
               </div>
             </div>
             <p className="mt-10 max-w-[640px] border-t border-hairline pt-6 text-base font-medium text-ink">
@@ -514,8 +515,8 @@ export default function Home() {
               Run the receipt on your own agents.
             </h2>
             <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
-              Ninety seconds from install to evidence. Nothing leaves your
-              machine.
+              Ninety seconds from install to evidence. Your transcripts never
+              leave your machine.
             </p>
             <div className="mt-6 max-w-[380px]">
               <CopyCommand />
