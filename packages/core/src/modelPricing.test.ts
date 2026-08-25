@@ -24,8 +24,23 @@ describe("model pricing coverage", () => {
     // DeepSeek
     expect(estimateTokenCostUsd("deepseek-chat", usage)).toBeCloseTo(0.38, 2);
     expect(estimateTokenCostUsd("deepseek-reasoner", usage)).toBeCloseTo(0.769, 2);
-    // Kimi / Moonshot
+    // Kimi / Moonshot — official list prices (platform.kimi.ai/docs/pricing/*,
+    // fetched 2026-08-25). Input + output pinned per model.
+    expect(estimateTokenCostUsd("kimi-k3", usage)).toBeCloseTo(4.5, 4);
+    expect(estimateTokenCostUsd("kimi-k3[1m]", usage)).toBeCloseTo(4.5, 4);
+    expect(estimateTokenCostUsd("kimi-k2.7-code", usage)).toBeCloseTo(1.35, 4);
+    expect(estimateTokenCostUsd("kimi-k2.7-code-highspeed", usage)).toBeCloseTo(2.7, 4);
+    expect(estimateTokenCostUsd("kimi-k2.6", usage)).toBeCloseTo(1.35, 4);
+    // Published cache-hit input rates (1M cache-read tokens, nothing else).
+    const cacheOnly = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 };
+    expect(estimateTokenCostUsd("kimi-k3", cacheOnly)).toBeCloseTo(0.3, 4);
+    expect(estimateTokenCostUsd("kimi-k2.7-code", cacheOnly)).toBeCloseTo(0.19, 4);
+    expect(estimateTokenCostUsd("kimi-k2.7-code-highspeed", cacheOnly)).toBeCloseTo(0.38, 4);
+    expect(estimateTokenCostUsd("kimi-k2.6", cacheOnly)).toBeCloseTo(0.16, 4);
+    // Legacy K2 family + moonshot-v1 (sunsets 2026-08-31) keep the old rates.
     expect(estimateTokenCostUsd("kimi-k2-instruct", usage)).toBeCloseTo(0.85, 2);
+    expect(estimateTokenCostUsd("kimi-k2", usage)).toBeCloseTo(0.85, 2);
+    expect(estimateTokenCostUsd("moonshot-v1-8k", usage)).toBeCloseTo(0.85, 2);
     // Grok
     expect(estimateTokenCostUsd("grok-4", usage)).toBeCloseTo(4.5, 2);
     expect(estimateTokenCostUsd("grok-3-mini", usage)).toBeCloseTo(0.35, 2);
@@ -53,6 +68,40 @@ describe("model pricing coverage", () => {
       inputTokens: 300_000,
       outputTokens: 20_000
     })).toBe(1.05);
+  });
+
+  it("kimi-k2.7-code no longer falls through to the old K2 rule (0.9.3 mispricing bug)", () => {
+    // 0.9.3's `^kimi-k2` prefix swallowed the k2.7/k2.6 dot families and
+    // priced them ~40% low ($0.60/$2.50 vs the real $0.95/$4.00) — wrong
+    // numbers presented as estimates. The dot families must resolve to
+    // their own published rates, never the legacy K2 rule.
+    for (const model of ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]) {
+      const rule = findPricingRule(model);
+      expect(rule, model).toBeDefined();
+      expect(rule!.inputPerM, model).not.toBe(0.6);
+      expect(rule!.outputPerM, model).not.toBe(2.5);
+    }
+    expect(findPricingRule("kimi-k2.7-code")!.inputPerM).toBe(0.95);
+    expect(findPricingRule("kimi-k2.7-code")!.outputPerM).toBe(4);
+    expect(findPricingRule("kimi-k2.7-code-highspeed")!.inputPerM).toBe(1.9);
+    expect(findPricingRule("kimi-k2.7-code-highspeed")!.outputPerM).toBe(8);
+    expect(findPricingRule("kimi-k2.6")!.inputPerM).toBe(0.95);
+    expect(findPricingRule("kimi-k2.6")!.outputPerM).toBe(4);
+    expect(findPricingRule("kimi-k3")!.inputPerM).toBe(3);
+    expect(findPricingRule("kimi-k3")!.outputPerM).toBe(15);
+    // The legacy rule still owns exactly the models it is true for.
+    expect(findPricingRule("kimi-k2")!.inputPerM).toBe(0.6);
+    expect(findPricingRule("kimi-k2-instruct")!.inputPerM).toBe(0.6);
+  });
+
+  it("current DeepSeek v4 models stay honestly unpriced — time-of-day rates are never flattened", () => {
+    // deepseek-v4-* pricing is time-of-day (off-peak = half price); a flat
+    // number would be wrong by up to 2x. Deferred to timestamp-aware
+    // pricing — until then these flow to the missing/unpriced path.
+    for (const model of ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]) {
+      expect(estimateTokenCostUsd(model, usage), model).toBeUndefined();
+      expect(findPricingRule(model), model).toBeUndefined();
+    }
   });
 
   it("returns undefined for open-weight models with no canonical price — never invents a number", () => {
