@@ -1864,3 +1864,101 @@ describe("board-style report generation", () => {
     }
   });
 });
+
+describe("cross-surface parity (report.md / report.html)", () => {
+  function localDayRecord(
+    id: string,
+    project: string,
+    model: string,
+    amountUsd: number,
+    day: number
+  ): UsageRecord {
+    return {
+      id,
+      timestamp: `2026-08-${String(day).padStart(2, "0")}T00:00:00.000Z`,
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model,
+      inputTokens: 10_000,
+      outputTokens: 1_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  function parityInput(records: UsageRecord[], extra: Partial<SpendReportInput> = {}): SpendReportInput {
+    return {
+      ...input,
+      dataMode: "local_logs",
+      summary: analyzeSpend(records),
+      allRecords: records,
+      generatedAt: "2026-08-25T00:00:00.000Z",
+      evidenceWindowDays: 30,
+      ...extra
+    };
+  }
+
+  it("D1: the $15.995 half-cent boundary renders $16.00 in md and html — same as the terminal", () => {
+    const records = [
+      localDayRecord("m-1", "app", "claude-opus-4-8", 6.452, 5),
+      localDayRecord("m-2", "app", "claude-opus-4-8", 0.3563, 6),
+      localDayRecord("m-3", "app", "claude-opus-4-8", 9.1867, 7)
+    ];
+    const reportInput = parityInput(records);
+    const markdown = generateMarkdownReport(reportInput);
+    const html = generateHtmlReport(reportInput);
+    for (const surface of [markdown, html]) {
+      expect(surface).toContain("$16.00");
+      expect(surface).not.toContain("$15.99");
+    }
+  });
+
+  it("D2: the html header states the derived days of data with span, never the request window", () => {
+    // 3 days of data inside a 30-day request window.
+    const records = [
+      localDayRecord("w-1", "app", "claude-opus-4-8", 10, 5),
+      localDayRecord("w-2", "app", "claude-opus-4-8", 10, 6),
+      localDayRecord("w-3", "app", "claude-opus-4-8", 10, 25)
+    ];
+    const html = generateHtmlReport(parityInput(records));
+    expect(html).toContain("3 days of data (2026-08-05 → 2026-08-25)");
+    expect(html).not.toContain("30 days of data");
+  });
+
+  it("D2: the html telemetry disclosure carries the npx form", () => {
+    const records = [localDayRecord("t-1", "app", "claude-opus-4-8", 10, 5)];
+    const html = generateHtmlReport(parityInput(records, { telemetryDisclosure: true }));
+    expect(html).toContain("npx aibill telemetry off");
+    expect(html).not.toMatch(/(?<!npx )aibill telemetry off/u);
+  });
+
+  it("D3: 11 projects — md lists all, html shows 6 plus an explicit overflow row that reconciles", () => {
+    const amounts = [1443.49, 407.74, 81.49, 58.65, 49.86, 28.27, 19.43, 9.18, 4.93, 1.39, 0.62];
+    const records = amounts.map((amountUsd, index) =>
+      localDayRecord(`p-${index}`, `project-${String(index).padStart(2, "0")}`, "claude-opus-4-8", amountUsd, 5 + index));
+    const reportInput = parityInput(records);
+    const markdown = generateMarkdownReport(reportInput);
+    const html = generateHtmlReport(reportInput);
+    // md keeps the full list.
+    for (const project of ["project-00", "project-10"]) {
+      expect(markdown).toContain(project);
+    }
+    // html: 6 visible + "+5 more projects · $X — full list in report.md".
+    expect(html).toContain("project-05");
+    expect(html).not.toContain("project-06");
+    expect(html).toContain("+5 more projects");
+    expect(html).toContain("full list in report.md");
+    // The overflow amount = the five hidden projects exactly.
+    const hidden = 19.43 + 9.18 + 4.93 + 1.39 + 0.62;
+    expect(html).toContain(`$${hidden.toFixed(2)}`);
+  });
+
+  it("shareable footer: report.html points at asktilden.com", () => {
+    const records = [localDayRecord("f-1", "app", "claude-opus-4-8", 10, 5)];
+    const html = generateHtmlReport(parityInput(records));
+    expect(html).toContain("made with aibill · asktilden.com");
+  });
+});

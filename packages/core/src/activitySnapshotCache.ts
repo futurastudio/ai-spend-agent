@@ -5,6 +5,7 @@ import {
   lstat,
   mkdir,
   chmod,
+  readdir,
   realpath,
   rename,
   unlink,
@@ -447,10 +448,49 @@ async function ensureDefaultParent(homeDirectory: string, create: boolean): Prom
     throw new ActivitySnapshotCacheError("unsafe_directory", "The private aibill directory is not a real directory.");
   }
   if (!create && !hasPrivatePermissions(info.mode)) {
-    throw new ActivitySnapshotCacheError("unsafe_directory", "The private aibill directory is not private.");
+    // Self-heal (NEW-B1): 0.9.2's signup/telemetry state writers created
+    // ~/.aibill without a mode (755 under the default umask), which this
+    // guard then refused forever — bricking init on machines that ran
+    // 0.9.2 in that window. When the directory holds ONLY our own state
+    // files (no cache/ yet, nothing foreign), tighten it to 0700 and
+    // proceed instead of erroring. Anything unexpected still refuses.
+    if (!await selfHealStateOnlyAibillDirectory(parent)) {
+      throw new ActivitySnapshotCacheError(
+        "unsafe_directory",
+        `The private aibill directory is not private. Fix: chmod 700 ${parent}`
+      );
+    }
   }
   if (create) await chmod(parent, 0o700);
   await ensureDefaultCacheGitPrivacy(parent, create);
+}
+
+/**
+ * The complete set of files aibill's own home-scope state writers may have
+ * placed in ~/.aibill before any cache exists. A directory with exactly
+ * these contents (or fewer) is provably ours to repair.
+ */
+const selfHealableAibillEntries: ReadonlySet<string> = new Set([
+  "signup.json",
+  "signup.json.tmp",
+  "telemetry.json",
+  "telemetry.json.tmp",
+  ".gitignore"
+]);
+
+async function selfHealStateOnlyAibillDirectory(parent: string): Promise<boolean> {
+  try {
+    const entries = await readdir(parent, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !selfHealableAibillEntries.has(entry.name)) return false;
+    }
+    await chmod(parent, 0o700);
+    const confirmed = await lstat(parent);
+    return !confirmed.isSymbolicLink() && confirmed.isDirectory() &&
+      hasPrivatePermissions(confirmed.mode);
+  } catch {
+    return false;
+  }
 }
 
 /**

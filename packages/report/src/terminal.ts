@@ -1,4 +1,5 @@
 /* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V5 · CLI-adapted slop: pass */
+import { roundUsdCents } from "./money.js";
 import Table from "cli-table3";
 import pc from "picocolors";
 import {
@@ -354,7 +355,10 @@ function renderPlainEnglishSummary(
     rawGroupAmounts,
     fullRawTotalUsd,
     fullHasHeadlineAmount,
-    width
+    width,
+    // Parity nit: this is the SAME table --group-by renders — the tilde
+    // discipline must match (both mark estimated bases approximate).
+    isApproximateBasis(fullPresentationBasis)
   ), "  "));
   lines.push("");
   const topProject = summary.byProject[0];
@@ -433,8 +437,16 @@ function renderPlainEnglishSummary(
       action.estimatedMonthlySavingsUsd < 1
     ));
     const shown = visibleCuts.length > 0 ? visibleCuts : cutList;
-    for (const [index, action] of shown.slice(0, 5).entries()) {
-      lines.push(...cutActionLines(action, index + 1, c, options.mode));
+    // 0.9.3 (founder feedback: "the five recommendations seem generic — only
+    // the amount changes"): the same candidate-action kind+agent repeating
+    // across projects renders as ONE grouped recommendation with per-project
+    // amounts under it, followed by any different-kind items. Display-level
+    // only — plan math, dedup, and the apply-artifact see the full list.
+    const collapsedCuts = collapseRepeatedCutActions(shown);
+    for (const [index, entry] of collapsedCuts.slice(0, 5).entries()) {
+      lines.push(...(entry.members.length === 1
+        ? cutActionLines(entry.members[0]!, index + 1, c, options.mode)
+        : groupedCutActionLines(entry, index + 1, c, options.mode)));
     }
     if (visibleCuts.length > 0 && minorCuts.length > 0) {
       const minorTotal = minorCuts.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
@@ -712,9 +724,11 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   lines.push(...compactLabeledLines("Next", c.bold(guided?.actionHeadline ?? next.title), width, c));
   lines.push(`  ${c.dim(guided?.actionDetail ?? next.evidence)}`);
   const nextCommand = guided?.command ?? next.command;
-  if (nextCommand.includes("improve")) {
-    // improve is project-scoped; a machine-wide receipt must say where to
-    // stand before handing over a command that refuses broad roots.
+  if (nextCommand.includes("improve") || nextCommand.includes("apply")) {
+    // improve/apply are project-scoped; a machine-wide receipt must say
+    // where to stand before handing over a command that refuses broad
+    // roots (0.9.3: the founder's home receipt pointed at `apply`, which
+    // then refused his home directory).
     lines.push(`  ${c.dim("run it from the project folder you want to improve")}`);
   }
   lines.push(`  ${c.cyan("›")} ${c.bold(nextCommand)}`);
@@ -1355,6 +1369,102 @@ function dataWindowLine(records: UsageRecord[]): string {
   return `window: ${days.length} day${days.length === 1 ? "" : "s"} of data (${span})`;
 }
 
+type CollapsedCutEntry = {
+  /** Shared headline: the title up to its first " · " project suffix. */
+  sharedTitle: string;
+  members: CutAction[];
+};
+
+/**
+ * Group the per-project fan-out of ONE candidate action, e.g. "Investigate
+ * cumulative context in claude-code · <project>" × 5. Only a repeat
+ * collapses; ordering keeps each entry at its first member's rank. Pure
+ * display grouping — no math is altered.
+ *
+ * DELIBERATELY restricted to kind === "context_trim": that is the only kind
+ * whose builder fans one candidate out per (agent, project) with the project
+ * as a " · " title suffix, so members provably share one action and one
+ * agent. Other kinds can produce IDENTICAL titles for genuinely DIFFERENT
+ * actions — two `cache` actions on the same operation but different
+ * model/fingerprint, two `batch` actions from different sources — and
+ * merging those would fabricate a group ("across 2 projects — this project …
+ * · this project …") and quote one member's guidance for both. Do not
+ * generalize this key without a per-kind proof like context_trim's.
+ */
+function collapseRepeatedCutActions(actions: readonly CutAction[]): CollapsedCutEntry[] {
+  const entries: CollapsedCutEntry[] = [];
+  const byKey = new Map<string, CollapsedCutEntry>();
+  for (const action of actions) {
+    if (action.kind !== "context_trim") {
+      entries.push({ sharedTitle: action.title, members: [action] });
+      continue;
+    }
+    const sharedTitle = action.title.split(" · ")[0]!;
+    const key = `${action.kind}::${action.impactBasis}::${sharedTitle}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.members.push(action);
+      continue;
+    }
+    const entry: CollapsedCutEntry = { sharedTitle, members: [action] };
+    byKey.set(key, entry);
+    entries.push(entry);
+  }
+  return entries;
+}
+
+/** Project label for the grouped across-line: the title's " · " suffix. */
+function cutProjectLabel(action: CutAction): string {
+  const separator = action.title.indexOf(" · ");
+  return separator === -1 ? "this project" : action.title.slice(separator + 3);
+}
+
+const confidenceRank: Record<string, number> = { detected_unverified: 0, estimated: 1, verified: 2 };
+
+function groupedCutActionLines(
+  entry: CollapsedCutEntry,
+  rank: number,
+  c: Colors,
+  mode: PlainEnglishSummaryOptions["mode"]
+): string[] {
+  const members = entry.members;
+  const observed = members[0]!.impactBasis === "observed_value_no_counterfactual";
+  const totalSavings = members.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
+  const opportunity = mode === "demo"
+    ? c.yellow(c.bold(`illustrative model ~${formatUsd(totalSavings)}/mo`))
+    : observed
+    ? c.yellow(c.bold("reduction unproven"))
+    : c.yellow(c.bold(`model ~${formatUsd(totalSavings)}/mo`));
+  const head = `  ${c.bold(`${rank}.`)} ${c.bold(entry.sharedTitle)}  ${opportunity}`;
+  // Per-project detail, largest window value first; ~rounded dollars keep the
+  // line honest about precision without repeating five near-identical blocks.
+  const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
+  const across = ranked.slice(0, 4).map((action) =>
+    `${cutProjectLabel(action)} ~$${Math.round(action.affectedSpendUsd).toLocaleString("en-US")}`);
+  if (ranked.length > 4) across.push(`+ ${ranked.length - 4} more`);
+  const acrossLine = `     ${c.dim(`across ${members.length} projects — ${across.join(" · ")}`)}`;
+  // The shared instruction: the action copy minus its leading per-project
+  // count sentence (every member carries the same guidance tail).
+  const guidanceSource = members[0]!.action;
+  const guidanceStart = guidanceSource.indexOf(". ");
+  const guidance = guidanceStart === -1 ? guidanceSource : guidanceSource.slice(guidanceStart + 2);
+  const detail = `     ${c.dim(guidance)}`;
+  const recordCount = members.reduce((total, action) => total + action.recordCount, 0);
+  const affectedTotal = members.reduce((total, action) => total + action.affectedSpendUsd, 0);
+  const unit = members[0]!.recordUnit === "daily-aggregates"
+    ? `daily aggregate${recordCount === 1 ? "" : "s"}`
+    : members[0]!.recordUnit === "tools"
+      ? `tool${recordCount === 1 ? "" : "s"}`
+      : `call${recordCount === 1 ? "" : "s"}`;
+  const valueLabel = observed
+    ? `${formatUsd(affectedTotal)} API-equivalent value observed in window`
+    : `${formatUsd(affectedTotal)} in window`;
+  const weakest = [...members].sort((a, b) =>
+    (confidenceRank[a.confidence] ?? 0) - (confidenceRank[b.confidence] ?? 0))[0]!;
+  const grounding = `     ${c.dim(`${recordCount} ${unit} · ${valueLabel} · ${confidenceWord(weakest.confidence)}`)}`;
+  return [head, acrossLine, detail, grounding, ""];
+}
+
 function cutActionLines(
   action: CutAction,
   rank: number,
@@ -1458,11 +1568,26 @@ function renderBreakdownTable(
     return c.dim("(no breakdown available for this dimension)");
   }
 
+  // Parity D3: a capped table must never truncate silently — the hidden
+  // remainder gets an explicit "+N more" row so visible rows + remainder
+  // always reconcile to the printed header total.
+  const rowCap = 10;
+  const hiddenEntries = entries.slice(rowCap);
+  const hiddenAmountUsd = hiddenEntries.reduce((total, entry) => total + entry.amountUsd, 0);
+  const hiddenRawUsd = hiddenEntries.reduce(
+    (total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd),
+    0
+  );
+  const hiddenRecords = hiddenEntries.reduce((total, entry) => total + entry.recordCount, 0);
+  const hiddenShare = rawTotal > 0 ? hiddenRawUsd / rawTotal : 0;
+  const hiddenLabel = `+${hiddenEntries.length} more`;
+  const hiddenAmount = `${approximate ? "~" : ""}${formatUsd(hiddenAmountUsd)}`;
+
   // Box tables are useful at normal terminal widths, but their fixed columns
   // become horizontal noise on a narrow split pane. Degrade to a readable
   // two-line list; the outer renderer will wrap its prose to the exact width.
   if (maxWidth < 72) {
-    return entries.slice(0, 10).flatMap((entry) => {
+    const narrowLines = entries.slice(0, rowCap).flatMap((entry) => {
       const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
       const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
       const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
@@ -1479,7 +1604,14 @@ function renderBreakdownTable(
         c.bold(label),
         c.dim(`${evidence} · ${recordLabel} ${entry.recordCount} · ${confidenceWord(entry.confidence)}`)
       ];
-    }).join("\n");
+    });
+    if (hiddenEntries.length > 0) {
+      narrowLines.push(
+        c.bold(hiddenLabel),
+        c.dim(`${hiddenAmount} · ${formatPercent(hiddenShare)} · ${recordLabel} ${hiddenRecords}`)
+      );
+    }
+    return narrowLines.join("\n");
   }
 
   const table = new Table({
@@ -1496,7 +1628,7 @@ function renderBreakdownTable(
     chars: tableChars()
   });
 
-  for (const entry of entries.slice(0, 10)) {
+  for (const entry of entries.slice(0, rowCap)) {
     const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
@@ -1511,6 +1643,15 @@ function renderBreakdownTable(
       entryAmountAvailable ? `${bar(share, c)} ${formatPercent(share)}` : "Unavailable",
       String(entry.recordCount),
       confidenceWord(entry.confidence)
+    ]);
+  }
+  if (hiddenEntries.length > 0) {
+    table.push([
+      hiddenLabel,
+      hiddenAmount,
+      `${bar(hiddenShare, c)} ${formatPercent(hiddenShare)}`,
+      String(hiddenRecords),
+      ""
     ]);
   }
 
@@ -1784,7 +1925,7 @@ function renderSpendBars(
   if (entries.length === 0) return [];
   const top = entries.slice(0, 5);
   const labelWidth = Math.min(16, Math.max(...top.map((entry) => labelOf(entry.key).length)));
-  return top.map((entry) => {
+  const barLines = top.map((entry) => {
     const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const label = labelOf(entry.key).slice(0, labelWidth).padEnd(labelWidth);
@@ -1799,6 +1940,18 @@ function renderSpendBars(
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
+  // Parity D3: never truncate silently.
+  const hidden = entries.slice(5);
+  if (hidden.length > 0) {
+    const hiddenAmount = hidden.reduce((total, entry) => total + entry.amountUsd, 0);
+    const hiddenShare = rawTotal > 0
+      ? hidden.reduce((total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd), 0) / rawTotal
+      : 0;
+    barLines.push(
+      `  ${c.dim(`+${hidden.length} more · ${approximate ? "~" : ""}${formatUsd(hiddenAmount)} · ${Math.round(hiddenShare * 100)}%`)}`
+    );
+  }
+  return barLines;
 }
 
 /** Wider bar for the headline spend block; the dominant source reads bold. */
@@ -1933,14 +2086,15 @@ function visibleLength(text: string): number {
 
 function formatBigUsd(amount: number, rawAmount = amount): string {
   if (rawAmount > 0 && rawAmount < 0.01) return "<$0.01";
-  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${roundUsdCents(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatUsd(amount: number): string {
   // A real-but-tiny amount rendered as "$0.00" reads as a data bug to a
   // technical audience; "<$0.01" says what actually happened.
   if (amount > 0 && amount < 0.01) return "<$0.01";
-  return `$${amount.toFixed(2)}`;
+  // Parity D1: the shared cents policy — every surface rounds identically.
+  return `$${roundUsdCents(amount).toFixed(2)}`;
 }
 
 function formatPercent(ratio: number): string {

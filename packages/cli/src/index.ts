@@ -21,6 +21,7 @@ import {
   clearSignupState,
   sanitizeSignupRefTag,
   serializeWaitlistPayload,
+  signupAskTimeoutMs,
   signupCopy,
   signupStateFilePath,
   writeSignupState,
@@ -332,6 +333,13 @@ export type CliRuntimeOptions = {
   interactive?: boolean;
   /** Foreground terminal prompt. Tests/embeddings must inject it explicitly. */
   prompt?: (question: string) => Promise<string>;
+  /**
+   * Consent-grade read for the explicit signup command (adversary SF1):
+   * buffered/type-ahead bytes never answer, EOF/^C resolve undefined. The
+   * bin wires signup.openTerminalConsentRead; tests inject stubs. When
+   * absent, `prompt` is the fallback with aborts mapped to "nothing sent".
+   */
+  consentRead?: (query: string, timeoutMs: number) => Promise<string | undefined>;
   /**
    * Guided-flow line IO for the improve/identify sittings. The foreground
    * terminal wires an arrival-timestamped readline source; tests inject
@@ -1553,9 +1561,26 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
   }
 
   const payload = { email, ref: buildWaitlistRef("signup", args.signupRef) };
-  const consent = (await runtime.prompt(
-    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`
-  )).trim().toLowerCase();
+  const consentQuery =
+    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`;
+  // Adversary SF1: the consent question must never be answered by a
+  // buffered byte, and EOF/^C are a quiet "nothing sent", never the crash
+  // voice — this is the exact command the receipt advertises.
+  let consentAnswer: string | undefined;
+  if (runtime.consentRead) {
+    consentAnswer = await runtime.consentRead(consentQuery, signupAskTimeoutMs);
+  } else {
+    try {
+      consentAnswer = await runtime.prompt(consentQuery);
+    } catch {
+      // readline/promises rejects on Ctrl-D/Ctrl-C ("Aborted with Ctrl+D").
+      consentAnswer = undefined;
+    }
+  }
+  if (consentAnswer === undefined) {
+    return ok(signupCopy.nothingSentLine);
+  }
+  const consent = consentAnswer.trim().toLowerCase();
   if (consent !== "y" && consent !== "yes") {
     return ok(signupCopy.nothingSentLine);
   }
@@ -1590,7 +1615,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: aibill telemetry [on|off]`
+      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: npx aibill telemetry [on|off]`
     };
   }
 
@@ -1642,7 +1667,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       "telemetry on · anonymous command counts only",
       `counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
       "never: arguments, paths, file contents, project names, or your email",
-      "events start with your next run · see payloads anytime: aibill telemetry"
+      "events start with your next run · see payloads anytime: npx aibill telemetry"
     ].join("\n"));
   }
 
@@ -1668,7 +1693,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
   } else {
     lines.push("last payload sent: none");
   }
-  lines.push("switch: aibill telemetry on · aibill telemetry off");
+  lines.push("switch: npx aibill telemetry on · npx aibill telemetry off");
   return ok(lines.join("\n"));
 }
 
@@ -1832,7 +1857,7 @@ async function doctorCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
     `node version: ${process.version}`,
     `cli version: ${await cliVersion()}`,
     runtime.telemetryDisclosure === true
-      ? "local-first mode: enabled (evidence stays local · anonymous command counts shared · aibill telemetry off)"
+      ? `local-first mode: enabled (evidence stays local · ${telemetryDisclosureLine})`
       : "local-first mode: enabled (no cloud upload, no telemetry)",
     `path: ${rootPath}`,
     `state directory: ${stateDir}`,
@@ -2379,6 +2404,12 @@ async function cliVersion(): Promise<string> {
 }
 
 async function resetCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("reset", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = await resolveSafeScanRoot(args.path);
   // The trust receipt is deliberately outside the repository. Reset must
   // clear it too so restoring an old spend.json cannot replay prior trust.
@@ -2439,7 +2470,7 @@ async function statuslineCommand(
     exitCode: 1,
     stdout: "",
     stderr: `Unknown statusline action: ${sanitizeSecretishError(action)}\n` +
-      "Use: aibill statusline [refresh|install|uninstall|expand]"
+      "Use: npx aibill statusline [refresh|install|uninstall|expand]"
   };
 }
 
@@ -2511,7 +2542,7 @@ function statuslineInstallerFailure(
         `The local filesystem operation failed safely${safeFileSystemErrorCode(error)}; no successful settings change was claimed.`
       );
   const replacement = installerError.code === "statusline-conflict"
-    ? "\nTo replace an existing status line explicitly: aibill statusline install --replace"
+    ? "\nTo replace an existing status line explicitly: npx aibill statusline install --replace"
     : "";
   return {
     exitCode: 1,
@@ -2541,6 +2572,12 @@ async function initCommand(
       stderr: "aibill init only initializes from real local evidence; --sample was not used and no state or cache was changed. Run `npx aibill --sample` for the illustrative demo."
     };
   }
+
+  // NEW-B3 (cold-start audit): init from a broad root used to crash-wrap the
+  // raw scan refusal ("unexpected error … open an issue") — for a by-design
+  // guard, on the funnel's second command. Friendly guidance instead.
+  const rootGuard = await guardExactProjectRoot("init", args.path);
+  if (rootGuard) return rootGuard;
 
   let detectedPlanOverride: DetectedPlan[] | undefined;
   if (args.plan) {
@@ -3129,24 +3166,40 @@ function expansionFreshness(snapshot: ExpansionSnapshot, now: Date): string {
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
   const existing = await readActivitySnapshot({ cacheDirectory });
   if (existing.status !== "error") return;
-  // A pre-created but EMPTY cache directory holds nothing to preserve —
-  // typically a user-made dir with default (non-0700) permissions. Init's
-  // own create path re-validates and tightens it to 0700, so proceeding is
-  // safe; only a directory with actual contents aborts (shipped-audit fix).
-  if (existing.code === "unsafe_directory" && await isEmptyRealDirectory(dirname(activitySnapshotCachePath({
+  const cacheDirectoryPath = dirname(activitySnapshotCachePath({
     ...(cacheDirectory ? { cacheDirectory } : {})
-  })))) {
+  }));
+  // A missing or pre-created-but-EMPTY cache directory holds nothing to
+  // preserve — typically a first run whose home state was stamped before
+  // any cache existed, or a user-made dir with default (non-0700)
+  // permissions. Init's own create path re-validates and tightens it to
+  // 0700, so proceeding is safe; only a directory with actual contents
+  // aborts (shipped-audit fix; cold-start audit NEW-B1: the old check
+  // required cache/ to EXIST, so first runs dead-ended here).
+  if (existing.code === "unsafe_directory" && await isMissingOrEmptyRealDirectory(cacheDirectoryPath)) {
     return;
   }
+  // NEW-B1(d): name the path and the one-line rescue — "remove the cache
+  // explicitly" with no path was unactionable.
+  const parentPath = dirname(cacheDirectoryPath);
+  const rescue = existing.code === "unsafe_directory"
+    ? ` One-line rescue: chmod 700 ${parentPath} ${cacheDirectoryPath} — then rerun init.`
+    : ` Remove it explicitly before rebuilding it.`;
   throw new Error(
-    `Existing private activity cache is ${existing.code.replaceAll("_", " ")}; ` +
-    "it was preserved and init stopped. Remove the cache explicitly before rebuilding it."
+    `Existing private activity cache (${cacheDirectoryPath}) is ${existing.code.replaceAll("_", " ")}; ` +
+    `it was preserved and init stopped.${rescue}`
   );
 }
 
-async function isEmptyRealDirectory(path: string): Promise<boolean> {
+async function isMissingOrEmptyRealDirectory(path: string): Promise<boolean> {
+  let info;
   try {
-    const info = await lstat(path);
+    info = await lstat(path);
+  } catch (error) {
+    // Not there yet: nothing to preserve, init's create path builds it 0700.
+    return isNodeError(error, "ENOENT");
+  }
+  try {
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
     return (await readdir(path)).length === 0;
   } catch {
@@ -3569,15 +3622,12 @@ function emptyInitSourceScan(agent: LocalAgentSourceScan["agent"]): LocalAgentSo
 }
 
 async function scanCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): the bare raw refusal tier is gone — scan
+  // gives the same friendly exact-project guidance as every other
+  // project-scoped command.
+  const rootGuard = await guardExactProjectRoot("scan", args.path);
+  if (rootGuard) return rootGuard;
   const rootPath = resolve(args.path);
-  const unsafeReason = unsafeScanRootReason(rootPath);
-  if (unsafeReason) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `Refusing to scan ${rootPath}: ${unsafeReason}. Choose a narrower approved folder with --path.`
-    };
-  }
 
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
@@ -3681,6 +3731,12 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function watchCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("watch", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
@@ -3975,6 +4031,12 @@ function providerSyncSetupCommand(provider: string, adminRef: string): string {
 }
 
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("connect", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
   const requestedProvider = (args.provider ?? "unknown").trim().toLowerCase();
   const provider = providerAliases[requestedProvider] ?? requestedProvider;
@@ -4630,6 +4692,14 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
+  // NEW-B3 + adversary F2: guard UNCONDITIONALLY. Even --sample writes
+  // project state into the root (resolveSafeStateDirectory below), so a
+  // broad root must refuse with the friendly guidance — the sample gate
+  // alone still leaked the raw "Refusing to scan" from home. report-card
+  // --sample differs: it writes only the SVG artifact and keeps its
+  // deliberate home exemption.
+  const rootGuard = await guardExactProjectRoot("report", args.path);
+  if (rootGuard) return rootGuard;
   const rootPath = resolve(args.path);
 
   try {
@@ -4735,7 +4805,7 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
           : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
       runtime.telemetryDisclosure === true
-        ? "privacy: report rendered locally · anonymous command counts shared · aibill telemetry off; only explicit sync-provider contacts the selected provider"
+        ? `privacy: report rendered locally · ${telemetryDisclosureLine}; only explicit sync-provider contacts the selected provider`
         : "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
@@ -4772,6 +4842,13 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
 }
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
+  if (!args.sample) {
+    // NEW-B3 + founder repro (`npx aibill report-card` from home): the raw
+    // scan refusal used to surface wrapped in "Couldn't write the report
+    // card:". The friendly guard renders clean, BEFORE the try/wrapper.
+    const rootGuard = await guardExactProjectRoot("report-card", args.path);
+    if (rootGuard) return rootGuard;
+  }
   try {
     // Explicit sample mode reads no workspace data, so a broad-root scan guard
     // would reject a harmless receipt written from the user's home directory.
@@ -6421,6 +6498,12 @@ function formatMeasuredPercent(value: number): string {
 }
 
 async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("apply", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
 
   try {
@@ -6510,6 +6593,12 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function tokenVerificationCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("verify", args.path);
+  if (rootGuard) return rootGuard;
+
   if (args.sample) {
     return {
       exitCode: 1,
@@ -8116,7 +8205,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
     "",
     telemetryDisclosure === true
-      ? "Privacy: local analysis and reports upload nothing; anonymous command counts shared · aibill telemetry off. Only explicit sync-provider contacts the selected provider through an env: reference."
+      ? `Privacy: local analysis and reports upload nothing; ${telemetryDisclosureLine}. Only explicit sync-provider contacts the selected provider through an env: reference.`
       : "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
     "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
   ].join("\n");
@@ -8203,6 +8292,7 @@ export async function runMain(): Promise<void> {
   let askOutcome: import("./signup.js").PreReceiptAskOutcome = { kind: "no_ask" };
   let promptInterface: import("node:readline/promises").Interface | undefined;
   let guidedInterface: import("node:readline").Interface | undefined;
+  let consentReader: Awaited<ReturnType<typeof import("./signup.js").openTerminalConsentRead>> | undefined;
   try {
     let guidedIoShared:
       | { source: GuidedPromptSource; write: (text: string) => void }
@@ -8217,6 +8307,15 @@ export async function runMain(): Promise<void> {
             promptInterface = createInterface({ input: process.stdin, output: process.stdout });
           }
           return promptInterface.question(question);
+        },
+        // Consent-grade read for `signup <email>` (adversary SF1): buffered
+        // type-ahead never answers; EOF/^C resolve undefined quietly.
+        consentRead: async (query: string, timeoutMs: number) => {
+          if (!consentReader) {
+            const signup = await import("./signup.js");
+            consentReader = await signup.openTerminalConsentRead();
+          }
+          return consentReader ? consentReader.read(query, timeoutMs) : undefined;
         },
         openGuidedIo: async () => {
           if (!guidedIoShared) {
@@ -8267,6 +8366,7 @@ export async function runMain(): Promise<void> {
   } finally {
     promptInterface?.close();
     guidedInterface?.close();
+    consentReader?.close();
     spinner?.stop();
   }
 

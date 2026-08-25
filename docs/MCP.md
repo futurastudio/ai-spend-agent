@@ -1,6 +1,6 @@
 # aibill MCP Server
 
-> **Version boundary:** npm latest is `v0.9.1` and reads supported Claude Code,
+> **Version boundary:** the published npm `latest` reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
 > Context Health, plan/runway, invocation evidence, recommendations, and Apply.
@@ -16,7 +16,7 @@ The MCP client and the spend provider are separate concerns:
 
 - **MCP clients:** any stdio-compatible agent can call the tools.
 - **Local usage:** Claude Code and Codex transcript metadata; both readers are
-  `live_verified` against an adversarial local corpus. v0.9.1 also reads
+  `live_verified` against an adversarial local corpus. The published package also reads
   experimental Gemini CLI financial evidence only
   from `chats/**/*.{json,jsonl}`; it remains `fixture_verified`, and
   `logs.json` is detection-only.
@@ -129,7 +129,7 @@ Use the JSON server definition above wherever that client stores its
 `ai-spend-mcp`. Consult that client's documentation for its exact config
 path and restart behavior.
 
-The published npm package (`v0.9.1`) exposes all ten tools below, including
+The published npm package (`@agent-finops/mcp@latest`) exposes all ten tools below, including
 `get_token_reduction_test` and its read-only drafting sibling
 `draft_improve_command`. Restart the client and confirm the tool set for the
 package you intentionally configured:

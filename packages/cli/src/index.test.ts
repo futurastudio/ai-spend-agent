@@ -213,7 +213,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.2$/);
+    expect(result.stdout).toMatch(/^0\.9\.3$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -3145,7 +3145,13 @@ describe("minimal CLI vertical slice", () => {
     process.env.AIBILL_CACHE_DIR = unsafeCache;
     await expect(
       runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe-"))], { homeDirectory: statuslineHome })
-    ).rejects.toThrow("Existing private activity cache is unsafe directory");
+    ).rejects.toThrow(
+      // NEW-B1(d): the refusal names the cache path and the one-line rescue.
+      `Existing private activity cache (${unsafeCache}) is unsafe directory`
+    );
+    await expect(
+      runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe2-"))], { homeDirectory: statuslineHome })
+    ).rejects.toThrow("One-line rescue: chmod 700 ");
     await expect(readFile(join(unsafeCache, "stale-file.json"), "utf8")).resolves.toBe("{}");
   });
 
@@ -4090,12 +4096,56 @@ describe("minimal CLI vertical slice", () => {
     expect(await readFile(outsideSpend, "utf8")).toContain("must survive reset");
   });
 
-  it("refuses to scan the full home directory by default", async () => {
+  it("refuses to scan the full home directory with the friendly exact-project guidance", async () => {
     const result = await runCli(["scan", "--path", homedir()]);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Refusing to scan");
-    expect(result.stderr).toContain("home directory is too broad");
+    // NEW-B3: the bare "Refusing to scan" tier is gone — scan uses the same
+    // friendly guard as every other project-scoped command.
+    expect(result.stderr).toContain("aibill scan needs one exact project folder.");
+    expect(result.stderr).toContain("You ran it from your home directory, which is too broad to observe.");
+    expect(result.stderr).toContain("Nothing was read, created, or changed.");
+    expect(result.stderr).not.toContain("Refusing to scan");
+  });
+
+  it("every project-scoped command refuses a broad root with the SAME friendly guidance (NEW-B3, all ten)", async () => {
+    // Cold-start audit NEW-B3 + the founder's live repro: from $HOME the raw
+    // "Refusing to scan" leaked in three tiers — crash-wrap (init/connect/
+    // watch/reset), prefixed raw (report/report-card/apply/apply-artifact/
+    // verify), and bare raw (scan). All ten now use the friendly guard that
+    // improve/index/identify/accountability/outcome already had.
+    const home = homedir();
+    const surfaces: Array<{ argv: string[]; commandName: string }> = [
+      { argv: ["init"], commandName: "init" },
+      { argv: ["connect", "openai"], commandName: "connect" },
+      { argv: ["watch", "--cycles", "1"], commandName: "watch" },
+      { argv: ["reset"], commandName: "reset" },
+      { argv: ["report"], commandName: "report" },
+      // Adversary F2: --sample still writes project state into the root, so
+      // it guards too (report-card --sample keeps its true home exemption).
+      { argv: ["report", "--sample"], commandName: "report" },
+      { argv: ["report-card"], commandName: "report-card" },
+      { argv: ["apply"], commandName: "apply" },
+      { argv: ["apply-artifact"], commandName: "apply" },
+      { argv: ["verify", "tre_v0_0000000000000000"], commandName: "verify" },
+      { argv: ["verify", "inspect", "some-candidate"], commandName: "verify" },
+      { argv: ["scan"], commandName: "scan" }
+    ];
+    for (const surface of surfaces) {
+      const result = await runCli([...surface.argv, "--path", home]);
+      const label = surface.argv.join(" ");
+      expect(result.exitCode, label).toBe(1);
+      // The friendly text renders CLEAN — first line, never nested inside a
+      // "Couldn't …:" prefix or the crash wrapper.
+      expect(result.stderr.split("\n")[0], label).toBe(`aibill ${surface.commandName} needs one exact project folder.`);
+      expect(result.stderr, label).toContain("You ran it from your home directory, which is too broad to observe.");
+      expect(result.stderr, label).toContain("cd to an exact project or use --path <project>");
+      expect(result.stderr, label).toContain("Nothing was read, created, or changed.");
+      expect(result.stderr, label).not.toContain("Refusing to scan");
+      expect(result.stderr, label).not.toContain("unexpected error");
+      expect(result.stderr, label).not.toContain("Couldn't");
+      expect(result.stdout, label).toBe("");
+    }
   });
 
   it("adds and lists approved sources without scanning them immediately", async () => {

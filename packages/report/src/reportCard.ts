@@ -1,3 +1,4 @@
+import { roundUsdCents } from "./money.js";
 import {
   generateCutList,
   buildRecommendedPlan,
@@ -55,8 +56,8 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   const cutLines = topCuts.length > 0
     ? topCuts.map((cut, index) => {
         const impact = cut.impactBasis === "observed_value_no_counterfactual"
-          ? `${formatUsd(cut.affectedSpendUsd)} observed exposure`
-          : `~${formatUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled`;
+          ? `${formatBigUsd(cut.affectedSpendUsd)} observed exposure`
+          : `~${formatBigUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled`;
         return (
           `      <text x="40" y="${274 + index * 30}" class="cut">` +
           `${escapeXml(`${index + 1}. ${genericCutTitle(cut)}`)}` +
@@ -65,10 +66,12 @@ export function generateReportCardSvg(input: ReportCardInput): string {
       }).join("\n")
     : `      <text x="40" y="274" class="cut">No high-confidence cut in this window yet.</text>`;
 
+  // Parity nit: ONE thousands style per artifact — the headline uses the
+  // comma form, so every other dollar on the card (and its caption) does too.
   const opportunityLine = opportunity.modeledMonthlySavingsUsd > 0
-    ? `<tspan class="modeled">~${escapeXml(formatUsd(opportunity.modeledMonthlySavingsUsd))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan>`
+    ? `<tspan class="modeled">~${escapeXml(formatBigUsd(opportunity.modeledMonthlySavingsUsd))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan>`
     : opportunity.observedExposureUsd > 0
-      ? `<tspan class="modeled">${escapeXml(formatUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
+      ? `<tspan class="modeled">${escapeXml(formatBigUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
       : `<tspan class="unavailable">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="${ariaLabel}">
@@ -105,7 +108,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
 
 ${cutLines}
 
-  <text x="40" y="372" class="brand">aibill · local-first · npx aibill</text>
+  <text x="40" y="372" class="brand">aibill · local-first · npx aibill · asktilden.com</text>
 </svg>
 `;
 }
@@ -116,19 +119,20 @@ export function generateReportCardCaption(input: ReportCardInput): string {
   const rawTotalUsd = input.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
   const cutList = generateCutList(input.records);
   const opportunity = summarizeOpportunity(input.records, cutList);
+  // The caption mirrors EXACTLY the card's own opportunity-line decision
+  // (modeled branch, else observed branch, else unavailable) so every dollar
+  // figure in the caption also appears on the artifact it captions. The old
+  // "; $X is observed API-equivalent exposure…" appendix quoted a figure the
+  // card and the receipt never display (launch-sweep finding: a sample
+  // caption said $41.00 that reconciled to nothing a reader could see).
   const opportunityText = opportunity.modeledMonthlySavingsUsd > 0
-    ? (
-      `with ~${formatUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings` +
-      (opportunity.observedExposureUsd > 0
-        ? `; ${formatUsd(opportunity.observedExposureUsd)} is observed API-equivalent exposure with savings unavailable without a matched counterfactual`
-        : "")
-    )
+    ? `with ~${formatBigUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings`
     : opportunity.observedExposureUsd > 0
-      ? `with ${formatUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
+      ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
       : "with no supported savings model in this window";
   const headline = presentationBasis === "connected_missing"
     ? "amounts unavailable (no priced financial evidence)"
-    : `${formatUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
+    : `${formatBigUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
   return (
     `${input.mode === "demo" ? "DEMO SAMPLE — " : ""}My AI receipt: ${headline}, ` +
     `${opportunityText}. ` +
@@ -270,12 +274,13 @@ function receiptConfidenceLabel(
 
 function formatUsd(amount: number, rawAmount = amount): string {
   if (rawAmount > 0 && rawAmount < 0.01) return "<$0.01";
-  return `$${amount.toFixed(2)}`;
+  // Parity D1: the shared cents policy — every surface rounds identically.
+  return `$${roundUsdCents(amount).toFixed(2)}`;
 }
 
 function formatBigUsd(amount: number, rawAmount = amount): string {
   if (rawAmount > 0 && rawAmount < 0.01) return "<$0.01";
-  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${roundUsdCents(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function escapeXml(value: string): string {

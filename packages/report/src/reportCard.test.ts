@@ -306,3 +306,64 @@ describe("generateReportCardSvg", () => {
     expect(caption).not.toContain("$0.00");
   });
 });
+
+describe("caption ↔ card reconciliation (launch-sweep fix)", () => {
+  // The shipped sample caption once quoted "$41.00" — observed exposure summed
+  // from cuts the card and receipt never display. Contract now: the caption is
+  // recomputed from the same fixture the artifact renders, and every dollar
+  // figure in the caption is present on the card itself.
+  it("recomputes the expected sample caption from the fixture and finds every caption figure on the card", async () => {
+    const { generateCutList, buildRecommendedPlan } = await import("@agent-finops/core");
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const caption = generateReportCardCaption({ summary, records, mode: "demo" });
+    const svg = generateReportCardSvg({ summary, records, mode: "demo" });
+
+    // Expected caption, derived from the fixture through the same helpers the
+    // renderer uses — never a hand-typed dollar literal.
+    const expectedModeled = buildRecommendedPlan(generateCutList(records)).recommendedSavingsUsd;
+    const expectedTotal = summary.totalUsd;
+    const usd = (value: number) =>
+      value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    expect(caption).toBe(
+      `DEMO SAMPLE — My AI receipt: $${usd(expectedTotal)} in illustrative evidence, ` +
+      `with ~$${usd(expectedModeled)}/mo in modeled opportunities to test—not verified savings. ` +
+      "Local-first: npx aibill"
+    );
+
+    // Reconciliation: every dollar figure the caption quotes appears on the
+    // artifact it captions.
+    const captionFigures = caption.match(/\$\d[\d,]*\.\d{2}/gu) ?? [];
+    expect(captionFigures.length).toBeGreaterThan(0);
+    for (const figure of captionFigures) {
+      expect(svg, `caption figure ${figure} must appear on the card`).toContain(figure);
+    }
+    // The old unreconcilable appendix is gone.
+    expect(caption).not.toContain("is observed API-equivalent exposure");
+  });
+});
+
+describe("cross-surface parity (SVG receipt card)", () => {
+  it("uses ONE thousands style — every dollar on the card carries commas at >= $1,000", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      amountUsd: record.amountUsd === null ? null : record.amountUsd * 100
+    }));
+    const summary = analyzeSpend(records);
+    const svg = generateReportCardSvg({ summary, records, mode: "demo" });
+    const caption = generateReportCardCaption({ summary, records, mode: "demo" });
+    // The corpus defect: "$2,105.06" (big) and "$2105.06" (modeled) two
+    // lines apart. Every 4+ digit dollar on the card and caption now
+    // carries the comma form; the bare form must not appear.
+    expect(svg).not.toMatch(/\$\d{4,}\.\d{2}/u);
+    expect(caption).not.toMatch(/\$\d{4,}\.\d{2}/u);
+    expect(svg).toMatch(/\$\d{1,3}(,\d{3})+\.\d{2}/u);
+  });
+
+  it("shareable footer: the card points at asktilden.com", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const svg = generateReportCardSvg({ summary, records, mode: "demo" });
+    expect(svg).toContain("aibill · local-first · npx aibill · asktilden.com");
+  });
+});

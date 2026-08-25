@@ -363,11 +363,11 @@ describe("standalone status-line renderer", () => {
     expect(renderStatusline(ok(snapshot("empty")), { now: NOW, columns: 100 }))
       .toBe("aibill · no usage yet · updated 12s");
     expect(renderStatusline(ok(snapshot("error")), { now: NOW, columns: 100 }))
-      .toBe("aibill · update error 12s · run aibill init");
+      .toBe("aibill · update error 12s · run npx aibill init");
     expect(renderStatusline({ status: "missing" }, { now: NOW, columns: 100 }))
-      .toBe("aibill · run aibill init");
+      .toBe("aibill · run npx aibill init");
     expect(renderStatusline({ status: "error" }, { now: NOW, columns: 100 }))
-      .toBe("aibill · cache error · run aibill init");
+      .toBe("aibill · cache error · run npx aibill init");
   });
 
   it("omits expired limits at and after the exact reset boundary", () => {
@@ -735,7 +735,7 @@ describe("hook safety", () => {
       render: { now: NOW, columns: 100 }
     });
     expect(exitCode).toBe(0);
-    expect(output).toEqual(["aibill · run aibill init\n"]);
+    expect(output).toEqual(["aibill · run npx aibill init\n"]);
     expect(output.join("")).not.toContain("private prompt/path");
   });
 

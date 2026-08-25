@@ -5,6 +5,73 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.3 — 2026-08-25
+
+The founder-test patch: fixes from the first production run of 0.9.2 and the
+cold-start audit, all in the first-five-minutes path.
+
+- Fixed the consent step so it can never be answered by a buffered keypress.
+  In 0.9.2 the Enter that had just submitted your email could land on the
+  consent question the instant it armed and silently decline it — no outcome
+  line, nothing sent, no way to tell. The consent read now drains all
+  buffered input, renders its line exactly once, waits for a fresh
+  deliberate keypress, and ALWAYS ends with an outcome line: either
+  `sent: exactly that JSON · nothing else in the payload` or `nothing sent`.
+- Every command aibill's output tells you to run is now the npx form
+  (`npx aibill telemetry off`, not `aibill telemetry off`) — npx users have
+  no bare `aibill` on PATH.
+- Every project-scoped command run from a too-broad folder (home, root, a
+  system directory) now explains itself the same friendly way: which exact
+  project folder to stand in, with nothing read, created, or changed. In
+  0.9.2 ten commands leaked the raw refusal — four of them dressed as an
+  "unexpected error" with a file-an-issue link. The machine-wide receipt
+  also stopped pointing at project-scoped commands without saying where to
+  stand.
+- First runs no longer poison `~/.aibill`: home state is created private
+  (0700), a 0.9.2-poisoned directory that holds only aibill's own state
+  files self-heals, and the remaining `init` refusal names the exact path
+  and the one-line rescue. The `npx aibill` → `npx aibill init` funnel now
+  works on a fresh machine with a default umask.
+- The email ask is calmer under real fingers: Ctrl-D/EOF renders the receipt
+  like every other skip, a rapid double-Enter skip counts as the one
+  lifetime skip instead of dying as "pasted input", and the receipt-ready
+  notice renders on its own line.
+- Five near-identical recommendations ("only the amount changes") now
+  collapse into one grouped entry with per-project amounts; genuinely
+  different suggestions keep their own ranks.
+- The shareable receipt caption only quotes figures the card itself renders,
+  recomputed from the same data — a sample caption used to cite an exposure
+  number no other surface showed.
+- `glance` (the menu-bar app's ~30s machine poll) never emits telemetry
+  events — it is not a human command, and counting it was pure noise.
+
+## 0.9.2 — 2026-08-24
+
+The Friday launch build: the funnel, the analytics, and the last truth fixes.
+
+- Added the one-time launch-list ask. On a first interactive run, while
+  aibill reads your evidence, it asks once: type your email for launch
+  updates, or press Enter to skip. Before anything is sent you see the
+  LITERAL payload — `{"email","ref"}`, nothing else — and confirm with a
+  typed `y`. Deliverability-checked (MX lookup + disposable-domain screen),
+  one lifetime ask, `npx aibill signup <email>` for the deliberate path,
+  and the receipt renders no matter how the ask ends.
+- Introduced disclosed, anonymous usage counting — default-on, notice-first.
+  aibill counts which commands run: never your content, paths, arguments,
+  or anything joinable to an email. The three-line notice prints BEFORE the
+  first event ever fires (run 1 sends nothing); `npx aibill telemetry off`
+  switches it off, DO_NOT_TRACK / CI / AI_SPEND_NO_TELEMETRY hard-disable
+  it, and `npx aibill telemetry` shows the exact last payload verbatim.
+  Every "nothing uploaded" line swaps to a disclosure line while counting
+  is active, so no surface ever claims less than what leaves the machine.
+  Delivery is a detached one-shot child: the CLI never waits on it.
+- Connected reports keep both bases in report.md/html too: provider-billed
+  and local API-equivalent figures stay separate, never a blended total.
+- Truth fixes from launch-week QA: `--help` reflects published commands,
+  every printed NEXT command runs as printed, Copilot AI-credit billing
+  reflected in source status, seat dedupe, Cursor "Enterprise teams",
+  neutral demo names, and npm `funding` metadata on all packages.
+
 ## 0.9.1 — 2026-08-20
 
 The agent-native loop: your coding agent is now a first-class participant in

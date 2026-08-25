@@ -32,7 +32,7 @@ import {
 } from "./signup.js";
 
 const creepGuardHint =
-  "payload creep — the waitlist body is exactly {email, ref}; see docs/qa-handoff/CLI_CAPTURE_DESIGN.md §3c before adding anything";
+  "payload creep — the waitlist body is exactly {email, ref}; the capture design pins this closed payload, add nothing";
 
 function jsonResponse(status: number): Response {
   return new Response(status === 201 ? JSON.stringify({ ok: true }) : JSON.stringify({ error: "x" }), { status });
@@ -541,7 +541,7 @@ describe("consent after the receipt", () => {
     });
   });
 
-  it("anything but y at the consent step is a decline: nothing sent, one skip", async () => {
+  it("anything but y at the consent step is a decline: nothing sent, one skip, outcome printed", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => jsonResponse(201));
     const { outcome, scripted } = await emailOutcome(file, [""]);
@@ -550,10 +550,13 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+    // 0.9.3: a decline is ANNOUNCED — never a silent instant resolution
+    // (the founder's production consent auto-declined with no output).
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
   });
 
-  it("a consent timeout decides nothing and consumes no skip", async () => {
+  it("a consent timeout decides nothing, consumes no skip, and still announces the outcome", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => jsonResponse(201));
     const { outcome, scripted } = await emailOutcome(file, [undefined]);
@@ -562,10 +565,62 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 0 } });
   });
 
-  it("send failure prints the mapped line and never persists, retries, or queues the email", async () => {
+  it("every consent resolution ends in exactly one outcome line (sent or nothing sent)", async () => {
+    // The closed set of final lines: sentLine on 201, nothingSentLine on
+    // everything else. No resolution may end on any other line, and no
+    // resolution may print both.
+    const finals: string[] = [signupCopy.sentLine, signupCopy.nothingSentLine];
+    const cases: Array<{ answers: Array<string | undefined>; fetch?: () => Promise<Response> }> = [
+      { answers: ["y"], fetch: async () => jsonResponse(201) },
+      { answers: ["yes"], fetch: async () => jsonResponse(201) },
+      { answers: ["n"] },
+      { answers: [""] },
+      { answers: ["whatever"] },
+      { answers: [undefined] },
+      { answers: ["y"], fetch: async () => jsonResponse(429) },
+      { answers: ["y"], fetch: async () => jsonResponse(422) },
+      { answers: ["y"], fetch: async () => { throw new Error("down"); } }
+    ];
+    for (const testCase of cases) {
+      const file = await tempStateFile();
+      const { outcome, scripted } = await emailOutcome(file, testCase.answers);
+      await runSignupConsentAfterReceipt({
+        io: scripted.io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+        fetchImpl: (testCase.fetch ?? (async () => jsonResponse(201))) as unknown as typeof fetch
+      });
+      const last = scripted.written.at(-1);
+      expect(finals).toContain(last);
+      expect(scripted.written.filter((line) => finals.includes(line))).toHaveLength(1);
+    }
+  });
+
+  it("the consent read prefers questionFresh when the binding provides it", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const { outcome, scripted } = await emailOutcome(file, ["stale-should-not-be-read"]);
+    const freshQuestions: string[] = [];
+    const io: SignupAskIo = {
+      ...scripted.io,
+      questionFresh: async (query) => {
+        freshQuestions.push(query);
+        return "y";
+      }
+    };
+    await runSignupConsentAfterReceipt({
+      io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(freshQuestions).toHaveLength(1);
+    expect(freshQuestions[0]).toContain('send {"email":"you@work.com","ref":"cli-receipt"}');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(scripted.written.at(-1)).toBe(signupCopy.sentLine);
+  });
+
+  it("send failure prints the mapped line, then nothing sent; never persists, retries, or queues the email", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => { throw new Error("network down"); });
     const { outcome, scripted } = await emailOutcome(file, ["y"]);
@@ -574,7 +629,8 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(scripted.written.at(-1)).toBe(signupCopy.unreachableLine);
+    expect(scripted.written.at(-2)).toBe(signupCopy.unreachableLine);
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     const stateBytes = await readFile(file, "utf8");
     expect(stateBytes).not.toContain("you@work.com");
 
@@ -584,7 +640,8 @@ describe("consent after the receipt", () => {
       io: second.scripted.io, stateFilePath: file, payload: second.outcome.payload, stamped: second.outcome.stamped,
       fetchImpl: busy as unknown as typeof fetch
     });
-    expect(second.scripted.written.at(-1)).toBe(signupCopy.rateLimitedLine);
+    expect(second.scripted.written.at(-2)).toBe(signupCopy.rateLimitedLine);
+    expect(second.scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
   });
 });
 
@@ -694,7 +751,9 @@ describe("during-scan orchestration", () => {
     const run = orchestratePreReceiptAsk({ session, runPipeline: async () => "receipt" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(scripted.written).toContain(`  ${signupCopy.receiptReadyLine}`);
-    expect(scripted.raws).toEqual([signupCopy.askPrompt]);
+    // PC-4a: the nudge first breaks off the pending prompt row, then
+    // redraws the prompt on a fresh line — never glued to the open "  > ".
+    expect(scripted.raws).toEqual(["\n", signupCopy.askPrompt]);
     answer("");
     answer = () => undefined;
     // Second empty Enter completes the skip.
@@ -1000,5 +1059,76 @@ describe("surface contracts (QA 11-12)", () => {
     }
     // The claim never overreaches the payload layer (verdict B2).
     expect(everyLine).not.toContain("nothing else left this machine");
+  });
+});
+
+describe("home state directory permissions (cold-start audit NEW-B1)", () => {
+  it("creates ~/.aibill 0700 even under a permissive umask", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-mode-"));
+    const filePath = signupStateFilePath(home);
+    const previousUmask = process.umask(0o022);
+    try {
+      expect(await writeSignupState(filePath, { version: 1, status: "deferred", askCount: 0 })).toBe(true);
+    } finally {
+      process.umask(previousUmask);
+    }
+    if (process.platform !== "win32") {
+      const { lstat } = await import("node:fs/promises");
+      const info = await lstat(join(home, ".aibill"));
+      expect(info.mode & 0o077).toBe(0);
+    }
+  });
+});
+
+describe("signup command consent is consent-grade (adversary SF1)", () => {
+  it("routes through consentRead when provided; undefined resolves as nothing sent, exit 0", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-fresh-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const reads: string[] = [];
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("prompt must not be used when consentRead exists"); },
+      consentRead: async (query) => { reads.push(query); return undefined; },
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.nothingSentLine);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toContain('send {"email":"a@b.co","ref":"cli-signup"}');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a fresh y through consentRead still sends exactly the payload", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-fresh-y-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("unused"); },
+      consentRead: async () => "y",
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.sentLine);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("a prompt-fallback abort (Ctrl-D/Ctrl-C rejection) is nothing sent, exit 0 — never the crash voice", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-abort-"));
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const result = await runCli(["signup", "a@b.co"], {
+      homeDirectory: home,
+      interactive: true,
+      prompt: async () => { throw new Error("Aborted with Ctrl+D"); },
+      waitlistFetch: fetchImpl as unknown as typeof fetch,
+      signupDns: okDns
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(signupCopy.nothingSentLine);
+    expect(result.stderr).toBe("");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

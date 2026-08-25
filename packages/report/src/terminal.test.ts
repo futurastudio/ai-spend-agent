@@ -941,3 +941,203 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).not.toContain("anthropic|openai");
   });
 });
+
+describe("RECOMMEND grouped collapse (0.9.3 founder feedback)", () => {
+  // Five near-identical "Investigate cumulative context in claude-code ·
+  // <project>" entries (only the amount changed) collapse into ONE grouped
+  // recommendation with per-project amounts; different-kind items follow.
+  function contextRecord(project: string, index: number, amountUsd: number): UsageRecord {
+    return {
+      id: `local-ctx-${project}-${index}`,
+      timestamp: "2026-08-11T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model: "claude-opus-4-8",
+      inputTokens: 150_000,
+      outputTokens: 4_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  it("collapses the per-project fan-out of one action kind into one grouped entry", () => {
+    const projects: Array<[string, number]> = [
+      ["agent-finops", 1274.2],
+      ["action-verifier", 408.4],
+      ["tilden-web", 99.9],
+      ["glance-macos", 55.5],
+      ["tiktok-pipeline", 22.2]
+    ];
+    const records = projects.map(([project, amount], index) => contextRecord(project, index, amount));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs"
+    });
+    const normalized = normalizeWhitespace(text);
+
+    // ONE grouped headline, not five numbered near-duplicates.
+    expect(text.match(/Investigate cumulative context in claude-code/gu)).toHaveLength(1);
+    expect(text).not.toContain("2. Investigate cumulative context");
+    // The across-line carries per-project detail, largest first, ~rounded.
+    expect(normalized).toContain("across 5 projects — agent-finops ~$1,274 · action-verifier ~$408 · tilden-web ~$100 · glance-macos ~$56 · + 1 more");
+    // Shared guidance renders once; combined grounding sums the aggregates.
+    expect(text).toContain("Inspect per-session context");
+    expect(normalized).toContain("5 daily aggregates");
+    // Observed-value discipline: no modeled ~$/mo is invented for the group.
+    expect(text).toContain("reduction unproven");
+  });
+
+  it("a single-project action renders exactly as before (no grouping artifacts)", () => {
+    const records = [contextRecord("agent-finops", 0, 1274.2)];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs"
+    });
+    expect(text).toContain("Investigate cumulative context in claude-code · agent-finops");
+    expect(text).not.toMatch(/across \d+ projects/u);
+  });
+});
+
+describe("RECOMMEND collapse never fabricates groups (adversary F1)", () => {
+  // Identical titles do NOT imply one action for kinds other than
+  // context_trim: two cache actions on the same operation with different
+  // models, or two batch actions from different sources, are genuinely
+  // different recommendations and must keep their own ranks.
+  function connectedCall(
+    id: string,
+    source: string,
+    model: string,
+    fingerprint: string | undefined,
+    batchEligible: boolean,
+    hour: number
+  ): UsageRecord {
+    return {
+      id,
+      timestamp: `2026-08-11T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      source: { id: source, name: source, provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model,
+      operation: "research_summary",
+      inputTokens: 20_000,
+      outputTokens: 2_000,
+      amountUsd: 12.5,
+      costConfidence: "estimated",
+      usageGranularity: "call",
+      workloadSemantics: {
+        ...(fingerprint !== undefined ? { stableInputFingerprint: fingerprint } : {}),
+        ...(batchEligible ? { batchEligible: true } : {})
+      }
+    } as UsageRecord;
+  }
+
+  it("two cache actions on the same operation but different models never merge", () => {
+    // Same operation → identical "Cache repeated research_summary calls"
+    // titles; different model+fingerprint → two distinct cache actions.
+    const records = [
+      connectedCall("a-1", "api-a", "gpt-5.5", "fp-alpha", false, 1),
+      connectedCall("a-2", "api-a", "gpt-5.5", "fp-alpha", false, 2),
+      connectedCall("a-3", "api-a", "gpt-5.5", "fp-alpha", false, 3),
+      connectedCall("b-1", "api-a", "gpt-5.5-mini", "fp-beta", false, 4),
+      connectedCall("b-2", "api-a", "gpt-5.5-mini", "fp-beta", false, 5),
+      connectedCall("b-3", "api-a", "gpt-5.5-mini", "fp-beta", false, 6)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), { records, color: false });
+    expect(text.match(/Cache repeated research_summary calls/gu)?.length).toBe(2);
+    expect(text).not.toMatch(/across \d+ projects/u);
+    expect(text).not.toContain("this project");
+  });
+
+  it("two batch actions from different sources never merge", () => {
+    const records = [
+      connectedCall("s1-1", "source-one", "gpt-5.5", undefined, true, 1),
+      connectedCall("s1-2", "source-one", "gpt-5.5", undefined, true, 2),
+      connectedCall("s1-3", "source-one", "gpt-5.5", undefined, true, 3),
+      connectedCall("s2-1", "source-two", "gpt-5.5", undefined, true, 4),
+      connectedCall("s2-2", "source-two", "gpt-5.5", undefined, true, 5),
+      connectedCall("s2-3", "source-two", "gpt-5.5", undefined, true, 6)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), { records, color: false });
+    expect(text.match(/Move research_summary calls to the Batch API/gu)?.length).toBe(2);
+    expect(text).not.toMatch(/across \d+ projects/u);
+    expect(text).not.toContain("this project");
+  });
+});
+
+describe("cross-surface parity (terminal side)", () => {
+  function localDayRecord(
+    id: string,
+    project: string,
+    model: string,
+    amountUsd: number,
+    day: number
+  ): UsageRecord {
+    return {
+      id,
+      timestamp: `2026-08-${String(day).padStart(2, "0")}T00:00:00.000Z`,
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model,
+      inputTokens: 10_000,
+      outputTokens: 1_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  it("D1: the $15.995 half-cent boundary renders $16.00 on the group-by model surface", () => {
+    // The corpus defect: 6.452 + 0.3563 + 9.1867 = 15.995 exactly rendered
+    // ~$15.99 in the terminal but $16.00 in report.md/html.
+    const records = [
+      localDayRecord("m-1", "app", "claude-opus-4-8", 6.452, 5),
+      localDayRecord("m-2", "app", "claude-opus-4-8", 0.3563, 6),
+      localDayRecord("m-3", "app", "claude-opus-4-8", 9.1867, 7)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records, color: false, mode: "local-logs", view: "breakdown", groupBy: "model"
+    });
+    expect(text).toContain("$16.00");
+    expect(text).not.toContain("$15.99");
+  });
+
+  it("D3: an 11-project table shows 10 rows plus an explicit +1 more row that reconciles to the total", () => {
+    const amounts = [1443.49, 407.74, 81.49, 58.65, 49.86, 28.27, 19.43, 9.18, 4.93, 1.39, 0.62];
+    const records = amounts.map((amountUsd, index) =>
+      localDayRecord(`p-${index}`, `project-${String(index).padStart(2, "0")}`, "claude-opus-4-8", amountUsd, 5 + index));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records, color: false, mode: "local-logs", view: "breakdown", groupBy: "project"
+    });
+    // The smallest project no longer vanishes silently.
+    expect(text).toContain("+1 more");
+    expect(text).toContain("~$0.62");
+    // Visible rows + the overflow row reconcile to the header total.
+    const rowAmounts = [...text.matchAll(/~\$(\d+\.\d{2})/gu)].map((match) => Number(match[1]));
+    const tableSum = rowAmounts.reduce((total, value) => total + value, 0);
+    expect(Math.abs(tableSum - 2105.05)).toBeLessThan(0.02);
+  });
+
+  it("tilde parity: the --full project table carries the same approximation markers as --group-by", () => {
+    const records = [
+      localDayRecord("t-1", "alpha", "claude-opus-4-8", 100.25, 5),
+      localDayRecord("t-2", "beta", "claude-opus-4-8", 50.5, 6)
+    ];
+    const summary = analyzeSpend(records);
+    const full = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs", view: "full" });
+    const grouped = generatePlainEnglishSummary(summary, {
+      records, color: false, mode: "local-logs", view: "breakdown", groupBy: "model"
+    });
+    // Same renderer, same tilde discipline: the table embedded in --full
+    // (model dimension here, $150.75 total row) marks approximation exactly
+    // like the standalone --group-by table. Before the fix --full rendered
+    // the identical row WITHOUT the tilde.
+    expect(full).toContain("~$150.75");
+    expect(grouped).toContain("~$150.75");
+    expect(full).not.toMatch(/│\s*\$150\.75/u);
+  });
+});

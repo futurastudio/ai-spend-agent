@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { aibillCommandV0 } from "@agent-finops/core";
 
 /**
  * CLI telemetry — anonymous command counts, notice-before-first-byte.
@@ -54,6 +55,7 @@ export const telemetryCommands = [
   "connect",
   "sync-provider",
   "doctor",
+  "glance",
   "report",
   "report-card",
   "apply",
@@ -85,13 +87,18 @@ export type TelemetryEvent = {
   ts: string;
 };
 
-/** Printed instead of "nothing uploaded" while telemetry is active. */
-export const telemetryDisclosureLine = "anonymous command counts shared · aibill telemetry off";
+/**
+ * Printed instead of "nothing uploaded" while telemetry is active. The
+ * command is composed through the runtime command helper (aibillCommandV0,
+ * npx form): npx users have no bare `aibill` on PATH (0.9.2 founder
+ * incident — "command not found").
+ */
+export const telemetryDisclosureLine = `anonymous command counts shared · ${aibillCommandV0("telemetry off")}`;
 
 export const telemetryNoticeLines = [
   "aibill counts which commands run — anonymous, never your data or content",
-  "turn off: aibill telemetry off",
-  "see payloads: aibill telemetry"
+  `turn off: ${aibillCommandV0("telemetry off")}`,
+  `see payloads: ${aibillCommandV0("telemetry")}`
 ] as const;
 
 export function telemetryOsLabel(platform: string = process.platform): TelemetryOs {
@@ -139,6 +146,7 @@ export function telemetryCommandForArgv(argv: readonly string[]): TelemetryComma
     case "connect": return "connect";
     case "sync-provider": return "sync-provider";
     case "doctor": return "doctor";
+    case "glance": return "glance";
     case "report": return "report";
     case "report-card": return "report-card";
     case "apply":
@@ -210,7 +218,10 @@ export async function readTelemetryState(filePath: string): Promise<TelemetrySta
 
 export async function writeTelemetryState(filePath: string, state: TelemetryState): Promise<boolean> {
   try {
-    await mkdir(dirname(filePath), { recursive: true });
+    // 0o700 (NEW-B1): under the default umask a modeless mkdir left
+    // ~/.aibill at 755, which the private-cache guard then refused —
+    // dead-ending `init` on every fresh machine after the notice stamp.
+    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${filePath}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
     await rename(temporaryPath, filePath);
@@ -392,6 +403,12 @@ export async function openCliTelemetry(options: {
     finish: async (input) => {
       try {
         if (sessionTelemetryKilled) return;
+        // `glance` is a machine-invoked poll (the Glance menu-bar app spawns
+        // it every ~30s), not a human command — counting it is noise by
+        // definition and would flood the anonymous command counts (~2,880
+        // events/day/user). Never emit for it, notice or not; the label
+        // still exists in the map so any stray event is at least honest.
+        if (telemetryCommandForArgv(input.argv) === "glance") return;
         if (envDisabled || read.kind === "unreadable") return;
         if (read.kind === "ok" && !read.state.enabled) return;
         // The command that just ran may have CHANGED the state (`telemetry

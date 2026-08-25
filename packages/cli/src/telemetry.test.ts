@@ -424,7 +424,7 @@ describe("aibill telemetry command", () => {
 
     const unknown = await runCli(["telemetry", "sideways"], { homeDirectory: home });
     expect(unknown.exitCode).toBe(1);
-    expect(unknown.stderr).toContain("Use: aibill telemetry [on|off]");
+    expect(unknown.stderr).toContain("Use: npx aibill telemetry [on|off]");
   });
 
   it("fresh status is honest about never having sent anything", async () => {
@@ -510,7 +510,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const helpOff = await runCli(["--help"]);
     expect(helpOff.stdout).toContain("Privacy: local analysis and reports upload nothing. Only explicit");
     const helpOn = await runCli(["--help"], { telemetryDisclosure: true });
-    expect(helpOn.stdout).toContain("anonymous command counts shared · aibill telemetry off");
+    expect(helpOn.stdout).toContain("anonymous command counts shared · npx aibill telemetry off");
   });
 
   it("doctor and report surfaces disclose in both states — including the generated md/html files (QA B1)", async () => {
@@ -520,7 +520,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const doctorOff = await runCli(["doctor", "--path", dir]);
     expect(doctorOff.stdout).toContain("local-first mode: enabled (no cloud upload, no telemetry)");
     const doctorOn = await runCli(["doctor", "--path", dir], { telemetryDisclosure: true });
-    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · aibill telemetry off");
+    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · npx aibill telemetry off");
     expect(doctorOn.stdout).not.toContain("no telemetry)");
 
     const reportOff = await runCli(["report", "--path", dir]);
@@ -534,12 +534,12 @@ describe("receipt-line truth (both states pinned)", () => {
 
     const reportOn = await runCli(["report", "--path", dir], { telemetryDisclosure: true });
     expect(reportOn.exitCode).toBe(0);
-    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · aibill telemetry off");
+    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · npx aibill telemetry off");
     expect(reportOn.stdout).not.toContain("no aibill telemetry");
     const markdownOn = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const htmlOn = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     // Persistent, shareable artifacts must state what their generating run did.
-    expect(markdownOn).toContain("the generating run shared anonymous command counts (aibill telemetry off to disable)");
+    expect(markdownOn).toContain("the generating run shared anonymous command counts (npx aibill telemetry off to disable)");
     expect(markdownOn).not.toContain("no aibill telemetry");
     expect(htmlOn).toContain("The generating run shared anonymous command counts");
     expect(htmlOn).not.toContain("No aibill telemetry.");
@@ -556,7 +556,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const localOn = await runCli(["report", "--path", logsDir], { telemetryDisclosure: true });
     expect(localOn.exitCode).toBe(0);
     const localHtmlOn = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
-    expect(localHtmlOn).toContain("anonymous command counts shared · aibill telemetry off");
+    expect(localHtmlOn).toContain("anonymous command counts shared · npx aibill telemetry off");
     expect(localHtmlOn).not.toContain("no aibill telemetry<");
   });
 
@@ -771,5 +771,89 @@ describe("unjoinability to signup (structural)", () => {
       kind: "ok",
       state: { status: "subscribed" }
     });
+  });
+});
+
+describe("npx-form command strings (0.9.3 — founder hit 'command not found')", () => {
+  // npx users have no bare `aibill` on PATH. Every command the telemetry
+  // surfaces tell a human to RUN must carry the npx form, verbatim.
+  it("pins the notice and disclosure lines to the npx form", () => {
+    expect(telemetryNoticeLines).toEqual([
+      "aibill counts which commands run — anonymous, never your data or content",
+      "turn off: npx aibill telemetry off",
+      "see payloads: npx aibill telemetry"
+    ]);
+    expect(telemetryDisclosureLine).toBe(
+      "anonymous command counts shared · npx aibill telemetry off"
+    );
+  });
+
+  it("no shipped telemetry instruction regresses to a bare `aibill` invocation", () => {
+    for (const line of [...telemetryNoticeLines, telemetryDisclosureLine]) {
+      // Any `aibill telemetry…` occurrence must be immediately preceded by
+      // "npx " — a bare invocation would strand npx users.
+      expect(line).not.toMatch(/(?<!npx )aibill telemetry/u);
+    }
+  });
+});
+
+describe("home state directory permissions (cold-start audit NEW-B1)", () => {
+  it("creates ~/.aibill 0700 even under a permissive umask", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-telemetry-mode-"));
+    const filePath = telemetryStateFilePath(home);
+    const previousUmask = process.umask(0o022);
+    try {
+      expect(await writeTelemetryState(filePath, {
+        version: 1,
+        installId: "6f9619ff-8b86-4d01-b42d-00cf4fc964ff",
+        enabled: true
+      })).toBe(true);
+    } finally {
+      process.umask(previousUmask);
+    }
+    if (process.platform !== "win32") {
+      const { lstat } = await import("node:fs/promises");
+      const info = await lstat(join(home, ".aibill"));
+      expect(info.mode & 0o077).toBe(0);
+    }
+  });
+});
+
+describe("glance: machine-invoked poll, never counted", () => {
+  it("labels glance honestly in the command map", () => {
+    expect(telemetryCommandForArgv(["glance"])).toBe("glance");
+    expect(telemetryCommandForArgv(["glance", "--since-days", "30"])).toBe("glance");
+    expect(telemetryCommands).toContain("glance");
+  });
+
+  it("emits NOTHING for glance even on a noticed, enabled install", async () => {
+    const home = await tempHome();
+    const first = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await first.finish({ argv: [], ok: true, durationMs: 5, interactive: true, version: "0.9.3", printNotice: () => {} });
+
+    // The Glance menu-bar app spawns `aibill glance --since-days 30` every
+    // ~30s — ~2,880 machine events/day/user if counted. Suppressed entirely.
+    const fetchImpl = vi.fn(async () => okResponse());
+    const second = await openCliTelemetry({ homeDirectory: home, env: {} });
+    const before = await readTelemetryState(telemetryStateFilePath(home));
+    await second.finish({
+      argv: ["glance", "--since-days", "30"], ok: true, durationMs: 40, interactive: false, version: "0.9.3",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      printNotice: () => { throw new Error("glance must never print the notice"); }
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // No payload cached either — the state is byte-identical.
+    const after = await readTelemetryState(telemetryStateFilePath(home));
+    expect(after).toEqual(before);
+  });
+
+  it("glance never stamps the first notice on a fresh install", async () => {
+    const home = await tempHome();
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await runtime.finish({
+      argv: ["glance"], ok: true, durationMs: 40, interactive: true, version: "0.9.3",
+      printNotice: () => { throw new Error("glance must never print the notice"); }
+    });
+    expect(await readTelemetryState(telemetryStateFilePath(home))).toEqual({ kind: "fresh" });
   });
 });
