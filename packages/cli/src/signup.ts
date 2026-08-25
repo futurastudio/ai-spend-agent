@@ -6,9 +6,9 @@ import { dirname, join } from "node:path";
 /**
  * CLI email capture — the launch-list signup lane (v0.9.2).
  *
- * Design: docs/qa-handoff/CLI_CAPTURE_DESIGN.md (see its dated placement
- * addendum). QA verdict (its B/M fixes are mandatory):
- * docs/qa-handoff/CLI_CAPTURE_QA_VERDICT.md.
+ * Design: the CLI capture design + its dated placement addendum
+ * (2026-08-24). The QA verdict's B/M fixes are mandatory and are encoded
+ * in the rules below — the verdict tags (B1, B2, M1…) cite it.
  *
  * Placement (founder decision 2026-08-24): the ONE ask runs PRE-RECEIPT,
  * DURING the first evidence scan — it fills the first-run wait instead of
@@ -79,8 +79,8 @@ export function buildWaitlistRef(surface: WaitlistRefSurface, tag?: string): str
 
 /**
  * The exact bytes sent — key order pinned. Payload creep (adding os/plan/
- * version data, or stuffing values into ref) fails the CI creep-guard test;
- * see docs/qa-handoff/CLI_CAPTURE_DESIGN.md §3c before touching this.
+ * version data, or stuffing values into ref) fails the CI creep-guard test
+ * (signup.test.ts); read that test's contract before touching this.
  */
 export function serializeWaitlistPayload(payload: WaitlistPayload): string {
   return JSON.stringify({ email: payload.email, ref: payload.ref });

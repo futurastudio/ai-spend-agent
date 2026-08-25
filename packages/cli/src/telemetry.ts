@@ -55,6 +55,7 @@ export const telemetryCommands = [
   "connect",
   "sync-provider",
   "doctor",
+  "glance",
   "report",
   "report-card",
   "apply",
@@ -145,6 +146,7 @@ export function telemetryCommandForArgv(argv: readonly string[]): TelemetryComma
     case "connect": return "connect";
     case "sync-provider": return "sync-provider";
     case "doctor": return "doctor";
+    case "glance": return "glance";
     case "report": return "report";
     case "report-card": return "report-card";
     case "apply":
@@ -401,6 +403,12 @@ export async function openCliTelemetry(options: {
     finish: async (input) => {
       try {
         if (sessionTelemetryKilled) return;
+        // `glance` is a machine-invoked poll (the Glance menu-bar app spawns
+        // it every ~30s), not a human command — counting it is noise by
+        // definition and would flood the anonymous command counts (~2,880
+        // events/day/user). Never emit for it, notice or not; the label
+        // still exists in the map so any stray event is at least honest.
+        if (telemetryCommandForArgv(input.argv) === "glance") return;
         if (envDisabled || read.kind === "unreadable") return;
         if (read.kind === "ok" && !read.state.enabled) return;
         // The command that just ran may have CHANGED the state (`telemetry

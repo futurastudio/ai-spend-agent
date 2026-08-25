@@ -818,3 +818,42 @@ describe("home state directory permissions (cold-start audit NEW-B1)", () => {
     }
   });
 });
+
+describe("glance: machine-invoked poll, never counted", () => {
+  it("labels glance honestly in the command map", () => {
+    expect(telemetryCommandForArgv(["glance"])).toBe("glance");
+    expect(telemetryCommandForArgv(["glance", "--since-days", "30"])).toBe("glance");
+    expect(telemetryCommands).toContain("glance");
+  });
+
+  it("emits NOTHING for glance even on a noticed, enabled install", async () => {
+    const home = await tempHome();
+    const first = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await first.finish({ argv: [], ok: true, durationMs: 5, interactive: true, version: "0.9.3", printNotice: () => {} });
+
+    // The Glance menu-bar app spawns `aibill glance --since-days 30` every
+    // ~30s — ~2,880 machine events/day/user if counted. Suppressed entirely.
+    const fetchImpl = vi.fn(async () => okResponse());
+    const second = await openCliTelemetry({ homeDirectory: home, env: {} });
+    const before = await readTelemetryState(telemetryStateFilePath(home));
+    await second.finish({
+      argv: ["glance", "--since-days", "30"], ok: true, durationMs: 40, interactive: false, version: "0.9.3",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      printNotice: () => { throw new Error("glance must never print the notice"); }
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // No payload cached either — the state is byte-identical.
+    const after = await readTelemetryState(telemetryStateFilePath(home));
+    expect(after).toEqual(before);
+  });
+
+  it("glance never stamps the first notice on a fresh install", async () => {
+    const home = await tempHome();
+    const runtime = await openCliTelemetry({ homeDirectory: home, env: {} });
+    await runtime.finish({
+      argv: ["glance"], ok: true, durationMs: 40, interactive: true, version: "0.9.3",
+      printNotice: () => { throw new Error("glance must never print the notice"); }
+    });
+    expect(await readTelemetryState(telemetryStateFilePath(home))).toEqual({ kind: "fresh" });
+  });
+});

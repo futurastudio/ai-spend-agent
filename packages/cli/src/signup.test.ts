@@ -32,7 +32,7 @@ import {
 } from "./signup.js";
 
 const creepGuardHint =
-  "payload creep — the waitlist body is exactly {email, ref}; see docs/qa-handoff/CLI_CAPTURE_DESIGN.md §3c before adding anything";
+  "payload creep — the waitlist body is exactly {email, ref}; the capture design pins this closed payload, add nothing";
 
 function jsonResponse(status: number): Response {
   return new Response(status === 201 ? JSON.stringify({ ok: true }) : JSON.stringify({ error: "x" }), { status });
