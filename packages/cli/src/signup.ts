@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
  *
  * Design: the CLI capture design + its dated placement addendum
  * (2026-08-24). The QA verdict's B/M fixes are mandatory and are encoded
- * in the rules below — the verdict tags (B1, B2, M1…) cite it.
+ * in the rules below — the verdict tags (B1, B2, M1…) cite it. The email
+ * promise each ref makes is anchored publicly in docs/EMAIL_SEND_POLICY.md.
  *
  * Placement (founder decision 2026-08-24): the ONE ask runs PRE-RECEIPT,
  * DURING the first evidence scan — it fills the first-run wait instead of
