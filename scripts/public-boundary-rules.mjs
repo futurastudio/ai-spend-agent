@@ -31,6 +31,26 @@ export const forbiddenPathPatterns = [
   /(^|\/)\.npmrc$/i
 ];
 
+// Repo-root directories that hold internal-only working material (QA
+// handoffs, GTM plans). They exist in the private repo and must NEVER ride a
+// release branch into the public tree — two qa-handoff docs did exactly that
+// on 2026-08-24. Checked as exact tree locations, separate from the generic
+// name-based patterns above, so the failure names the policy explicitly.
+export const internalOnlyTreeDirectories = ["docs/qa-handoff", "docs/gtm"];
+
+/**
+ * Return true when a tracked path sits under one of the internal-only tree
+ * directories (the directory itself included). Case-insensitive, matching
+ * the generic directory patterns above — a re-cased directory must not
+ * slip through on a case-insensitive filesystem.
+ */
+export function isInternalOnlyTreePath(path) {
+  const normalized = path.toLowerCase();
+  return internalOnlyTreeDirectories.some(
+    (dir) => normalized === dir || normalized.startsWith(`${dir}/`)
+  );
+}
+
 const genericUserSegments = new Set([
   "dev",
   "private-company",

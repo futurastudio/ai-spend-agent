@@ -31,7 +31,7 @@ export default function McpDocsPage() {
     >
       <DocsSection id="install" label="01 · Install" title="Choose your MCP client">
         <DocsCallout title="AI-client data boundary" tone="neutral">
-          aibill sends no telemetry and does not upload transcript contents. A selected tool result is returned to the AI client you configure below and then follows that client&apos;s data policy.
+          This MCP server sends no telemetry and does not upload transcript contents. A selected tool result is returned to the AI client you configure below and then follows that client&apos;s data policy. The aibill CLI&apos;s separate anonymous command counts are disclosed at first run and end with <code className="font-mono text-ink">aibill telemetry off</code>.
         </DocsCallout>
         <h3 className="text-lg font-medium text-ink">Codex</h3>
         <CodeBlock label="Terminal">{`codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
@@ -91,7 +91,7 @@ subscription context, and missing evidence separate.`}</CodeBlock>
           <li>State tools require a specific absolute project path; home, filesystem, and system roots are refused.</li>
           <li>Raw provider keys are rejected. Provider tools accept an inherited <code className="font-mono text-ink">env:NAME</code> reference.</li>
           <li>Provider syncs are read-only against the selected provider API.</li>
-          <li>aibill sends no telemetry and does not upload transcript contents.</li>
+          <li>This MCP server sends no telemetry and does not upload transcript contents.</li>
           <li>The selected structured tool result is returned to the invoking AI client and then follows that client’s data policy.</li>
           <li>A project cannot declare its own connected totals trusted; a separate hash-only local receipt binds trusted provider state to this machine.</li>
         </ul>

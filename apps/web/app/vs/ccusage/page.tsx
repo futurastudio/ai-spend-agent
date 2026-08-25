@@ -34,7 +34,7 @@ const rows: Array<[string, string, string]> = [
   ],
   ["Evidence-ranked action candidates", "Observed exposure locally; modeled $ only with a source-supported counterfactual", "—"],
   ["Context inventory and invocation coverage", "Yes — loading/overhead stays unmeasured where the host does not expose it", "—"],
-  ["Local-first, no telemetry", "Yes", "Yes"],
+  ["Local-first analysis", "Yes", "Yes"],
   ["Open source", "MIT", "MIT"],
   ["Install", "npx aibill", "npx ccusage"],
 ];
