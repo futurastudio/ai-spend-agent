@@ -1002,3 +1002,67 @@ describe("RECOMMEND grouped collapse (0.9.3 founder feedback)", () => {
     expect(text).not.toMatch(/across \d+ projects/u);
   });
 });
+
+describe("RECOMMEND collapse never fabricates groups (adversary F1)", () => {
+  // Identical titles do NOT imply one action for kinds other than
+  // context_trim: two cache actions on the same operation with different
+  // models, or two batch actions from different sources, are genuinely
+  // different recommendations and must keep their own ranks.
+  function connectedCall(
+    id: string,
+    source: string,
+    model: string,
+    fingerprint: string | undefined,
+    batchEligible: boolean,
+    hour: number
+  ): UsageRecord {
+    return {
+      id,
+      timestamp: `2026-08-11T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      source: { id: source, name: source, provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model,
+      operation: "research_summary",
+      inputTokens: 20_000,
+      outputTokens: 2_000,
+      amountUsd: 12.5,
+      costConfidence: "estimated",
+      usageGranularity: "call",
+      workloadSemantics: {
+        ...(fingerprint !== undefined ? { stableInputFingerprint: fingerprint } : {}),
+        ...(batchEligible ? { batchEligible: true } : {})
+      }
+    } as UsageRecord;
+  }
+
+  it("two cache actions on the same operation but different models never merge", () => {
+    // Same operation → identical "Cache repeated research_summary calls"
+    // titles; different model+fingerprint → two distinct cache actions.
+    const records = [
+      connectedCall("a-1", "api-a", "gpt-5.5", "fp-alpha", false, 1),
+      connectedCall("a-2", "api-a", "gpt-5.5", "fp-alpha", false, 2),
+      connectedCall("a-3", "api-a", "gpt-5.5", "fp-alpha", false, 3),
+      connectedCall("b-1", "api-a", "gpt-5.5-mini", "fp-beta", false, 4),
+      connectedCall("b-2", "api-a", "gpt-5.5-mini", "fp-beta", false, 5),
+      connectedCall("b-3", "api-a", "gpt-5.5-mini", "fp-beta", false, 6)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), { records, color: false });
+    expect(text.match(/Cache repeated research_summary calls/gu)?.length).toBe(2);
+    expect(text).not.toMatch(/across \d+ projects/u);
+    expect(text).not.toContain("this project");
+  });
+
+  it("two batch actions from different sources never merge", () => {
+    const records = [
+      connectedCall("s1-1", "source-one", "gpt-5.5", undefined, true, 1),
+      connectedCall("s1-2", "source-one", "gpt-5.5", undefined, true, 2),
+      connectedCall("s1-3", "source-one", "gpt-5.5", undefined, true, 3),
+      connectedCall("s2-1", "source-two", "gpt-5.5", undefined, true, 4),
+      connectedCall("s2-2", "source-two", "gpt-5.5", undefined, true, 5),
+      connectedCall("s2-3", "source-two", "gpt-5.5", undefined, true, 6)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), { records, color: false });
+    expect(text.match(/Move research_summary calls to the Batch API/gu)?.length).toBe(2);
+    expect(text).not.toMatch(/across \d+ projects/u);
+    expect(text).not.toContain("this project");
+  });
+});

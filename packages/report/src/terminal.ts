@@ -1372,15 +1372,29 @@ type CollapsedCutEntry = {
 };
 
 /**
- * Group same-kind, same-headline actions (the per-project fan-out of ONE
- * candidate action, e.g. "Investigate cumulative context in claude-code ·
- * <project>" × 5). Only a repeat collapses; ordering keeps each entry at its
- * first member's rank. Pure display grouping — no math is altered.
+ * Group the per-project fan-out of ONE candidate action, e.g. "Investigate
+ * cumulative context in claude-code · <project>" × 5. Only a repeat
+ * collapses; ordering keeps each entry at its first member's rank. Pure
+ * display grouping — no math is altered.
+ *
+ * DELIBERATELY restricted to kind === "context_trim": that is the only kind
+ * whose builder fans one candidate out per (agent, project) with the project
+ * as a " · " title suffix, so members provably share one action and one
+ * agent. Other kinds can produce IDENTICAL titles for genuinely DIFFERENT
+ * actions — two `cache` actions on the same operation but different
+ * model/fingerprint, two `batch` actions from different sources — and
+ * merging those would fabricate a group ("across 2 projects — this project …
+ * · this project …") and quote one member's guidance for both. Do not
+ * generalize this key without a per-kind proof like context_trim's.
  */
 function collapseRepeatedCutActions(actions: readonly CutAction[]): CollapsedCutEntry[] {
   const entries: CollapsedCutEntry[] = [];
   const byKey = new Map<string, CollapsedCutEntry>();
   for (const action of actions) {
+    if (action.kind !== "context_trim") {
+      entries.push({ sharedTitle: action.title, members: [action] });
+      continue;
+    }
     const sharedTitle = action.title.split(" · ")[0]!;
     const key = `${action.kind}::${action.impactBasis}::${sharedTitle}`;
     const existing = byKey.get(key);
