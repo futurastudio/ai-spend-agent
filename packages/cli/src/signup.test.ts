@@ -1061,3 +1061,21 @@ describe("surface contracts (QA 11-12)", () => {
     expect(everyLine).not.toContain("nothing else left this machine");
   });
 });
+
+describe("home state directory permissions (cold-start audit NEW-B1)", () => {
+  it("creates ~/.aibill 0700 even under a permissive umask", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-signup-mode-"));
+    const filePath = signupStateFilePath(home);
+    const previousUmask = process.umask(0o022);
+    try {
+      expect(await writeSignupState(filePath, { version: 1, status: "deferred", askCount: 0 })).toBe(true);
+    } finally {
+      process.umask(previousUmask);
+    }
+    if (process.platform !== "win32") {
+      const { lstat } = await import("node:fs/promises");
+      const info = await lstat(join(home, ".aibill"));
+      expect(info.mode & 0o077).toBe(0);
+    }
+  });
+});

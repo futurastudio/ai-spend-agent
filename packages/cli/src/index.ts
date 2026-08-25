@@ -3129,24 +3129,40 @@ function expansionFreshness(snapshot: ExpansionSnapshot, now: Date): string {
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
   const existing = await readActivitySnapshot({ cacheDirectory });
   if (existing.status !== "error") return;
-  // A pre-created but EMPTY cache directory holds nothing to preserve —
-  // typically a user-made dir with default (non-0700) permissions. Init's
-  // own create path re-validates and tightens it to 0700, so proceeding is
-  // safe; only a directory with actual contents aborts (shipped-audit fix).
-  if (existing.code === "unsafe_directory" && await isEmptyRealDirectory(dirname(activitySnapshotCachePath({
+  const cacheDirectoryPath = dirname(activitySnapshotCachePath({
     ...(cacheDirectory ? { cacheDirectory } : {})
-  })))) {
+  }));
+  // A missing or pre-created-but-EMPTY cache directory holds nothing to
+  // preserve — typically a first run whose home state was stamped before
+  // any cache existed, or a user-made dir with default (non-0700)
+  // permissions. Init's own create path re-validates and tightens it to
+  // 0700, so proceeding is safe; only a directory with actual contents
+  // aborts (shipped-audit fix; cold-start audit NEW-B1: the old check
+  // required cache/ to EXIST, so first runs dead-ended here).
+  if (existing.code === "unsafe_directory" && await isMissingOrEmptyRealDirectory(cacheDirectoryPath)) {
     return;
   }
+  // NEW-B1(d): name the path and the one-line rescue — "remove the cache
+  // explicitly" with no path was unactionable.
+  const parentPath = dirname(cacheDirectoryPath);
+  const rescue = existing.code === "unsafe_directory"
+    ? ` One-line rescue: chmod 700 ${parentPath} ${cacheDirectoryPath} — then rerun init.`
+    : ` Remove it explicitly before rebuilding it.`;
   throw new Error(
-    `Existing private activity cache is ${existing.code.replaceAll("_", " ")}; ` +
-    "it was preserved and init stopped. Remove the cache explicitly before rebuilding it."
+    `Existing private activity cache (${cacheDirectoryPath}) is ${existing.code.replaceAll("_", " ")}; ` +
+    `it was preserved and init stopped.${rescue}`
   );
 }
 
-async function isEmptyRealDirectory(path: string): Promise<boolean> {
+async function isMissingOrEmptyRealDirectory(path: string): Promise<boolean> {
+  let info;
   try {
-    const info = await lstat(path);
+    info = await lstat(path);
+  } catch (error) {
+    // Not there yet: nothing to preserve, init's create path builds it 0700.
+    return isNodeError(error, "ENOENT");
+  }
+  try {
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
     return (await readdir(path)).length === 0;
   } catch {

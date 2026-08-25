@@ -796,3 +796,25 @@ describe("npx-form command strings (0.9.3 — founder hit 'command not found')",
     }
   });
 });
+
+describe("home state directory permissions (cold-start audit NEW-B1)", () => {
+  it("creates ~/.aibill 0700 even under a permissive umask", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-telemetry-mode-"));
+    const filePath = telemetryStateFilePath(home);
+    const previousUmask = process.umask(0o022);
+    try {
+      expect(await writeTelemetryState(filePath, {
+        version: 1,
+        installId: "6f9619ff-8b86-4d01-b42d-00cf4fc964ff",
+        enabled: true
+      })).toBe(true);
+    } finally {
+      process.umask(previousUmask);
+    }
+    if (process.platform !== "win32") {
+      const { lstat } = await import("node:fs/promises");
+      const info = await lstat(join(home, ".aibill"));
+      expect(info.mode & 0o077).toBe(0);
+    }
+  });
+});

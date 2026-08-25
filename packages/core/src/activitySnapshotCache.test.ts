@@ -531,3 +531,52 @@ describe("activity snapshot cache dual-write (C-lane §2.1/QA-12b)", () => {
     expect(v1Raw.refresh.status).toBe("error");
   });
 });
+
+describe("~/.aibill 755 self-heal (cold-start audit NEW-B1)", () => {
+  // 0.9.2's signup/telemetry writers created ~/.aibill without a mode; under
+  // the default umask the guard then refused it forever. A directory holding
+  // ONLY aibill's own state files is provably ours: tighten to 0700, proceed.
+  it("heals a 755 directory containing only aibill state files and proceeds", async () => {
+    const syntheticHome = await mkdtemp(join(tmpdir(), "aibill-heal-home-"));
+    const aibillDirectory = join(syntheticHome, ".aibill");
+    await mkdir(aibillDirectory, { mode: 0o755 });
+    await chmod(aibillDirectory, 0o755); // explicit: unaffected by the test umask
+    await writeFile(join(aibillDirectory, "signup.json"), "{}\n", "utf8");
+    await writeFile(join(aibillDirectory, "telemetry.json"), "{}\n", "utf8");
+
+    await expect(readActivitySnapshot({ homeDirectory: syntheticHome })).resolves.toEqual({
+      status: "missing"
+    });
+    const healed = await lstat(aibillDirectory);
+    expect(healed.mode & 0o077).toBe(0);
+  });
+
+  it("still refuses a 755 directory holding anything that is not ours", async () => {
+    const syntheticHome = await mkdtemp(join(tmpdir(), "aibill-noheal-home-"));
+    const aibillDirectory = join(syntheticHome, ".aibill");
+    await mkdir(aibillDirectory, { mode: 0o755 });
+    await chmod(aibillDirectory, 0o755);
+    await writeFile(join(aibillDirectory, "signup.json"), "{}\n", "utf8");
+    await writeFile(join(aibillDirectory, "keep.txt"), "not ours\n", "utf8");
+
+    await expect(readActivitySnapshot({ homeDirectory: syntheticHome })).resolves.toEqual({
+      status: "error",
+      code: "unsafe_directory"
+    });
+    const untouched = await lstat(aibillDirectory);
+    expect(untouched.mode & 0o777).toBe(0o755);
+  });
+
+  it("refuses when a subdirectory exists even if named like our files", async () => {
+    const syntheticHome = await mkdtemp(join(tmpdir(), "aibill-subdir-home-"));
+    const aibillDirectory = join(syntheticHome, ".aibill");
+    await mkdir(aibillDirectory, { mode: 0o755 });
+    await chmod(aibillDirectory, 0o755);
+    await mkdir(join(aibillDirectory, "signup.json"));
+
+    await expect(readActivitySnapshot({ homeDirectory: syntheticHome })).resolves.toEqual({
+      status: "error",
+      code: "unsafe_directory"
+    });
+  });
+});

@@ -3145,7 +3145,13 @@ describe("minimal CLI vertical slice", () => {
     process.env.AIBILL_CACHE_DIR = unsafeCache;
     await expect(
       runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe-"))], { homeDirectory: statuslineHome })
-    ).rejects.toThrow("Existing private activity cache is unsafe directory");
+    ).rejects.toThrow(
+      // NEW-B1(d): the refusal names the cache path and the one-line rescue.
+      `Existing private activity cache (${unsafeCache}) is unsafe directory`
+    );
+    await expect(
+      runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe2-"))], { homeDirectory: statuslineHome })
+    ).rejects.toThrow("One-line rescue: chmod 700 ");
     await expect(readFile(join(unsafeCache, "stale-file.json"), "utf8")).resolves.toBe("{}");
   });
 

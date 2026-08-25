@@ -215,7 +215,10 @@ export async function readTelemetryState(filePath: string): Promise<TelemetrySta
 
 export async function writeTelemetryState(filePath: string, state: TelemetryState): Promise<boolean> {
   try {
-    await mkdir(dirname(filePath), { recursive: true });
+    // 0o700 (NEW-B1): under the default umask a modeless mkdir left
+    // ~/.aibill at 755, which the private-cache guard then refused —
+    // dead-ending `init` on every fresh machine after the notice stamp.
+    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${filePath}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
     await rename(temporaryPath, filePath);

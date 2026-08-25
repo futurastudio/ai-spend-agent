@@ -42,6 +42,7 @@ const fakeTty = (stream) => {
 };
 fakeTty(process.stdin);
 fakeTty(process.stdout);
+if (process.platform !== "win32") process.umask(0o022);
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const target = String(url);
@@ -308,6 +309,42 @@ describe("ask-path resilience (cold-start audit NEW-B2 / PC-4 / PC-5)", () => {
       };
       expect(state.status).toBe("deferred");
       expect(state.askCount).toBe(1);
+    }
+  );
+});
+
+describe("cold-start funnel (audit NEW-B1): bare run stamps home state, init still works", () => {
+  it(
+    "fresh HOME + umask 022: skip the ask (state written), then init succeeds and everything is 0700",
+    { timeout: 60_000 },
+    async () => {
+      const run = await startCli();
+      await run.waitFor(signupCopy.askFooter);
+      run.write("\r\r");
+      await run.waitFor("Next");
+      expect(await run.waitForExit()).toBe(0);
+      // The first run stamped ~/.aibill (signup + telemetry notice state).
+      const { lstat } = await import("node:fs/promises");
+      const aibillInfo = await lstat(join(run.home, ".aibill"));
+      if (process.platform !== "win32") expect(aibillInfo.mode & 0o077).toBe(0);
+
+      // The funnel's second command — 0.9.2 dead-ended here forever.
+      const projectDir = await mkdtemp(join(tmpdir(), "coldstart-project-"));
+      const init = spawn(process.execPath, [cliEntry, "init", "--path", projectDir], {
+        env: { ...process.env, HOME: run.home, USERPROFILE: run.home, NO_COLOR: "1" } as NodeJS.ProcessEnv,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      let initOutput = "";
+      init.stdout.on("data", (chunk: Buffer) => { initOutput += chunk.toString("utf8"); });
+      init.stderr.on("data", (chunk: Buffer) => { initOutput += chunk.toString("utf8"); });
+      const initExit = await new Promise<number | null>((resolve) => { init.on("exit", resolve); });
+      expect(initExit, initOutput).toBe(0);
+      expect(initOutput).toContain("aibill init");
+      expect(initOutput).not.toContain("unsafe directory");
+      if (process.platform !== "win32") {
+        const cacheInfo = await lstat(join(run.home, ".aibill", "cache"));
+        expect(cacheInfo.mode & 0o077).toBe(0);
+      }
     }
   );
 });
