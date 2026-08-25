@@ -941,3 +941,64 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).not.toContain("anthropic|openai");
   });
 });
+
+describe("RECOMMEND grouped collapse (0.9.3 founder feedback)", () => {
+  // Five near-identical "Investigate cumulative context in claude-code ·
+  // <project>" entries (only the amount changed) collapse into ONE grouped
+  // recommendation with per-project amounts; different-kind items follow.
+  function contextRecord(project: string, index: number, amountUsd: number): UsageRecord {
+    return {
+      id: `local-ctx-${project}-${index}`,
+      timestamp: "2026-08-11T00:00:00.000Z",
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model: "claude-opus-4-8",
+      inputTokens: 150_000,
+      outputTokens: 4_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  it("collapses the per-project fan-out of one action kind into one grouped entry", () => {
+    const projects: Array<[string, number]> = [
+      ["agent-finops", 1274.2],
+      ["action-verifier", 408.4],
+      ["tilden-web", 99.9],
+      ["glance-macos", 55.5],
+      ["tiktok-pipeline", 22.2]
+    ];
+    const records = projects.map(([project, amount], index) => contextRecord(project, index, amount));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs"
+    });
+    const normalized = normalizeWhitespace(text);
+
+    // ONE grouped headline, not five numbered near-duplicates.
+    expect(text.match(/Investigate cumulative context in claude-code/gu)).toHaveLength(1);
+    expect(text).not.toContain("2. Investigate cumulative context");
+    // The across-line carries per-project detail, largest first, ~rounded.
+    expect(normalized).toContain("across 5 projects — agent-finops ~$1,274 · action-verifier ~$408 · tilden-web ~$100 · glance-macos ~$56 · + 1 more");
+    // Shared guidance renders once; combined grounding sums the aggregates.
+    expect(text).toContain("Inspect per-session context");
+    expect(normalized).toContain("5 daily aggregates");
+    // Observed-value discipline: no modeled ~$/mo is invented for the group.
+    expect(text).toContain("reduction unproven");
+  });
+
+  it("a single-project action renders exactly as before (no grouping artifacts)", () => {
+    const records = [contextRecord("agent-finops", 0, 1274.2)];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs"
+    });
+    expect(text).toContain("Investigate cumulative context in claude-code · agent-finops");
+    expect(text).not.toMatch(/across \d+ projects/u);
+  });
+});
