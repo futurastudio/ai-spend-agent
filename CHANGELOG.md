@@ -5,6 +5,25 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.4 — 2026-08-25
+
+Pricing correctness for Kimi, at official list rates as of 2026-08-25.
+
+- Fixed a silent mispricing: `kimi-k2.7-code` (and `-highspeed`) matched the
+  legacy K2 rule by prefix and was priced ~40% low ($0.60/$2.50 instead of
+  the published $0.95/$4.00). The legacy rule now matches only the models it
+  is true for (`kimi-k2`, `kimi-k2-*`, `moonshot-*`).
+- Added verified list rates from platform.kimi.ai: `kimi-k3` ($3/$15,
+  cache-hit $0.30 — also matches the `kimi-k3[1m]` context-suffix form),
+  `kimi-k2.7-code` ($0.95/$4, hit $0.19), `kimi-k2.7-code-highspeed`
+  ($1.90/$8, hit $0.38), `kimi-k2.6` ($0.95/$4, hit $0.16).
+- Deliberately NOT added, staying on the honest unpriced path: first-party
+  Qwen commercial rates (the canonical price list is console-gated;
+  aggregator numbers have been wrong for this family) and `deepseek-v4-*`
+  (published rates are time-of-day — flattening them would be wrong by up
+  to 2x; deferred to timestamp-aware pricing). Unknown models keep
+  rendering labeled and unpriced, never guessed.
+
 ## 0.9.3 — 2026-08-25
 
 The founder-test patch: fixes from the first production run of 0.9.2 and the
