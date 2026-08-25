@@ -5,6 +5,37 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.5 — 2026-08-25
+
+Terminal polish from direct founder feedback ("really hard to read… I wonder
+if we can have the text aligned"). Display-only: no change to data, math,
+scanning, or file contents.
+
+- Aligned `report` and `report-card` terminal summaries: both now render in
+  the receipt's visual language — a proper header, one shared label column
+  (Scope/Path · Markdown · HTML · Total · Privacy; Receipt · Data ·
+  Privacy), dot separators, and a Next block whose commands pad to one
+  shared description column instead of drifting per row. Long paths never
+  wrap mid-path (descriptions drop gracefully below), and narrow terminals
+  (<58 columns) stack label over value like the receipt does.
+- De-duplicated the receipt caption: when observed value and observed
+  exposure agree within rounding noise (≤ $0.05 — sub-cent per-action
+  rounding put $2,281.89 next to $2,281.87 on a live card), the caption and
+  the SVG card print ONE number with combined phrasing ("effectively all of
+  it exposure to investigate"). Genuinely different figures keep both
+  numbers, and "savings unavailable without a matched counterfactual"
+  survives verbatim.
+- Broad-root pointers, same doctrine as 0.9.4: a `--full` readout printed
+  from a broad root now cd-prefixes its project-scoped pointers
+  (`cd <project> && npx aibill apply …`, apply-artifact, watch, connect)
+  instead of advertising bare commands that friendly-refuse right where
+  they were printed. Project folders keep the bare forms.
+- Explicit `--path /` or `--path /etc` on report/report-card now gets the
+  friendly guard voice up front ("…writes its report files into the folder
+  it points at") instead of dying at write time with a wrapped raw error
+  (`EROFS`, "Refusing to use /etc…"). Home keeps running machine-wide; an
+  explicit absolute `--out` elsewhere still works.
+
 ## 0.9.4 — 2026-08-25
 
 Pricing correctness for Kimi (official list rates as of 2026-08-25), and
