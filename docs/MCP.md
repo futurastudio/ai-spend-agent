@@ -40,11 +40,13 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 
 ## Quick start from npm
 
-> **AI-client data boundary for every setup below:** aibill sends no telemetry
-> and does not upload transcript contents. The selected structured result of a
-> tool you invoke is returned to the configured AI client and then follows that
-> client's data-handling policy. Choose the client, account, and project scope
-> accordingly.
+> **AI-client data boundary for every setup below:** this MCP server sends no
+> telemetry and does not upload transcript contents. The selected structured
+> result of a tool you invoke is returned to the configured AI client and then
+> follows that client's data-handling policy. Choose the client, account, and
+> project scope accordingly. (The aibill CLI's separate anonymous command
+> counts are disclosed at first run and end with `aibill telemetry off` — see
+> [`TELEMETRY.md`](TELEMETRY.md).)
 
 ### Codex
 
@@ -213,9 +215,11 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   prevents a cloned repository from declaring its own connected totals or
   source-status truth axes trusted. Reset, sample, and local-log syncs
   invalidate the receipt.
-- aibill itself does not upload local transcript contents or send telemetry.
-  An MCP tool's selected structured result is returned to the invoking AI
-  client and follows that client's data-handling policy.
+- This MCP server does not upload local transcript contents or send
+  telemetry; the aibill CLI's separate anonymous command counts are disclosed
+  at first run and end with `aibill telemetry off`. An MCP tool's selected
+  structured result is returned to the invoking AI client and follows that
+  client's data-handling policy.
 - Provider tools are read-only against provider APIs.
 - Provider credentials must be inherited environment variables referenced as
   `env:NAME`; raw keys are rejected before any network request.

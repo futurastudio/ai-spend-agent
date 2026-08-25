@@ -66,7 +66,9 @@ describe("public-boundary internal-only tree directories", () => {
     "docs/qa-handoff/CLI_CAPTURE_DESIGN_ADDENDUM_2026-08-24.md",
     "docs/qa-handoff/V092_FINAL_QA_VERDICT_IMPLEMENTER_RESPONSE.md",
     "docs/qa-handoff/nested/notes.md",
-    "docs/gtm/private-launch.md"
+    "docs/gtm/private-launch.md",
+    "docs/QA-Handoff/RECASED.md",
+    "DOCS/GTM/plan.md"
   ];
   for (const path of internalOnlyPaths) {
     it(`rejects internal-only tree path ${path}`, () => {

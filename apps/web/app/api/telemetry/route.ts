@@ -1,9 +1,9 @@
 export const runtime = "nodejs";
 
 // POST /api/telemetry — ingest endpoint for the CLI's disclosed opt-out usage
-// telemetry (model per docs/qa-handoff/CLI_TELEMETRY_RESEARCH.md: aggregate
-// only, no content, no paths, no PII; the CLI discloses on the receipt line
-// and honors DO_NOT_TRACK).
+// telemetry (model: aggregate only, no content, no paths, no PII; the CLI
+// discloses on the receipt line and honors DO_NOT_TRACK — user-facing
+// contract in docs/TELEMETRY.md).
 //
 // AGGREGATE-ONLY INVARIANT — ENFORCED SERVER-SIDE, IN THIS FILE:
 // every stored field is an enum, a bounded pattern (uuid v4 / x.y.z version /

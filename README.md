@@ -651,8 +651,9 @@ current form records interest, not access to a signed download.
   from all output and persisted state.
 - **Launch-list signup is the other disclosed exception — and the only
   consent-gated one.** `npx aibill signup <email>` — and the single optional ask that
-  fills the first-run scan wait — sends exactly one JSON payload,
-  `{"email":"you@work.com","ref":"cli-signup"}`, to
+  fills the first-run scan wait — sends exactly one JSON payload —
+  `{"email":"you@work.com","ref":"cli-signup"}` from the command,
+  `"ref":"cli-receipt"` from the scan-wait ask — to
   `https://asktilden.com/api/waitlist`, and only after the CLI prints that
   literal payload and you type `y` (the consent step always renders after
   your receipt). Skipping costs two empty Enters (one nudge between);

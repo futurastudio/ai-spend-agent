@@ -24,7 +24,7 @@ function validEvent(overrides: Record<string, unknown> = {}): Record<string, unk
   return {
     installId: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
     command: "receipt",
-    version: "0.9.1",
+    version: "0.9.2",
     os: "darwin",
     arch: "arm64",
     ci: false,
@@ -109,7 +109,7 @@ describe("telemetry API", () => {
       {
         install_id: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
         command: "receipt",
-        version: "0.9.1",
+        version: "0.9.2",
         os: "darwin",
         arch: "arm64",
         ci: false,
@@ -120,7 +120,7 @@ describe("telemetry API", () => {
       {
         install_id: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
         command: "improve",
-        version: "0.9.1",
+        version: "0.9.2",
         os: "darwin",
         arch: "arm64",
         ci: false,

@@ -40,11 +40,14 @@ export const internalOnlyTreeDirectories = ["docs/qa-handoff", "docs/gtm"];
 
 /**
  * Return true when a tracked path sits under one of the internal-only tree
- * directories (the directory itself included).
+ * directories (the directory itself included). Case-insensitive, matching
+ * the generic directory patterns above — a re-cased directory must not
+ * slip through on a case-insensitive filesystem.
  */
 export function isInternalOnlyTreePath(path) {
+  const normalized = path.toLowerCase();
   return internalOnlyTreeDirectories.some(
-    (dir) => path === dir || path.startsWith(`${dir}/`)
+    (dir) => normalized === dir || normalized.startsWith(`${dir}/`)
   );
 }
 
