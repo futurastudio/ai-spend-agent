@@ -4,7 +4,9 @@ import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   findDeveloperPathLeaks,
-  isForbiddenPublicPath
+  internalOnlyTreeDirectories,
+  isForbiddenPublicPath,
+  isInternalOnlyTreePath
 } from "./public-boundary-rules.mjs";
 
 const root = resolve(import.meta.dirname, "..");
@@ -16,6 +18,16 @@ const tracked = execFileSync(
   encoding: "utf8"
   }
 ).split("\0").filter(Boolean);
+const internalOnlyFiles = tracked.filter(isInternalOnlyTreePath);
+if (internalOnlyFiles.length > 0) {
+  throw new Error(
+    `internal-only paths must never ride a release branch: ` +
+    `${internalOnlyTreeDirectories.map((dir) => `${dir}/`).join(" and ")} hold ` +
+    `private QA-handoff and GTM material that must not enter the public tree. ` +
+    `Remove: ${internalOnlyFiles.join(", ")}`
+  );
+}
+
 const forbiddenFiles = tracked.filter((path) => (
   isForbiddenPublicPath(path) ||
   /(^|\/)\.env($|\.)/.test(path) && !path.endsWith(".env.example")
@@ -45,6 +57,7 @@ if (localPathLeaks.length > 0) {
 console.log(JSON.stringify({
   status: "pass",
   trackedFilesChecked: tracked.length,
+  internalOnlyTreePaths: 0,
   internalPathsTracked: 0,
   developerHomeLeaks: 0,
   symbolicLinks: 0

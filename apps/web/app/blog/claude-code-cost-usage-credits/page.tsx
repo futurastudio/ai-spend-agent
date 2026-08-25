@@ -38,7 +38,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-20",
-          dateModified: "2026-08-08",
+          dateModified: "2026-08-24",
           mainEntityOfPage: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -159,14 +159,24 @@ export default function Page() {
         <Reveal>
           <H2>Local-first, because it&apos;s your evidence</H2>
           <P>
-            Default transcript analysis runs on your machine with no signup,
-            telemetry, or upload. A deliberate provider connection sends the
+            Default transcript analysis runs on your machine with no signup:
+            transcripts, prompts, file names, and dollar amounts are never
+            uploaded. The CLI&apos;s one disclosed signal is anonymous command
+            counts — no code, no prompts, no file names — announced by a
+            printed notice before the first byte and ended by{" "}
+            <span className="font-mono text-ink">aibill telemetry off</span>{" "}
+            or DO_NOT_TRACK. A deliberate provider connection sends the
             referenced credential only to that provider&apos;s official API; an
             explicit MCP result goes only to the AI client you invoked. The code
             is MIT-licensed and open source. aibill never sits in the inference path and never stores, prints, or proxies provider credentials. The
             meters are multiplying; know which number you are looking at before
             acting on it.
           </P>
+          <p className="mt-4 text-sm leading-relaxed text-faint">
+            Correction (August 24, 2026): an earlier version of this post said
+            the default run involves no telemetry. Since v0.9.2 the CLI sends
+            disclosed, anonymous command counts as described above.
+          </p>
         </Reveal>
       </article>
     </PageShell>

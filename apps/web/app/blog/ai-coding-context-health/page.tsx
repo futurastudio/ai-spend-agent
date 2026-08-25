@@ -44,7 +44,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-29",
-          dateModified: "2026-08-03",
+          dateModified: "2026-08-24",
           mainEntityOfPage: `${SITE_URL}/blog/ai-coding-context-health`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -160,14 +160,24 @@ export default function Page() {
         <Reveal>
           <H2>Privacy depends on the surface</H2>
           <P>
-            Terminal and Glance stay on the machine and aibill sends no
-            telemetry. If you explicitly invoke an MCP-backed skill, the
-            selected structured result is returned to that AI client and is
-            governed by the client&apos;s data policy. That boundary is more
-            useful than a vague promise: you can choose the terminal when you
-            want no AI-client handoff and the plugin when conversational
-            explanation is worth it.
+            Terminal and Glance analysis stays on the machine: transcripts,
+            prompts, file names, and dollar amounts are never uploaded. The
+            CLI counts which commands run — anonymous, never your data or
+            content — after a printed first-run notice, and{" "}
+            <span className="font-mono text-ink">aibill telemetry off</span>{" "}
+            (or DO_NOT_TRACK) ends it. If you explicitly invoke an MCP-backed
+            skill, the selected structured result is returned to that AI
+            client and is governed by the client&apos;s data policy. That
+            boundary is more useful than a vague promise: you can choose the
+            terminal when you want no AI-client handoff and the plugin when
+            conversational explanation is worth it.
           </P>
+          <p className="mt-4 text-sm leading-relaxed text-faint">
+            Correction (August 24, 2026): an earlier version of this post said
+            aibill sends no telemetry. Since v0.9.2 the CLI sends disclosed,
+            anonymous command counts as described above; the MCP server still
+            sends none.
+          </p>
         </Reveal>
       </article>
     </PageShell>

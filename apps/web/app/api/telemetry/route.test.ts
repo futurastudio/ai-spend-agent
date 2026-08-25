@@ -8,17 +8,29 @@ function uniqueIp(): string {
   return `203.0.113.${nextIpOctet++}`;
 }
 
+// The route rejects timestamps outside [now - 30d, now + 48h], so fixtures
+// compute a recent ts at load instead of hard-coding a date that would rot
+// out of the window. One hour of margin keeps runtime drift irrelevant.
+const HOUR_MS = 60 * 60 * 1000;
+function isoAt(offsetMs: number): string {
+  return new Date(Date.now() + offsetMs).toISOString();
+}
+const RECENT_TS = isoAt(-HOUR_MS);
+// Zone-required short form (no millis) — same 20-char length the byte-cap
+// math below has always assumed.
+const RECENT_TS_SECONDS = RECENT_TS.replace(/\.\d{3}Z$/, "Z");
+
 function validEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     installId: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
     command: "receipt",
-    version: "0.9.1",
+    version: "0.9.2",
     os: "darwin",
     arch: "arm64",
     ci: false,
     durationBucket: "lt5s",
     ok: true,
-    ts: "2026-08-24T12:00:00.000Z",
+    ts: RECENT_TS,
     ...overrides,
   };
 }
@@ -32,7 +44,7 @@ function minimalEvent(): Record<string, unknown> {
     os: "linux",
     arch: "x64",
     durationBucket: "lt1s",
-    ts: "2026-08-24T12:00:00Z",
+    ts: RECENT_TS_SECONDS,
   });
 }
 
@@ -97,24 +109,24 @@ describe("telemetry API", () => {
       {
         install_id: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
         command: "receipt",
-        version: "0.9.1",
+        version: "0.9.2",
         os: "darwin",
         arch: "arm64",
         ci: false,
         duration_bucket: "lt5s",
         ok: true,
-        ts: "2026-08-24T12:00:00.000Z",
+        ts: RECENT_TS,
       },
       {
         install_id: "5f2b0c4e-6c1a-4b9e-8f3d-2a7c9e1b4d6f",
         command: "improve",
-        version: "0.9.1",
+        version: "0.9.2",
         os: "darwin",
         arch: "arm64",
         ci: false,
         duration_bucket: "gte30s",
         ok: false,
-        ts: "2026-08-24T12:00:00.000Z",
+        ts: RECENT_TS,
       },
     ]);
   });
@@ -185,6 +197,8 @@ describe("telemetry API", () => {
     ["ts has impossible date parts", { ts: "2026-13-45T99:99:99Z" }],
     ["ts lacks a zone", { ts: "2026-08-24T12:00:00" }],
     ["ts is not a string", { ts: 1724500000 }],
+    ["ts is more than 48h in the future", { ts: isoAt(48 * HOUR_MS + HOUR_MS) }],
+    ["ts is more than 30d in the past", { ts: isoAt(-(30 * 24 * HOUR_MS + HOUR_MS)) }],
   ])("rejects 422 when %s", async (_name, overrides) => {
     const fetchMock = stubSupabase();
 
@@ -193,6 +207,19 @@ describe("telemetry API", () => {
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["just inside the 48h future bound", isoAt(48 * HOUR_MS - HOUR_MS)],
+    ["just inside the 30d past bound", isoAt(-(30 * 24 * HOUR_MS - HOUR_MS))],
+  ])("accepts a ts %s", async (_name, ts) => {
+    const fetchMock = stubSupabase();
+
+    const response = await post({ events: [validEvent({ ts })] });
+
+    expect(response.status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))[0].ts).toBe(ts);
   });
 
   it.each([
