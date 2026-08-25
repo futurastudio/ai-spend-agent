@@ -26,6 +26,14 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain('.modeled { fill: #fbbf24;');
     expect(svg).toContain('.cutImpact { fill: #fbbf24;');
     expect(svg).not.toContain("#4ade80");
+    // 0.9.5 brand retint: the card's ground joins the landing's warm
+    // green-black ladder; text styles above are deliberately untouched.
+    expect(svg).toContain('stop-color="#0C0D09"');
+    expect(svg).toContain('stop-color="#12140E"');
+    expect(svg).toContain('stroke="rgba(255,255,255,0.08)"');
+    expect(svg).not.toContain("#0b1020");
+    expect(svg).not.toContain("#121a33");
+    expect(svg).not.toContain("#26304f");
     expect(svg).not.toContain('class="save"');
     expect(svg).not.toContain('class="cutSave"');
     expect(svg).toContain("aibill · local-first · npx aibill");

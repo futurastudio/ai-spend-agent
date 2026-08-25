@@ -33,6 +33,9 @@ const CARD_HEIGHT = 400;
  * sharing the card can't leak who a spend belongs to.
  */
 export function generateReportCardSvg(input: ReportCardInput): string {
+  // 0.9.5 brand retint: the card ground joined the landing's warm
+  // green-black ladder (#0C0D09 -> #12140E gradient, white-alpha hairline
+  // stroke) replacing the off-brand indigo. Text and layout untouched.
   const { summary } = input;
   const cardTitle = input.mode === "demo" ? "AI RECEIPT · DEMO SAMPLE" : "AI RECEIPT";
   const ariaLabel = input.mode === "demo" ? "AI receipt demo sample" : "AI receipt";
@@ -82,8 +85,8 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="${ariaLabel}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0b1020"/>
-      <stop offset="100%" stop-color="#121a33"/>
+      <stop offset="0%" stop-color="#0C0D09"/>
+      <stop offset="100%" stop-color="#12140E"/>
     </linearGradient>
   </defs>
   <style>
@@ -98,7 +101,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
     .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
   </style>
   <rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="18" fill="url(#bg)"/>
-  <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="#26304f"/>
+  <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="rgba(255,255,255,0.08)"/>
 
   <text x="40" y="58" class="label">${cardTitle}</text>
 
