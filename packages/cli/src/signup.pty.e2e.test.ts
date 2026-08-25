@@ -209,11 +209,13 @@ describe("signup consent PTY rhythm (founder incident end-to-end)", () => {
       await run.waitFor(signupCopy.askFooter);
       run.write(email);
       await sleep(150);
-      // Held Enter: macOS key-repeat fires ~every 70ms. The first submits
+      // Held Enter: macOS key-repeat fires every ~35-80ms. 40ms writes keep
+      // each press safely inside the 75ms burst window even on a loaded CI
+      // runner (adversary SF3: 70ms left a 5ms margin). The first submits
       // the email; the rest are one burst that must be discarded whole.
       for (let press = 0; press < 12; press += 1) {
         run.write("\r");
-        await sleep(70);
+        await sleep(40);
       }
 
       await run.waitFor("[y/N]");
