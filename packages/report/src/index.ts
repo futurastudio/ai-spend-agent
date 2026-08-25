@@ -70,6 +70,12 @@ export type SpendReportInput = {
    * API-equivalent values are never added to the connected provider headline.
    */
   localFinancialRecords?: UsageRecord[];
+  /**
+   * Connected mode only: whether the separate local financial scan was
+   * complete. `unavailable` means the scan itself failed; it must not be
+   * rendered as an honest zero-record observation.
+   */
+  localFinancialCoverage?: "complete" | "partial" | "unavailable";
   /** Where the analyzed data came from. Sample is labeled non-finance-grade. */
   dataMode?: "sample" | "local_logs" | "connected_provider";
   /** Real dead-context findings (named items + config paths) for the apply artifact. */
@@ -518,7 +524,6 @@ function connectedReadoutLine(input: SpendReportInput, basis: ReportFinancialPre
 
 type ConnectedLocalFinancialAxis = {
   records: UsageRecord[];
-  coverage: LocalFinancialCoverage;
   summary: SpendSummary;
   value: string;
   detail: string;
@@ -534,42 +539,56 @@ function connectedLocalFinancialAxis(input: SpendReportInput): ConnectedLocalFin
       ))
     : [];
   const coverage = localFinancialCoverage(records);
+  const scanCoverage = input.localFinancialCoverage ?? (
+    coverage.missingRecords.length > 0 ? "partial" : "complete"
+  );
+  const summary = analyzeSpend(records);
+  if (scanCoverage === "unavailable") {
+    return {
+      records,
+      summary,
+      value: "Unavailable",
+      detail: "the local financial scan could not be completed; missing is not zero"
+    };
+  }
   if (records.length === 0) {
     return {
       records,
-      coverage,
-      summary: analyzeSpend(records),
-      value: "Not reported",
-      detail: "no readable local financial records were present"
+      summary,
+      value: scanCoverage === "partial" ? "Unavailable" : "Not reported",
+      detail: scanCoverage === "partial"
+        ? "local source coverage is incomplete; missing is not zero"
+        : "no local financial records were observed in readable sources"
     };
   }
   if (coverage.pricedRecords.length === 0) {
     return {
       records,
-      coverage,
-      summary: analyzeSpend(records),
+      summary,
       value: "Unavailable",
       detail: `${coverage.missingRecords.length} record${coverage.missingRecords.length === 1 ? " has" : "s have"} missing cost evidence; missing/null is not zero`
     };
   }
-  const partial = coverage.missingRecords.length > 0;
+  const partial = scanCoverage === "partial" || coverage.missingRecords.length > 0;
+  const partialDetail = coverage.missingRecords.length > 0
+    ? `${coverage.pricedRecords.length} priced and ${coverage.missingRecords.length} missing`
+    : `${coverage.pricedRecords.length} priced; local source coverage incomplete`;
   return {
     records,
-    coverage,
-    summary: analyzeSpend(records),
+    summary,
     value: formatUsd(coverage.amountUsd),
     detail: partial
-      ? `partial · ${coverage.pricedRecords.length} priced and ${coverage.missingRecords.length} missing; missing/null is not zero`
-      : `${coverage.pricedRecords.length} estimated local record${coverage.pricedRecords.length === 1 ? "" : "s"}`
+      ? `partial · ${partialDetail}; missing/null is not zero`
+      : `${coverage.pricedRecords.length} priced local record${coverage.pricedRecords.length === 1 ? "" : "s"}`
   };
 }
 
 function connectedFinancialAxesMarkdownLines(
   input: SpendReportInput,
-  providerBasis: ReportFinancialPresentationBasis
+  providerBasis: ReportFinancialPresentationBasis,
+  local: ConnectedLocalFinancialAxis
 ): string[] {
   if (input.dataMode !== "connected_provider") return [];
-  const local = connectedLocalFinancialAxis(input);
   return [
     "",
     "## Financial evidence by accounting basis (never blended)",
@@ -641,6 +660,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     ? []
     : [...(input.summary.insights ?? [])].sort(compareInsights);
   const isConnected = input.dataMode === "connected_provider";
+  const connectedLocalAxis = isConnected ? connectedLocalFinancialAxis(input) : undefined;
   const financialBasis = reportFinancialPresentationBasis(input);
   const reportRecords = input.allRecords ?? input.providerRecords ?? [];
   const financialAmountAvailable = financialBasis !== "connected_missing";
@@ -728,14 +748,11 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     "## Executive summary",
     "",
     `- ${headlineLabel}: ${headlineAmount}`,
-    ...(isConnected
-      ? (() => {
-          const local = connectedLocalFinancialAxis(input);
-          return [
-            `- Local API-equivalent value: ${local.value} — ${local.detail}`,
-            "- Basis boundary: provider-reported cost and API-equivalent value are shown separately and are never added."
-          ];
-        })()
+    ...(connectedLocalAxis
+      ? [
+          `- Local API-equivalent value: ${connectedLocalAxis.value} — ${connectedLocalAxis.detail}`,
+          "- Basis boundary: provider-reported cost and API-equivalent value are shown separately and are never added."
+        ]
       : []),
     `- Records analyzed: ${input.summary.recordCount}`,
     `- Overall confidence: ${input.summary.confidence}`,
@@ -779,7 +796,9 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     "## Evidence quality ledger",
     "",
     ...evidenceLedgerMarkdownLines(reportRecords),
-    ...connectedFinancialAxesMarkdownLines(input, financialBasis),
+    ...(connectedLocalAxis
+      ? connectedFinancialAxesMarkdownLines(input, financialBasis, connectedLocalAxis)
+      : []),
     "",
     "## Provider-by-provider live QA",
     "",

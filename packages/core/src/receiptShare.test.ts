@@ -71,6 +71,7 @@ describe("receipt share V0 aggregate contract", () => {
       currency: "USD",
       windowDays: 30,
       mode: "mixed",
+      transportEvidence: "client_supplied_aggregate",
       financials: resultCard.totals,
       providerCount: 2,
       recordCount: 12,
@@ -123,6 +124,14 @@ describe("receipt share V0 aggregate contract", () => {
     expect(receiptShareCardV0Schema.safeParse({
       ...valid,
       financials: { ...valid.financials, blendPolicy: "sum_everything" }
+    }).success).toBe(false);
+  });
+
+  it("cannot relabel a client-supplied aggregate as server-verified evidence", () => {
+    const valid = shareCard();
+    expect(receiptShareCardV0Schema.safeParse({
+      ...valid,
+      transportEvidence: "server_verified"
     }).success).toBe(false);
   });
 

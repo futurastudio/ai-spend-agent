@@ -4,6 +4,7 @@ import {
   resultCardTotalsSchema,
   type ResultCard
 } from "./resultCard.js";
+import { normalizeAibillEmailAddress } from "./emailAddress.js";
 
 /**
  * Post-launch transport groundwork only.
@@ -37,6 +38,8 @@ export const receiptShareCardV0Schema = z.object({
   windowDays: z.number().int().min(1).max(365),
   // Demo/sample payloads are intentionally ineligible for real delivery.
   mode: z.enum(["local-logs", "connected", "mixed"]),
+  /** Shape-checked client aggregate; never authenticated financial evidence. */
+  transportEvidence: z.literal("client_supplied_aggregate"),
   /** Canonical three-basis stack, including blended:null/never_blended. */
   financials: resultCardTotalsSchema,
   providerCount: z.number().int().positive().max(64),
@@ -59,14 +62,17 @@ export const receiptShareCardV0Schema = z.object({
   }
 });
 
-// Deliberately ASCII and single-line. The future route must additionally use
-// the already-waitlisted normalized address as its authorization identity.
+// The future route must additionally use the already-waitlisted normalized
+// address as its authorization identity.
 const receiptRecipientEmailV0Schema = z.string()
-  .trim()
-  .toLowerCase()
-  .min(3)
-  .max(254)
-  .regex(/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/u);
+  .transform((value, context) => {
+    const normalized = normalizeAibillEmailAddress(value);
+    if (!normalized) {
+      context.addIssue({ code: "custom", message: "Invalid bounded email address." });
+      return z.NEVER;
+    }
+    return normalized;
+  });
 
 export const receiptEmailRequestV0Schema = z.object({
   kind: z.literal(RECEIPT_EMAIL_REQUEST_V0_KIND),
@@ -102,6 +108,7 @@ export function buildReceiptShareCardV0(input: BuildReceiptShareCardV0Input): Re
     currency: "USD",
     windowDays: resultCard.windowDays,
     mode: resultCard.mode,
+    transportEvidence: "client_supplied_aggregate",
     financials: resultCard.totals,
     providerCount: input.providerCount,
     recordCount: input.recordCount,
@@ -130,9 +137,9 @@ export type ReceiptEmailDeliveryDecisionV0 =
   | { status: "accepted"; httpStatus: 202 };
 
 /**
- * Pure authorization policy for a future route. Counters must come from a
- * durable shared store; this function creates no in-memory limiter and has no
- * persistence or network side effects.
+ * Pure authorization policy for a future route. The route must evaluate and
+ * increment both counters atomically in a durable shared store; this function
+ * creates no in-memory limiter and has no persistence or network side effects.
  */
 export function decideReceiptEmailDeliveryV0(
   state: z.input<typeof receiptEmailDeliveryStateV0Schema>

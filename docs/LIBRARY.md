@@ -60,7 +60,9 @@ The source tree also exports `receiptShareCardV0Schema`,
 pure contracts only: there is no `push` command, email route, mail provider,
 upload, authentication flow, or persistence implementation.
 
-The card contract carries numeric aggregates only. Subscription commitment,
+The card contract carries numeric aggregates only and labels them
+`client_supplied_aggregate`; schema validation is not server authentication.
+Subscription commitment,
 API-equivalent value, and provider-billed cost remain three labeled bases with
 `blended: null` and `blendPolicy: "never_blended"`. It rejects sample cards,
 raw history, project/client/owner fields, client markup, arbitrary cut titles,
@@ -68,9 +70,10 @@ and more than three fixed-template modeled opportunities. The email request
 names the recipient plus aggregate card as data sent through a mail provider;
 the pure decision requires existing waitlist membership and the future route's
 durable counters to be below one send per email and ten per IP in 24 hours.
+Those checks and counter increments must be atomic in the future route.
 
 This does **not** make an email route safe or shipped. A real route still needs
-server-side rendering, shared durable limits, waitlist lookup, minimal and
+server-side rendering, atomic shared durable limits, waitlist lookup, minimal and
 documented provider retention, an explicit no-card-persistence test, and
 production abuse testing. Until those exist, aibill remains local-only unless
 the user invokes an already documented explicit provider sync.
