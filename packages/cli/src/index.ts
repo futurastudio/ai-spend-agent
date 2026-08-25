@@ -1076,9 +1076,11 @@ function quickstartNextSteps(
   }
   steps.push(
     mode === "demo"
-      // Every printed command must run as printed: the demo workspace does
-      // not exist yet, so the command creates it first (shipped-audit fix).
-      ? "mkdir -p ./demo-workspace && npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
+      // 0.9.4: report --sample runs as printed from ANY directory — broad
+      // roots write ./ai-spend-report.{md,html} machine-wide-style, project
+      // folders keep .ai-spend-agent/report.* (the old mkdir demo-workspace
+      // preamble is no longer needed for the command to run as printed).
+      ? "npx aibill report --sample     write a clearly labeled demo report right here"
       : "npx aibill report              write a shareable Markdown + HTML report"
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
@@ -1703,7 +1705,7 @@ function uploadsNothingLine(telemetryDisclosure: boolean | undefined, original: 
 }
 
 function noEvidenceResult(
-  surface: "receipt" | "watch" | "report-card",
+  surface: "receipt" | "watch" | "report-card" | "report",
   warnings: readonly string[],
   sinceDays: number,
   telemetryDisclosure?: boolean
@@ -1712,7 +1714,9 @@ function noEvidenceResult(
     ? "Watch has no financial baseline yet; no zero total or sample activity was recorded."
     : surface === "report-card"
       ? "No receipt was written because there is no supported financial evidence to summarize."
-      : `No supported AI usage evidence was found in the last ${sinceDays} days.`;
+      : surface === "report"
+        ? "No report was written because there is no supported financial evidence to summarize."
+        : `No supported AI usage evidence was found in the last ${sinceDays} days.`;
   return {
     exitCode: surface === "receipt" ? 0 : 1,
     stdout: surface === "receipt"
@@ -4692,26 +4696,43 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
-  // NEW-B3 + adversary F2: guard UNCONDITIONALLY. Even --sample writes
-  // project state into the root (resolveSafeStateDirectory below), so a
-  // broad root must refuse with the friendly guidance — the sample gate
-  // alone still leaked the raw "Refusing to scan" from home. report-card
-  // --sample differs: it writes only the SVG artifact and keeps its
-  // deliberate home exemption.
-  const rootGuard = await guardExactProjectRoot("report", args.path);
-  if (rootGuard) return rootGuard;
+  // 0.9.4: a broad root (home, /) runs MACHINE-WIDE — the same read-only
+  // transcript scanning as the bare receipt, no project state created, both
+  // report files written to the current directory. The report renders
+  // machine-wide content anyway (it lists every project), so the
+  // exact-project requirement was incoherent here: the receipt's own Next
+  // pointer led from home straight into a refusal. Only a bogus --path
+  // still gets the friendly guard; project folders behave exactly as
+  // before.
+  const machineWide = isBroadScanRoot(args.path);
+  if (!machineWide) {
+    const rootGuard = await guardExactProjectRoot("report", args.path);
+    if (rootGuard) return rootGuard;
+  }
   const rootPath = resolve(args.path);
 
   try {
     const sinceDays = args.sinceDays ?? 30;
     if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
-    const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
+    // Machine-wide mode NEVER creates project state at the broad root — the
+    // only writes are the two report files below (plus ~/.aibill home state
+    // owned by other subsystems).
+    const stateDir = machineWide ? undefined : await resolveSafeStateDirectory(rootPath, { create: true });
     // Like Apply, an explicit sample report is a strict privacy boundary. It
     // must not inspect local transcripts, account metadata, or persisted state.
-    const reportInput = args.sample
-      ? await buildExplicitSampleReportInput(rootPath)
-      : await buildReportInput(stateDir, rootPath, sinceDays);
-    const persistedPreferredExperiment = args.sample
+    let reportInput: SpendReportInput;
+    if (args.sample) {
+      reportInput = await buildExplicitSampleReportInput(rootPath);
+    } else if (machineWide) {
+      const machineWideInput = await buildMachineWideReportInput(args, sinceDays);
+      if (machineWideInput.kind === "no_evidence") {
+        return noEvidenceResult("report", machineWideInput.warnings, sinceDays, runtime.telemetryDisclosure);
+      }
+      reportInput = machineWideInput.input;
+    } else {
+      reportInput = await buildReportInput(stateDir!, rootPath, sinceDays);
+    }
+    const persistedPreferredExperiment = args.sample || machineWide
       ? undefined
       : chooseLatestTokenReductionExperiment(
           (await loadTokenVerificationState(rootPath)).experiments
@@ -4755,26 +4776,38 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       : { ...reportInput, telemetryDisclosure };
     const qualitativeActionsSuppressed = reportInput.dataMode !== "sample" &&
       reportInput.qualitativeCoverage?.status !== "complete";
-    const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
+    // Machine-wide artifacts land in the CURRENT directory under the
+    // ai-spend-* family name; project mode keeps .ai-spend-agent/report.*.
+    const outBase = args.out
+      ? resolve(rootPath, args.out)
+      : machineWide
+        ? join(rootPath, "ai-spend-report")
+        : join(stateDir!, "report");
     const markdownPath = `${outBase}.md`;
     const htmlPath = `${outBase}.html`;
-    await writeLocalReportFile(markdownPath, generateMarkdownReport(reportRenderInput), stateDir);
-    await writeLocalReportFile(htmlPath, generateHtmlReport(reportRenderInput), stateDir);
+    await writeLocalReportFile(markdownPath, generateMarkdownReport(reportRenderInput), stateDir ?? rootPath);
+    await writeLocalReportFile(htmlPath, generateHtmlReport(reportRenderInput), stateDir ?? rootPath);
     // A preferred canonical experiment owns this project's action/result
     // lineage even after completion or rollback. A report may refresh its
     // read-only projection, but never overwrite the frozen handoff with a
     // fresh or contradictory candidate. Coverage gaps receive only explicit
     // non-executable gap artifacts from the report package.
-    const artifactPaths = reportableExperiment
+    // Apply artifacts are project-scoped handoffs — machine-wide runs skip
+    // them (apply itself still requires one exact project folder).
+    const artifactPaths = reportableExperiment || machineWide
       ? undefined
-      : await writeApplyArtifacts(stateDir, reportInput);
+      : await writeApplyArtifacts(stateDir!, reportInput);
 
     return ok([
       "aibill report",
-      `path: ${rootPath}`,
+      machineWide
+        ? `scope: machine-wide · all supported local agent evidence on this machine (last ${sinceDays} days) · artifacts in ${rootPath}`
+        : `path: ${rootPath}`,
       `markdown: ${markdownPath}`,
       `html: ${htmlPath}`,
-      ...(reportableExperiment
+      ...(machineWide
+        ? []
+        : reportableExperiment
         ? [
             `action artifacts: preserved · canonical token test ${reportableExperiment.id} (${reportableExperiment.lifecycle})`,
             `token result: status=${reportableExperiment.evaluation.status}; reductionPercent=${reportExperimentProjection!.reductionPercent ?? "unavailable"}; metricEvidence=${reportExperimentProjection!.evidenceLabel}; quality=${reportExperimentProjection!.qualityLabel}; qualityEvidence=${reportExperimentProjection!.qualityEvidence}; matchingEvidence=${reportableExperiment.evaluation.matchingEvidence}`,
@@ -4811,7 +4844,14 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
       `  less ${markdownPath}       read it in the terminal`,
-      reportableExperiment
+      machineWide
+        // apply/improve need one exact project folder — a machine-wide
+        // report must never point at a command that then refuses (the exact
+        // trap this mode removes).
+        ? reportInput.dataMode === "sample"
+          ? `  cd <project> && ${actionRuntimeCommand("apply --sample")}  print the non-executable demo boundary from one exact project folder`
+          : `  cd <project> && ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}  per-project action plan from one exact project folder`
+        : reportableExperiment
         ? `  ${improveRuntimeCommand}  review canonical token test ${reportableExperiment.id}`
         : qualitativeActionsSuppressed
           ? `  ${actionRuntimeCommand(`context --json --since-days ${sinceDays}`)}  complete bounded qualitative evidence before any action`
@@ -4842,18 +4882,24 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
 }
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
-  if (!args.sample) {
-    // NEW-B3 + founder repro (`npx aibill report-card` from home): the raw
-    // scan refusal used to surface wrapped in "Couldn't write the report
-    // card:". The friendly guard renders clean, BEFORE the try/wrapper.
+  // 0.9.4: a broad root (home, /) runs MACHINE-WIDE — identical read-only
+  // scanning to the bare receipt (loadInstantReadData below), SVG written to
+  // the current directory. The card renders machine-wide content anyway, so
+  // an exact-project requirement was incoherent here; only a bogus --path
+  // still gets the friendly guard.
+  const machineWide = isBroadScanRoot(args.path);
+  if (!args.sample && !machineWide) {
     const rootGuard = await guardExactProjectRoot("report-card", args.path);
     if (rootGuard) return rootGuard;
   }
   try {
-    // Explicit sample mode reads no workspace data, so a broad-root scan guard
-    // would reject a harmless receipt written from the user's home directory.
-    // Output still goes through the safe-write/symlink checks below.
-    const rootPath = args.sample ? resolve(args.path) : await resolveSafeScanRoot(args.path);
+    // Sample mode reads no workspace data and machine-wide mode reads only
+    // the agent transcript dirs — neither scans the current directory, so
+    // both write the receipt from wherever the user stands. Output still
+    // goes through the safe-write/symlink checks below.
+    const rootPath = args.sample || machineWide
+      ? resolve(args.path)
+      : await resolveSafeScanRoot(args.path);
     const { records, mode, providerCoverage, warnings } = await loadInstantReadData(args);
     if (records.length === 0) {
       return noEvidenceResult("report-card", warnings, args.sinceDays ?? 30);
@@ -4915,6 +4961,24 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
  * exist (a location problem is not a breadth problem, but the fix is the
  * same). Returns undefined when the root is an acceptable exact project.
  */
+/**
+ * True when the requested root is a machine-wide location (home, filesystem
+ * root, a system directory, or anything containing home). report/report-card
+ * treat this as MACHINE-WIDE MODE — the same read-only, transcript-dir
+ * scanning the bare receipt performs — instead of refusing (0.9.4 founder
+ * fix: the receipt's own Next pointer led from home into a refusal that
+ * read as "the commands don't work"). Genuinely project-scoped commands
+ * (improve, apply, verify, watch, connect, reset, …) keep the guard.
+ */
+function isBroadScanRoot(requestedPath: string): boolean {
+  const rootPath = resolve(requestedPath);
+  const home = homedir();
+  const guardHome = home && home.trim().length > 0
+    ? home
+    : join(rootPath, "aibill-impossible-home-sentinel");
+  return unsafeScanRootReason(rootPath, guardHome) !== undefined;
+}
+
 async function guardExactProjectRoot(
   commandName: string,
   requestedPath: string
@@ -7068,6 +7132,47 @@ function applyEvidenceAcquisitionLines(input: SpendReportInput): string[] {
     lines.push("- Run `npx aibill doctor --sources` to see which local or provider evidence is missing.");
   }
   return lines;
+}
+
+/**
+ * Machine-wide report input (0.9.4): the bare receipt's own data path —
+ * loadInstantReadData over the agent transcript dirs (read-only) — rendered
+ * through the report package. No project state is read or created; plan
+ * detection is home-scoped metadata, exactly as the receipt reads it.
+ */
+async function buildMachineWideReportInput(
+  args: ParsedArgs,
+  sinceDays: number
+): Promise<
+  | { kind: "input"; input: SpendReportInput }
+  | { kind: "no_evidence"; warnings: readonly string[] }
+> {
+  const { records, mode, providerCoverage, warnings } = await loadInstantReadData(args);
+  if (records.length === 0) {
+    // Same honest empty-state voice the receipt/report-card use — an empty
+    // report file would just look broken.
+    return { kind: "no_evidence", warnings };
+  }
+  const detectedPlans = await detectLocalPlans({
+    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+    codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+  }).catch(() => []);
+  const headlineRecords = mode === "connected"
+    ? selectProviderFinancialHeadlineRecords(records)
+    : records;
+  return {
+    kind: "input",
+    input: {
+      generatedAt: new Date().toISOString(),
+      summary: analyzeSpend(headlineRecords),
+      allRecords: records,
+      dataMode: mode === "connected" ? "connected_provider" : "local_logs",
+      evidenceWindowDays: sinceDays,
+      detectedPlans,
+      ...(mode === "connected" ? { providerRecords: records } : {}),
+      ...(providerCoverage ? { providerCoverage } : {})
+    }
+  };
 }
 
 async function buildExplicitSampleReportInput(rootPath: string): Promise<SpendReportInput> {

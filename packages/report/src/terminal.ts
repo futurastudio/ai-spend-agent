@@ -1573,7 +1573,19 @@ function renderBreakdownTable(
   // always reconcile to the printed header total.
   const rowCap = 10;
   const hiddenEntries = entries.slice(rowCap);
-  const hiddenAmountUsd = hiddenEntries.reduce((total, entry) => total + entry.amountUsd, 0);
+  // Founder's live machine: an independently rounded remainder made the
+  // rows sum a penny off the header total ($2,192.30 vs $2,192.31). The
+  // remainder is therefore computed as the DISPLAYED header total minus the
+  // DISPLAYED row values, so the column reconciles by construction
+  // whichever way the per-row roundings fell.
+  const shownDisplayedUsd = entries.slice(0, rowCap).reduce((sum, entry) => {
+    const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
+    const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
+    return sum + roundUsdCents(displayAmount);
+  }, 0);
+  const hiddenAmountUsd = hiddenEntries.length > 0
+    ? Math.max(0, roundUsdCents(roundUsdCents(total) - roundUsdCents(shownDisplayedUsd)))
+    : 0;
   const hiddenRawUsd = hiddenEntries.reduce(
     (total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd),
     0
@@ -1940,12 +1952,18 @@ function renderSpendBars(
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
-  // Parity D3: never truncate silently.
+  // Parity D3: never truncate silently. The remainder reconciles to the
+  // displayed total by construction (same policy as the breakdown table).
   const hidden = entries.slice(5);
   if (hidden.length > 0) {
-    const hiddenAmount = hidden.reduce((total, entry) => total + entry.amountUsd, 0);
+    const shownDisplayedUsd = top.reduce((sum, entry) => {
+      const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
+      const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
+      return sum + roundUsdCents(displayAmount);
+    }, 0);
+    const hiddenAmount = Math.max(0, roundUsdCents(roundUsdCents(total) - roundUsdCents(shownDisplayedUsd)));
     const hiddenShare = rawTotal > 0
-      ? hidden.reduce((total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd), 0) / rawTotal
+      ? hidden.reduce((sum, entry) => sum + (rawAmounts.get(entry.key) ?? entry.amountUsd), 0) / rawTotal
       : 0;
     barLines.push(
       `  ${c.dim(`+${hidden.length} more · ${approximate ? "~" : ""}${formatUsd(hiddenAmount)} · ${Math.round(hiddenShare * 100)}%`)}`

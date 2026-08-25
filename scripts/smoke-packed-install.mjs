@@ -4,6 +4,15 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Telemetry kill-switch (0.9.4): this script spawns the REAL built/packed
+// CLI. Without these, every local run emitted production telemetry from the
+// developer's machine (phantom unpublished-version installs in the live
+// counts). Set at script level so no human ever has to remember it; every
+// child env below either inherits process.env or spreads it.
+process.env.AI_SPEND_NO_TELEMETRY = "1";
+process.env.DO_NOT_TRACK = "1";
+
+
 const root = resolve(import.meta.dirname, "..");
 const releasePackages = [
   { directory: "packages/core", name: "@agent-finops/core" },
@@ -76,6 +85,12 @@ try {
     "dist",
     "statuslineRuntime.js"
   );
+  // Pin: the kill-switch must be armed before ANY real-CLI child runs — a
+  // refactor that drops the top-of-script env would fail here, not in the
+  // production telemetry counts.
+  if (process.env.AI_SPEND_NO_TELEMETRY !== "1" || process.env.DO_NOT_TRACK !== "1") {
+    throw new Error("smoke harness must set AI_SPEND_NO_TELEMETRY=1 and DO_NOT_TRACK=1 before spawning the CLI.");
+  }
   const help = execFileSync(process.execPath, [cliPath, "--help"], {
     cwd: installDir,
     encoding: "utf8"

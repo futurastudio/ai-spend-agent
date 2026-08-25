@@ -5,6 +5,15 @@ import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+// Telemetry kill-switch (0.9.4): this script spawns the REAL built/packed
+// CLI. Without these, every local run emitted production telemetry from the
+// developer's machine (phantom unpublished-version installs in the live
+// counts). Set at script level so no human ever has to remember it; every
+// child env below either inherits process.env or spreads it.
+process.env.AI_SPEND_NO_TELEMETRY = "1";
+process.env.DO_NOT_TRACK = "1";
+
+
 const projectRoot = resolve(import.meta.dirname, "..");
 const packageMetadata = JSON.parse(
   await readFile(resolve(projectRoot, "packages/mcp/package.json"), "utf8")

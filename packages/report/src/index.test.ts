@@ -1962,3 +1962,52 @@ describe("cross-surface parity (report.md / report.html)", () => {
     expect(html).toContain("made with aibill · asktilden.com");
   });
 });
+
+describe("html overflow reconciliation (0.9.4 founder fix)", () => {
+  it("the +N-more amount is hero-minus-visible-rows, never an independently rounded remainder", () => {
+    // Six visible $1.005 projects display $1.01 each ($6.06); five hidden
+    // (4 × $1.005 + $0.62) sum $4.64 raw. Hero = $10.67. A raw remainder
+    // would make visible + overflow = $10.70 — 3 cents off the hero. The
+    // reconciled remainder is $10.67 − $6.06 = $4.61.
+    const records: UsageRecord[] = [
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `p-${index}`,
+        timestamp: `2026-08-${String(5 + index).padStart(2, "0")}T00:00:00.000Z`,
+        source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+        model: "claude-opus-4-8",
+        inputTokens: 10_000,
+        outputTokens: 1_000,
+        amountUsd: 1.005,
+        costConfidence: "estimated",
+        projectId: `proj-${String(index).padStart(2, "0")}`,
+        agentId: "claude-code",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate"
+      } as UsageRecord)),
+      {
+        id: "p-hidden",
+        timestamp: "2026-08-15T00:00:00.000Z",
+        source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+        model: "claude-opus-4-8",
+        inputTokens: 10_000,
+        outputTokens: 1_000,
+        amountUsd: 0.62,
+        costConfidence: "estimated",
+        projectId: "proj-10",
+        agentId: "claude-code",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate"
+      } as UsageRecord
+    ];
+    const html = generateHtmlReport({
+      ...input,
+      dataMode: "local_logs",
+      summary: analyzeSpend(records),
+      allRecords: records,
+      generatedAt: "2026-08-25T00:00:00.000Z"
+    });
+    expect(html).toContain("+5 more projects");
+    expect(html).toContain("$4.61");
+    expect(html).not.toContain("$4.64");
+  });
+});

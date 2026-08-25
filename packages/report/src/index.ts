@@ -3057,11 +3057,17 @@ function dataDaysPhrase(records: readonly UsageRecord[]): string {
 function breakdownOverflowRow(
   entries: SpendSummary["bySource"],
   cap: number,
-  noun: string
+  noun: string,
+  /** Sum of the VISIBLE rows' displayed values (their own coverage basis). */
+  shownDisplayedUsd: number,
+  /** The displayed hero total the column must reconcile to. */
+  heroTotalUsd: number
 ): string {
   if (entries.length <= cap) return "";
   const hidden = entries.slice(cap);
-  const hiddenTotal = hidden.reduce((total, entry) => total + entry.amountUsd, 0);
+  // Reconciles by construction: remainder = displayed hero − displayed rows
+  // (an independently rounded raw remainder could land a penny off).
+  const hiddenTotal = Math.max(0, roundUsdCents(roundUsdCents(heroTotalUsd) - roundUsdCents(shownDisplayedUsd)));
   return `<div class="row"><span class="k">+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>full list in report.md</em></span></div>`;
 }
 
@@ -3130,6 +3136,13 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
       ? `partial value · ${financialCoverage.pricedRecords.length} priced · ${financialCoverage.missingRecords.length} missing`
       : `${summary.recordCount} session-day record${summary.recordCount === 1 ? "" : "s"} · estimated`;
 
+  const displayedRowUsd = (
+    entry: SpendSummary["bySource"][number],
+    dimension: LocalBreakdownDimension
+  ): number => {
+    const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
+    return groupCoverage.pricedRecords.length === 0 ? 0 : roundUsdCents(groupCoverage.amountUsd);
+  };
   const barRow = (
     entry: SpendSummary["bySource"][number],
     dimension: LocalBreakdownDimension
@@ -3209,8 +3222,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         ${sectionHead("WHY", "where it goes")}
         <div class="cols">
-          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project")}</div>
-          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model")}</div>
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project", summary.byProject.slice(0, 6).reduce((sum, entry) => sum + displayedRowUsd(entry, "project"), 0), financialCoverage.amountUsd)}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model", summary.byModel.slice(0, 5).reduce((sum, entry) => sum + displayedRowUsd(entry, "model"), 0), financialCoverage.amountUsd)}</div>
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Configured/catalogued with no matching invocation (loading and future need may be unmeasured):</span> ${deadChips}</div>` : ""}
 

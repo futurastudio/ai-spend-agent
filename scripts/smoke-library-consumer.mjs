@@ -4,6 +4,15 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Telemetry kill-switch (0.9.4): this script spawns the REAL built/packed
+// CLI. Without these, every local run emitted production telemetry from the
+// developer's machine (phantom unpublished-version installs in the live
+// counts). Set at script level so no human ever has to remember it; every
+// child env below either inherits process.env or spreads it.
+process.env.AI_SPEND_NO_TELEMETRY = "1";
+process.env.DO_NOT_TRACK = "1";
+
+
 const root = resolve(import.meta.dirname, "..");
 const packages = [
   { directory: "packages/core", name: "@agent-finops/core" },

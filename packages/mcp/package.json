@@ -1,6 +1,6 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "funding": "https://asktilden.com",
   "description": "aibill MCP server: Claude Code/Codex attribution, runway, and Context Health, plus experimental Gemini CLI financial evidence.",
   "keywords": [
@@ -51,7 +51,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.9.3",
+    "@agent-finops/core": "0.9.4",
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "^4.1.0"
   },

@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-08-16";
+export const PRICING_TABLE_AS_OF = "2026-08-25";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -127,14 +127,35 @@ const pricingRules: PricingRule[] = [
   // DeepSeek (official API list prices)
   { match: /^deepseek-chat|^deepseek-v3/i, inputPerM: 0.27, outputPerM: 1.1 },
   { match: /^deepseek-reasoner|^deepseek-r1/i, inputPerM: 0.55, outputPerM: 2.19 },
-  // Moonshot / Kimi (official API list prices)
-  { match: /^kimi-k2|^moonshot/i, inputPerM: 0.6, outputPerM: 2.5 },
+  // Moonshot / Kimi (official list prices, platform.kimi.ai/docs/pricing/*,
+  // fetched 2026-08-25; cache-hit input is a distinct published rate). Order
+  // matters: k2.7-code-highspeed before its k2.7-code prefix, dot families
+  // before the legacy K2 rule.
+  // ^kimi-k3 also covers the Anthropic-style "kimi-k3[1m]" context suffix.
+  { match: /^kimi-k3/i, inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3 },
+  { match: /^kimi-k2\.7-code-highspeed/i, inputPerM: 1.9, outputPerM: 8, cacheReadPerM: 0.38 },
+  { match: /^kimi-k2\.7-code/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.19 },
+  { match: /^kimi-k2\.6/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.16 },
+  // Legacy K2 (kimi-k2, kimi-k2-*) and moonshot-v1-* (sunset 2026-08-31 —
+  // still prices past transcripts). Deliberately does NOT match the dot
+  // families above: 0.9.3's `^kimi-k2` prefix silently priced kimi-k2.7-code
+  // at these old K2 rates (~$0.60/$2.50 vs the real $0.95/$4.00).
+  { match: /^kimi-k2(?:$|-)|^moonshot/i, inputPerM: 0.6, outputPerM: 2.5 },
   // xAI / Grok (official API list prices)
   { match: /^grok-4|^grok-3$/i, inputPerM: 3, outputPerM: 15 },
   { match: /^grok-3-mini/i, inputPerM: 0.3, outputPerM: 0.5 },
   // Open-weight models with NO canonical price (llama, qwen, mistral, glm):
   // hosting rates vary several-fold by provider, so we deliberately return
   // undefined -> costConfidence "missing" instead of inventing a number.
+  //
+  // Deliberate deferrals (2026-08-25 CN-provider review), same honest path:
+  // - First-party Qwen commercial models (qwen3.x-max/plus/flash): the
+  //   canonical Model Studio price list is console-gated and aggregator
+  //   numbers have been wrong for this vendor family before — no rule until
+  //   a canonical price is verified.
+  // - deepseek-v4-* (api-docs.deepseek.com/quick_start/pricing): published
+  //   rates are time-of-day (off-peak = half price, up to 2x swing), so any
+  //   flat number here would be dishonest; needs timestamp-aware pricing.
 ];
 
 export function findPricingRule(model: string): PricingRule | undefined {

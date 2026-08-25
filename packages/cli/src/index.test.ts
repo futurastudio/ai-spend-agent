@@ -213,7 +213,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.3$/);
+    expect(result.stdout).toMatch(/^0\.9\.4$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -4108,7 +4108,7 @@ describe("minimal CLI vertical slice", () => {
     expect(result.stderr).not.toContain("Refusing to scan");
   });
 
-  it("every project-scoped command refuses a broad root with the SAME friendly guidance (NEW-B3, all ten)", async () => {
+  it("every genuinely project-scoped command refuses a broad root with the SAME friendly guidance", async () => {
     // Cold-start audit NEW-B3 + the founder's live repro: from $HOME the raw
     // "Refusing to scan" leaked in three tiers — crash-wrap (init/connect/
     // watch/reset), prefixed raw (report/report-card/apply/apply-artifact/
@@ -4120,11 +4120,11 @@ describe("minimal CLI vertical slice", () => {
       { argv: ["connect", "openai"], commandName: "connect" },
       { argv: ["watch", "--cycles", "1"], commandName: "watch" },
       { argv: ["reset"], commandName: "reset" },
-      { argv: ["report"], commandName: "report" },
-      // Adversary F2: --sample still writes project state into the root, so
-      // it guards too (report-card --sample keeps its true home exemption).
-      { argv: ["report", "--sample"], commandName: "report" },
-      { argv: ["report-card"], commandName: "report-card" },
+      // 0.9.4: report and report-card no longer guard broad roots — they run
+      // MACHINE-WIDE from home (same read-only scanning as the bare receipt,
+      // artifacts in the current directory). Their success pins live in the
+      // spawned e2e (report.machinewide.e2e.test.ts) where HOME is a sandbox
+      // — an in-process run here would write into the developer's real home.
       { argv: ["apply"], commandName: "apply" },
       { argv: ["apply-artifact"], commandName: "apply" },
       { argv: ["verify", "tre_v0_0000000000000000"], commandName: "verify" },
