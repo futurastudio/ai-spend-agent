@@ -556,7 +556,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const localOn = await runCli(["report", "--path", logsDir], { telemetryDisclosure: true });
     expect(localOn.exitCode).toBe(0);
     const localHtmlOn = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
-    expect(localHtmlOn).toContain("anonymous command counts shared · aibill telemetry off");
+    expect(localHtmlOn).toContain("anonymous command counts shared · npx aibill telemetry off");
     expect(localHtmlOn).not.toContain("no aibill telemetry<");
   });
 

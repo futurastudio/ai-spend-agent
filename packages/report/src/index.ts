@@ -1,3 +1,4 @@
+import { roundUsdCents } from "./money.js";
 import {
   aibillCommandV0,
   analyzeSpend,
@@ -3031,7 +3032,37 @@ function nextSourceLine(input: SpendReportInput): string {
 
 function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.01) return "<$0.01";
-  return `$${amount.toFixed(2)}`;
+  // Parity D1: the shared cents policy — every surface rounds identically.
+  return `$${roundUsdCents(amount).toFixed(2)}`;
+}
+
+/**
+ * "13 days of data (2026-08-05 → 2026-08-25)" — the html header's window
+ * phrase, derived from the records exactly like the terminal's
+ * dataWindowLine (parity D2: the header used to hardcode the REQUEST
+ * window as "30 days of data" over 13 actual days of data).
+ */
+function dataDaysPhrase(records: readonly UsageRecord[]): string {
+  const days = [...new Set(records.map((record) => record.timestamp.slice(0, 10)))].sort();
+  if (days.length === 0) return "no dated records";
+  const span = days.length === 1 ? days[0]! : `${days[0]} → ${days[days.length - 1]}`;
+  return `${days.length} day${days.length === 1 ? "" : "s"} of data (${span})`;
+}
+
+/**
+ * Parity D3: a capped breakdown column must never truncate silently — the
+ * hidden remainder renders as one explicit row so visible rows + remainder
+ * reconcile to the hero total ("full list in report.md").
+ */
+function breakdownOverflowRow(
+  entries: SpendSummary["bySource"],
+  cap: number,
+  noun: string
+): string {
+  if (entries.length <= cap) return "";
+  const hidden = entries.slice(cap);
+  const hiddenTotal = hidden.reduce((total, entry) => total + entry.amountUsd, 0);
+  return `<div class="row"><span class="k">+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>full list in report.md</em></span></div>`;
 }
 
 function formatMachineUsd(amount: number): string {
@@ -3109,7 +3140,9 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
       return `<div class="row"><span class="k">${key}</span><span class="bar"></span><span class="v estimated-value">Unavailable<em>share unavailable · missing/null is not zero</em></span></div>`;
     }
     const share = financialCoverage.amountUsd > 0 ? groupCoverage.amountUsd / financialCoverage.amountUsd : 0;
-    const pct = share > 0 ? Math.max(1, Math.round(share * 100)) : 0;
+    // Parity nit: the bar width must equal the printed percent — a
+    // 0%-labeled row used to draw a 1% bar (floor artifact).
+    const pct = Math.round(share * 100);
     const coverageNote = groupCoverage.missingRecords.length > 0
       ? `${formatPercent(share)} of priced value · ${groupCoverage.missingRecords.length} missing`
       : financialCoverage.missingRecords.length > 0
@@ -3150,7 +3183,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     <div class="term">
       <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
-        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${windowDays} day${windowDays === 1 ? "" : "s"} of data · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · aibill telemetry off" : "no aibill telemetry"}</span></p>
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
         ${qualitativeNotice ? `<p class="dim note-line"><strong>${escapeHtml(qualitativeNotice)}</strong></p>` : ""}
         ${tokenExperiment ? `<p class="dim note-line"><strong>CANONICAL TOKEN TEST ${escapeHtml(tokenExperiment.lifecycle.toUpperCase())} · ${escapeHtml(tokenExperiment.id)}</strong> · ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))} · matched-session token evidence only, not provider-billed savings, accepted-outcome proof, or ROI · continue with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span></p>` : ""}
 
@@ -3176,8 +3209,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         ${sectionHead("WHY", "where it goes")}
         <div class="cols">
-          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}</div>
-          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}</div>
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project")}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model")}</div>
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Configured/catalogued with no matching invocation (loading and future need may be unmeasured):</span> ${deadChips}</div>` : ""}
 
@@ -3200,7 +3233,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
         <div class="footer">
           <span><span class="g-accent">$</span> npx aibill <span class="dim">· reproduce this</span></span>
           <span><span class="g-accent">$</span> ${escapeHtml(tokenExperiment ? tokenExperiment.nextCommand : !qualitativeComplete ? aibillCommandV0(`context --json --since-days ${windowDays}`) : aibillCommandV0(`apply --since-days ${windowDays}`))} <span class="dim">· ${tokenExperiment ? "review canonical token test" : !qualitativeComplete ? "complete bounded qualitative evidence" : "inspection plan, approval + rollback"}</span></span>
-          <span class="dim">free · MIT · deterministic arithmetic over local transcripts</span>
+          <span class="dim">free · MIT · deterministic arithmetic over local transcripts · made with aibill · asktilden.com</span>
         </div>
       </div>
     </div>

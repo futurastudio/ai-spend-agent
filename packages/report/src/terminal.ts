@@ -1,4 +1,5 @@
 /* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V5 · CLI-adapted slop: pass */
+import { roundUsdCents } from "./money.js";
 import Table from "cli-table3";
 import pc from "picocolors";
 import {
@@ -354,7 +355,10 @@ function renderPlainEnglishSummary(
     rawGroupAmounts,
     fullRawTotalUsd,
     fullHasHeadlineAmount,
-    width
+    width,
+    // Parity nit: this is the SAME table --group-by renders — the tilde
+    // discipline must match (both mark estimated bases approximate).
+    isApproximateBasis(fullPresentationBasis)
   ), "  "));
   lines.push("");
   const topProject = summary.byProject[0];
@@ -1564,11 +1568,26 @@ function renderBreakdownTable(
     return c.dim("(no breakdown available for this dimension)");
   }
 
+  // Parity D3: a capped table must never truncate silently — the hidden
+  // remainder gets an explicit "+N more" row so visible rows + remainder
+  // always reconcile to the printed header total.
+  const rowCap = 10;
+  const hiddenEntries = entries.slice(rowCap);
+  const hiddenAmountUsd = hiddenEntries.reduce((total, entry) => total + entry.amountUsd, 0);
+  const hiddenRawUsd = hiddenEntries.reduce(
+    (total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd),
+    0
+  );
+  const hiddenRecords = hiddenEntries.reduce((total, entry) => total + entry.recordCount, 0);
+  const hiddenShare = rawTotal > 0 ? hiddenRawUsd / rawTotal : 0;
+  const hiddenLabel = `+${hiddenEntries.length} more`;
+  const hiddenAmount = `${approximate ? "~" : ""}${formatUsd(hiddenAmountUsd)}`;
+
   // Box tables are useful at normal terminal widths, but their fixed columns
   // become horizontal noise on a narrow split pane. Degrade to a readable
   // two-line list; the outer renderer will wrap its prose to the exact width.
   if (maxWidth < 72) {
-    return entries.slice(0, 10).flatMap((entry) => {
+    const narrowLines = entries.slice(0, rowCap).flatMap((entry) => {
       const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
       const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
       const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
@@ -1585,7 +1604,14 @@ function renderBreakdownTable(
         c.bold(label),
         c.dim(`${evidence} · ${recordLabel} ${entry.recordCount} · ${confidenceWord(entry.confidence)}`)
       ];
-    }).join("\n");
+    });
+    if (hiddenEntries.length > 0) {
+      narrowLines.push(
+        c.bold(hiddenLabel),
+        c.dim(`${hiddenAmount} · ${formatPercent(hiddenShare)} · ${recordLabel} ${hiddenRecords}`)
+      );
+    }
+    return narrowLines.join("\n");
   }
 
   const table = new Table({
@@ -1602,7 +1628,7 @@ function renderBreakdownTable(
     chars: tableChars()
   });
 
-  for (const entry of entries.slice(0, 10)) {
+  for (const entry of entries.slice(0, rowCap)) {
     const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const displayAmount = rawAmount > 0 && rawAmount < 0.01 ? rawAmount : entry.amountUsd;
@@ -1617,6 +1643,15 @@ function renderBreakdownTable(
       entryAmountAvailable ? `${bar(share, c)} ${formatPercent(share)}` : "Unavailable",
       String(entry.recordCount),
       confidenceWord(entry.confidence)
+    ]);
+  }
+  if (hiddenEntries.length > 0) {
+    table.push([
+      hiddenLabel,
+      hiddenAmount,
+      `${bar(hiddenShare, c)} ${formatPercent(hiddenShare)}`,
+      String(hiddenRecords),
+      ""
     ]);
   }
 
@@ -1890,7 +1925,7 @@ function renderSpendBars(
   if (entries.length === 0) return [];
   const top = entries.slice(0, 5);
   const labelWidth = Math.min(16, Math.max(...top.map((entry) => labelOf(entry.key).length)));
-  return top.map((entry) => {
+  const barLines = top.map((entry) => {
     const rawAmount = rawAmounts.get(entry.key) ?? entry.amountUsd;
     const share = rawTotal > 0 ? rawAmount / rawTotal : 0;
     const label = labelOf(entry.key).slice(0, labelWidth).padEnd(labelWidth);
@@ -1905,6 +1940,18 @@ function renderSpendBars(
     const pct = `${Math.round(share * 100)}%`.padStart(4);
     return `  ${c.dim(label)}  ${spendBar(share, c)}  ${c.bold(amount)}  ${c.dim(pct)}`;
   });
+  // Parity D3: never truncate silently.
+  const hidden = entries.slice(5);
+  if (hidden.length > 0) {
+    const hiddenAmount = hidden.reduce((total, entry) => total + entry.amountUsd, 0);
+    const hiddenShare = rawTotal > 0
+      ? hidden.reduce((total, entry) => total + (rawAmounts.get(entry.key) ?? entry.amountUsd), 0) / rawTotal
+      : 0;
+    barLines.push(
+      `  ${c.dim(`+${hidden.length} more · ${approximate ? "~" : ""}${formatUsd(hiddenAmount)} · ${Math.round(hiddenShare * 100)}%`)}`
+    );
+  }
+  return barLines;
 }
 
 /** Wider bar for the headline spend block; the dominant source reads bold. */
@@ -2039,14 +2086,15 @@ function visibleLength(text: string): number {
 
 function formatBigUsd(amount: number, rawAmount = amount): string {
   if (rawAmount > 0 && rawAmount < 0.01) return "<$0.01";
-  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `$${roundUsdCents(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatUsd(amount: number): string {
   // A real-but-tiny amount rendered as "$0.00" reads as a data bug to a
   // technical audience; "<$0.01" says what actually happened.
   if (amount > 0 && amount < 0.01) return "<$0.01";
-  return `$${amount.toFixed(2)}`;
+  // Parity D1: the shared cents policy — every surface rounds identically.
+  return `$${roundUsdCents(amount).toFixed(2)}`;
 }
 
 function formatPercent(ratio: number): string {
