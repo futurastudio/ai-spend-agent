@@ -541,7 +541,7 @@ describe("consent after the receipt", () => {
     });
   });
 
-  it("anything but y at the consent step is a decline: nothing sent, one skip", async () => {
+  it("anything but y at the consent step is a decline: nothing sent, one skip, outcome printed", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => jsonResponse(201));
     const { outcome, scripted } = await emailOutcome(file, [""]);
@@ -550,10 +550,13 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+    // 0.9.3: a decline is ANNOUNCED — never a silent instant resolution
+    // (the founder's production consent auto-declined with no output).
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 1 } });
   });
 
-  it("a consent timeout decides nothing and consumes no skip", async () => {
+  it("a consent timeout decides nothing, consumes no skip, and still announces the outcome", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => jsonResponse(201));
     const { outcome, scripted } = await emailOutcome(file, [undefined]);
@@ -562,10 +565,62 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { status: "deferred", askCount: 0 } });
   });
 
-  it("send failure prints the mapped line and never persists, retries, or queues the email", async () => {
+  it("every consent resolution ends in exactly one outcome line (sent or nothing sent)", async () => {
+    // The closed set of final lines: sentLine on 201, nothingSentLine on
+    // everything else. No resolution may end on any other line, and no
+    // resolution may print both.
+    const finals: string[] = [signupCopy.sentLine, signupCopy.nothingSentLine];
+    const cases: Array<{ answers: Array<string | undefined>; fetch?: () => Promise<Response> }> = [
+      { answers: ["y"], fetch: async () => jsonResponse(201) },
+      { answers: ["yes"], fetch: async () => jsonResponse(201) },
+      { answers: ["n"] },
+      { answers: [""] },
+      { answers: ["whatever"] },
+      { answers: [undefined] },
+      { answers: ["y"], fetch: async () => jsonResponse(429) },
+      { answers: ["y"], fetch: async () => jsonResponse(422) },
+      { answers: ["y"], fetch: async () => { throw new Error("down"); } }
+    ];
+    for (const testCase of cases) {
+      const file = await tempStateFile();
+      const { outcome, scripted } = await emailOutcome(file, testCase.answers);
+      await runSignupConsentAfterReceipt({
+        io: scripted.io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+        fetchImpl: (testCase.fetch ?? (async () => jsonResponse(201))) as unknown as typeof fetch
+      });
+      const last = scripted.written.at(-1);
+      expect(finals).toContain(last);
+      expect(scripted.written.filter((line) => finals.includes(line))).toHaveLength(1);
+    }
+  });
+
+  it("the consent read prefers questionFresh when the binding provides it", async () => {
+    const file = await tempStateFile();
+    const fetchImpl = vi.fn(async () => jsonResponse(201));
+    const { outcome, scripted } = await emailOutcome(file, ["stale-should-not-be-read"]);
+    const freshQuestions: string[] = [];
+    const io: SignupAskIo = {
+      ...scripted.io,
+      questionFresh: async (query) => {
+        freshQuestions.push(query);
+        return "y";
+      }
+    };
+    await runSignupConsentAfterReceipt({
+      io, stateFilePath: file, payload: outcome.payload, stamped: outcome.stamped,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(freshQuestions).toHaveLength(1);
+    expect(freshQuestions[0]).toContain('send {"email":"you@work.com","ref":"cli-receipt"}');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(scripted.written.at(-1)).toBe(signupCopy.sentLine);
+  });
+
+  it("send failure prints the mapped line, then nothing sent; never persists, retries, or queues the email", async () => {
     const file = await tempStateFile();
     const fetchImpl = vi.fn(async () => { throw new Error("network down"); });
     const { outcome, scripted } = await emailOutcome(file, ["y"]);
@@ -574,7 +629,8 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(scripted.written.at(-1)).toBe(signupCopy.unreachableLine);
+    expect(scripted.written.at(-2)).toBe(signupCopy.unreachableLine);
+    expect(scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
     const stateBytes = await readFile(file, "utf8");
     expect(stateBytes).not.toContain("you@work.com");
 
@@ -584,7 +640,8 @@ describe("consent after the receipt", () => {
       io: second.scripted.io, stateFilePath: file, payload: second.outcome.payload, stamped: second.outcome.stamped,
       fetchImpl: busy as unknown as typeof fetch
     });
-    expect(second.scripted.written.at(-1)).toBe(signupCopy.rateLimitedLine);
+    expect(second.scripted.written.at(-2)).toBe(signupCopy.rateLimitedLine);
+    expect(second.scripted.written.at(-1)).toBe(signupCopy.nothingSentLine);
   });
 });
 

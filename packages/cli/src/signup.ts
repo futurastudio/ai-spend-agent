@@ -431,12 +431,40 @@ export function signupAskAllowed(read: SignupStateRead, now: Date): boolean {
 export type SignupAskIo = {
   /** Resolves the typed line, or undefined when the read timed out / aborted. */
   question: (query: string, timeoutMs: number) => Promise<string | undefined>;
+  /**
+   * Consent-grade read (0.9.3): drains every buffered byte before rendering
+   * and ignores lines that were already in flight when the prompt rendered —
+   * the same burst-guard discipline the APPROVE screen uses. A consent
+   * question may NEVER be answered by a buffered byte. Scripted/test IO may
+   * omit it; the consent step then falls back to `question`.
+   */
+  questionFresh?: (query: string, timeoutMs: number) => Promise<string | undefined>;
   write: (line: string) => void;
   /** Raw prompt redraw after a nudge line (no newline appended). */
   writeRaw?: (text: string) => void;
 };
 
 export const signupAskTimeoutMs = 30_000;
+
+/**
+ * Consent burst-guard (0.9.3, founder incident 2026-08-24): lines arriving
+ * within this window of the previous line belong to the SAME burst and
+ * inherit its first timestamp — the guided prompt engine's convention
+ * (createInteractivePromptSource). Key-repeat Enters and paste chains can
+ * therefore never look "fresh" one line at a time.
+ */
+export const signupConsentBurstWindowMs = 75;
+
+/**
+ * Minimum time between the consent question rendering and a line that may
+ * answer it. The payload JSON is ~100 characters; no human reads it and
+ * decides faster than this. Anything quicker is an in-flight keypress from
+ * the email entry (the reproduced production failure: the follow-up Enter
+ * landed ~0.4–0.7s after the email and silently auto-declined consent).
+ * Discarded lines never re-render the prompt — the read simply keeps
+ * waiting for a deliberate keypress.
+ */
+export const signupConsentFreshKeypressMs = 1_000;
 
 export type PreReceiptAskOutcome =
   | { kind: "no_ask" }
@@ -571,6 +599,15 @@ export async function openPreReceiptSignupAsk(options: {
  * The consent step, strictly AFTER the receipt has printed: scope line, the
  * literal payload JSON, a typed y — then ONE POST. Failures never persist,
  * retry, or queue the typed email.
+ *
+ * 0.9.3 contract (founder incident 2026-08-24 — production consent was
+ * auto-declined by the Enter that had submitted the email moments earlier):
+ * - The read goes through io.questionFresh when the binding provides it, so
+ *   a buffered or in-flight byte can never be the answer.
+ * - EVERY resolution prints exactly one final outcome line: sentLine on a
+ *   201, nothingSentLine on decline / timeout / interrupt / close / send
+ *   failure (failure detail prints above it). The human is never left
+ *   guessing whether anything left the machine.
  */
 export async function runSignupConsentAfterReceipt(options: {
   io: SignupAskIo;
@@ -582,14 +619,21 @@ export async function runSignupConsentAfterReceipt(options: {
   const { io, stamped } = options;
   io.write("");
   io.write(signupCopy.scopeLine);
-  const consent = await io.question(
+  const read = io.questionFresh ?? io.question;
+  const consent = await read(
     signupCopy.consentQuestion(serializeWaitlistPayload(options.payload)),
     signupAskTimeoutMs
   );
-  if (consent === undefined) return;
+  if (consent === undefined) {
+    // Timeout / close / interrupt: no decision, no skip consumed (M3) —
+    // but the resolution is still announced.
+    io.write(signupCopy.nothingSentLine);
+    return;
+  }
   const consentAnswer = consent.trim().toLowerCase();
   if (consentAnswer !== "y" && consentAnswer !== "yes") {
     await writeSignupState(options.stateFilePath, { ...stamped, askCount: stamped.askCount + 1 });
+    io.write(signupCopy.nothingSentLine);
     return;
   }
   const outcome = await postWaitlistSignup(options.payload, {
@@ -613,6 +657,7 @@ export async function runSignupConsentAfterReceipt(options: {
         ? signupCopy.rateLimitedLine
         : signupCopy.unreachableLine
   );
+  io.write(signupCopy.nothingSentLine);
 }
 
 /**
@@ -689,6 +734,14 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
   try {
     const { createInterface } = await import("node:readline/promises");
     const lineInterface = createInterface({ input: process.stdin, output: process.stdout });
+    // Kill readline's own default "> " prompt: this interface never calls
+    // prompt() itself, but terminal-mode readline repaints its prompt on any
+    // internal refresh (backspace edits, cursor movement). With the default
+    // marker those repaints were the only in-process source of stray ">"
+    // markers over our output (founder incident 2026-08-24: the consent
+    // line rendered with the marker repeated and "[y/N]" overwritten). An
+    // empty prompt makes every internal repaint marker-free by construction.
+    lineInterface.setPrompt("");
     let interrupted = false;
     let abortedRead = false;
     // Ctrl-C must SETTLE the pending read (closing the interface alone
@@ -697,8 +750,9 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
     // read deterministically; the ask resolves as a no-decision, one ack
     // line explains that the scan continues (QA M2), and the receipt still
     // renders.
-    let waiter: ((line: string | undefined) => void) | undefined;
-    const settleWaiter = (line: string | undefined) => {
+    type ArrivedLine = { text: string; arrivedAtMs: number; burstStartAtMs: number };
+    let waiter: ((line: ArrivedLine | undefined) => void) | undefined;
+    const settleWaiter = (line: ArrivedLine | undefined) => {
       const settle = waiter;
       waiter = undefined;
       if (settle) settle(line);
@@ -708,10 +762,24 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
     // the guided engine's drain notice when the next read arms — they are
     // never used as answers, so pasted input can neither pre-answer the
     // consent step nor strand the user in 30s of silent dead air.
-    const strayLines: string[] = [];
+    //
+    // 0.9.3: every line additionally carries its arrival time and the start
+    // time of the burst it belongs to (guided-engine convention: lines
+    // within signupConsentBurstWindowMs of the previous line inherit the
+    // burst's FIRST timestamp — key-repeat and paste chains count as one
+    // burst). The consent read uses this to refuse in-flight bytes.
+    const strayLines: ArrivedLine[] = [];
+    let lastArrivalMs: number | undefined;
+    let burstStartMs: number | undefined;
     lineInterface.on("line", (line) => {
-      if (waiter) settleWaiter(line);
-      else strayLines.push(line);
+      const arrivedAtMs = Date.now();
+      if (lastArrivalMs === undefined || arrivedAtMs - lastArrivalMs > signupConsentBurstWindowMs) {
+        burstStartMs = arrivedAtMs;
+      }
+      lastArrivalMs = arrivedAtMs;
+      const arrived: ArrivedLine = { text: line, arrivedAtMs, burstStartAtMs: burstStartMs ?? arrivedAtMs };
+      if (waiter) settleWaiter(arrived);
+      else strayLines.push(arrived);
     });
     lineInterface.on("close", () => {
       settleWaiter(undefined);
@@ -730,23 +798,67 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       }
       lineInterface.close();
     });
+    const drainStrayLines = () => {
+      if (strayLines.length === 0) return;
+      const discarded = strayLines.length;
+      strayLines.length = 0;
+      process.stdout.write(`  ${renderDrainNotice(discarded)}\n`);
+    };
     const io: SignupAskIo = {
       question: async (query, timeoutMs) => {
         if (interrupted) return undefined;
-        if (strayLines.length > 0) {
-          const discarded = strayLines.length;
-          strayLines.length = 0;
-          process.stdout.write(`  ${renderDrainNotice(discarded)}\n`);
-        }
+        drainStrayLines();
         process.stdout.write(query);
         const timer = setTimeout(() => settleWaiter(undefined), timeoutMs);
         timer.unref?.();
         try {
-          const answer = await new Promise<string | undefined>((resolvePromise) => {
+          const answer = await new Promise<ArrivedLine | undefined>((resolvePromise) => {
             waiter = resolvePromise;
           });
           abortedRead = answer === undefined;
-          return answer;
+          return answer?.text;
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      // Consent-grade read (founder incident 2026-08-24: the Enter that had
+      // submitted the email answered — and silently declined — the consent
+      // question that armed a few hundred ms later). Contract:
+      // (a) drain EVERY buffered byte before rendering: whole stray lines
+      //     AND the half-typed remainder readline is still holding;
+      // (b) render the full line exactly once — discarded arrivals never
+      //     re-print the prompt, and nothing here redraws a marker;
+      // (c) only a FRESH keypress answers: lines whose burst began at or
+      //     before the render (key-repeat/paste chains), or that landed
+      //     faster than a human could have read the payload, are dropped
+      //     silently while the read keeps waiting.
+      questionFresh: async (query, timeoutMs) => {
+        if (interrupted) return undefined;
+        drainStrayLines();
+        try {
+          // Clear readline's in-progress line buffer without a repaint —
+          // bytes typed before the question rendered must not seed its
+          // answer. Internal fields, so cosmetic-only failure is fine.
+          const editable = lineInterface as unknown as { line: string; cursor: number };
+          editable.line = "";
+          editable.cursor = 0;
+        } catch {
+          // Best-effort; the burst-guard below still refuses stale lines.
+        }
+        const renderedAtMs = Date.now();
+        process.stdout.write(query);
+        const timer = setTimeout(() => settleWaiter(undefined), timeoutMs);
+        timer.unref?.();
+        try {
+          for (;;) {
+            const answer = await new Promise<ArrivedLine | undefined>((resolvePromise) => {
+              waiter = resolvePromise;
+            });
+            if (answer === undefined) return undefined;
+            if (answer.burstStartAtMs <= renderedAtMs) continue;
+            if (answer.arrivedAtMs - renderedAtMs < signupConsentFreshKeypressMs) continue;
+            return answer.text;
+          }
         } finally {
           clearTimeout(timer);
         }
@@ -772,7 +884,13 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       session,
       needsFreshLine: () => abortedRead,
       runConsent: async (outcome) => {
-        if (interrupted) return;
+        if (interrupted) {
+          // The ask was interrupted after the email was typed: consent never
+          // renders, but the resolution is still announced (0.9.3 — an
+          // email-shaped run must never end without an outcome line).
+          io.write(signupCopy.nothingSentLine);
+          return;
+        }
         try {
           await runSignupConsentAfterReceipt({
             io,
