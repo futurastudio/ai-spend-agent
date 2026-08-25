@@ -274,15 +274,15 @@ export function renderStatusline(
   const columns = normalizeColumns(options.columns ?? Number(process.env.COLUMNS));
   const tier = columns >= 80 ? "full" : columns >= 50 ? "compact" : "minimal";
 
-  if (result.status === "missing") return fitStatic("aibill · run aibill init", columns);
+  if (result.status === "missing") return fitStatic("aibill · run npx aibill init", columns);
   if (result.status === "error") {
-    return fitStatic("aibill · cache error · run aibill init", columns);
+    return fitStatic("aibill · cache error · run npx aibill init", columns);
   }
 
   const snapshot = result.snapshot;
   const freshness = freshnessSegment(snapshot, now);
   if (snapshot.mode === "error") {
-    return fitStatic(`aibill · ${freshness} · run aibill init`, columns);
+    return fitStatic(`aibill · ${freshness} · run npx aibill init`, columns);
   }
   if (snapshot.mode === "empty") {
     return assembleLine(["no usage yet"], freshness, columns);
@@ -306,7 +306,7 @@ export function renderStatusline(
       segments = renderUnresolved(snapshot, tier);
       break;
     default:
-      segments = ["cache error", "run aibill init"];
+      segments = ["cache error", "run npx aibill init"];
   }
 
   if (overage) {
@@ -399,7 +399,7 @@ export async function runStatuslineHook(options: {
     stdout.on("error", () => undefined);
     guardedOutputs.add(stdout);
   }
-  let line = "aibill · cache error · run aibill init";
+  let line = "aibill · cache error · run npx aibill init";
   try {
     const [result] = await Promise.all([
       readStatuslineCache(options.cache),
@@ -1659,7 +1659,7 @@ if (isDirectInvocation()) {
     process.exitCode = 0;
   }).catch(() => {
     try {
-      process.stdout.write("aibill · cache error · run aibill init\n");
+      process.stdout.write("aibill · cache error · run npx aibill init\n");
     } catch {
       // No stderr or non-zero exit on a hook path.
     }

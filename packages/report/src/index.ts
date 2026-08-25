@@ -708,7 +708,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     `Generated: ${generatedAt}`,
     "",
     input.telemetryDisclosure === true
-      ? "> Report rendered locally; the generating run shared anonymous command counts (aibill telemetry off to disable). Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled."
+      ? "> Report rendered locally; the generating run shared anonymous command counts (npx aibill telemetry off to disable). Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled."
       : "> Report rendered locally with no aibill telemetry. Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled.",
     "",
     ...dataModeBannerLines(input.dataMode),
@@ -2160,7 +2160,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       </div>
       <aside class="privacy-banner" aria-label="Privacy posture">
         <span class="privacy-dot" aria-hidden="true"></span>
-        <strong>${input.telemetryDisclosure === true ? "Report rendered locally. The generating run shared anonymous command counts (aibill telemetry off to disable)." : "Report rendered locally. No aibill telemetry."}</strong>
+        <strong>${input.telemetryDisclosure === true ? "Report rendered locally. The generating run shared anonymous command counts (npx aibill telemetry off to disable)." : "Report rendered locally. No aibill telemetry."}</strong>
         <span>Only an explicit provider sync contacts the selected provider; credentials are referenced, not printed or persisted.</span>
       </aside>
       ${isSample ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative mixed cost/value evidence—not your logs, account, bill, margin, savings, or ROI. No local logs or provider account data were used.</span></aside>` : ""}

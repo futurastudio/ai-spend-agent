@@ -1590,7 +1590,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     return {
       exitCode: 1,
       stdout: "",
-      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: aibill telemetry [on|off]`
+      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: npx aibill telemetry [on|off]`
     };
   }
 
@@ -1642,7 +1642,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       "telemetry on · anonymous command counts only",
       `counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
       "never: arguments, paths, file contents, project names, or your email",
-      "events start with your next run · see payloads anytime: aibill telemetry"
+      "events start with your next run · see payloads anytime: npx aibill telemetry"
     ].join("\n"));
   }
 
@@ -1668,7 +1668,7 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
   } else {
     lines.push("last payload sent: none");
   }
-  lines.push("switch: aibill telemetry on · aibill telemetry off");
+  lines.push("switch: npx aibill telemetry on · npx aibill telemetry off");
   return ok(lines.join("\n"));
 }
 
@@ -1832,7 +1832,7 @@ async function doctorCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
     `node version: ${process.version}`,
     `cli version: ${await cliVersion()}`,
     runtime.telemetryDisclosure === true
-      ? "local-first mode: enabled (evidence stays local · anonymous command counts shared · aibill telemetry off)"
+      ? `local-first mode: enabled (evidence stays local · ${telemetryDisclosureLine})`
       : "local-first mode: enabled (no cloud upload, no telemetry)",
     `path: ${rootPath}`,
     `state directory: ${stateDir}`,
@@ -2439,7 +2439,7 @@ async function statuslineCommand(
     exitCode: 1,
     stdout: "",
     stderr: `Unknown statusline action: ${sanitizeSecretishError(action)}\n` +
-      "Use: aibill statusline [refresh|install|uninstall|expand]"
+      "Use: npx aibill statusline [refresh|install|uninstall|expand]"
   };
 }
 
@@ -2511,7 +2511,7 @@ function statuslineInstallerFailure(
         `The local filesystem operation failed safely${safeFileSystemErrorCode(error)}; no successful settings change was claimed.`
       );
   const replacement = installerError.code === "statusline-conflict"
-    ? "\nTo replace an existing status line explicitly: aibill statusline install --replace"
+    ? "\nTo replace an existing status line explicitly: npx aibill statusline install --replace"
     : "";
   return {
     exitCode: 1,
@@ -4735,7 +4735,7 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
           : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
       runtime.telemetryDisclosure === true
-        ? "privacy: report rendered locally · anonymous command counts shared · aibill telemetry off; only explicit sync-provider contacts the selected provider"
+        ? `privacy: report rendered locally · ${telemetryDisclosureLine}; only explicit sync-provider contacts the selected provider`
         : "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
@@ -8116,7 +8116,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
     "",
     telemetryDisclosure === true
-      ? "Privacy: local analysis and reports upload nothing; anonymous command counts shared · aibill telemetry off. Only explicit sync-provider contacts the selected provider through an env: reference."
+      ? `Privacy: local analysis and reports upload nothing; ${telemetryDisclosureLine}. Only explicit sync-provider contacts the selected provider through an env: reference.`
       : "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
     "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
   ].join("\n");

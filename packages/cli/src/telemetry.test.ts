@@ -424,7 +424,7 @@ describe("aibill telemetry command", () => {
 
     const unknown = await runCli(["telemetry", "sideways"], { homeDirectory: home });
     expect(unknown.exitCode).toBe(1);
-    expect(unknown.stderr).toContain("Use: aibill telemetry [on|off]");
+    expect(unknown.stderr).toContain("Use: npx aibill telemetry [on|off]");
   });
 
   it("fresh status is honest about never having sent anything", async () => {
@@ -510,7 +510,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const helpOff = await runCli(["--help"]);
     expect(helpOff.stdout).toContain("Privacy: local analysis and reports upload nothing. Only explicit");
     const helpOn = await runCli(["--help"], { telemetryDisclosure: true });
-    expect(helpOn.stdout).toContain("anonymous command counts shared · aibill telemetry off");
+    expect(helpOn.stdout).toContain("anonymous command counts shared · npx aibill telemetry off");
   });
 
   it("doctor and report surfaces disclose in both states — including the generated md/html files (QA B1)", async () => {
@@ -520,7 +520,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const doctorOff = await runCli(["doctor", "--path", dir]);
     expect(doctorOff.stdout).toContain("local-first mode: enabled (no cloud upload, no telemetry)");
     const doctorOn = await runCli(["doctor", "--path", dir], { telemetryDisclosure: true });
-    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · aibill telemetry off");
+    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · npx aibill telemetry off");
     expect(doctorOn.stdout).not.toContain("no telemetry)");
 
     const reportOff = await runCli(["report", "--path", dir]);
@@ -534,12 +534,12 @@ describe("receipt-line truth (both states pinned)", () => {
 
     const reportOn = await runCli(["report", "--path", dir], { telemetryDisclosure: true });
     expect(reportOn.exitCode).toBe(0);
-    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · aibill telemetry off");
+    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · npx aibill telemetry off");
     expect(reportOn.stdout).not.toContain("no aibill telemetry");
     const markdownOn = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const htmlOn = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     // Persistent, shareable artifacts must state what their generating run did.
-    expect(markdownOn).toContain("the generating run shared anonymous command counts (aibill telemetry off to disable)");
+    expect(markdownOn).toContain("the generating run shared anonymous command counts (npx aibill telemetry off to disable)");
     expect(markdownOn).not.toContain("no aibill telemetry");
     expect(htmlOn).toContain("The generating run shared anonymous command counts");
     expect(htmlOn).not.toContain("No aibill telemetry.");
@@ -771,5 +771,28 @@ describe("unjoinability to signup (structural)", () => {
       kind: "ok",
       state: { status: "subscribed" }
     });
+  });
+});
+
+describe("npx-form command strings (0.9.3 — founder hit 'command not found')", () => {
+  // npx users have no bare `aibill` on PATH. Every command the telemetry
+  // surfaces tell a human to RUN must carry the npx form, verbatim.
+  it("pins the notice and disclosure lines to the npx form", () => {
+    expect(telemetryNoticeLines).toEqual([
+      "aibill counts which commands run — anonymous, never your data or content",
+      "turn off: npx aibill telemetry off",
+      "see payloads: npx aibill telemetry"
+    ]);
+    expect(telemetryDisclosureLine).toBe(
+      "anonymous command counts shared · npx aibill telemetry off"
+    );
+  });
+
+  it("no shipped telemetry instruction regresses to a bare `aibill` invocation", () => {
+    for (const line of [...telemetryNoticeLines, telemetryDisclosureLine]) {
+      // Any `aibill telemetry…` occurrence must be immediately preceded by
+      // "npx " — a bare invocation would strand npx users.
+      expect(line).not.toMatch(/(?<!npx )aibill telemetry/u);
+    }
   });
 });
