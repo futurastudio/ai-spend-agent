@@ -13,7 +13,7 @@ instructions.
 - Ten MCP tools, including `get_usage_glance`, `get_context_health`, and the
   read-only `draft_improve_command` improve-plan drafting tool.
 
-The plugin launches `@agent-finops/mcp@0.9.1` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.9.2` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository
@@ -31,7 +31,9 @@ local structured result.
 
 ## Privacy boundary
 
-aibill sends no telemetry or transcripts to an aibill service. CLI transcript
+The aibill MCP server and plugin skills send no telemetry or transcripts to
+an aibill service (optional CLI command-count telemetry is documented in
+docs/TELEMETRY.md and is never emitted by MCP). CLI transcript
 analysis and the source-built Glance preview run locally. Scan, sync, and report
 tools may write explicit local state under the selected project's
 `.ai-spend-agent/` directory. A successful provider sync also writes a

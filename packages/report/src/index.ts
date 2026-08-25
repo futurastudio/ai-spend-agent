@@ -40,6 +40,12 @@ export {
 
 export type SpendReportInput = {
   summary: SpendSummary;
+  /**
+   * True when the generating run had telemetry enabled AND noticed: the
+   * report's privacy lines must then disclose the command counts instead of
+   * claiming "no aibill telemetry" (receipt-line truth; TELEMETRY.md).
+   */
+  telemetryDisclosure?: boolean;
   discovery?: LocalDiscoveryResult;
   mappings?: AttributionMapping[];
   sourceRegistry?: SourceRegistry;
@@ -58,6 +64,11 @@ export type SpendReportInput = {
    * back to providerRecords for older callers.
    */
   allRecords?: UsageRecord[];
+  /**
+   * Connected mode only: separately priced local transcript evidence. These
+   * API-equivalent values are never added to the connected provider headline.
+   */
+  localFinancialRecords?: UsageRecord[];
   /** Where the analyzed data came from. Sample is labeled non-finance-grade. */
   dataMode?: "sample" | "local_logs" | "connected_provider";
   /** Real dead-context findings (named items + config paths) for the apply artifact. */
@@ -504,6 +515,107 @@ function connectedReadoutLine(input: SpendReportInput, basis: ReportFinancialPre
   return `- Current readout: ${reportHeadlineAmount(basis, input)} of ${reportHeadlineLabel(basis).toLowerCase()} across ${input.summary.recordCount} connected provider record${input.summary.recordCount === 1 ? "" : "s"} with ${input.summary.confidence} confidence.`;
 }
 
+type ConnectedLocalFinancialAxis = {
+  records: UsageRecord[];
+  coverage: LocalFinancialCoverage;
+  summary: SpendSummary;
+  value: string;
+  detail: string;
+};
+
+function connectedLocalFinancialAxis(input: SpendReportInput): ConnectedLocalFinancialAxis {
+  // `localFinancialRecords` is an explicit accounting axis, not a generic
+  // record bag. Ignore any provider row a caller attempts to place here so a
+  // verified bill can never be counted again as API-equivalent value.
+  const records = input.dataMode === "connected_provider"
+    ? (input.localFinancialRecords ?? []).filter((record) => (
+        record.providerCostType === "local_agent_logs"
+      ))
+    : [];
+  const coverage = localFinancialCoverage(records);
+  if (records.length === 0) {
+    return {
+      records,
+      coverage,
+      summary: analyzeSpend(records),
+      value: "Not reported",
+      detail: "no readable local financial records were present"
+    };
+  }
+  if (coverage.pricedRecords.length === 0) {
+    return {
+      records,
+      coverage,
+      summary: analyzeSpend(records),
+      value: "Unavailable",
+      detail: `${coverage.missingRecords.length} record${coverage.missingRecords.length === 1 ? " has" : "s have"} missing cost evidence; missing/null is not zero`
+    };
+  }
+  const partial = coverage.missingRecords.length > 0;
+  return {
+    records,
+    coverage,
+    summary: analyzeSpend(records),
+    value: formatUsd(coverage.amountUsd),
+    detail: partial
+      ? `partial · ${coverage.pricedRecords.length} priced and ${coverage.missingRecords.length} missing; missing/null is not zero`
+      : `${coverage.pricedRecords.length} estimated local record${coverage.pricedRecords.length === 1 ? "" : "s"}`
+  };
+}
+
+function connectedFinancialAxesMarkdownLines(
+  input: SpendReportInput,
+  providerBasis: ReportFinancialPresentationBasis
+): string[] {
+  if (input.dataMode !== "connected_provider") return [];
+  const local = connectedLocalFinancialAxis(input);
+  return [
+    "",
+    "## Financial evidence by accounting basis (never blended)",
+    "",
+    `- Connected provider basis: ${reportHeadlineLabel(providerBasis)}: ${reportHeadlineAmount(providerBasis, input)}.`,
+    `- Local API-equivalent value: ${local.value} — ${local.detail}.`,
+    "- Combined financial total: Not reported — API-equivalent comparison evidence is not a provider bill. Never added to provider-reported cost.",
+    ...(local.records.length > 0
+      ? [
+          "",
+          "### Local API-equivalent value by project",
+          "",
+          ...breakdownLines(local.summary.byProject, local.records, "project"),
+          "",
+          "### Local API-equivalent value by agent",
+          "",
+          ...breakdownLines(local.summary.byAgent, local.records, "agent")
+        ]
+      : [])
+  ];
+}
+
+function connectedFinancialAxesHtml(
+  input: SpendReportInput,
+  providerBasis: ReportFinancialPresentationBasis
+): string {
+  if (input.dataMode !== "connected_provider") return "";
+  const local = connectedLocalFinancialAxis(input);
+  return `<section class="artifact-grid" aria-label="Financial evidence by accounting basis">
+      <article class="artifact-card">
+        <div class="section-label">Connected provider basis</div>
+        <h2>${escapeHtml(reportHeadlineLabel(providerBasis))}</h2>
+        <p><strong>${escapeHtml(reportHeadlineAmount(providerBasis, input))}</strong></p>
+      </article>
+      <article class="artifact-card">
+        <div class="section-label">Separate local comparison</div>
+        <h2>Local API-equivalent value</h2>
+        <p><strong>${escapeHtml(local.value)}</strong> · ${escapeHtml(local.detail)}</p>
+      </article>
+      <article class="artifact-card">
+        <div class="section-label">Basis boundary</div>
+        <h2>Combined financial total</h2>
+        <p><strong>Not reported</strong> · API-equivalent comparison evidence is not a provider bill. Never added to provider-reported cost.</p>
+      </article>
+    </section>`;
+}
+
 export function generateMarkdownReport(input: SpendReportInput): string {
   return generateSanitizedMarkdownReport(sanitizeMarkdownReportInput(input));
 }
@@ -595,7 +707,9 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     "",
     `Generated: ${generatedAt}`,
     "",
-    "> Report rendered locally with no aibill telemetry. Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled.",
+    input.telemetryDisclosure === true
+      ? "> Report rendered locally; the generating run shared anonymous command counts (aibill telemetry off to disable). Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled."
+      : "> Report rendered locally with no aibill telemetry. Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled.",
     "",
     ...dataModeBannerLines(input.dataMode),
     ...(qualitativeNotice && !isSample
@@ -613,6 +727,15 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     "## Executive summary",
     "",
     `- ${headlineLabel}: ${headlineAmount}`,
+    ...(isConnected
+      ? (() => {
+          const local = connectedLocalFinancialAxis(input);
+          return [
+            `- Local API-equivalent value: ${local.value} — ${local.detail}`,
+            "- Basis boundary: provider-reported cost and API-equivalent value are shown separately and are never added."
+          ];
+        })()
+      : []),
     `- Records analyzed: ${input.summary.recordCount}`,
     `- Overall confidence: ${input.summary.confidence}`,
     `- Discovery signals: ${input.discovery?.signals.length ?? 0}`,
@@ -655,6 +778,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     "## Evidence quality ledger",
     "",
     ...evidenceLedgerMarkdownLines(reportRecords),
+    ...connectedFinancialAxesMarkdownLines(input, financialBasis),
     "",
     "## Provider-by-provider live QA",
     "",
@@ -2036,7 +2160,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       </div>
       <aside class="privacy-banner" aria-label="Privacy posture">
         <span class="privacy-dot" aria-hidden="true"></span>
-        <strong>Report rendered locally. No aibill telemetry.</strong>
+        <strong>${input.telemetryDisclosure === true ? "Report rendered locally. The generating run shared anonymous command counts (aibill telemetry off to disable)." : "Report rendered locally. No aibill telemetry."}</strong>
         <span>Only an explicit provider sync contacts the selected provider; credentials are referenced, not printed or persisted.</span>
       </aside>
       ${isSample ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative mixed cost/value evidence—not your logs, account, bill, margin, savings, or ROI. No local logs or provider account data were used.</span></aside>` : ""}
@@ -2057,6 +2181,8 @@ export function generateHtmlReport(input: SpendReportInput): string {
       ${metricCard("Mapping questions", String(mappingQuestions.length), "Need confirmation for finance-grade attribution")}
       ${metricCard("Discovery signals", String(input.discovery?.signals.length ?? 0), "Local source hints found during scan")}
     </section>
+
+    ${connectedFinancialAxesHtml(input, financialBasis)}
 
     <section class="operating-loop" aria-label="Diagnose recommend apply verify operating loop">
       <div class="section-heading">
@@ -3024,7 +3150,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     <div class="term">
       <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
-        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${windowDays} day${windowDays === 1 ? "" : "s"} of data · report rendered locally · no aibill telemetry</span></p>
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${windowDays} day${windowDays === 1 ? "" : "s"} of data · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · aibill telemetry off" : "no aibill telemetry"}</span></p>
         ${qualitativeNotice ? `<p class="dim note-line"><strong>${escapeHtml(qualitativeNotice)}</strong></p>` : ""}
         ${tokenExperiment ? `<p class="dim note-line"><strong>CANONICAL TOKEN TEST ${escapeHtml(tokenExperiment.lifecycle.toUpperCase())} · ${escapeHtml(tokenExperiment.id)}</strong> · ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))} · matched-session token evidence only, not provider-billed savings, accepted-outcome proof, or ROI · continue with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span></p>` : ""}
 

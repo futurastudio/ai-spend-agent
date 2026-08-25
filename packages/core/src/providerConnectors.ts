@@ -254,6 +254,13 @@ export type GitHubCopilotReconciliationExpectation = {
    * so a huge tolerance can never rubber-stamp a mismatch.
    */
   toleranceUsd?: number;
+  /**
+   * Optional account binding: a bare slug or `org:<slug>` / `enterprise:<slug>`.
+   * When present, the anchor applies ONLY to a sync of that account; a sync
+   * of any other org/enterprise fails the reconciliation closed (QA C3 —
+   * leftover shell env must never verify a different account by coincidence).
+   */
+  account?: string;
 };
 
 export type GitHubCopilotReconciliationOutcome = {
@@ -272,7 +279,14 @@ export type GitHubCopilotReconciliationOutcome = {
 export const gitHubCopilotReconciliationEnvVars = {
   expectedUsd: "AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD",
   billingMonth: "AI_SPEND_COPILOT_RECONCILE_MONTH",
-  toleranceUsd: "AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD"
+  toleranceUsd: "AI_SPEND_COPILOT_RECONCILE_TOLERANCE_USD",
+  /**
+   * Optional binding of the anchor to ONE account (post-hoc QA C3): a bare
+   * slug or `org:<slug>` / `enterprise:<slug>`. When set, a sync of any
+   * other account fails the reconciliation closed instead of stamping a
+   * coincidence-equal total verified with leftover shell env.
+   */
+  account: "AI_SPEND_COPILOT_RECONCILE_ACCOUNT"
 } as const;
 
 /**
@@ -288,6 +302,9 @@ export function parseGitHubCopilotReconciliationEnv(
   const rawExpected = env[gitHubCopilotReconciliationEnvVars.expectedUsd];
   const rawMonth = env[gitHubCopilotReconciliationEnvVars.billingMonth];
   const rawTolerance = env[gitHubCopilotReconciliationEnvVars.toleranceUsd];
+  const rawAccount = env[gitHubCopilotReconciliationEnvVars.account];
+  // A dangling ACCOUNT binding alone requests nothing — it only constrains a
+  // reconciliation that the expected/month pair actually requested.
   if (rawExpected === undefined && rawMonth === undefined && rawTolerance === undefined) {
     return {};
   }
@@ -298,10 +315,12 @@ export function parseGitHubCopilotReconciliationEnv(
   }
   const expectedNetUsd = Number(rawExpected.trim());
   const toleranceUsd = rawTolerance === undefined ? undefined : Number(rawTolerance.trim());
+  const account = rawAccount?.trim();
   const expectation: GitHubCopilotReconciliationExpectation = {
     expectedNetUsd,
     expectedBillingMonth: rawMonth.trim(),
-    ...(toleranceUsd === undefined ? {} : { toleranceUsd })
+    ...(toleranceUsd === undefined ? {} : { toleranceUsd }),
+    ...(account ? { account } : {})
   };
   const invalidReason = invalidGitHubCopilotReconciliationExpectationReason(expectation);
   return invalidReason ? { invalidReason } : { expectation };
@@ -319,6 +338,11 @@ function invalidGitHubCopilotReconciliationExpectationReason(
   if (expectation.toleranceUsd !== undefined &&
       (!Number.isFinite(expectation.toleranceUsd) || expectation.toleranceUsd < 0)) {
     return `${gitHubCopilotReconciliationEnvVars.toleranceUsd} must be a non-negative USD amount when set`;
+  }
+  if (expectation.account !== undefined &&
+      !/^(?:(?:org|enterprise):)?[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(expectation.account)) {
+    // Never echo the raw value — env parse reasons are printed verbatim.
+    return `${gitHubCopilotReconciliationEnvVars.account} must be an org/enterprise slug, optionally prefixed org: or enterprise:`;
   }
   return undefined;
 }
@@ -1075,11 +1099,28 @@ async function fetchGitHubCopilot(input: ProviderConnectorInput, token: string, 
     ? { expectation: input.copilotReconciliation, invalidReason: invalidGitHubCopilotReconciliationExpectationReason(input.copilotReconciliation) }
     : parseGitHubCopilotReconciliationEnv();
   const aiCredit = await fetchGitHubCopilotAiCreditUsage(fetcher, input, request, requested.expectation);
-  const reconciliation = assessGitHubCopilotReconciliation(aiCredit, requested.expectation, requested.invalidReason);
-  const metricsRecords = metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId }));
-  const seatRecords = seatFetch ? seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })) : [];
+  const syncedAccount = input.org
+    ? { scope: "org" as const, slug: input.org }
+    : { scope: "enterprise" as const, slug: input.enterprise! };
+  const reconciliation = assessGitHubCopilotReconciliation(aiCredit, requested.expectation, requested.invalidReason, syncedAccount);
+  // Dedupe every record family by stable id BEFORE the QA summary so a
+  // GitHub page-shift during churn (the same seat or day row returned on
+  // two pages) can never double-count estimated dollars or usage (QA M2).
+  const metricsRecords = dedupeGitHubCopilotRecordsById(
+    metricsFetch.pages.flatMap((page) => normalizeGitHubCopilotMetricsResponse(page, { sourceId, observedFrom: "GitHub Copilot metrics API", accountId })),
+    metricsFetch
+  );
+  const seatRecords = seatFetch
+    ? dedupeGitHubCopilotRecordsById(
+        seatFetch.pages.flatMap((page) => normalizeGitHubCopilotSeatResponse(page, { sourceId, observedFrom: "GitHub Copilot billing seats API", accountId })),
+        seatFetch
+      )
+    : [];
   const aiCreditRecords = aiCredit.fetch
-    ? aiCredit.fetch.pages.flatMap((page) => normalizeGitHubCopilotAiCreditUsageResponse(page, { sourceId, observedFrom: "GitHub AI-credit usage report", accountId }, reconciliation))
+    ? dedupeGitHubCopilotRecordsById(
+        aiCredit.fetch.pages.flatMap((page) => normalizeGitHubCopilotAiCreditUsageResponse(page, { sourceId, observedFrom: "GitHub AI-credit usage report", accountId }, reconciliation)),
+        aiCredit.fetch
+      )
     : [];
   const qa = qaSummary("github-copilot", [metricsFetch, ...(seatFetch ? [seatFetch] : []), ...(aiCredit.fetch ? [aiCredit.fetch] : [])]);
   if (aiCredit.unavailableReason) {
@@ -1222,6 +1263,20 @@ function markMalformedGitHubCopilotAiCreditRows(fetchResult: FetchPagesResult, l
   fetchResult.responseDrift.push(...issues);
 }
 
+/** Case-insensitive account-binding match; a bare slug matches either scope. */
+function gitHubCopilotAccountBindingMatches(
+  declared: string,
+  synced: { scope: "org" | "enterprise"; slug: string } | undefined
+): boolean {
+  if (!synced) return false;
+  const normalized = declared.trim().toLowerCase();
+  const scoped = normalized.match(/^(org|enterprise):(.+)$/);
+  if (scoped) {
+    return scoped[1] === synced.scope && scoped[2] === synced.slug.toLowerCase();
+  }
+  return normalized === synced.slug.toLowerCase();
+}
+
 /**
  * Compare the connector's summed AI-credit net total for one billing month
  * against the operator-read billing page figure. Every exit that is not a
@@ -1232,7 +1287,8 @@ function markMalformedGitHubCopilotAiCreditRows(fetchResult: FetchPagesResult, l
 function assessGitHubCopilotReconciliation(
   aiCredit: GitHubCopilotAiCreditUsage,
   expectation: GitHubCopilotReconciliationExpectation | undefined,
-  invalidReason: string | undefined
+  invalidReason: string | undefined,
+  syncedAccount?: { scope: "org" | "enterprise"; slug: string }
 ): GitHubCopilotReconciliationOutcome | undefined {
   if (!expectation && !invalidReason) return undefined;
   if (invalidReason || !expectation) {
@@ -1242,6 +1298,16 @@ function assessGitHubCopilotReconciliation(
     };
   }
   const billingMonth = expectation.expectedBillingMonth;
+  if (expectation.account !== undefined &&
+      !gitHubCopilotAccountBindingMatches(expectation.account, syncedAccount)) {
+    // QA C3: leftover shell env from one account's runbook pass must never
+    // stamp a different account verified on a coincidence-equal total.
+    return {
+      status: "not_provable",
+      billingMonth,
+      note: `${gitHubCopilotReconciliationEnvVars.account} is bound to a different org/enterprise than this sync; the billing figure was not applied. Reconcile one account per shell, or update the binding. Records remain estimated.`
+    };
+  }
   if (!aiCredit.fetch) {
     return {
       status: "not_provable",
@@ -1263,11 +1329,21 @@ function assessGitHubCopilotReconciliation(
     const monthKey = typeof year === "number" && typeof month === "number"
       ? `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`
       : undefined;
-    if (monthKey !== billingMonth || timePeriod?.day !== undefined) {
+    if (monthKey !== billingMonth) {
       return {
         status: "not_provable",
         billingMonth,
         note: `The declared billing month ${billingMonth} does not match the provider-reported time period${monthKey ? ` ${monthKey}` : ""}; the billing page figure and the connector read different windows. Records remain estimated.`
+      };
+    }
+    if (timePeriod?.day !== undefined) {
+      // Fail closed on any day field (null included), and say WHY without
+      // the self-contradictory month-vs-same-month wording (QA A4): a
+      // day-scoped report cannot anchor a whole-month billing figure.
+      return {
+        status: "not_provable",
+        billingMonth,
+        note: `GitHub Copilot reconciliation requires a whole-month AI-credit report; the provider-reported time period carries a day field, so the monthly billing page figure cannot be compared against it. Records remain estimated.`
       };
     }
   }
@@ -1614,16 +1690,67 @@ function assessGitHubCopilotSeatCompleteness(fetchResult: FetchPagesResult): voi
   const expected = fetchResult.pages
     .map((page) => isRecord(page) ? numberValue(page.total_seats) : undefined)
     .find((value): value is number => typeof value === "number");
-  const actual = fetchResult.pages.reduce<number>((sum, page) => sum + extractArray(page, "seats").length, 0);
+  // Count UNIQUE seat identities (same derivation as the normalizer), not raw
+  // rows: a GitHub page-shift during churn can return the same assignee on
+  // two pages, which would otherwise satisfy total_seats while a real seat
+  // went unfetched (QA M2). Rows without any identity still count singly.
+  const identities = new Set<string>();
+  let unidentifiedRows = 0;
+  for (const page of fetchResult.pages) {
+    for (const seat of extractArray(page, "seats")) {
+      if (!isRecord(seat)) {
+        unidentifiedRows += 1;
+        continue;
+      }
+      const assignee = isRecord(seat.assignee) ? seat.assignee : {};
+      const identity = stringValue(assignee.login) ?? stringValue(assignee.email) ?? stringValue(seat.login) ?? stringValue(seat.id);
+      if (identity) identities.add(identity);
+      else unidentifiedRows += 1;
+    }
+  }
+  const actual = identities.size + unidentifiedRows;
   if (typeof expected !== "number") {
     if (fetchResult.pagination.stoppedBecause === "complete") fetchResult.pagination.stoppedBecause = "missing_cursor";
     fetchResult.pagination.note = "GitHub Copilot seats response omitted total_seats; completeness cannot be proven.";
     fetchResult.responseDrift.push({ label: "GitHub Copilot seats", field: "total_seats", issue: fetchResult.pagination.note });
   } else if (fetchResult.pagination.stoppedBecause === "complete" && actual !== expected) {
     fetchResult.pagination.stoppedBecause = "missing_cursor";
-    fetchResult.pagination.note = `GitHub reported ${expected} seats but returned ${actual}; completeness cannot be proven.`;
+    fetchResult.pagination.note = `GitHub reported ${expected} seats but returned ${actual} unique seat identit${actual === 1 ? "y" : "ies"}; completeness cannot be proven.`;
     fetchResult.responseDrift.push({ label: "GitHub Copilot seats", field: "total_seats", issue: fetchResult.pagination.note });
   }
+}
+
+/**
+ * Dedupe one normalized GitHub Copilot record family by stable id, mirroring
+ * the OpenAI dedupe semantics: an identical duplicate is excluded with a
+ * drift note; conflicting rows sharing one id are ALL excluded (evidence
+ * that cannot be told apart must not be counted). Any duplicate marks the
+ * fetch's coverage incomplete so the sync reports partial instead of
+ * silently inflating estimated dollars (QA M2).
+ */
+function dedupeGitHubCopilotRecordsById(records: UsageRecord[], fetchResult: FetchPagesResult): UsageRecord[] {
+  const byId = new Map<string, UsageRecord>();
+  const conflicted = new Set<string>();
+  for (const record of records) {
+    const existing = byId.get(record.id);
+    if (!existing && !conflicted.has(record.id)) {
+      byId.set(record.id, record);
+      continue;
+    }
+    fetchResult.coverageIncomplete = true;
+    fetchResult.responseDrift.push({
+      label: fetchResult.pagination.label,
+      field: "normalized records[].id",
+      issue: existing && JSON.stringify(existing) === JSON.stringify(record)
+        ? "duplicate provider record was excluded"
+        : "conflicting provider records shared one stable identity; all conflicting rows were excluded"
+    });
+    if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
+      byId.delete(record.id);
+      conflicted.add(record.id);
+    }
+  }
+  return Array.from(byId.values());
 }
 
 async function fetchPaginatedJson(
@@ -2318,7 +2445,7 @@ function providerInstructions(provider: string): string[] {
       "Use a GitHub token reference with org or enterprise Copilot metrics, billing seats, and billing usage read access.",
       "Fine-grained token permissions (2026): 'Organization Copilot metrics: read' for usage metrics, 'GitHub Copilot Business: read' for seats, and 'Administration: read' for the AI-credit usage report (classic PATs: read:org and/or manage_billing:copilot; enterprise reads accept read:enterprise). The org's Copilot 'usage metrics' policy must be enabled.",
       "Seat records estimate monthly plan commitment at list price ($19 Business / $39 Enterprise); metrics records are usage evidence without direct spend allocation.",
-      "AI-credit records carry GitHub-billed net dollars (usage-based billing for every Copilot Business/Enterprise account since 2026-06-01; 1 AI credit bills as $0.01) and stay estimated until an in-sync reconciliation matches the billing page figure; set AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD and AI_SPEND_COPILOT_RECONCILE_MONTH to run one. Legacy premium-request billing is not fetched or blended.",
+      "AI-credit records carry GitHub-billed net dollars (usage-based billing for every Copilot Business/Enterprise account since 2026-06-01; 1 AI credit bills as $0.01) and stay estimated until an in-sync reconciliation matches the billing page figure; set AI_SPEND_COPILOT_RECONCILE_EXPECTED_USD and AI_SPEND_COPILOT_RECONCILE_MONTH to run one, and optionally AI_SPEND_COPILOT_RECONCILE_ACCOUNT (org:<slug> or enterprise:<slug>) to bind the anchor to one account when several are synced from one shell. Legacy premium-request billing is not fetched or blended.",
       "Individual Copilot (Free/Pro/Pro+) exposes no org billing or metrics API; the personal-plan endpoints under /users/{username}/settings/billing need that user's own token with 'Plan: read' and are not implemented."
     ];
   }

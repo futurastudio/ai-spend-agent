@@ -240,18 +240,20 @@ const identityFields: Array<{
   {
     field: "owner", kind: "name", label: "owner",
     question: "Who is the accountable human owner of this project's AI cost?",
-    example: "Jose Artigas"
+    // Neutral placeholder identities only — a real person's details in an
+    // e.g. hint read as prefilled truth (shipped-audit fix).
+    example: "Sam Rivera"
   },
   {
     field: "team", kind: "team", label: "team",
     question: "What team does this cost belong to?",
-    example: "Futura Studio"
+    example: "Platform Team"
   },
   {
     field: "role", kind: "role", label: "role",
     question: "What is your approval role for this project?",
     guidance: "(A job role — not aibill's held/passed quality vocabulary.)",
-    example: "Founder"
+    example: "Engineering Manager"
   },
   {
     field: "client", kind: "optional", label: "client",

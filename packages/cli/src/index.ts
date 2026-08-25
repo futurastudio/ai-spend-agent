@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +12,29 @@ import {
   renderForYourAgent,
   type GuidedPromptSource
 } from "./guidedPrompt.js";
+import {
+  assessEmailDeliverability,
+  buildWaitlistRef,
+  normalizeWaitlistEmail,
+  postWaitlistSignup,
+  readSignupState,
+  clearSignupState,
+  sanitizeSignupRefTag,
+  serializeWaitlistPayload,
+  signupCopy,
+  signupStateFilePath,
+  writeSignupState,
+  type SignupDnsResolver
+} from "./signup.js";
+import {
+  killTelemetryForThisProcess,
+  readTelemetryState,
+  telemetryDisclosureLine,
+  telemetryNoticeLines,
+  telemetryStateFilePath,
+  writeTelemetryState,
+  type TelemetryState
+} from "./telemetry.js";
 import {
   parsePlanDraft,
   renderCleanExit,
@@ -117,6 +141,7 @@ import {
   markTokenReductionAppliedV0,
   invalidateTokenReductionExperimentV0,
   markTokenReductionRolledBackV0,
+  activitySnapshotCachePath,
   readActivitySnapshot,
   recordActivitySnapshotRefreshFailure,
   refreshTokenReductionExperimentV0,
@@ -282,6 +307,16 @@ type ParsedArgs = {
   outcomeAction?: "github";
   pullRequestNumber?: number;
   businessOutcome?: string;
+  /** signup: the email typed as the positional argument. */
+  signupEmail?: string;
+  /** signup: sanitized attribution tag from --ref (e.g. starfund). */
+  signupRef?: string;
+  /** signup --forget: clear local signup state. */
+  signupForget?: boolean;
+  /** signup --never: record never-ask without sending anything. */
+  signupNever?: boolean;
+  /** telemetry subcommand: on | off | (absent = status). */
+  telemetryAction?: string;
   parseErrors: string[];
 };
 
@@ -306,6 +341,16 @@ export type CliRuntimeOptions = {
     source: GuidedPromptSource;
     write: (text: string) => void;
   }>;
+  /** Test override for the waitlist signup POST. Production uses global fetch. */
+  waitlistFetch?: typeof fetch;
+  /** Test override for signup email deliverability DNS. Production uses node:dns. */
+  signupDns?: SignupDnsResolver;
+  /**
+   * Set ONLY by the bin entrypoint when telemetry is enabled AND noticed:
+   * every "nothing uploaded" claim then prints the disclosure line instead.
+   * Embedded/MCP callers never set it (and never emit telemetry).
+   */
+  telemetryDisclosure?: boolean;
 };
 
 export async function runCli(
@@ -316,7 +361,7 @@ export async function runCli(
     return ok(await cliVersion());
   }
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
-    return ok(helpText());
+    return ok(helpText(runtime.telemetryDisclosure));
   }
 
   const args = parseArgs(argv);
@@ -360,7 +405,7 @@ export async function runCli(
   }
 
   if (args.command === "doctor") {
-    return doctorCommand(args);
+    return doctorCommand(args, runtime);
   }
 
   if (args.command === "reset") {
@@ -373,6 +418,14 @@ export async function runCli(
 
   if (args.command === "statusline") {
     return statuslineCommand(args, runtime);
+  }
+
+  if (args.command === "signup") {
+    return signupCommand(args, runtime);
+  }
+
+  if (args.command === "telemetry") {
+    return telemetryCommand(args, runtime);
   }
 
   if (args.command === "scan") {
@@ -388,7 +441,7 @@ export async function runCli(
   }
 
   if (args.command === "report") {
-    return reportCommand(args);
+    return reportCommand(args, runtime);
   }
 
   if (args.command === "report-card") {
@@ -400,7 +453,7 @@ export async function runCli(
   }
 
   if (args.command === "context" || args.command === "context-health") {
-    return contextHealthCommand(args);
+    return contextHealthCommand(args, runtime);
   }
 
   if (args.command === "apply-artifact" || args.command === "apply") {
@@ -458,7 +511,7 @@ export async function runCli(
   return {
     exitCode: 1,
     stdout: "",
-    stderr: `Unknown command: ${sanitizeSecretishError(args.command)}\n${helpText()}`
+    stderr: `Unknown command: ${sanitizeSecretishError(args.command)}\n${helpText(runtime.telemetryDisclosure)}`
   };
 }
 
@@ -507,7 +560,7 @@ async function quickstartCommand(
     financialCoverageComplete
   } = await loadInstantReadData(args);
   if (records.length === 0) {
-    return noEvidenceResult("receipt", warnings, sinceDays);
+    return noEvidenceResult("receipt", warnings, sinceDays, runtime.telemetryDisclosure);
   }
   const summaryRecords = mode === "connected"
     ? selectProviderFinancialHeadlineRecords(records)
@@ -607,6 +660,10 @@ async function quickstartCommand(
     groupBy,
     color,
     mode,
+    // Receipt-line truth: with telemetry enabled+noticed the receipt's
+    // privacy claim discloses the command counts instead of "nothing
+    // uploaded".
+    ...(runtime.telemetryDisclosure === true ? { telemetryDisclosureLine } : {}),
     ...(providerCoverage ? { providerCoverage } : {}),
     nextSteps,
     deadContext,
@@ -909,7 +966,7 @@ async function glanceCommand(args: ParsedArgs): Promise<CliResult> {
   return ok(JSON.stringify(snapshot));
 }
 
-async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
+async function contextHealthCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const sinceIso = sinceIsoForDays(sinceDays);
@@ -935,10 +992,10 @@ async function contextHealthCommand(args: ParsedArgs): Promise<CliResult> {
   const qualitativeCoverage = summarizeCliQualitativeCoverage(logs);
   return ok(args.json
     ? JSON.stringify({ ...health, qualitativeCoverage })
-    : `${renderContextHealth(health)}\n\n${renderCliQualitativeCoverage(qualitativeCoverage)}`);
+    : `${renderContextHealth(health, runtime.telemetryDisclosure)}\n\n${renderCliQualitativeCoverage(qualitativeCoverage)}`);
 }
 
-function renderContextHealth(health: ContextHealthResult): string {
+function renderContextHealth(health: ContextHealthResult, telemetryDisclosure?: boolean): string {
   const status = health.status.replace("_", " ").toUpperCase();
   const activation = health.activation;
   const dead = health.deadContext;
@@ -991,7 +1048,7 @@ function renderContextHealth(health: ContextHealthResult): string {
   lines.push(
     "",
     "Data: local agent configuration + local Claude Code/Codex transcripts; hook commands were not run.",
-    "Privacy: this CLI run uploads nothing."
+    `Privacy: ${uploadsNothingLine(telemetryDisclosure, "this CLI run uploads nothing.")}`
   );
   return lines.join("\n");
 }
@@ -1011,11 +1068,18 @@ function quickstartNextSteps(
   }
   steps.push(
     mode === "demo"
-      ? "npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
+      // Every printed command must run as printed: the demo workspace does
+      // not exist yet, so the command creates it first (shipped-audit fix).
+      ? "mkdir -p ./demo-workspace && npx aibill report --sample --path ./demo-workspace     write a clearly labeled demo report in an explicitly narrow workspace"
       : "npx aibill report              write a shareable Markdown + HTML report"
   );
   steps.push("npx aibill --group-by project  see which project has the most observed activity");
   steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com");
+  if (mode === "demo") {
+    // Static pointer only — sample output is built for recordings and
+    // screenshots, so it never prompts (capture design moments map).
+    steps.push(signupCopy.samplePointer);
+  }
   return steps;
 }
 
@@ -1421,10 +1485,203 @@ function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string 
     `${coverage.skippedForBudget} eligible files skipped by budget`;
 }
 
+/**
+ * `aibill signup <email> [--ref <token>]` — the explicit, deliberate path to
+ * the launch list. Sends EXACTLY {email, ref} to the deployed waitlist route
+ * after showing the literal payload JSON and receiving a typed `y` on a real
+ * terminal. Never sends without the confirm; never retries, queues, or
+ * persists the typed email on failure. `--forget` clears local signup state;
+ * `--never` records never-ask without sending anything.
+ */
+async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const stateFile = signupStateFilePath(runtime.homeDirectory);
+
+  if (args.signupForget) {
+    const cleared = await clearSignupState(stateFile);
+    return cleared
+      ? ok(signupCopy.forgetLine)
+      : { exitCode: 1, stdout: "", stderr: "local signup state could not be cleared; check ~/.aibill permissions" };
+  }
+
+  const priorRead = await readSignupState(stateFile);
+  const priorAskCount = priorRead.kind === "ok" ? priorRead.state.askCount : 0;
+
+  if (args.signupNever) {
+    const written = await writeSignupState(stateFile, { version: 1, status: "never", askCount: priorAskCount });
+    return written
+      ? ok(signupCopy.neverLine)
+      : { exitCode: 1, stdout: "", stderr: "never-ask could not be persisted; check ~/.aibill permissions" };
+  }
+
+  if (!args.signupEmail) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: [
+        "signup needs an email: npx aibill signup you@work.com [--ref <token>]",
+        "Optional: signup --never (never ask again) · signup --forget (clear local signup state)"
+      ].join("\n")
+    };
+  }
+
+  // Consent requires a human at a real terminal; there is deliberately no
+  // --yes flag and no non-TTY path (QA 2).
+  if (runtime.interactive !== true || !runtime.prompt) {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.nonInteractiveLine };
+  }
+
+  const email = normalizeWaitlistEmail(args.signupEmail);
+  if (email === undefined) {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.invalidEmailLine };
+  }
+  // Deliverability (MX with A fallback, 1.5s budget, fail-open on DNS
+  // trouble): only a provable cannot-receive domain or a throwaway inbox is
+  // refused — never a slow or offline resolver.
+  const deliverability = await assessEmailDeliverability(email, {
+    ...(runtime.signupDns ? { resolver: runtime.signupDns } : {})
+  });
+  if (deliverability === "no_mx") {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.noMxLine };
+  }
+  if (deliverability === "disposable") {
+    return { exitCode: 1, stdout: "", stderr: signupCopy.disposableLine };
+  }
+
+  if (priorRead.kind === "ok" && priorRead.state.status === "subscribed" && priorRead.state.email === email) {
+    // Cosmetic-local dedupe; the route itself is idempotent (201 on duplicate).
+    return ok(signupCopy.alreadyLine);
+  }
+
+  const payload = { email, ref: buildWaitlistRef("signup", args.signupRef) };
+  const consent = (await runtime.prompt(
+    `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`
+  )).trim().toLowerCase();
+  if (consent !== "y" && consent !== "yes") {
+    return ok(signupCopy.nothingSentLine);
+  }
+
+  const outcome = await postWaitlistSignup(payload, { fetchImpl: runtime.waitlistFetch });
+  if (outcome === "sent") {
+    await writeSignupState(stateFile, { version: 1, status: "subscribed", askCount: priorAskCount, email });
+    return ok(signupCopy.sentLine);
+  }
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: outcome === "invalid_email"
+      ? signupCopy.invalidEmailLine
+      : outcome === "rate_limited"
+        ? signupCopy.rateLimitedLine
+        : signupCopy.unreachableLine
+  };
+}
+
+/**
+ * `aibill telemetry [on|off]` — inspect or switch anonymous command-count
+ * telemetry. Status shows the EXACT last payload verbatim; state is
+ * fail-closed (corrupt/readonly ⇒ off).
+ */
+async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const filePath = telemetryStateFilePath(runtime.homeDirectory);
+  const read = await readTelemetryState(filePath);
+  const action = args.telemetryAction;
+
+  if (action !== undefined && action !== "on" && action !== "off") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `Unknown telemetry action: ${sanitizeSecretishError(action)}\nUse: aibill telemetry [on|off]`
+    };
+  }
+
+  if (action === "off") {
+    const state: TelemetryState = {
+      version: 1,
+      installId: read.kind === "ok" ? read.state.installId : randomUUID(),
+      enabled: false,
+      ...(read.kind === "ok" && read.state.noticedAt !== undefined ? { noticedAt: read.state.noticedAt } : {}),
+      ...(read.kind === "ok" && read.state.lastPayload !== undefined ? { lastPayload: read.state.lastPayload } : {})
+    };
+    if (!await writeTelemetryState(filePath, state)) {
+      // FAIL CLOSED (QA M1): the off could not be persisted and the stored
+      // state may still say enabled — silence THIS process and point at the
+      // env kill-switches for a durable off.
+      killTelemetryForThisProcess();
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: [
+          "telemetry off could not be persisted — nothing more will be sent by this run.",
+          "For a durable off, set AI_SPEND_NO_TELEMETRY=1 or DO_NOT_TRACK=1, then fix ~/.aibill permissions."
+        ].join("\n")
+      };
+    }
+    killTelemetryForThisProcess();
+    return ok("telemetry off · nothing is sent");
+  }
+
+  if (action === "on") {
+    // Turning telemetry on explicitly IS the notice moment: the user is
+    // reading this command's output, so noticedAt is stamped now and
+    // events begin on the next run.
+    const state: TelemetryState = {
+      version: 1,
+      installId: read.kind === "ok" ? read.state.installId : randomUUID(),
+      enabled: true,
+      noticedAt: new Date().toISOString(),
+      ...(read.kind === "ok" && read.state.lastPayload !== undefined ? { lastPayload: read.state.lastPayload } : {})
+    };
+    if (!await writeTelemetryState(filePath, state)) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "telemetry state could not be written — telemetry remains off (unreadable state fails closed)"
+      };
+    }
+    return ok([
+      "telemetry on · anonymous command counts only",
+      `counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
+      "never: arguments, paths, file contents, project names, or your email",
+      "events start with your next run · see payloads anytime: aibill telemetry"
+    ].join("\n"));
+  }
+
+  const lines = ["aibill telemetry"];
+  if (read.kind === "unreadable") {
+    lines.push("status: off (state unreadable — telemetry fails closed)");
+  } else if (read.kind === "fresh") {
+    lines.push("status: not yet noticed · nothing has ever been sent");
+    lines.push("a one-time notice prints after your next interactive run; events begin only after it");
+  } else if (!read.state.enabled) {
+    lines.push("status: off · nothing is sent");
+  } else if (read.state.noticedAt === undefined) {
+    lines.push("status: on but not yet noticed · nothing has been sent");
+  } else {
+    lines.push(`status: on · noticed ${read.state.noticedAt}`);
+  }
+  lines.push(
+    "counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp",
+    "never: arguments, paths, file contents, project names, or your email"
+  );
+  if (read.kind === "ok" && read.state.lastPayload !== undefined) {
+    lines.push("last payload sent (verbatim):", read.state.lastPayload);
+  } else {
+    lines.push("last payload sent: none");
+  }
+  lines.push("switch: aibill telemetry on · aibill telemetry off");
+  return ok(lines.join("\n"));
+}
+
+/** The run-level privacy claim: literal truth in both telemetry states. */
+function uploadsNothingLine(telemetryDisclosure: boolean | undefined, original: string): string {
+  return telemetryDisclosure === true ? telemetryDisclosureLine : original;
+}
+
 function noEvidenceResult(
   surface: "receipt" | "watch" | "report-card",
   warnings: readonly string[],
-  sinceDays: number
+  sinceDays: number,
+  telemetryDisclosure?: boolean
 ): CliResult {
   const surfaceLine = surface === "watch"
     ? "Watch has no financial baseline yet; no zero total or sample activity was recorded."
@@ -1439,11 +1696,12 @@ function noEvidenceResult(
           "",
           surfaceLine,
           "Looked for: Claude Code, Codex, and Gemini CLI local history.",
-          "Nothing was uploaded. No sample data was substituted.",
+          `${uploadsNothingLine(telemetryDisclosure, "Nothing was uploaded.")} No sample data was substituted.`,
           ...warnings.map((warning) => `! ${warning}`),
           "",
           "Next",
-          "  npx aibill doctor --sources       see the exact evidence gap and setup paths"
+          "  npx aibill doctor --sources       see the exact evidence gap and setup paths",
+          `  ${signupCopy.receiptPointer}`
         ].join("\n")
       : "",
     stderr: surface === "receipt"
@@ -1502,7 +1760,7 @@ function dataModeBanner(mode: InstantReadMode, records: readonly UsageRecord[]):
   return "DATA MODE: demo sample (illustrative — not your real spend)";
 }
 
-async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
+async function doctorCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   if (args.sources) {
     return doctorSourcesCommand(args);
   }
@@ -1573,7 +1831,9 @@ async function doctorCommand(args: ParsedArgs): Promise<CliResult> {
     "aibill doctor",
     `node version: ${process.version}`,
     `cli version: ${await cliVersion()}`,
-    "local-first mode: enabled (no cloud upload, no telemetry)",
+    runtime.telemetryDisclosure === true
+      ? "local-first mode: enabled (evidence stays local · anonymous command counts shared · aibill telemetry off)"
+      : "local-first mode: enabled (no cloud upload, no telemetry)",
     `path: ${rootPath}`,
     `state directory: ${stateDir}`,
     `state mode: ${stateMode}`,
@@ -2208,7 +2468,9 @@ async function installStatuslineCommand(
         ? "aibill statusline is already installed in Claude user settings."
         : "aibill statusline installed in Claude user settings.",
       "Claude Code: run /status to verify the active setting and every managed source.",
-      "The renderer reads only the private aibill cache; it never reads Claude's session stdin as financial evidence."
+      "The renderer reads only the private aibill cache; it never reads Claude's session stdin as financial evidence.",
+      // Static pointer only — never a prompt (capture design moments map).
+      signupCopy.statuslinePointer
     ].join("\n"));
   } catch (error) {
     return statuslineInstallerFailure("install", error);
@@ -2360,7 +2622,8 @@ async function initCommand(
     trustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted === true,
     untrustedProviderState: persisted?.mode === "connected_provider" && persisted.connectedTrust?.trusted !== true,
     scanError,
-    cacheStatus
+    cacheStatus,
+    ...(runtime.telemetryDisclosure !== undefined ? { telemetryDisclosure: runtime.telemetryDisclosure } : {})
   });
   if (!args.statusline) {
     return ok(`${receipt}\noptional Claude Code status line: npx aibill statusline install`);
@@ -2858,16 +3121,37 @@ function expansionFreshness(snapshot: ExpansionSnapshot, now: Date): string {
       : seconds < 48 * 3_600
         ? `${Math.floor(seconds / 3_600)}h`
         : `${Math.floor(seconds / 86_400)}d`;
-  return ageMs > 5 * 60 * 1_000 ? `stale ${age}` : `updated ${age}`;
+  // Same freshness vocabulary as the statusline runner: state the cache age
+  // as fact instead of calling minutes-old data "stale".
+  return ageMs > 5 * 60 * 1_000 ? `cache ${age} old` : `updated ${age}`;
 }
 
 async function preflightInitCache(cacheDirectory: string | undefined): Promise<void> {
   const existing = await readActivitySnapshot({ cacheDirectory });
   if (existing.status !== "error") return;
+  // A pre-created but EMPTY cache directory holds nothing to preserve —
+  // typically a user-made dir with default (non-0700) permissions. Init's
+  // own create path re-validates and tightens it to 0700, so proceeding is
+  // safe; only a directory with actual contents aborts (shipped-audit fix).
+  if (existing.code === "unsafe_directory" && await isEmptyRealDirectory(dirname(activitySnapshotCachePath({
+    ...(cacheDirectory ? { cacheDirectory } : {})
+  })))) {
+    return;
+  }
   throw new Error(
     `Existing private activity cache is ${existing.code.replaceAll("_", " ")}; ` +
     "it was preserved and init stopped. Remove the cache explicitly before rebuilding it."
   );
+}
+
+async function isEmptyRealDirectory(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isDirectory()) return false;
+    return (await readdir(path)).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function preserveOrCreateInitRegistry(
@@ -2982,6 +3266,7 @@ type InitReceiptInput = {
   untrustedProviderState: boolean;
   scanError?: string;
   cacheStatus: "refreshed" | "kept newer snapshot" | "refresh failed";
+  telemetryDisclosure?: boolean;
 };
 
 function initProviderCoverage(
@@ -3139,9 +3424,12 @@ function formatInitReceipt(input: InitReceiptInput): string {
     ...diagnosticLines,
     input.scanError ? `  ! scan failed: ${input.scanError}` : "",
     "",
-    `status cache: ${input.cacheStatus} · private local aggregate · nothing uploaded`,
+    `status cache: ${input.cacheStatus} · private local aggregate · ${uploadsNothingLine(input.telemetryDisclosure, "nothing uploaded")}`,
     "state: .ai-spend-agent",
     "manifest: written last",
+    // Static pointer only, ABOVE the strict single next-command exit line —
+    // init's `next:` line stays last (capture design moments map).
+    signupCopy.initPointer,
     "next: npx aibill doctor --sources"
   ].filter((line) => line !== "").join("\n");
 }
@@ -3655,7 +3943,9 @@ async function listSourcesCommand(args: ParsedArgs): Promise<CliResult> {
 // not first-run blockers.
 const selfServeProviders = new Set(["openai", "anthropic"]);
 const adminUpgradeProviders: Record<string, string> = {
-  cursor: "requires a Cursor TEAM-ADMIN key (Business plan only)",
+  // Cursor's Admin API is gated to Enterprise teams (cursor.com/docs/api);
+  // Business/Teams keys are rejected with 401/403.
+  cursor: "requires a Cursor TEAM-ADMIN key (Enterprise teams only)",
   "github-copilot": "requires a GitHub BILLING-ADMIN token (org/enterprise)",
   copilot: "requires a GitHub BILLING-ADMIN token (org/enterprise)"
 };
@@ -4339,7 +4629,7 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
   ].join("\n"));
 }
 
-async function reportCommand(args: ParsedArgs): Promise<CliResult> {
+async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   const rootPath = resolve(args.path);
 
   try {
@@ -4378,9 +4668,11 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
     const reportExperimentProjection = reportableExperiment
       ? buildActionVerificationProjectionV0(reportableExperiment)
       : undefined;
+    const telemetryDisclosure = runtime.telemetryDisclosure === true;
     const reportRenderInput: SpendReportInput = reportableExperiment
       ? {
           ...reportInput,
+          telemetryDisclosure,
           tokenExperiment: {
             id: reportableExperiment.id,
             lifecycle: reportableExperiment.lifecycle,
@@ -4390,7 +4682,7 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
             nextCommand: improveRuntimeCommand
           }
         }
-      : reportInput;
+      : { ...reportInput, telemetryDisclosure };
     const qualitativeActionsSuppressed = reportInput.dataMode !== "sample" &&
       reportInput.qualitativeCoverage?.status !== "complete";
     const outBase = args.out ? resolve(rootPath, args.out) : join(stateDir, "report");
@@ -4442,7 +4734,9 @@ async function reportCommand(args: ParsedArgs): Promise<CliResult> {
             !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
           ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
           : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
-      "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
+      runtime.telemetryDisclosure === true
+        ? "privacy: report rendered locally · anonymous command counts shared · aibill telemetry off; only explicit sync-provider contacts the selected provider"
+        : "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
       "",
       "next:",
       `  open ${htmlPath}       view the full report in your browser`,
@@ -6723,14 +7017,6 @@ async function buildReportInput(
   sinceDays = 30,
   options: { persistLocalFinancialState?: boolean } = {}
 ) {
-  // Known residual (QA m6, shipped documented in 0.9.1): in connected mode
-  // this input stays billed-only — the saved report's evidence total omits
-  // the local API-equivalent axis that the terminal receipt shows (it
-  // under-discloses, never overclaims, and improve's waste lane is
-  // unaffected because it derives from action evidence, not these records).
-  // 0.9.2 (ROADMAP): ride localFinancialRecords into the report's evidence
-  // section per-basis, exactly as the receipt does.
-  //
   // One anchor for logs, Context Health, the paste-ready prompt, and every
   // supporting Apply artifact. This prevents millisecond window drift between
   // files generated by the same command.
@@ -6830,13 +7116,17 @@ async function buildReportInput(
     freshLocalCalls = freshActionLogs.calls;
     freshCodexInvocationFiles = freshActionLogs.codexInvocationFiles;
   }
+  // Financial and qualitative readers have separate truth contracts. Always
+  // read the bounded/streaming financial axis once: local mode uses it as the
+  // headline, while connected mode carries it into the saved report as a
+  // separate API-equivalent comparison that is never added to billed cost.
+  const freshFinancialLogs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
+    sinceIso
+  }).catch(() => undefined);
   if (needsFreshLogs) {
-    const freshFinancialLogs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
-      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-      codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-      geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-      sinceIso
-    }).catch(() => undefined);
     if (freshFinancialLogs && freshFinancialLogs.records.length > 0) {
       const records = freshFinancialLogs.records;
       const summary = analyzeSpend(records);
@@ -7010,6 +7300,9 @@ async function buildReportInput(
     allRecords: spendState.mode === "connected_provider"
       ? selectProviderFinancialHeadlineRecords(spendState.records ?? [])
       : spendState.records ?? [],
+    ...(spendState.mode === "connected_provider" && (freshFinancialLogs?.records.length ?? 0) > 0
+      ? { localFinancialRecords: freshFinancialLogs!.records }
+      : {}),
     dataMode: spendState.mode,
     discovery,
     mappings: mappings ?? [],
@@ -7103,6 +7396,12 @@ function parseArgs(argv: string[]): ParsedArgs {
     parsed.provider = rest[0];
     rest.shift();
   }
+  if (command === "signup" && rest[0] && !rest[0].startsWith("-")) {
+    parsed.signupEmail = rest.shift();
+  }
+  if (command === "telemetry" && rest[0] && !rest[0].startsWith("--")) {
+    parsed.telemetryAction = rest.shift();
+  }
   if (command === "verify") {
     const first = rest[0];
     if (first === "inspect" || first === "start" || first === "mark-applied" ||
@@ -7131,7 +7430,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--interval", "--cycles", "--canary", "--quality", "--change-digest",
     "--rollback-digest", "--canary-digest", "--approved-at", "--applied-at",
     "--pr", "--business-outcome",
-    "--draft", "--record-applied-at", "--record-canary"
+    "--draft", "--record-applied-at", "--record-canary",
+    "--ref"
   ]);
   const numericValueFlags = new Set([
     "--since-days", "--confidence", "--start-time", "--end-time", "--interval", "--cycles", "--pr"
@@ -7275,6 +7575,29 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--ignore-state") {
       parsed.ignoreState = true;
+      continue;
+    }
+    if (arg === "--forget") {
+      parsed.signupForget = true;
+      continue;
+    }
+    if (arg === "--never") {
+      parsed.signupNever = true;
+      continue;
+    }
+    if (arg === "--ref") {
+      const next = rest[index + 1];
+      if (next) {
+        // Allowlist sanitization happens here so nothing outside
+        // [a-z0-9-]{1,24} can ever reach the payload builder (QA 8).
+        const tag = sanitizeSignupRefTag(next);
+        if (tag === undefined) {
+          parsed.parseErrors.push("--ref must be 1-24 lowercase letters, digits, or dashes (e.g. --ref starfund)");
+        } else {
+          parsed.signupRef = tag;
+        }
+        index += 1;
+      }
       continue;
     }
     if (arg === "--plan") {
@@ -7719,7 +8042,7 @@ function ok(stdout: string): CliResult {
   return { exitCode: 0, stdout, stderr: "" };
 }
 
-function helpText(): string {
+function helpText(telemetryDisclosure?: boolean): string {
   return [
     "aibill — your AI cost and usage evidence in one private view",
     "",
@@ -7729,11 +8052,11 @@ function helpText(): string {
     "  npx aibill --sample                  Show the clearly labeled illustrative demo (never implicit)",
     "  npx aibill --group-by agent          Drill down by source|model|client|project|agent|user|workspace|apiKey",
     "  npx aibill --plan <id>               Declare your plan when auto-detection can't (claude-max-5x|claude-max-20x|claude-pro|chatgpt-plus|chatgpt-pro)",
-    `  ${improveRuntimeCommand}    Source preview: test one personalized change and measure whether token usage fell`,
-    `  ${actionRuntimeCommand("index")}    Source preview: read very large agent histories to completion so results stop saying "indexing"`,
-    `  ${actionRuntimeCommand("identify")}    Source preview: confirm the human owner, team, client/cost center, and approval role`,
-    `  ${actionRuntimeCommand("outcome github")}    Source preview: attach one merged PR whose observed status checks passed`,
-    `  ${actionRuntimeCommand("accountability")}    Source preview: answer owner → outcome → approval → measured-result for this project`,
+    `  ${improveRuntimeCommand}    Test one personalized change and measure whether token usage fell`,
+    `  ${actionRuntimeCommand("index")}    Read very large agent histories to completion so results stop saying "indexing"`,
+    `  ${actionRuntimeCommand("identify")}    Confirm the human owner, team, client/cost center, and approval role`,
+    `  ${actionRuntimeCommand("outcome github")}    Attach one merged PR whose observed status checks passed`,
+    `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",
@@ -7756,6 +8079,9 @@ function helpText(): string {
     "    [--replace]           Explicitly replace an existing statusLine while preserving it for uninstall",
     "  statusline uninstall    Remove only the owned setting and restore its preserved predecessor",
     "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
+    "  signup <email> [--ref <token>]  Join the launch list · email only · the exact payload is shown before send",
+    "    [--never]             Never ask again (nothing is sent)   [--forget]  Clear local signup state",
+    "  telemetry [on|off]      Show anonymous command-count status + the exact last payload · switch it",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",
@@ -7789,7 +8115,9 @@ function helpText(): string {
     "Cron (production watch): add a crontab entry such as:",
     "  0 * * * * cd /path/to/workspace && npx --yes aibill watch --interval 3600 --cycles 1 >> aibill-watch.log 2>&1",
     "",
-    "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
+    telemetryDisclosure === true
+      ? "Privacy: local analysis and reports upload nothing; anonymous command counts shared · aibill telemetry off. Only explicit sync-provider contacts the selected provider through an env: reference."
+      : "Privacy: local analysis and reports upload nothing. Only explicit sync-provider contacts the selected provider through an env: reference.",
     "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
   ].join("\n");
 }
@@ -7828,11 +8156,41 @@ export async function runMain(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
   const isInstantDemo = !command || command === "quickstart" || command === "demo";
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const startedAtMs = Date.now();
 
-  // Show a spinner only for the work-heavy instant-demo path, and only on a
-  // real TTY so piped output stays clean.
+  // Bin-entry-only telemetry (notice-before-first-byte; see telemetry.ts).
+  // Embedded runCli callers and the MCP server never construct this, so
+  // they can never emit an event.
+  let telemetry: import("./telemetry.js").CliTelemetryRuntime | undefined;
+  try {
+    const { openCliTelemetry } = await import("./telemetry.js");
+    telemetry = await openCliTelemetry();
+  } catch {
+    // Telemetry must never break the CLI.
+  }
+
+  // The during-scan signup ask (capture design, placement addendum
+  // 2026-08-24): on a qualifying interactive first run the ask fills the
+  // scan wait — it prints its own wait line, so the spinner stays off. A
+  // run that does not qualify (or whose signup state disallows the ask)
+  // takes the exact fast path below, byte-identical.
+  let preAsk: import("./signup.js").TerminalPreReceiptAsk | undefined;
+  if (interactive && !process.env.CI && !process.env.AI_SPEND_NO_PROMPT) {
+    try {
+      const signup = await import("./signup.js");
+      if (signup.qualifiesForPreReceiptSignupAsk(argv)) {
+        preAsk = await signup.openPreReceiptSignupAskInTerminal();
+      }
+    } catch {
+      // The ask must never break the receipt path.
+    }
+  }
+
+  // Show a spinner only for the work-heavy instant-demo path, only on a
+  // real TTY so piped output stays clean, and never over the open ask.
   let spinner: { stop: () => void } | undefined;
-  if (isInstantDemo && process.stdout.isTTY && !process.env.NO_COLOR) {
+  if (isInstantDemo && !preAsk && process.stdout.isTTY && !process.env.NO_COLOR) {
     try {
       const { default: yoctoSpinner } = await import("yocto-spinner");
       spinner = yoctoSpinner({ text: "Reading local AI evidence…" }).start();
@@ -7842,15 +8200,16 @@ export async function runMain(): Promise<void> {
   }
 
   let result: CliResult;
+  let askOutcome: import("./signup.js").PreReceiptAskOutcome = { kind: "no_ask" };
   let promptInterface: import("node:readline/promises").Interface | undefined;
   let guidedInterface: import("node:readline").Interface | undefined;
   try {
-    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
     let guidedIoShared:
       | { source: GuidedPromptSource; write: (text: string) => void }
       | undefined;
-    result = await runCli(argv, {
+    const runPipeline = (): Promise<CliResult> => runCli(argv, {
       interactive,
+      ...(telemetry?.disclosureActive === true ? { telemetryDisclosure: true } : {}),
       ...(interactive ? {
         prompt: async (question: string) => {
           if (!promptInterface) {
@@ -7879,6 +8238,19 @@ export async function runMain(): Promise<void> {
         }
       } : {})
     });
+    if (preAsk) {
+      // Receipt renders only when BOTH the human's answer (bounded by the
+      // ask's own timeouts) and the pipeline have resolved; a pipeline
+      // error still waits for the bounded ask, then re-throws into the
+      // error voice below — never a hung prompt over a dead pipeline.
+      const { orchestratePreReceiptAsk } = await import("./signup.js");
+      const orchestrated = await orchestratePreReceiptAsk({ session: preAsk.session, runPipeline });
+      askOutcome = orchestrated.outcome;
+      if (!orchestrated.pipeline.ok) throw orchestrated.pipeline.error;
+      result = orchestrated.pipeline.value;
+    } else {
+      result = await runPipeline();
+    }
   } catch (error) {
     // The product's error voice, never a raw stack trace — and never an
     // un-redacted secret from a provider payload or file path.
@@ -7888,7 +8260,7 @@ export async function runMain(): Promise<void> {
       stdout: "",
       stderr: [
         `aibill hit an unexpected error: ${message}`,
-        "Nothing was uploaded. The command stopped without completing; run diagnostics before retrying.",
+        `${telemetry?.disclosureActive === true ? telemetryDisclosureLine : "Nothing was uploaded."} The command stopped without completing; run diagnostics before retrying.`,
         "Try `npx aibill doctor` for diagnostics, or open an issue: https://github.com/futurastudio/ai-spend-agent/issues"
       ].join("\n")
     };
@@ -7898,6 +8270,11 @@ export async function runMain(): Promise<void> {
     spinner?.stop();
   }
 
+  // A read that ended without the user pressing Enter (timeout / Ctrl-C)
+  // left the prompt line open; start the receipt on a fresh line.
+  if (preAsk?.needsFreshLine()) {
+    process.stdout.write("\n");
+  }
   if (result.stdout) {
     console.log(result.stdout);
   }
@@ -7905,6 +8282,30 @@ export async function runMain(): Promise<void> {
     console.error(result.stderr);
   }
   process.exitCode = result.exitCode;
+
+  // Consent renders strictly AFTER the receipt: scope line, the literal
+  // payload JSON, a typed y, ONE POST. Nothing here can change the
+  // receipt's bytes or exit code.
+  if (preAsk && askOutcome.kind === "email") {
+    await preAsk.runConsent(askOutcome);
+  }
+  preAsk?.close();
+
+  // Telemetry LAST: on the first interactive run this prints the one-time
+  // notice (and stamps it); on later noticed runs it fires ONE
+  // fire-and-forget event with a hard 1500ms abort. Never blocks the
+  // receipt, never changes the exit code.
+  try {
+    await telemetry?.finish({
+      argv,
+      ok: result.exitCode === 0,
+      durationMs: Date.now() - startedAtMs,
+      interactive,
+      version: await cliVersion()
+    });
+  } catch {
+    // Telemetry must never break the CLI.
+  }
 }
 
 if (invokedAsMain) {

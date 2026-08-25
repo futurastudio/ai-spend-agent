@@ -1394,6 +1394,107 @@ describe("board-style report generation", () => {
       .toContain("currentCostValueEvidenceUsd: 0.0075");
   });
 
+  it("keeps connected provider cost and local API-equivalent value on separate saved-report axes", () => {
+    const billedRecord: UsageRecord = {
+      ...providerRecords[0]!,
+      amountUsd: 8.66
+    };
+    const localEstimatedRecord: UsageRecord = {
+      id: "local-claude-api-equivalent",
+      timestamp: "2026-05-25T16:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Claude Code local logs",
+        provider: "anthropic",
+        confidence: "estimated",
+        observedFrom: "supported local transcript"
+      },
+      model: "claude-opus-4-8",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      amountUsd: 7.5,
+      costConfidence: "estimated",
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code",
+      projectId: "project-a",
+      operation: "Claude Code session"
+    };
+    const connectedInput: SpendReportInput = {
+      ...input,
+      allRecords: [billedRecord],
+      providerRecords: [billedRecord],
+      // A caller cannot launder a provider-billed row into the local axis.
+      localFinancialRecords: [localEstimatedRecord, billedRecord],
+      summary: analyzeSpend([billedRecord])
+    };
+
+    const markdown = generateMarkdownReport(connectedInput);
+    const html = generateHtmlReport(connectedInput);
+
+    for (const output of [markdown, html]) {
+      expect(output).toContain("Provider-reported cost");
+      expect(output).toContain("$8.66");
+      expect(output).toContain("Local API-equivalent value");
+      expect(output).toContain("$7.50");
+      expect(output).toContain("Never added to provider-reported cost");
+      expect(output).not.toContain("$16.16");
+    }
+    expect(markdown).toContain("## Financial evidence by accounting basis (never blended)");
+    expect(markdown).toContain("- Combined financial total: Not reported");
+    expect(markdown).toContain("### Local API-equivalent value by project");
+    expect(markdown).toContain("project-a: $7.50");
+    expect(markdown).toContain("### Local API-equivalent value by agent");
+    expect(markdown).toContain("claude-code: $7.50");
+    expect(html).toContain('aria-label="Financial evidence by accounting basis"');
+    expect(html).toContain("Combined financial total");
+    expect(html).toContain("Not reported");
+  });
+
+  it("keeps a missing local connected-report axis unavailable instead of zero", () => {
+    const billedRecord: UsageRecord = {
+      ...providerRecords[0]!,
+      amountUsd: 8.66
+    };
+    const localMissingRecord: UsageRecord = {
+      id: "local-cost-missing",
+      timestamp: "2026-05-25T16:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Codex local logs",
+        provider: "openai",
+        confidence: "verified",
+        observedFrom: "supported local transcript"
+      },
+      model: "unknown-model",
+      inputTokens: 500,
+      outputTokens: 100,
+      amountUsd: null,
+      costConfidence: "missing",
+      providerCostType: "local_agent_logs",
+      agentId: "codex",
+      projectId: "project-a",
+      operation: "Codex session"
+    };
+    const connectedInput: SpendReportInput = {
+      ...input,
+      allRecords: [billedRecord],
+      providerRecords: [billedRecord],
+      localFinancialRecords: [localMissingRecord],
+      summary: analyzeSpend([billedRecord])
+    };
+
+    const markdown = generateMarkdownReport(connectedInput);
+    const html = generateHtmlReport(connectedInput);
+
+    for (const output of [markdown, html]) {
+      expect(output).toContain("Local API-equivalent value");
+      expect(output).toContain("Unavailable");
+      expect(output).toContain("missing/null is not zero");
+      expect(output).not.toContain("Local API-equivalent value: $0.00");
+      expect(output).not.toContain("$8.66 + $0.00");
+    }
+  });
+
   it("keeps persisted partial provider coverage explicit across all provider QA entries", () => {
     const providerQa: SpendReportInput["providerQa"] = [
       {

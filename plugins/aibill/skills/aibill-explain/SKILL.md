@@ -41,6 +41,7 @@ advice; never fill a missing field with an estimate the contract did not make.
 - “No matching invocation” describes the selected transcript window, not
   permanent uselessness or proof that a configured definition was loaded into
   every turn.
-- aibill sends no telemetry or transcripts to an aibill service. Explicit
+- The aibill MCP server sends no telemetry or transcripts to an aibill
+  service. Explicit
   provider sync contacts the selected provider's official read-only API. An MCP
   result is returned to the invoking AI client under that client's data policy.

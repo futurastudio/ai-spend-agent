@@ -50,8 +50,8 @@ const serverHelp = [
   "  ai-spend-mcp --version   Show the package version and exit",
   "",
   "Data boundary:",
-  "  aibill sends no telemetry. Selected MCP tool results are returned to the",
-  "  invoking AI client and then follow that client's data-handling policy."
+  "  This MCP server sends no telemetry. Selected MCP tool results are returned",
+  "  to the invoking AI client and then follow that client's data-handling policy."
 ].join("\n");
 
 function jsonContent(value: unknown) {

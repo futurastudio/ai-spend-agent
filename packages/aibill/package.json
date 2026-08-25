@@ -1,6 +1,7 @@
 {
   "name": "aibill",
-  "version": "0.9.1",
+  "version": "0.9.2",
+  "funding": "https://asktilden.com",
   "description": "Short command for ai-spend-agent: local financial accountability for Claude Code, Codex, and experimental Gemini CLI cost evidence. Run: npx aibill",
   "type": "module",
   "bin": {
@@ -34,6 +35,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "ai-spend-agent": "0.9.1"
+    "ai-spend-agent": "0.9.2"
   }
 }

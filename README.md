@@ -627,14 +627,37 @@ current form records interest, not access to a signed download.
 ## Privacy & trust
 
 - **Local-first by default.** CLI and Glance transcript analysis happens on
-  your machine and sends no telemetry. An explicit `sync-provider` call uses
-  the inherited credential only with that provider's official API.
+  your machine. An explicit `sync-provider` call uses the inherited
+  credential only with that provider's official API.
+- **Anonymous command counts, notice-first.** The CLI can count which
+  commands run — never arguments, paths, content, dollars, or your email.
+  Nothing is sent before a one-time notice has been shown on an interactive
+  run; `aibill telemetry` prints the exact last payload verbatim,
+  `aibill telemetry off` (or `DO_NOT_TRACK`/`CI`/`AI_SPEND_NO_TELEMETRY`)
+  turns it off, and while it is on every receipt says so in place of
+  "nothing uploaded". Details and the full never-list:
+  [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
 - **Explicit MCP boundary.** When you invoke an MCP tool or plugin skill, its
   selected structured result is returned to that AI client and follows the
   client's data policy. The aibill process itself makes no telemetry/upload
   request.
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
+- **Launch-list signup is the sole, consent-gated exception to "uploads
+  nothing".** `npx aibill signup <email>` — and the single optional ask that
+  fills the first-run scan wait — sends exactly one JSON payload,
+  `{"email":"you@work.com","ref":"cli-signup"}`, to
+  `https://asktilden.com/api/waitlist`, and only after the CLI prints that
+  literal payload and you type `y` (the consent step always renders after
+  your receipt). Skipping costs two empty Enters (one nudge between);
+  two lifetime skips or `n` means it never asks again, and a timeout or
+  Ctrl-C never counts against you. The decision is stored in
+  `~/.aibill/signup.json` (aibill's second home-scope file, next to the
+  statusline cache); a failed send is never retried, queued, or persisted.
+  Like any web request, standard HTTP metadata (source IP, request headers)
+  accompanies the payload. The address is used only for product updates —
+  scope line `used only for updates · never shared`; the audience policy is
+  written down in [`docs/EMAIL_SEND_POLICY.md`](docs/EMAIL_SEND_POLICY.md).
 - **Estimates labeled as estimates.** Log-derived financial values with a
   supported price basis use published API rates and are tagged `estimated`;
   unsupported cost bases stay `missing`. Authenticated OpenAI and Anthropic

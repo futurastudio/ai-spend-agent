@@ -206,10 +206,17 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     label: "GitHub Copilot",
     preferredSourceType: "provider_api",
     preferredAccessMethod: "api",
-    verifiedFields: ["Copilot usage metrics", "seat assignments and reported plan types"],
+    // AI-credit billing (gross/discount/net) is implemented and shipped;
+    // billed dollars stay estimated until an AI_SPEND_COPILOT_RECONCILE_*
+    // reconciliation matches the billing page figure. Legacy premium-request
+    // billing is deliberately never fetched.
+    verifiedFields: [
+      "Copilot usage metrics",
+      "seat assignments and reported plan types",
+      "AI-credit gross, discount, and net billing usage report"
+    ],
     missingFields: [
       "GitHub admin token reference and organization or enterprise slug",
-      "AI-credit gross, discount, and net billing",
       "license invoice settlement"
     ]
   },
@@ -322,7 +329,7 @@ export const providerConnectorCatalog: ProviderConnectorCatalogEntry[] = [
     fallbackAuthModes: [],
     scopes: ["fine-grained Administration: read", "organization or enterprise billing access"],
     tokenStorage: "local_reference_only",
-    setupHint: "Use a local env reference to a GitHub token with read-only organization or enterprise Copilot metrics and seat access; AI-credit billing is not implemented."
+    setupHint: "Use a local env reference to a GitHub token with read-only organization or enterprise Copilot metrics, seat, and AI-credit billing usage access; billed AI-credit dollars stay estimated until an AI_SPEND_COPILOT_RECONCILE_* reconciliation matches the billing page figure."
   },
   {
     provider: "cursor",

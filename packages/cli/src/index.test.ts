@@ -86,7 +86,10 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).toContain("No sample data was substituted");
     expect(result.stdout).toContain("Looked for: Claude Code, Codex, and Gemini CLI");
     expect(result.stdout).toContain("doctor --sources");
-    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(1);
+    // Exactly two commands: the doctor next step and the optional signup
+    // pointer (static, never a prompt — capture design moments map).
+    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(2);
+    expect(result.stdout).toContain("npx aibill signup <email>");
     expect(result.stdout).not.toContain("connect openai");
     expect(result.stdout).not.toContain("connect anthropic");
     expect(result.stdout).not.toContain("$87.00");
@@ -210,7 +213,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.1$/);
+    expect(result.stdout).toMatch(/^0\.9\.2$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -3121,6 +3124,31 @@ describe("minimal CLI vertical slice", () => {
     await expect(readFile(settingsPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("proceeds through a pre-existing EMPTY cache dir but still aborts on one with contents", async () => {
+    // Shipped-audit fix: a user-made empty cache dir (default 0755 perms)
+    // holds nothing to preserve — init re-validates and tightens it itself.
+    const emptyCache = join(await mkdtemp(join(tmpdir(), "ai-spend-precreated-")), "cache");
+    await mkdir(emptyCache, { mode: 0o755 });
+    process.env.AIBILL_CACHE_DIR = emptyCache;
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-empty-cache-"));
+    const statuslineHome = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-empty-home-"));
+    const result = await runCli(["init", "--path", dir], { homeDirectory: statuslineHome });
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("status cache: refreshed");
+
+    // A cache dir that CONTAINS data but fails the safety read still aborts
+    // with the data preserved.
+    const unsafeCache = join(await mkdtemp(join(tmpdir(), "ai-spend-precreated-full-")), "cache");
+    await mkdir(unsafeCache, { mode: 0o755 });
+    await writeFile(join(unsafeCache, "stale-file.json"), "{}", "utf8");
+    process.env.AIBILL_CACHE_DIR = unsafeCache;
+    await expect(
+      runCli(["init", "--path", await mkdtemp(join(tmpdir(), "ai-spend-cli-init-unsafe-"))], { homeDirectory: statuslineHome })
+    ).rejects.toThrow("Existing private activity cache is unsafe directory");
+    await expect(readFile(join(unsafeCache, "stale-file.json"), "utf8")).resolves.toBe("{}");
+  });
+
   it("supports explicit init installation without changing bare-init consent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-project-"));
     const homeDirectory = await mkdtemp(join(tmpdir(), "ai-spend-cli-init-statusline-user-"));
@@ -4698,8 +4726,12 @@ describe("minimal CLI vertical slice", () => {
     ]);
 
     const receipt = await runCli(["--path", dir, "--no-color"]);
+    const report = await runCli(["report", "--path", dir, "--out", "connected-mixed"]);
+    const reportMarkdown = await readFile(join(dir, "connected-mixed.md"), "utf8");
+    const reportHtml = await readFile(join(dir, "connected-mixed.html"), "utf8");
 
     expect(receipt.exitCode).toBe(0);
+    expect(report.exitCode).toBe(0);
     expect(receipt.stdout).toContain("CONNECTED · MIXED EVIDENCE");
     // The claude sub row keeps its ~ figure from local transcripts.
     expect(receipt.stdout).toContain(
@@ -4717,6 +4749,14 @@ describe("minimal CLI vertical slice", () => {
     expect(receipt.stdout).toContain("includes $8.66 billed from sources without a subscription row");
     expect(receipt.stdout).toContain("$8.66 billed (provider-reported, verified)");
     expect(receipt.stdout).not.toContain("$16.16");
+    for (const output of [reportMarkdown, reportHtml]) {
+      expect(output).toContain("Provider-reported cost");
+      expect(output).toContain("$8.66");
+      expect(output).toContain("Local API-equivalent value");
+      expect(output).toContain("$7.50");
+      expect(output).toContain("Never added to provider-reported cost");
+      expect(output).not.toContain("$16.16");
+    }
   });
 
   it("warns on identical twin slices and prunes one with drop-slice (QA M1)", async () => {

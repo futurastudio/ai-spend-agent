@@ -20,7 +20,7 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain("AI RECEIPT · DEMO SAMPLE");
     expect(svg).toContain('aria-label="AI receipt demo sample"');
     expect(svg).toContain("$87.00");
-    expect(svg).toContain("ILLUSTRATIVE COST / VALUE EVIDENCE");
+    expect(svg).toContain("ILLUSTRATIVE EVIDENCE · DEMO SAMPLE");
     expect(svg).toContain("modeled API-rate opportunity");
     expect(svg).toMatch(/~\$[\d,]+\.\d{2}\/mo/);
     expect(svg).toContain('.modeled { fill: #fbbf24;');
@@ -178,9 +178,9 @@ describe("generateReportCardSvg", () => {
     const caption = generateReportCardCaption({ summary, records, mode: "connected" });
 
     expect(svg).toContain("1 provider · 2 provider records · detected/unverified");
-    expect(svg).toContain("CONNECTED UNVERIFIED COST / VALUE");
+    expect(svg).toContain("CONNECTED DETECTED EVIDENCE (UNVERIFIED)");
     expect(svg).not.toContain("PROVIDER-REPORTED COST");
-    expect(caption).toContain("connected unverified cost/value");
+    expect(caption).toContain("connected detected evidence (unverified)");
     expect(caption).not.toContain("in provider-reported cost");
     expect(svg).not.toContain("2 providers");
     expect(svg).not.toContain("2 calls");
@@ -299,10 +299,10 @@ describe("generateReportCardSvg", () => {
     const svg = generateReportCardSvg(input);
     const caption = generateReportCardCaption(input);
 
-    expect(svg).toContain("CONNECTED COST / VALUE UNAVAILABLE");
+    expect(svg).toContain("CONNECTED EVIDENCE · NO PRICED AMOUNT");
     expect(svg).toContain(">Unavailable</text>");
     expect(svg).not.toContain("$0.00");
-    expect(caption).toContain("cost/value unavailable (no priced financial evidence)");
+    expect(caption).toContain("amounts unavailable (no priced financial evidence)");
     expect(caption).not.toContain("$0.00");
   });
 });

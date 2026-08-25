@@ -83,6 +83,12 @@ export type PlainEnglishSummaryOptions = {
   mode?: "demo" | "connected" | "local-logs";
   /** Optional next-step CTA lines printed in the footer. */
   nextSteps?: string[];
+  /**
+   * When the CLI entrypoint runs with telemetry enabled AND noticed, the
+   * receipt's "nothing uploaded" claim is replaced by this line so the
+   * printed privacy claim never understates what leaves the machine.
+   */
+  telemetryDisclosureLine?: string;
   /** Provider response completeness; independent from row-level confidence. */
   providerCoverage?: "complete" | "partial";
   /**
@@ -636,7 +642,8 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
     summary.confidence,
     options.providerCoverage,
     presentationBasis,
-    c
+    c,
+    options.telemetryDisclosureLine
   );
   const headline = compactHeadline(
     presentationBasis,
@@ -714,6 +721,13 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   lines.push("");
   lines.push(...compactLabeledLines("Details", c.bold(detailsCommand), width, c));
   lines.push("");
+  if (options.mode === "demo") {
+    // Static signup pointer on the sample exit only — never a prompt, safe
+    // to record (capture design moments map). Keep byte-identical to the
+    // CLI's signupCopy.samplePointer (pinned by cli signup tests).
+    lines.push(`  ${c.dim("launch updates: npx aibill signup <email> · optional · email only")}`);
+    lines.push("");
+  }
 
   return renderTerminalLines(lines, width);
 }
@@ -723,7 +737,8 @@ function compactTrust(
   confidence: CostConfidence,
   providerCoverage: PlainEnglishSummaryOptions["providerCoverage"],
   basis: FinancialPresentationBasis,
-  c: Colors
+  c: Colors,
+  telemetryDisclosureLine?: string
 ): { label: string; note: string } {
   if (mode === "demo") {
     return {
@@ -734,7 +749,7 @@ function compactTrust(
   if (mode === "local-logs") {
     return {
       label: c.yellow(c.bold("LOCAL ESTIMATE")),
-      note: "private transcript evidence × published API rates · nothing uploaded"
+      note: `private transcript evidence × published API rates · ${telemetryDisclosureLine ?? "nothing uploaded"}`
     };
   }
   if (mode === "connected" && providerCoverage === "partial") {
@@ -802,7 +817,11 @@ function compactHeadline(
     case "local_missing":
       return { amount: "Unavailable", label: "local activity found · financial evidence missing" };
     default:
-      return { amount: `~${amount}`, label: "illustrative evidence" };
+      // Demo sample: the window total is an exact sum of the bundled
+      // illustrative records, so it renders bare — the full receipt already
+      // prints $87.00 without a tilde and the two surfaces must agree
+      // (tilde discipline: ~ marks modeled/monthly figures only).
+      return { amount, label: "illustrative evidence" };
   }
 }
 

@@ -93,13 +93,17 @@ enforcement are not shipped.
   then the first sync runs automatically over a default 30-day window — no
   placeholders, no second command to compose. The agent-native loop drafts
   it conversationally where an MCP client is present.
-- **Per-basis saved reports in connected mode.** The terminal receipt already
-  shows billed and API-equivalent money side by side; the saved `report` (and
-  the input `improve` shares) still narrows connected state to billed-only
-  evidence, so its total under-discloses the local API-equivalent axis (it
-  never overclaims, and improve's waste findings are unaffected — they derive
-  from action evidence). Ride the receipt's local financial records into the
-  report's evidence section per-basis.
+- **Per-basis saved reports in connected mode (implemented in the current
+  source preview).** Connected Markdown and HTML reports keep the provider
+  headline and fresh local API-equivalent evidence on separate axes. They
+  explicitly decline to publish a combined total; missing local cost stays
+  unavailable rather than becoming zero. Improve's waste lane is unchanged
+  because it derives from bounded action evidence, not financial aggregates.
+- **Aggregate receipt transport (groundwork only).** The source preview has a
+  strict numeric aggregate schema and a pure waitlist/durable-rate-limit
+  decision for a future opt-in receipt delivery route. No upload, email route,
+  ESP, `push`, authentication, storage, or cloud receipt is shipped. A hosted
+  surface remains post-launch work and must pass retention and abuse QA first.
 
 ## Later — the paid accountability system
 

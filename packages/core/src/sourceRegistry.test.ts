@@ -335,8 +335,13 @@ describe("provider source normalization", () => {
 
     expect(cursor?.verifiedFields).toEqual(["Cursor Admin API team-member spend aggregate"]);
     expect(cursor?.missingFields.join(" ")).toMatch(/filtered usage-event detail/);
+    // The shipped AI-credit connector is stated as implemented (post-hoc QA
+    // M1: the old copy claimed the launch feature did not exist), while
+    // legacy premium-request billing must never be advertised.
     expect(copilot?.verifiedFields.join(" ")).not.toMatch(/premium request/i);
-    expect(copilot?.missingFields.join(" ")).toMatch(/AI-credit gross, discount, and net billing/);
+    expect(copilot?.verifiedFields.join(" ")).toMatch(/AI-credit gross, discount, and net billing/);
+    expect(copilot?.missingFields.join(" ")).not.toMatch(/AI-credit/);
+    expect(copilot?.missingFields.join(" ")).toMatch(/license invoice settlement/);
     expect(gemini?.verifiedFields).toEqual([]);
     expect(gemini?.missingFields.join(" ")).toMatch(/provider-reported billed money/);
     for (const provider of ["anthropic", "cursor", "github-copilot", "codex"]) {

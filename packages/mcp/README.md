@@ -22,7 +22,7 @@ folder boundary never means its financial contents were verified.
 
 ## Run from npm
 
-> **AI-client data boundary:** aibill sends no telemetry and does not upload
+> **AI-client data boundary:** this MCP server sends no telemetry and does not upload
 > transcript contents. A selected tool result is returned to the AI client you
 > configure below and then follows that client's data-handling policy.
 
@@ -81,7 +81,8 @@ or claims savings, an accepted outcome, or ROI. See the
 [MCP guide](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/MCP.md) for inputs, provider support, development
 configuration, and troubleshooting.
 
-aibill sends no telemetry or transcripts to an aibill service. Explicit
+This MCP server sends no telemetry or transcripts to an aibill service; the
+CLI's own optional, disclosed command counting is documented in docs/TELEMETRY.md. Explicit
 provider sync sends the referenced credential only to the selected provider's
 official read-only API; raw credentials are never persisted or returned. An MCP
 tool result is returned to the invoking AI client under that client's
