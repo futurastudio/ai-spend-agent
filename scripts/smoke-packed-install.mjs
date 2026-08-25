@@ -150,7 +150,7 @@ try {
   if (
     statuslineRender.status !== 0 ||
     statuslineRender.stderr !== "" ||
-    statuslineRender.stdout !== "aibill · run aibill init\n"
+    statuslineRender.stdout !== "aibill · run npx aibill init\n"
   ) {
     throw new Error(
       "Packed statusline runner did not fail closed with one clean cache-only line: " +
