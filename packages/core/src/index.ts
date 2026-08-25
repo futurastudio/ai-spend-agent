@@ -11,6 +11,7 @@ export * from "./contextHealth.js";
 export * from "./cutList.js";
 export * from "./deadContext.js";
 export * from "./discovery.js";
+export * from "./emailAddress.js";
 export * from "./glance.js";
 export * from "./toolInvocations.js";
 export * from "./insights.js";

@@ -4694,7 +4694,7 @@ describe("minimal CLI vertical slice", () => {
     await writeFile(join(logsDir, "-Users-jose-myproject", "session.jsonl"), JSON.stringify({
       type: "assistant",
       timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      cwd: "/Users/testuser/myproject",
+      cwd: dir,
       sessionId: "sess-mixed-1",
       requestId: "req-mixed-1",
       message: { id: "msg-mixed-1", model: "claude-opus-4-8", usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }
@@ -4727,11 +4727,13 @@ describe("minimal CLI vertical slice", () => {
 
     const receipt = await runCli(["--path", dir, "--no-color"]);
     const report = await runCli(["report", "--path", dir, "--out", "connected-mixed"]);
+    const improve = await runCli(["improve", "--path", dir]);
     const reportMarkdown = await readFile(join(dir, "connected-mixed.md"), "utf8");
     const reportHtml = await readFile(join(dir, "connected-mixed.html"), "utf8");
 
     expect(receipt.exitCode).toBe(0);
     expect(report.exitCode).toBe(0);
+    expect(improve.exitCode).toBe(0);
     expect(receipt.stdout).toContain("CONNECTED · MIXED EVIDENCE");
     // The claude sub row keeps its ~ figure from local transcripts.
     expect(receipt.stdout).toContain(
@@ -4749,6 +4751,9 @@ describe("minimal CLI vertical slice", () => {
     expect(receipt.stdout).toContain("includes $8.66 billed from sources without a subscription row");
     expect(receipt.stdout).toContain("$8.66 billed (provider-reported, verified)");
     expect(receipt.stdout).not.toContain("$16.16");
+    expect(improve.stdout).toContain("PROJECT");
+    expect(improve.stdout).toContain("~$8 of ~$8 API-equivalent (100%, 30d) · rank 1 of 1 project");
+    expect(improve.stdout).not.toContain("$8.66 of $8.66 billed");
     for (const output of [reportMarkdown, reportHtml]) {
       expect(output).toContain("Provider-reported cost");
       expect(output).toContain("$8.66");

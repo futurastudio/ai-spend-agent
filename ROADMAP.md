@@ -98,9 +98,11 @@ enforcement are not shipped.
   headline and fresh local API-equivalent evidence on separate axes. They
   explicitly decline to publish a combined total; missing local cost stays
   unavailable rather than becoming zero. Improve's waste lane is unchanged
-  because it derives from bounded action evidence, not financial aggregates.
+  because it derives from bounded action evidence, not financial aggregates;
+  its project standing uses the separate local API-equivalent axis when that
+  evidence is present.
 - **Aggregate receipt transport (groundwork only).** The source preview has a
-  strict numeric aggregate schema and a pure waitlist/durable-rate-limit
+  strict client-supplied numeric aggregate schema and a pure waitlist/durable-rate-limit
   decision for a future opt-in receipt delivery route. No upload, email route,
   ESP, `push`, authentication, storage, or cloud receipt is shipped. A hosted
   surface remains post-launch work and must pass retention and abuse QA first.

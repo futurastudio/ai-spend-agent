@@ -1314,18 +1314,33 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   };
 }
 
-function localFinancialEvidenceComplete(result: LocalAgentLogResult): boolean {
-  const scanCoverageComplete = result.sourceScans.every((scan) => (
+function localFinancialScanComplete(result: LocalAgentLogResult): boolean {
+  return result.sourceScans.every((scan) => (
     scan.directoryStatus !== "unreadable" &&
     scan.unreadableFiles === 0 &&
     scan.malformedLines === 0 &&
     scan.unsupportedUsageSnapshots === 0
   ));
+}
+
+function localFinancialEvidenceComplete(result: LocalAgentLogResult): boolean {
   const everyObservedRowHasFinancialValue = result.records.length > 0 &&
     result.records.every((record) => (
       typeof record.amountUsd === "number" && record.costConfidence !== "missing"
     ));
-  return scanCoverageComplete && everyObservedRowHasFinancialValue;
+  return localFinancialScanComplete(result) && everyObservedRowHasFinancialValue;
+}
+
+function localFinancialAxisCoverage(
+  result: LocalAgentLogResult | undefined
+): "complete" | "partial" | "unavailable" {
+  if (!result) return "unavailable";
+  const everyObservedRowHasFinancialValue = result.records.every((record) => (
+    typeof record.amountUsd === "number" && record.costConfidence !== "missing"
+  ));
+  return localFinancialScanComplete(result) && everyObservedRowHasFinancialValue
+    ? "complete"
+    : "partial";
 }
 
 async function loadBoundedLocalActionEvidence(sinceIso: string): Promise<LocalAgentLogResult> {
@@ -4640,7 +4655,9 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
     // must not inspect local transcripts, account metadata, or persisted state.
     const reportInput = args.sample
       ? await buildExplicitSampleReportInput(rootPath)
-      : await buildReportInput(stateDir, rootPath, sinceDays);
+      : await buildReportInput(stateDir, rootPath, sinceDays, {
+          includeConnectedLocalFinancialAxis: true
+        });
     const persistedPreferredExperiment = args.sample
       ? undefined
       : chooseLatestTokenReductionExperiment(
@@ -5221,23 +5238,31 @@ async function improveCommand(
       stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
     }
     const reportInput = await buildReportInput(stateDir, rootPath, sinceDays, {
-      persistLocalFinancialState: runtime.interactive === true
+      persistLocalFinancialState: runtime.interactive === true,
+      includeConnectedLocalFinancialAxis: true
     });
+    const improveResultCardRecords = reportInput.dataMode === "connected_provider" &&
+        (reportInput.localFinancialRecords?.length ?? 0) > 0
+      ? [...reportInput.allRecords, ...reportInput.localFinancialRecords!]
+      : reportInput.allRecords;
+    const improveResultCardMode = reportInput.dataMode === "sample"
+      ? "demo"
+      : reportInput.dataMode === "connected_provider"
+        ? (reportInput.localFinancialRecords?.length ?? 0) > 0
+          ? "mixed"
+          : "connected"
+        : "local-logs";
     // C-lane §3: the current project's standing for the improve card's
     // PROJECT line, computed from the canonical result card contract.
     // Omitted (never fabricated) when no project attribution exists.
     const improveProjectLine = buildResultCardProjectLine({
       card: buildResultCard({
-        mode: reportInput.dataMode === "sample"
-          ? "demo"
-          : reportInput.dataMode === "connected_provider"
-            ? "connected"
-            : "local-logs",
+        mode: improveResultCardMode,
         windowDays: sinceDays,
-        records: reportInput.allRecords,
+        records: improveResultCardRecords,
         detectedPlans: reportInput.detectedPlans
       }),
-      records: reportInput.allRecords,
+      records: improveResultCardRecords,
       currentProjectId: resolve(rootPath) === (runtime.homeDirectory ?? homedir())
         ? undefined
         : basename(rootPath)
@@ -7015,7 +7040,10 @@ async function buildReportInput(
   stateDir: string,
   rootPath: string,
   sinceDays = 30,
-  options: { persistLocalFinancialState?: boolean } = {}
+  options: {
+    persistLocalFinancialState?: boolean;
+    includeConnectedLocalFinancialAxis?: boolean;
+  } = {}
 ) {
   // One anchor for logs, Context Health, the paste-ready prompt, and every
   // supporting Apply artifact. This prevents millisecond window drift between
@@ -7116,16 +7144,21 @@ async function buildReportInput(
     freshLocalCalls = freshActionLogs.calls;
     freshCodexInvocationFiles = freshActionLogs.codexInvocationFiles;
   }
-  // Financial and qualitative readers have separate truth contracts. Always
-  // read the bounded/streaming financial axis once: local mode uses it as the
-  // headline, while connected mode carries it into the saved report as a
-  // separate API-equivalent comparison that is never added to billed cost.
-  const freshFinancialLogs = await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
-    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-    codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-    geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
-    sinceIso
-  }).catch(() => undefined);
+  // Financial and qualitative readers have separate truth contracts. Local
+  // mode needs a fresh financial scan as its headline. Connected mode only
+  // needs the additional API-equivalent axis on the two user-facing surfaces
+  // that render it (Report and Improve); advanced Apply/verify commands keep
+  // their prior I/O profile and do not rescan financial history unnecessarily.
+  const needsFreshFinancialLogs = needsFreshLogs ||
+    options.includeConnectedLocalFinancialAxis === true;
+  const freshFinancialLogs = needsFreshFinancialLogs
+    ? await loadLocalAgentFinancialUsage({ financialIndex: cliFinancialIndex,
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+        geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
+        sinceIso
+      }).catch(() => undefined)
+    : undefined;
   if (needsFreshLogs) {
     if (freshFinancialLogs && freshFinancialLogs.records.length > 0) {
       const records = freshFinancialLogs.records;
@@ -7302,6 +7335,9 @@ async function buildReportInput(
       : spendState.records ?? [],
     ...(spendState.mode === "connected_provider" && (freshFinancialLogs?.records.length ?? 0) > 0
       ? { localFinancialRecords: freshFinancialLogs!.records }
+      : {}),
+    ...(spendState.mode === "connected_provider" && options.includeConnectedLocalFinancialAxis === true
+      ? { localFinancialCoverage: localFinancialAxisCoverage(freshFinancialLogs) }
       : {}),
     dataMode: spendState.mode,
     discovery,

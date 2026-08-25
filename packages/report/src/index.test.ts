@@ -1495,6 +1495,51 @@ describe("board-style report generation", () => {
     }
   });
 
+  it("distinguishes a failed local financial scan from a complete empty scan", () => {
+    const billedRecord: UsageRecord = {
+      ...providerRecords[0]!,
+      amountUsd: 8.66
+    };
+    const base: SpendReportInput = {
+      ...input,
+      allRecords: [billedRecord],
+      providerRecords: [billedRecord],
+      summary: analyzeSpend([billedRecord])
+    };
+    const unavailable = generateMarkdownReport({
+      ...base,
+      localFinancialCoverage: "unavailable"
+    });
+    const completeEmpty = generateMarkdownReport({
+      ...base,
+      localFinancialCoverage: "complete"
+    });
+
+    expect(unavailable).toContain(
+      "Local API-equivalent value: Unavailable — the local financial scan could not be completed; missing is not zero"
+    );
+    expect(unavailable).not.toContain("no local financial records were observed");
+    expect(completeEmpty).toContain(
+      "Local API-equivalent value: Not reported — no local financial records were observed in readable sources"
+    );
+    expect(completeEmpty).not.toContain("Local API-equivalent value: $0.00");
+  });
+
+  it("ignores the connected-only local axis outside connected reports", () => {
+    const localInput: SpendReportInput = {
+      ...input,
+      dataMode: "local_logs"
+    };
+    const withUnexpectedAxis: SpendReportInput = {
+      ...localInput,
+      localFinancialRecords: [providerRecords[0]!],
+      localFinancialCoverage: "unavailable"
+    };
+
+    expect(generateMarkdownReport(withUnexpectedAxis)).toBe(generateMarkdownReport(localInput));
+    expect(generateHtmlReport(withUnexpectedAxis)).toBe(generateHtmlReport(localInput));
+  });
+
   it("keeps persisted partial provider coverage explicit across all provider QA entries", () => {
     const providerQa: SpendReportInput["providerQa"] = [
       {
