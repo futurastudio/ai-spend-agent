@@ -13,6 +13,13 @@
 #   docs/assets/demo.gif             README / social embed
 set -euo pipefail
 
+# Telemetry kill-switch (0.9.4): the capture step below runs the REAL built
+# CLI — without these, every demo regeneration emitted production telemetry
+# from this machine. Exported here so every child (capture, shim, vhs) is
+# covered without anyone having to remember it.
+export AI_SPEND_NO_TELEMETRY=1
+export DO_NOT_TRACK=1
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO_ROOT/packages/cli/dist/index.js"
 [ -f "$CLI" ] || { echo "CLI not built — run: npm run build" >&2; exit 1; }
