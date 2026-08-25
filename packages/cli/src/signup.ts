@@ -799,18 +799,29 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       closed = true;
       settleWaiter(undefined);
     });
+    // SF2 (adversary): the interrupt copy is ask-phase copy. Once the flow
+    // has moved to the consent question, "skipped the ask · your receipt is
+    // still being read" is triple-false (email given, receipt rendered,
+    // exit imminent) — in consent phase a ^C settles the read silently and
+    // the consent step's own outcome line ("nothing sent") speaks.
+    let phase: "ask" | "consent" = "ask";
     lineInterface.on("SIGINT", () => {
       interrupted = true;
-      if (waiter) {
-        // A read was pending: skip the ask, keep the scan (QA M2).
-        process.stdout.write(`\n  ${signupCopy.interruptLine}\n`);
-        settleWaiter(undefined);
+      if (phase === "ask") {
+        if (waiter) {
+          // A read was pending: skip the ask, keep the scan (QA M2).
+          process.stdout.write(`\n  ${signupCopy.interruptLine}\n`);
+        } else {
+          // No read pending (already answered): readline was swallowing
+          // the ^C — say so and stand aside so the NEXT ^C gets the
+          // default kill behavior.
+          process.stdout.write(`\n  ${signupCopy.interruptAfterAnswerLine}\n`);
+        }
       } else {
-        // No read pending (already answered / consent done): readline was
-        // swallowing the ^C — say so and stand aside so the NEXT ^C gets
-        // the default kill behavior.
-        process.stdout.write(`\n  ${signupCopy.interruptAfterAnswerLine}\n`);
+        // Consent phase: end the line the ^C landed on; nothing more.
+        process.stdout.write("\n");
       }
+      settleWaiter(undefined);
       lineInterface.close();
     });
     const drainStrayLines = () => {
@@ -913,6 +924,7 @@ export async function openPreReceiptSignupAskInTerminal(): Promise<TerminalPreRe
       session,
       needsFreshLine: () => abortedRead,
       runConsent: async (outcome) => {
+        phase = "consent";
         if (interrupted) {
           // The ask was interrupted after the email was typed: consent never
           // renders, but the resolution is still announced (0.9.3 — an
