@@ -55,8 +55,9 @@ export function PageShell({
             See your own evidence locally
           </h2>
           <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
-            Free and open source. The default CLI runs locally with no account
-            or telemetry; provider connections and MCP sharing are always
+            Free and open source. The default CLI runs locally with no
+            account, and your code, prompts, and financial data never leave
+            your machine; provider connections and MCP sharing are always
             explicit.
           </p>
           <div className="mt-6 max-w-[380px]">

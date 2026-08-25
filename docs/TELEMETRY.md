@@ -40,7 +40,7 @@ in both states.
 ## The event — exactly this, nothing else
 
 ```json
-{"events":[{"installId":"<uuid v4>","command":"receipt","version":"0.9.2","os":"darwin","arch":"arm64","ci":false,"durationBucket":"lt5s","ok":true,"ts":"2026-08-25T10:00:00.000Z"}]}
+{"events":[{"installId":"<uuid v4>","command":"receipt","version":"0.9.2","os":"darwin","arch":"arm64","ci":false,"durationBucket":"lt5s","ok":true,"ts":"2001-01-01T00:00:00.000Z"}]}
 ```
 
 - `command` comes from a fixed allowlist (`receipt`, `full`, `group-by`,
@@ -52,6 +52,12 @@ in both states.
 - `durationBucket` is one of `lt1s | lt5s | lt30s | gte30s`.
 - One batch of one event per run, fire-and-forget: hard 1.5s abort, no
   retry, no queue, total silence on failure (any non-204 = drop).
+- Server-side, the ingest endpoint enforces the same schema (enum/pattern
+  fields only, unknown fields reject the batch) and rejects any event whose
+  `ts` is more than 48 hours in the future or more than 30 days in the past
+  of receipt. The example above deliberately carries an ancient `ts` so that
+  pasting it verbatim is rejected — an aged or far-future timestamp never
+  lands in the table.
 
 **The never-list:** arguments, flag values, paths, file contents, project
 names, models, dollar amounts, transcripts, your email — none of it is in

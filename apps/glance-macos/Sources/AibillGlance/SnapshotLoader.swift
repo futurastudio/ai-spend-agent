@@ -42,6 +42,11 @@ enum SnapshotLoader {
     process.arguments = command.arguments
     var environment = ProcessInfo.processInfo.environment
     environment["NO_COLOR"] = "1"
+    // The 30s background refresh must stay silent: on an install whose user
+    // has completed an interactive CLI run, each spawn would otherwise emit
+    // one telemetry event (~2,880/day). This kill-switch (honored by the CLI
+    // for any non-empty value) keeps Glance's "uploads nothing" literally true.
+    environment["AI_SPEND_NO_TELEMETRY"] = "1"
     process.environment = environment
 
     let stdout = Pipe()

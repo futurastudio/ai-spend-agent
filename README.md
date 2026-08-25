@@ -16,7 +16,8 @@ Building a Node integration? The
 contract for usage-record validation, analysis, Receipt v0, pinned standards
 projections, and terminal rendering.
 
-> **Version boundary:** npm latest is `v0.9.1`. It reads supported Claude Code,
+> **Version boundary:** the npm `latest` release (live version in the badge
+> above) reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
 > Context Health, plan/runway, invocation evidence, recommendations, and Apply.
@@ -61,7 +62,10 @@ complete. Local cumulative usage remains observed exposure. The guided
 and after one approved change; it can calculate token change
 only after matched evidence and an explicit quality guard, and it is not a
 cash-savings, accepted-outcome, or ROI conclusion. No provider connection or
-signup is required, and nothing leaves your laptop on the default local run.
+signup is required, and your transcripts, prompts, and financial evidence
+never leave your laptop on the default local run — the only disclosed
+signals are the anonymous command counts and consent-gated launch-email ask
+described in [Privacy & trust](#privacy--trust).
 Connect a provider's admin cost report only when you need official
 provider-reported cost alongside the local evidence.
 
@@ -89,7 +93,7 @@ terminal copy.*
 ## Get started
 
 1. **Initialize a private personal baseline:** run `npx aibill init` from a
-   project. npm v0.9.1 detects supported Claude Code, Codex, and experimental
+   project. The published npm release detects supported Claude Code, Codex, and experimental
    Gemini CLI financial evidence and backfills the last 30 days. It prints the
    first evidence-labeled
    receipt and stores only the Claude Code/Codex fields supported by the small
@@ -142,9 +146,9 @@ developer, engineering leader, agency owner, or finance team does next:
 | --- | --- | --- |
 | Can this work finish before the reported limit? | Pair available five-hour or weekly windows with reset time, a separately labeled exhaustion projection, and one session action. | **Available** when the coding agent reports the limit metadata; missing windows are never guessed. |
 | What work is driving the available usage and cost evidence? | Inspect observed activity and cost evidence by project, model, agent, workspace, user, or client. | **Available** where the source exposes the dimension; coverage gaps stay visible. |
-| Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Published in npm v0.9.1:** `identify` records an explicitly confirmed human/team/client/cost-center locally; `outcome github` opt-in verifies a merged PR whose observed status checks all passed. It does not inspect branch-protection rules or claim which checks were required. Business meaning remains user-declared. |
+| Who owns it—and did it produce an accepted outcome? | Confirm attribution, then compare attempts, rework, tests, review, and acceptance instead of optimizing for token volume. | **Published in the current npm release:** `identify` records an explicitly confirmed human/team/client/cost-center locally; `outcome github` opt-in verifies a merged PR whose observed status checks all passed. It does not inspect branch-protection rules or claim which checks were required. Business meaning remains user-declared. |
 | Which subscriptions and provider charges never reach finance? | Keep local plan context, provider-reported cost, purchased credits, and API-equivalent value separate before reconciling them. | **Partial:** local plan context and optional provider reports exist. Centralized seat and invoice reconciliation is Workspace next. |
-| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Published in npm v0.9.1:** Apply drafts candidate-specific inspection, approval, and rollback steps but does not verify a result; `improve` reuses one command for the matched experiment, records the named local self-attested approval before it prints the handoff, and returns progress or the quality-gated result. Shared approval routing and company history remain Workspace work. |
+| What changed, what needs approval, and did the action work? | Investigate Context Health, model mix, repeats, anomalies, and one bounded recommendation; then compare the next result. | **Published in the current npm release:** Apply drafts candidate-specific inspection, approval, and rollback steps but does not verify a result; `improve` reuses one command for the matched experiment, records the named local self-attested approval before it prints the handoff, and returns progress or the quality-gated result. Shared approval routing and company history remain Workspace work. |
 | Can finance defend the ROI? | Join reconciled cost to an accepted outcome and independently evidenced business value before deciding what to scale, constrain, redesign, or stop. | **Next:** the beta does not calculate productivity or ROI. |
 
 aibill's beta establishes the cost-and-capacity evidence: provider-reported
@@ -500,8 +504,8 @@ The interfaces work best as one local loop:
 
 1. Run `npx aibill init` once to establish the private cross-agent cache, then
    use `npx aibill` for local Claude Code/Codex usage, attribution, plan
-   context, and API-equivalent value. npm v0.9.1 also reads supported
-   experimental Gemini CLI financial evidence. Gemini
+   context, and API-equivalent value. The published npm release also reads
+   supported experimental Gemini CLI financial evidence. Gemini
    does not enter the statusline, Glance, Context Health, or Apply activity
    surfaces.
 2. Optionally install `npx aibill statusline install` for cache-only runway,
@@ -537,9 +541,11 @@ CLI financial estimates or sync
 official OpenAI and Anthropic provider reports through reference-only
 credentials. Gemini remains financial-only and `fixture_verified`:
 
-> **AI-client data boundary:** aibill sends no telemetry and does not upload
-> transcript contents. The selected MCP result is returned to the AI client
-> you configure and then follows that client's data-handling policy.
+> **AI-client data boundary:** this MCP server sends no telemetry and does not
+> upload transcript contents. The selected MCP result is returned to the AI
+> client you configure and then follows that client's data-handling policy.
+> (The CLI's separate anonymous command counts are covered in
+> [Privacy & trust](#privacy--trust) below.)
 
 ```bash
 npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
@@ -547,7 +553,7 @@ npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
 
 GitHub Copilot and Cursor connectors are fixture-verified and remain labeled
 accordingly until live account QA. See [`docs/MCP.md`](docs/MCP.md) for client
-configuration, the ten tools in published `v0.9.1` — including the read-only
+configuration, the ten tools in the published release — including the read-only
 `draft_improve_command` that lets an agent draft the improve plan — and the
 safety model.
 
@@ -639,14 +645,15 @@ current form records interest, not access to a signed download.
   [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
 - **Explicit MCP boundary.** When you invoke an MCP tool or plugin skill, its
   selected structured result is returned to that AI client and follows the
-  client's data policy. The aibill process itself makes no telemetry/upload
+  client's data policy. The aibill MCP server process itself makes no telemetry/upload
   request.
 - **No raw secrets.** Keys are referenced from your environment and redacted
   from all output and persisted state.
-- **Launch-list signup is the sole, consent-gated exception to "uploads
-  nothing".** `npx aibill signup <email>` — and the single optional ask that
-  fills the first-run scan wait — sends exactly one JSON payload,
-  `{"email":"you@work.com","ref":"cli-signup"}`, to
+- **Launch-list signup is the other disclosed exception — and the only
+  consent-gated one.** `npx aibill signup <email>` — and the single optional ask that
+  fills the first-run scan wait — sends exactly one JSON payload —
+  `{"email":"you@work.com","ref":"cli-signup"}` from the command,
+  `"ref":"cli-receipt"` from the scan-wait ask — to
   `https://asktilden.com/api/waitlist`, and only after the CLI prints that
   literal payload and you type `y` (the consent step always renders after
   your receipt). Skipping costs two empty Enters (one nudge between);

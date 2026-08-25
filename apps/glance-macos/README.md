@@ -71,7 +71,9 @@ The current source preview resolves data in this order:
 It does not search an arbitrary shell `PATH`. For every executable candidate,
 Glance appends `glance --since-days 30`; for a JavaScript candidate it runs
 Node with the script path followed by those same arguments. It never invokes a
-shell. Nothing is uploaded. Transcript-reported values remain reported,
+shell. Nothing is uploaded — Glance sets `AI_SPEND_NO_TELEMETRY=1` on every
+background CLI run, so those refreshes emit no telemetry events either.
+Transcript-reported values remain reported,
 API-equivalent session value and exhaustion remain labeled estimates, and
 missing limits remain unavailable. When local account metadata identifies a
 subscription, Glance shows the plan and makes clear that API-rate value is not
