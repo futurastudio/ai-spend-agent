@@ -348,3 +348,29 @@ describe("cold-start funnel (audit NEW-B1): bare run stamps home state, init sti
     }
   );
 });
+
+describe("founder's literal repro: `npx aibill report-card` from the home directory", () => {
+  it(
+    "renders the friendly guard clean — never nested in the report-card error wrapper",
+    { timeout: 30_000 },
+    async () => {
+      const home = await mkdtemp(join(tmpdir(), "reportcard-home-"));
+      const child = spawn(process.execPath, [cliEntry, "report-card"], {
+        cwd: home,
+        env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" } as NodeJS.ProcessEnv,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      const exitCode = await new Promise<number | null>((resolve) => { child.on("exit", resolve); });
+      expect(exitCode).toBe(1);
+      expect(stderr.split("\n")[0]).toBe("aibill report-card needs one exact project folder.");
+      expect(stderr).toContain("Nothing was read, created, or changed.");
+      expect(stderr).not.toContain("Couldn't write the report card");
+      expect(stderr).not.toContain("Refusing to scan");
+      expect(stdout).toBe("");
+    }
+  );
+});

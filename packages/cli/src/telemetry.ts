@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { runtimeCliCommand } from "./runtimeCommand.js";
+import { aibillCommandV0 } from "@agent-finops/core";
 
 /**
  * CLI telemetry — anonymous command counts, notice-before-first-byte.
@@ -88,15 +88,16 @@ export type TelemetryEvent = {
 
 /**
  * Printed instead of "nothing uploaded" while telemetry is active. The
- * command is composed through the runtime helper: npx users have no bare
- * `aibill` on PATH (0.9.2 founder incident — "command not found").
+ * command is composed through the runtime command helper (aibillCommandV0,
+ * npx form): npx users have no bare `aibill` on PATH (0.9.2 founder
+ * incident — "command not found").
  */
-export const telemetryDisclosureLine = `anonymous command counts shared · ${runtimeCliCommand("telemetry off")}`;
+export const telemetryDisclosureLine = `anonymous command counts shared · ${aibillCommandV0("telemetry off")}`;
 
 export const telemetryNoticeLines = [
   "aibill counts which commands run — anonymous, never your data or content",
-  `turn off: ${runtimeCliCommand("telemetry off")}`,
-  `see payloads: ${runtimeCliCommand("telemetry")}`
+  `turn off: ${aibillCommandV0("telemetry off")}`,
+  `see payloads: ${aibillCommandV0("telemetry")}`
 ] as const;
 
 export function telemetryOsLabel(platform: string = process.platform): TelemetryOs {

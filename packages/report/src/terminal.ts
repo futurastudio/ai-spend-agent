@@ -712,9 +712,11 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
   lines.push(...compactLabeledLines("Next", c.bold(guided?.actionHeadline ?? next.title), width, c));
   lines.push(`  ${c.dim(guided?.actionDetail ?? next.evidence)}`);
   const nextCommand = guided?.command ?? next.command;
-  if (nextCommand.includes("improve")) {
-    // improve is project-scoped; a machine-wide receipt must say where to
-    // stand before handing over a command that refuses broad roots.
+  if (nextCommand.includes("improve") || nextCommand.includes("apply")) {
+    // improve/apply are project-scoped; a machine-wide receipt must say
+    // where to stand before handing over a command that refuses broad
+    // roots (0.9.3: the founder's home receipt pointed at `apply`, which
+    // then refused his home directory).
     lines.push(`  ${c.dim("run it from the project folder you want to improve")}`);
   }
   lines.push(`  ${c.cyan("›")} ${c.bold(nextCommand)}`);

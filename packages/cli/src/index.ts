@@ -2379,6 +2379,12 @@ async function cliVersion(): Promise<string> {
 }
 
 async function resetCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("reset", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = await resolveSafeScanRoot(args.path);
   // The trust receipt is deliberately outside the repository. Reset must
   // clear it too so restoring an old spend.json cannot replay prior trust.
@@ -2541,6 +2547,12 @@ async function initCommand(
       stderr: "aibill init only initializes from real local evidence; --sample was not used and no state or cache was changed. Run `npx aibill --sample` for the illustrative demo."
     };
   }
+
+  // NEW-B3 (cold-start audit): init from a broad root used to crash-wrap the
+  // raw scan refusal ("unexpected error … open an issue") — for a by-design
+  // guard, on the funnel's second command. Friendly guidance instead.
+  const rootGuard = await guardExactProjectRoot("init", args.path);
+  if (rootGuard) return rootGuard;
 
   let detectedPlanOverride: DetectedPlan[] | undefined;
   if (args.plan) {
@@ -3585,15 +3597,12 @@ function emptyInitSourceScan(agent: LocalAgentSourceScan["agent"]): LocalAgentSo
 }
 
 async function scanCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): the bare raw refusal tier is gone — scan
+  // gives the same friendly exact-project guidance as every other
+  // project-scoped command.
+  const rootGuard = await guardExactProjectRoot("scan", args.path);
+  if (rootGuard) return rootGuard;
   const rootPath = resolve(args.path);
-  const unsafeReason = unsafeScanRootReason(rootPath);
-  if (unsafeReason) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `Refusing to scan ${rootPath}: ${unsafeReason}. Choose a narrower approved folder with --path.`
-    };
-  }
 
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
@@ -3697,6 +3706,12 @@ async function scanCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function watchCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("watch", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
   const stateDir = await resolveSafeStateDirectory(rootPath, { create: true });
 
@@ -3991,6 +4006,12 @@ function providerSyncSetupCommand(provider: string, adminRef: string): string {
 }
 
 async function connectCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("connect", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
   const requestedProvider = (args.provider ?? "unknown").trim().toLowerCase();
   const provider = providerAliases[requestedProvider] ?? requestedProvider;
@@ -4646,6 +4667,12 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
+  if (!args.sample) {
+    // NEW-B3: live reports scan the root — same friendly guidance from a
+    // broad root, rendered clean (never nested in an error wrapper).
+    const rootGuard = await guardExactProjectRoot("report", args.path);
+    if (rootGuard) return rootGuard;
+  }
   const rootPath = resolve(args.path);
 
   try {
@@ -4788,6 +4815,13 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
 }
 
 async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
+  if (!args.sample) {
+    // NEW-B3 + founder repro (`npx aibill report-card` from home): the raw
+    // scan refusal used to surface wrapped in "Couldn't write the report
+    // card:". The friendly guard renders clean, BEFORE the try/wrapper.
+    const rootGuard = await guardExactProjectRoot("report-card", args.path);
+    if (rootGuard) return rootGuard;
+  }
   try {
     // Explicit sample mode reads no workspace data, so a broad-root scan guard
     // would reject a harmless receipt written from the user's home directory.
@@ -6437,6 +6471,12 @@ function formatMeasuredPercent(value: number): string {
 }
 
 async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("apply", args.path);
+  if (rootGuard) return rootGuard;
+
   const rootPath = resolve(args.path);
 
   try {
@@ -6526,6 +6566,12 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function tokenVerificationCommand(args: ParsedArgs): Promise<CliResult> {
+  // NEW-B3 (cold-start audit): every project-scoped command reachable from a
+  // broad root produces the SAME friendly exact-project guidance — never the
+  // raw scan refusal, never the crash wrapper.
+  const rootGuard = await guardExactProjectRoot("verify", args.path);
+  if (rootGuard) return rootGuard;
+
   if (args.sample) {
     return {
       exitCode: 1,
