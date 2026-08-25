@@ -41,6 +41,8 @@
   "files": [
     "dist",
     "README.md",
+    "!dist/**/*.test.*",
+    "!dist/**/*.map",
     "!dist/**/*.tsbuildinfo"
   ],
   "scripts": {
