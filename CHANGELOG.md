@@ -35,6 +35,25 @@ scanning, or file contents.
   it points at") instead of dying at write time with a wrapped raw error
   (`EROFS`, "Refusing to use /etc…"). Home keeps running machine-wide; an
   explicit absolute `--out` elsewhere still works.
+- `npx aibill report` now opens the HTML report in your browser
+  automatically (darwin `open`, linux `xdg-open` when present, win32
+  `cmd /c start`), fired detached so a missing or slow opener can never
+  crash, hang, or delay exit. Escape hatches: `--no-open`,
+  `AI_SPEND_NO_OPEN=1`, and automatic suppression when stdout is not a
+  TTY, in CI, or inside an SSH session — the summary then keeps the plain
+  `open <path>` pointer, and only a genuinely fired opener prints "opened
+  … in your browser". report-card is unchanged (SVG openers are
+  inconsistent across platforms).
+- Brand-aligned artifact palette: report.html and the receipt SVG now wear
+  the landing's warm green-black token family (ground `#0C0D09`, green
+  `#4CC98A` for command affordances, receipt amber `#C9A24B` for estimated
+  money, white-alpha hairlines, neutral bar fills, tabular-nums, no
+  shadows, no macOS traffic dots) instead of the off-brand cool blue-black
+  + cyan and indigo grounds. Display-only: every number, label, and
+  section is unchanged.
+- Caption equal-case threshold hardened to integer cents so the exact-5¢
+  boundary is deterministic at every magnitude (a float diff let
+  $20.05/$20.00 keep both figures while $100.05/$100.00 collapsed).
 
 ## 0.9.4 — 2026-08-25
 
