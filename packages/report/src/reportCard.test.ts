@@ -306,3 +306,37 @@ describe("generateReportCardSvg", () => {
     expect(caption).not.toContain("$0.00");
   });
 });
+
+describe("caption ↔ card reconciliation (launch-sweep fix)", () => {
+  // The shipped sample caption once quoted "$41.00" — observed exposure summed
+  // from cuts the card and receipt never display. Contract now: the caption is
+  // recomputed from the same fixture the artifact renders, and every dollar
+  // figure in the caption is present on the card itself.
+  it("recomputes the expected sample caption from the fixture and finds every caption figure on the card", async () => {
+    const { generateCutList, buildRecommendedPlan } = await import("@agent-finops/core");
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const caption = generateReportCardCaption({ summary, records, mode: "demo" });
+    const svg = generateReportCardSvg({ summary, records, mode: "demo" });
+
+    // Expected caption, derived from the fixture through the same helpers the
+    // renderer uses — never a hand-typed dollar literal.
+    const expectedModeled = buildRecommendedPlan(generateCutList(records)).recommendedSavingsUsd;
+    const expectedTotal = summary.totalUsd;
+    expect(caption).toBe(
+      `DEMO SAMPLE — My AI receipt: $${expectedTotal.toFixed(2)} in illustrative evidence, ` +
+      `with ~$${expectedModeled.toFixed(2)}/mo in modeled opportunities to test—not verified savings. ` +
+      "Local-first: npx aibill"
+    );
+
+    // Reconciliation: every dollar figure the caption quotes appears on the
+    // artifact it captions.
+    const captionFigures = caption.match(/\$\d[\d,]*\.\d{2}/gu) ?? [];
+    expect(captionFigures.length).toBeGreaterThan(0);
+    for (const figure of captionFigures) {
+      expect(svg, `caption figure ${figure} must appear on the card`).toContain(figure);
+    }
+    // The old unreconcilable appendix is gone.
+    expect(caption).not.toContain("is observed API-equivalent exposure");
+  });
+});

@@ -116,13 +116,14 @@ export function generateReportCardCaption(input: ReportCardInput): string {
   const rawTotalUsd = input.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
   const cutList = generateCutList(input.records);
   const opportunity = summarizeOpportunity(input.records, cutList);
+  // The caption mirrors EXACTLY the card's own opportunity-line decision
+  // (modeled branch, else observed branch, else unavailable) so every dollar
+  // figure in the caption also appears on the artifact it captions. The old
+  // "; $X is observed API-equivalent exposure…" appendix quoted a figure the
+  // card and the receipt never display (launch-sweep finding: a sample
+  // caption said $41.00 that reconciled to nothing a reader could see).
   const opportunityText = opportunity.modeledMonthlySavingsUsd > 0
-    ? (
-      `with ~${formatUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings` +
-      (opportunity.observedExposureUsd > 0
-        ? `; ${formatUsd(opportunity.observedExposureUsd)} is observed API-equivalent exposure with savings unavailable without a matched counterfactual`
-        : "")
-    )
+    ? `with ~${formatUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings`
     : opportunity.observedExposureUsd > 0
       ? `with ${formatUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
       : "with no supported savings model in this window";
