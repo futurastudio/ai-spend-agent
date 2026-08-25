@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { CodeBlock, DocsCallout, DocsPage, DocsSection } from "@/components/DocsPage";
+import { NPM_STABLE_VERSION } from "@/lib/docs";
 
 export const metadata: Metadata = {
   title: "aibill MCP setup for Codex, Claude Code, and Cursor",
-  description: "Connect the local-first aibill MCP server to a compatible AI client and understand its eight evidence tools and safety boundaries.",
+  description: "Connect the local-first aibill MCP server to a compatible AI client and understand its ten evidence tools and safety boundaries.",
   alternates: { canonical: "/docs/mcp" },
 };
 
@@ -13,6 +14,8 @@ const tools = [
   ["sync_provider_spend", "Read provider billing or usage through an env-reference credential."],
   ["get_usage_glance", "Return the read-only Claude Code/Codex Glance contract."],
   ["get_context_health", "Return canonical hook-aware Context Health."],
+  ["get_token_reduction_test", "Read-only: revalidate the bounded local token-reduction experiment and return its matched-session, quality-gated result from the canonical core evaluator."],
+  ["draft_improve_command", "Read-only: validate drafted plan sentences and compose the one paste-safe improve --draft command. It writes nothing and authorizes nothing."],
   ["list_sources", "Show approved sources and separate status axes."],
   ["get_spend_report", "Return the current local, provider, or explicitly labeled sample report."],
   ["recommend_cuts", "Legacy compatibility name for evidence-constrained candidate inspection."],
@@ -49,11 +52,11 @@ claude mcp list`}</CodeBlock>
           Use <code className="font-mono text-ink">~/.cursor/mcp.json</code> for all Cursor projects or <code className="font-mono text-ink">.cursor/mcp.json</code> for one project. Other clients use the same command and arguments at their documented local stdio configuration path.
         </p>
         <DocsCallout title="Stable version boundary" tone="published">
-          npm latest v0.8.1 reads Claude Code and Codex local evidence plus experimental, <code className="font-mono text-ink">fixture_verified</code> Gemini CLI financial evidence. Gemini can appear in local financial sync and report results only; it does not feed <code className="font-mono text-ink">get_usage_glance</code>, <code className="font-mono text-ink">get_context_health</code>, recommendations, Apply, plan, runway, or invocation evidence.
+          npm latest v{NPM_STABLE_VERSION} reads Claude Code and Codex local evidence plus experimental, <code className="font-mono text-ink">fixture_verified</code> Gemini CLI financial evidence. Gemini can appear in local financial sync and report results only; it does not feed <code className="font-mono text-ink">get_usage_glance</code>, <code className="font-mono text-ink">get_context_health</code>, recommendations, Apply, plan, runway, or invocation evidence.
         </DocsCallout>
       </DocsSection>
 
-      <DocsSection id="tools" label="02 · Tools" title="Eight bounded operations">
+      <DocsSection id="tools" label="02 · Tools" title="Ten bounded operations">
         <div className="docs-status-grid" data-columns="2">
           {tools.map(([name, description]) => (
             <article key={name} className="docs-status-cell p-5">
@@ -63,7 +66,7 @@ claude mcp list`}</CodeBlock>
           ))}
         </div>
         <p className="mt-6">
-          Each scan/sync tool may write local aibill state; <code className="font-mono text-ink">sync_provider_spend</code> also contacts the selected provider API. The get, list, and recommendation tools are read-only. <code className="font-mono text-ink">recommend_cuts</code> can return an evidence gap or observed exposure instead of a cut; the name remains for compatibility.
+          Each scan/sync tool may write local aibill state; <code className="font-mono text-ink">sync_provider_spend</code> also contacts the selected provider API. The get, list, draft, and recommendation tools are read-only, and no MCP tool can approve, start, apply, or record anything — approval exists only as the word APPROVE typed by the human in their own terminal. <code className="font-mono text-ink">recommend_cuts</code> can return an evidence gap or observed exposure instead of a cut; the name remains for compatibility.
         </p>
       </DocsSection>
 
@@ -76,7 +79,7 @@ subscription context, and missing evidence separate.`}</CodeBlock>
           <li>Call <code className="font-mono text-ink">sync_local_agent_spend</code> with a specific absolute project path.</li>
           <li>Read <code className="font-mono text-ink">get_spend_report</code> and <code className="font-mono text-ink">list_sources</code>.</li>
           <li>Ask for <code className="font-mono text-ink">get_context_health</code> or <code className="font-mono text-ink">get_usage_glance</code> only when that decision surface helps.</li>
-          <li>Use the CLI Apply workflow for the complete approval, rollback, and verification artifact.</li>
+          <li>Let the client draft a token test with <code className="font-mono text-ink">draft_improve_command</code>, then run the composed <code className="font-mono text-ink">npx aibill improve --draft …</code> yourself — approval and the quality-gated result stay in your terminal.</li>
         </ol>
         <p className="mt-5">
           With no synced state, <code className="font-mono text-ink">get_spend_report</code> returns <code className="font-mono text-ink">no_state</code>, zero rows, a null financial headline, and exact next steps. Sample rows appear only after an explicit <code className="font-mono text-ink">scan_ai_spend(sample=true)</code> request.

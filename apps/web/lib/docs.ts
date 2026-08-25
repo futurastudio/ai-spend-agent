@@ -1,5 +1,5 @@
-export const DOCS_UPDATED = "August 13, 2026";
-export const NPM_STABLE_VERSION = "0.8.1";
+export const DOCS_UPDATED = "August 24, 2026";
+export const NPM_STABLE_VERSION = "0.9.1";
 
 export const REPO_URL = "https://github.com/futurastudio/ai-spend-agent";
 export const ISSUE_URL = `${REPO_URL}/issues/new/choose`;

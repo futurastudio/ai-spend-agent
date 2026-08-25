@@ -18,6 +18,9 @@ export default function RoadmapDocsPage() {
     >
       <DocsSection id="now" label="01 · Available now" title={`npm v${NPM_STABLE_VERSION}`}>
         <ul className="list-disc space-y-3 pl-5 marker:text-green">
+          <li>The guided action loop: <code className="font-mono text-ink">npx aibill improve</code> finds a waste pattern in your own local evidence, drafts one reversible test, records your typed APPROVE before anything changes, and calculates one canonical matched-session, quality-gated result. <code className="font-mono text-ink">improve --sample</code> is the labeled practice run; it writes nothing.</li>
+          <li>The agent-native loop: the read-only <code className="font-mono text-ink">draft_improve_command</code> MCP tool lets an AI client draft the change/rollback/canary plan conversationally and hand over one paste-safe <code className="font-mono text-ink">improve --draft</code> command. Approval is still typed by the human in the terminal, never by an agent.</li>
+          <li>Local accountability contracts: <code className="font-mono text-ink">identify</code> records explicitly confirmed ownership, <code className="font-mono text-ink">outcome github</code> opt-in verifies a merged PR whose observed checks passed, and <code className="font-mono text-ink">accountability</code> answers owner, outcome, approval, and measured result from one private view. These are foundations for Workspace, not company identity or approval routing.</li>
           <li>Claude Code and Codex local evidence in the CLI, explicit MCP/plugin, private init/cache, and optional cache-only Claude Code statusline.</li>
           <li>Separate provider-billed cost, subscription context, API-equivalent value, validation coverage, freshness, and missing coverage.</li>
           <li>Optional OpenAI and Anthropic provider reports; Cursor and GitHub Copilot connectors remain fixture-verified beta.</li>
@@ -40,7 +43,7 @@ export default function RoadmapDocsPage() {
         <ol className="space-y-7">
           {[
             ["1", "Deepen attribution and session evidence before outcomes", "Add branch, ticket, and work-unit attribution plus plan presets and session vitals before accepted/rejected/reverted/rework outcome states. The first verified unit is an accepted coding task or merged PR—not lines of code or modeled hours."],
-            ["2", "Add financial CI without autonomous enforcement", "Start with warnings, preview, dry-run, explicit approval, rollback, and verified result. A real control adapter and team policy are prerequisites for any bounded action."],
+            ["2", "Add financial CI without autonomous enforcement", "Start with warnings, preview, dry-run, explicit approval, rollback, and verified result. No autonomous control claim without a real adapter and validated team policy."],
             ["3", "Close distribution and comprehension proof", "Run the 8–12-person study, collect real billing-reconciliation cases, and complete signed, notarized, safely updated Glance distribution before offering a public download."],
             ["4", "Earn the organization foundation with design partners", "Test one read-only observability import and gather design-partner proof first. Then begin an opt-in aggregate receipt sync for shared reconciliation, allocation, and approval history. This is a foundation—not Workspace general availability."],
           ].map(([number, title, description]) => (

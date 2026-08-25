@@ -21,6 +21,7 @@ const commandGroups = [
   {
     title: "Act carefully",
     commands: [
+      ["npx aibill improve", "Guided token-reduction loop: one reversible test from your own evidence, your typed APPROVE recorded before anything changes, then matched-session progress and a quality-gated result. --sample is a labeled demo that writes nothing."],
       ["npx aibill apply", "Writes a copy-ready inspection, approval, rollback, and matched-verification plan from current trusted evidence."],
       ["npx aibill report", "Writes local Markdown and HTML reports from the selected evidence window."],
       ["npx aibill report-card", "Writes a redacted shareable SVG and caption."],
@@ -114,6 +115,9 @@ npx aibill sync-provider \
         </p>
         <p className="mt-4">
           The prompt asks a coding agent to inspect the cited candidates, show exact changes and rollback, wait for explicit approval, and compare matched future sessions. Sample Apply is explicitly non-executable. Provider buckets or daily aggregates that cannot prove a call-level counterfactual remain reconciliation evidence, not invented savings advice.
+        </p>
+        <p className="mt-4">
+          The guided <code className="font-mono text-ink">npx aibill improve</code> command wraps this loop end to end: it records a named local self-attested approval before printing any agent handoff, reuses one command for the matched experiment, and later calculates the quality-gated before/after result. That percentage belongs to your own matched sessions — it is never a universal saving, provider-bill, or ROI claim.
         </p>
         <DocsCallout title="Financial claim boundary" tone="preview">
           Local API-equivalent usage is observed comparison value. A cash-effect claim requires comparable provider-reported cost to fall while accepted output quality holds.
