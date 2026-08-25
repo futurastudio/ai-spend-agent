@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   findDeveloperPathLeaks,
-  isForbiddenPublicPath
+  isForbiddenPublicPath,
+  isInternalOnlyTreePath
 } from "./public-boundary-rules.mjs";
 
 describe("public-boundary path rules", () => {
@@ -55,6 +56,34 @@ describe("public-boundary path rules", () => {
   for (const path of publicPaths) {
     it(`allows deliberately public path ${path}`, () => {
       assert.equal(isForbiddenPublicPath(path), false);
+    });
+  }
+});
+
+describe("public-boundary internal-only tree directories", () => {
+  const internalOnlyPaths = [
+    "docs/qa-handoff/LAUNCH_READINESS_SWEEP.md",
+    "docs/qa-handoff/CLI_CAPTURE_DESIGN_ADDENDUM_2026-08-24.md",
+    "docs/qa-handoff/V092_FINAL_QA_VERDICT_IMPLEMENTER_RESPONSE.md",
+    "docs/qa-handoff/nested/notes.md",
+    "docs/gtm/private-launch.md"
+  ];
+  for (const path of internalOnlyPaths) {
+    it(`rejects internal-only tree path ${path}`, () => {
+      assert.equal(isInternalOnlyTreePath(path), true);
+    });
+  }
+
+  const outsidePaths = [
+    "docs/TELEMETRY.md",
+    "docs/sources/claude-code.md",
+    "docs/qa-handoff.md",
+    "apps/web/docs/qa-handoff/readme.md",
+    "packages/cli/src/index.ts"
+  ];
+  for (const path of outsidePaths) {
+    it(`ignores path outside the internal-only directories: ${path}`, () => {
+      assert.equal(isInternalOnlyTreePath(path), false);
     });
   }
 });
