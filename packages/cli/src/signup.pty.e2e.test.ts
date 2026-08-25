@@ -333,7 +333,10 @@ describe("cold-start funnel (audit NEW-B1): bare run stamps home state, init sti
       // The funnel's second command — 0.9.2 dead-ended here forever.
       const projectDir = await mkdtemp(join(tmpdir(), "coldstart-project-"));
       const init = spawn(process.execPath, [cliEntry, "init", "--path", projectDir], {
-        env: { ...process.env, HOME: run.home, USERPROFILE: run.home, NO_COLOR: "1" } as NodeJS.ProcessEnv,
+        // Second run on a noticed home would EMIT telemetry — and the
+        // detached sender child does not inherit the harness fetch stub.
+        // Kill-switch keeps local test runs out of production counts.
+        env: { ...process.env, HOME: run.home, USERPROFILE: run.home, NO_COLOR: "1", AI_SPEND_NO_TELEMETRY: "1" } as NodeJS.ProcessEnv,
         stdio: ["ignore", "pipe", "pipe"]
       });
       let initOutput = "";
@@ -351,15 +354,15 @@ describe("cold-start funnel (audit NEW-B1): bare run stamps home state, init sti
   );
 });
 
-describe("founder's literal repro: `npx aibill report-card` from the home directory", () => {
+describe("founder's repro: `npx aibill report-card` from the home directory", () => {
   it(
-    "renders the friendly guard clean — never nested in the report-card error wrapper",
+    "runs machine-wide (0.9.4) — an empty home gets the honest no-evidence voice, never a guard refusal or the crash wrapper",
     { timeout: 30_000 },
     async () => {
       const home = await mkdtemp(join(tmpdir(), "reportcard-home-"));
       const child = spawn(process.execPath, [cliEntry, "report-card"], {
         cwd: home,
-        env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" } as NodeJS.ProcessEnv,
+        env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1", CI: "1" } as NodeJS.ProcessEnv,
         stdio: ["ignore", "pipe", "pipe"]
       });
       let stdout = "";
@@ -367,12 +370,18 @@ describe("founder's literal repro: `npx aibill report-card` from the home direct
       child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
       child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
       const exitCode = await new Promise<number | null>((resolve) => { child.on("exit", resolve); });
+      // 0.9.3 pinned a friendly refusal here; 0.9.4 makes report-card RUN
+      // machine-wide from broad roots (the receipt's own Next pointer led
+      // here). This empty sandbox has no evidence, so the honest empty-state
+      // voice answers — never the exact-project guard, never the wrapper.
+      // The with-evidence success path is pinned in
+      // report.machinewide.e2e.test.ts.
+      const output = stdout + stderr;
+      expect(output).not.toContain("needs one exact project folder");
+      expect(output).not.toContain("Refusing to scan");
+      expect(output).not.toContain("Couldn't write the report card");
       expect(exitCode).toBe(1);
-      expect(stderr.split("\n")[0]).toBe("aibill report-card needs one exact project folder.");
-      expect(stderr).toContain("Nothing was read, created, or changed.");
-      expect(stderr).not.toContain("Couldn't write the report card");
-      expect(stderr).not.toContain("Refusing to scan");
-      expect(stdout).toBe("");
+      expect(stderr).toContain("No receipt was written because there is no supported financial evidence to summarize.");
     }
   );
 });

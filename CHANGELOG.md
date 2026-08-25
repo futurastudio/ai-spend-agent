@@ -7,7 +7,28 @@ historical untagged exception.
 
 ## 0.9.4 — 2026-08-25
 
-Pricing correctness for Kimi, at official list rates as of 2026-08-25.
+Pricing correctness for Kimi (official list rates as of 2026-08-25), and
+report/report-card from anywhere.
+
+- `npx aibill report` and `npx aibill report-card` now RUN from your home
+  directory (or any broad root) instead of refusing: machine-wide mode uses
+  the exact read-only transcript scanning the bare receipt uses, creates no
+  project state, and writes the artifacts to the current directory
+  (`./ai-spend-report.md`, `./ai-spend-report.html`, `./ai-receipt.svg`).
+  These commands render machine-wide content anyway — the exact-project
+  requirement was incoherent, and the receipt's own Next pointer walked
+  people straight into the refusal. Project folders behave exactly as
+  before; genuinely project-scoped commands (improve, apply, verify, watch,
+  connect, reset) keep the guard.
+- Display fixes from founder live-testing: overflow "+N more" rows now
+  compute their amount as the displayed total minus the displayed rows, so
+  every column reconciles to its header by construction (rows could sum a
+  penny off); a plan-price multiple below 1x renders two decimals
+  ("~0.05×"), never "~0×".
+- Local dev hygiene: every script that spawns the real built/packed CLI
+  (smokes, MCP audits, statusline benchmark, demo recording) now hard-sets
+  the telemetry kill-switches, so local runs can never emit phantom
+  installs into production counts.
 
 - Fixed a silent mispricing: `kimi-k2.7-code` (and `-highspeed`) matched the
   legacy K2 rule by prefix and was priced ~40% low ($0.60/$2.50 instead of
