@@ -185,17 +185,23 @@ function summarizeOpportunity(records: UsageRecord[], cutList: CutAction[]): {
 }
 
 /**
- * 0.9.5 equal-case collapse threshold. Observed value (headline) and observed
- * exposure are two sums over near-identical record subsets; sub-cent
- * per-action rounding lets them drift a few cents apart while describing the
- * same evidence (the founder's live card read "$2,281.89 value" vs
- * "$2,281.87 exposure" — 2¢ of pure rounding noise). At or under $0.05 the
- * card and caption print ONE number with combined phrasing; above it the two
- * figures are treated as genuinely different and both print. A nickel sits
- * comfortably above the observed noise floor and far below any real subset
- * difference worth disclosing separately.
+ * 0.9.5 equal-case collapse threshold, in INTEGER CENTS. Observed value
+ * (headline) and observed exposure are two sums over near-identical record
+ * subsets; sub-cent per-action rounding lets them drift a few cents apart
+ * while describing the same evidence (the founder's live card read
+ * "$2,281.89 value" vs "$2,281.87 exposure" — 2¢ of pure rounding noise).
+ * At or under 5¢ the card and caption print ONE number with combined
+ * phrasing; above it the two figures are treated as genuinely different and
+ * both print. A nickel sits comfortably above the observed noise floor and
+ * far below any real subset difference worth disclosing separately.
+ *
+ * Cents, not dollars, on purpose: a float comparison made the exact-5¢
+ * boundary magnitude-dependent (20.05−20.00 → 0.05000000000000071 kept both
+ * figures while 100.05−100.00 → 0.04999999999999716 collapsed). Both sides
+ * round to displayed cents first, then diff as integers, so the boundary is
+ * deterministic at every magnitude.
  */
-const OBSERVED_EXPOSURE_MATCH_TOLERANCE_USD = 0.05;
+const OBSERVED_EXPOSURE_MATCH_TOLERANCE_CENTS = 5;
 
 /**
  * True when the card/caption would otherwise print the observed exposure as
@@ -206,10 +212,12 @@ function observedExposureMatchesHeadline(
   totalUsd: number,
   opportunity: { modeledMonthlySavingsUsd: number; observedExposureUsd: number }
 ): boolean {
-  return opportunity.modeledMonthlySavingsUsd <= 0 &&
-    opportunity.observedExposureUsd > 0 &&
-    Math.abs(roundUsdCents(totalUsd) - roundUsdCents(opportunity.observedExposureUsd)) <=
-      OBSERVED_EXPOSURE_MATCH_TOLERANCE_USD;
+  if (opportunity.modeledMonthlySavingsUsd > 0 || opportunity.observedExposureUsd <= 0) {
+    return false;
+  }
+  const totalCents = Math.round(roundUsdCents(totalUsd) * 100);
+  const exposureCents = Math.round(roundUsdCents(opportunity.observedExposureUsd) * 100);
+  return Math.abs(totalCents - exposureCents) <= OBSERVED_EXPOSURE_MATCH_TOLERANCE_CENTS;
 }
 
 type FinancialPresentationBasis =

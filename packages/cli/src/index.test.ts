@@ -186,8 +186,16 @@ describe("zero-key evidence-first receipt", () => {
     expect(flat(result.stdout)).toContain("$87.00 · DEMO SAMPLE · illustrative cost/value evidence · not user data");
     expect(result.stdout).toContain(aibillCommandV0("apply --sample"));
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const html = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
     expect(markdown).toContain("DEMO / SAMPLE DATA");
+    // File-shape truth (adversary finding): the .html must actually be the
+    // HTML document and the .md actual markdown — a swapped writer used to
+    // pass every path pin.
+    expect(html.startsWith("<!doctype html")).toBe(true);
+    expect(html).toContain("<html");
+    expect(markdown.startsWith("# ")).toBe(true);
+    expect(markdown).not.toContain("<!doctype html");
     expect(prompt).toContain("NON-EXECUTABLE DEMO");
   });
 
@@ -2382,7 +2390,7 @@ describe("zero-key evidence-first receipt", () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-ext-"));
     const result = await runCli(["report-card", "--sample", "--out", join(dir, "card"), "--no-color"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(join(dir, "card.svg"));
+    expect(flat(result.stdout)).toContain(`Receipt ${join(dir, "card.svg")}`);
     const svg = await readFile(join(dir, "card.svg"), "utf8");
     expect(svg.startsWith("<svg")).toBe(true);
   });
@@ -2392,7 +2400,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["report-card", "--sample", "--out", dir, "--no-color"]);
     expect(result.exitCode).toBe(0);
     const expected = join(dir, "ai-spend-receipt.svg");
-    expect(result.stdout).toContain(expected);
+    expect(flat(result.stdout)).toContain(`Receipt ${expected}`);
     const svg = await readFile(expected, "utf8");
     expect(svg.startsWith("<svg")).toBe(true);
   });
@@ -4189,6 +4197,60 @@ describe("minimal CLI vertical slice", () => {
     const explicitOut = await runCli(["report-card", "--sample", "--path", "/etc", "--out", outPath, "--no-color"]);
     expect(explicitOut.exitCode).toBe(0);
     expect(explicitOut.stdout).toContain(outPath);
+  });
+
+  it("report auto-open summary truth: an actually fired opener claims it; every other path keeps the pointer (0.9.5)", async () => {
+    // Opened: the Next block's first line states the fact + the escape hatch,
+    // and the copy-pasteable `open <path>` pointer is replaced.
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-report-autoopen-"));
+    const decisions: string[] = [];
+    const opened = await runCli(["report", "--sample", "--path", dir], {
+      reportOpenDecide: (input) => {
+        decisions.push(input.htmlPath);
+        expect(input.noOpenFlag).toBe(false);
+        return { open: true, command: "open", args: [input.htmlPath] };
+      },
+      reportOpenLaunch: (decision) => decision.open
+    });
+    expect(opened.exitCode).toBe(0);
+    // The state dir resolves through realpath (/var -> /private/var on
+    // macOS), so pin the decision's target by its stable tail.
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toContain(join(".ai-spend-agent", "report.html"));
+    expect(flat(opened.stdout)).toContain(
+      "opened report.html in your browser · next time: --no-open to skip"
+    );
+    expect(opened.stdout).not.toContain("view the full report in your browser");
+
+    // Suppressed (vitest stdout is not a TTY -> the real decide refuses):
+    // the pointer line survives exactly and nothing claims to have opened.
+    const suppressed = await runCli(["report", "--sample", "--path", dir]);
+    expect(suppressed.exitCode).toBe(0);
+    // The pointer verb + absolute path + description survive as one step
+    // (paths realpath through /private/var, so pin the stable pieces).
+    expect(flat(suppressed.stdout)).toContain("› open /");
+    expect(flat(suppressed.stdout)).toContain(
+      `${join(".ai-spend-agent", "report.html")} view the full report in your browser`
+    );
+    expect(suppressed.stdout).not.toContain("in your browser · next time");
+
+    // --no-open reaches the decision, and a decision that failed to LAUNCH
+    // (spawn refused) also keeps the honest pointer.
+    const flagged = await runCli(["report", "--sample", "--path", dir, "--no-open"], {
+      reportOpenDecide: (input) => {
+        expect(input.noOpenFlag).toBe(true);
+        return { open: false, reason: "no-open-flag" };
+      }
+    });
+    expect(flagged.exitCode).toBe(0);
+    expect(flagged.stdout).not.toContain("in your browser · next time");
+    const launchFailed = await runCli(["report", "--sample", "--path", dir], {
+      reportOpenDecide: (input) => ({ open: true, command: "open", args: [input.htmlPath] }),
+      reportOpenLaunch: () => false
+    });
+    expect(launchFailed.exitCode).toBe(0);
+    expect(launchFailed.stdout).not.toContain("in your browser · next time");
+    expect(flat(launchFailed.stdout)).toContain("view the full report in your browser");
   });
 
   it("--full from a broad root cd-prefixes project-scoped pointers; project mode keeps them bare (0.9.5)", async () => {

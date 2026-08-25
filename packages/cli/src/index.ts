@@ -213,6 +213,7 @@ import {
   type ProjectAccountabilityStateV1
 } from "./projectAccountabilityState.js";
 import { fetchGitHubAcceptedOutcomeV0 } from "./githubAcceptedOutcome.js";
+import { decideReportAutoOpen, openReportInBrowser } from "./reportOpener.js";
 import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
@@ -284,6 +285,8 @@ type ParsedArgs = {
   interval?: number;
   cycles?: number;
   noColor?: boolean;
+  /** report only: skip the automatic browser open of the HTML artifact. */
+  noOpen?: boolean;
   ignoreState?: boolean;
   plan?: string;
   sinceDays?: number;
@@ -362,6 +365,15 @@ export type CliRuntimeOptions = {
    * Embedded/MCP callers never set it (and never emit telemetry).
    */
   telemetryDisclosure?: boolean;
+  /**
+   * Test seams for `report`'s HTML auto-open (0.9.5): decide computes the
+   * truthful open/suppress verdict (platform, TTY, CI/SSH, --no-open,
+   * AI_SPEND_NO_OPEN); open fires the detached platform opener. Production
+   * uses the real implementations; tests inject stubs to pin the opener
+   * argv per platform, every suppression path, and summary-line truth.
+   */
+  reportOpenDecide?: typeof decideReportAutoOpen;
+  reportOpenLaunch?: typeof openReportInBrowser;
 };
 
 export async function runCli(
@@ -4811,6 +4823,17 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       ? undefined
       : await writeApplyArtifacts(stateDir!, reportInput);
 
+    // 0.9.5 "agent feel": the HTML report opens itself in the browser via
+    // the platform opener — decided truthfully BEFORE the summary renders,
+    // suppressed for non-TTY/CI/SSH/--no-open/AI_SPEND_NO_OPEN, and fired
+    // detached so a missing or slow opener can never crash, hang, or delay
+    // exit (the telemetry detached-child pattern).
+    const openDecision = (runtime.reportOpenDecide ?? decideReportAutoOpen)({
+      htmlPath,
+      noOpenFlag: args.noOpen === true
+    });
+    const openedInBrowser = (runtime.reportOpenLaunch ?? openReportInBrowser)(openDecision);
+
     // 0.9.5 founder polish ("really hard to read… I wonder if we can have
     // the text aligned"): the same facts, rendered in the receipt's visual
     // language — header, one shared label column, dot separators, and a Next
@@ -4864,7 +4887,11 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       }
     ];
     const nextSteps: CommandSummaryNextStep[] = [
-      { command: `open ${htmlPath}`, description: "view the full report in your browser" },
+      // Summary-line truth: only a fired opener may claim it opened; every
+      // suppression path keeps the plain copy-pasteable pointer.
+      openedInBrowser
+        ? { command: `opened ${basename(htmlPath)} in your browser · next time: --no-open to skip` }
+        : { command: `open ${htmlPath}`, description: "view the full report in your browser" },
       { command: `less ${markdownPath}`, description: "read it in the terminal" },
       machineWide
         // apply/improve need one exact project folder — a machine-wide
@@ -7754,6 +7781,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.noColor = true;
       continue;
     }
+    if (arg === "--no-open") {
+      parsed.noOpen = true;
+      continue;
+    }
     if (arg === "--json") {
       parsed.json = true;
       continue;
@@ -8379,7 +8410,8 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  quickstart [--sample] [--since-days N] Plain-English local readout (default 30 days)",
     "    [--full]            Render the complete audit; default is the compact receipt",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: project for local logs; model otherwise",
-    "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
+    "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports and open the HTML in your browser",
+    "    [--no-open]           Skip the automatic browser open (also AI_SPEND_NO_OPEN=1; auto-open is TTY-only and never fires in CI or SSH sessions)",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",

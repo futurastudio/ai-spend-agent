@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,9 @@ type MachineWideRun = {
 };
 
 async function seedHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "machinewide-home-"));
+  // realpath: macOS tmpdir lives behind the /var -> /private/var symlink and
+  // the CLI prints resolved paths; label-glued pins need the exact prefix.
+  const home = await realpath(await mkdtemp(join(tmpdir(), "machinewide-home-")));
   // Two projects of Claude Code evidence inside the sandbox home's default
   // transcript location — machine-wide scanning must find BOTH.
   const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString();
@@ -97,8 +99,11 @@ describe("report machine-wide mode (0.9.4)", () => {
       // Artifacts in the CURRENT directory, ai-spend-* family naming.
       const markdownPath = join(home, "ai-spend-report.md");
       const htmlPath = join(home, "ai-spend-report.html");
-      expect(run.stdout).toContain(markdownPath);
-      expect(run.stdout).toContain(htmlPath);
+      // Label-glued (adversary finding): a bare path pin passes even when
+      // the Markdown/HTML values are swapped.
+      const flatStdout = run.stdout.replace(/\s+/gu, " ");
+      expect(flatStdout).toContain(`Markdown ${markdownPath}`);
+      expect(flatStdout).toContain(`HTML ${htmlPath}`);
       const markdown = await readFile(markdownPath, "utf8");
       const html = await readFile(htmlPath, "utf8");
       // Machine-wide content: every project appears.
@@ -134,7 +139,7 @@ describe("report machine-wide mode (0.9.4)", () => {
       expect(run.stdout).not.toContain("needs one exact project folder");
       expect(run.stdout).not.toContain("Couldn't write the report card");
       const svgPath = join(home, "ai-receipt.svg");
-      expect(run.stdout).toContain(svgPath);
+      expect(run.stdout.replace(/\s+/gu, " ")).toContain(`Receipt ${svgPath}`);
       const svg = await readFile(svgPath, "utf8");
       expect(svg).toContain("<svg");
       expect(svg).not.toContain("decoy-marker-never-scanned");

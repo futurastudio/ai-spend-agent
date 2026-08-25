@@ -1300,4 +1300,21 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
       "savings unavailable without a matched counterfactual. Local-first: npx aibill"
     );
   });
+
+  it("never splits `npx aibill` across a narrow wrap inside a section body", () => {
+    const text = generateCommandSummary({
+      title: "aibill report-card",
+      rows: [{ label: "Receipt", value: "/Users/testuser/ai-receipt.svg" }],
+      sections: [{
+        heading: "Caption to share",
+        body: ["My AI receipt: $2,281.89 in observed API-equivalent value, effectively all of it exposure to investigate; savings unavailable without a matched counterfactual. Local-first: npx aibill"]
+      }],
+      color: false,
+      width: 40
+    });
+    const commandLine = text.split("\n").find((line) => line.includes("npx"));
+    expect(commandLine).toBeDefined();
+    expect(commandLine).toContain("npx aibill");
+    expect(text).not.toMatch(/npx\n/u);
+  });
 });

@@ -2260,7 +2260,10 @@ export function generateCommandSummary(options: CommandSummaryOptions): string {
     lines.push("");
     lines.push(`  ${c.bold(section.heading)}`);
     for (const bodyLine of section.body) {
-      for (const chunk of wrapPlainWords(bodyLine, width - 2)) lines.push(`  ${chunk}`);
+      // Same trick as the receipt's command protector: "npx aibill" is one
+      // copy-pasteable token and must never split across a narrow wrap.
+      const protectedLine = bodyLine.replace(/npx (?:aibill|ai-spend-agent)\b/gu, (command) => command.replace(/ /gu, ""));
+      for (const chunk of wrapPlainWords(protectedLine, width - 2)) lines.push(`  ${chunk.replace(//gu, " ")}`);
     }
   }
 
@@ -2268,10 +2271,12 @@ export function generateCommandSummary(options: CommandSummaryOptions): string {
   if (nextSteps.length > 0) {
     lines.push("");
     lines.push(`  ${c.bold("Next")}`);
-    const commandWidth = Math.max(...nextSteps.map((step) => step.command.length));
-    const aligned = !narrow && nextSteps.every((step) => (
-      step.description === undefined ||
-      4 + commandWidth + 2 + step.description.length <= width
+    // Description-less steps (e.g. the "opened … in your browser" status
+    // line) render as-is and never inflate the shared command column.
+    const describedSteps = nextSteps.filter((step) => step.description !== undefined);
+    const commandWidth = Math.max(0, ...describedSteps.map((step) => step.command.length));
+    const aligned = !narrow && describedSteps.every((step) => (
+      4 + commandWidth + 2 + step.description!.length <= width
     ));
     for (const step of nextSteps) {
       if (step.description !== undefined && aligned) {

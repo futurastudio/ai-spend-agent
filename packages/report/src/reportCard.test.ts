@@ -190,6 +190,25 @@ describe("generateReportCardSvg", () => {
       expect(svg).not.toContain('<tspan class="modeled">$20.00</tspan>');
     });
 
+    it("the exact-5¢ boundary collapses deterministically at every magnitude (integer cents, no float jitter)", () => {
+      // Float subtraction made this boundary magnitude-dependent:
+      // 20.05−20.00 = 0.05000000000000071 (kept both) while 100.05−100.00 =
+      // 0.04999999999999716 (collapsed). Integer-cent comparison pins both
+      // shapes to the SAME verdict: exactly 5¢ apart merges.
+      for (const heavyAmount of [20, 100]) {
+        const records = [
+          localRecord("heavy", heavyAmount, 200_000),
+          localRecord("five-cent-drift", 0.05, 1_000)
+        ];
+        const summary = analyzeSpend(records);
+        const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
+        expect(caption, `heavy=$${heavyAmount}`).toContain("effectively all of it exposure to investigate");
+        expect(caption.match(/\$/gu), `heavy=$${heavyAmount}`).toHaveLength(1);
+        const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
+        expect(svg, `heavy=$${heavyAmount}`).toContain('<tspan class="modeled">All</tspan>');
+      }
+    });
+
     it("keeps both numbers when they genuinely differ (> $0.05)", () => {
       const records = [
         localRecord("heavy", 20, 200_000),
