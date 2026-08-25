@@ -136,3 +136,50 @@ describe("computePlanChecks", () => {
     expect(computePlanChecks([localLogRecord({ providerCostType: "openai_cost" })])).toHaveLength(0);
   });
 });
+
+describe("valueMultiple display precision (0.9.4 founder fix)", () => {
+  const detectedMax = {
+    agent: "claude-code" as const,
+    provider: "anthropic" as const,
+    planId: "claude-max-20x",
+    planLabel: "Claude Max 20x",
+    billing: "subscription" as const,
+    source: "test"
+  };
+
+  it("a sub-1x multiple renders two decimals, never ~0x", () => {
+    // The founder's live case shape: ~$9.63/mo API-equivalent on a $200/mo
+    // plan printed "~0× the plan price". 9.63/200 = 0.048 → 0.05.
+    // $0.642/day over 2 active days → $0.642×...: need monthly 9.63 →
+    // daily = 9.63/30 = 0.321; two days at $0.321.
+    const checks = computePlanChecks([
+      localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 0.321 }),
+      localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 0.321 })
+    ], [detectedMax]);
+    const check = checks[0]!;
+    expect(check.valueMultiple).toBe(0.05);
+    expect(check.headline).toContain("~0.05× the plan price");
+    expect(check.headline).not.toContain("~0×");
+  });
+
+  it("a tiny-but-real multiple floors at 0.01x instead of rendering zero", () => {
+    const checks = computePlanChecks([
+      localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 0.01 }),
+      localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 0.01 })
+    ], [detectedMax]);
+    const check = checks[0]!;
+    expect(check.valueMultiple).toBe(0.01);
+    expect(check.headline).toContain("~0.01×");
+  });
+
+  it("multiples at or above 1x keep the existing one-decimal display", () => {
+    const checks = computePlanChecks([
+      localLogRecord({ id: "a", timestamp: "2026-06-07T00:00:00.000Z", amountUsd: 161.88 }),
+      localLogRecord({ id: "b", timestamp: "2026-06-08T00:00:00.000Z", amountUsd: 161.88 })
+    ], [detectedMax]);
+    const check = checks[0]!;
+    // $323.76/2d → $4,856.40/mo on $200 → 24.282 → 24.3 (unchanged policy).
+    expect(check.valueMultiple).toBe(24.3);
+    expect(check.headline).toContain("~24.3×");
+  });
+});

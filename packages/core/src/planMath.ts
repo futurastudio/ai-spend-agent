@@ -107,7 +107,7 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
     if (detectedKnown) {
       // The label comes from local metadata or an explicit override. It is not
       // independently verified against the provider account.
-      valueMultiple = Math.round((monthly / detectedKnown.monthlyUsd) * 10) / 10;
+      valueMultiple = roundValueMultiple(monthly / detectedKnown.monthlyUsd);
       const savingsVsApi = roundMoney(monthly - detectedKnown.monthlyUsd);
       effectiveSavings = savingsVsApi > 0 ? savingsVsApi : undefined;
       headline =
@@ -137,7 +137,7 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
         (suggested ? `; reference listed plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
     } else {
       const covered = suggested && typeof savings === "number" && savings > 0;
-      valueMultiple = covered ? Math.round((monthly / suggested.monthlyUsd) * 10) / 10 : undefined;
+      valueMultiple = covered ? roundValueMultiple(monthly / suggested.monthlyUsd) : undefined;
       effectiveSavings = covered ? savings : undefined;
       if (!suggested) {
         headline = `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}).`;
@@ -170,4 +170,16 @@ function roundMoney(value: number): number {
 function formatUsd(value: number): string {
   if (value > 0 && value < 0.01) return "<$0.01";
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Display rounding for the plan-price multiple. One decimal at >= 1x
+ * ("~24.3x" stays as-is); TWO decimals below 1x so a small-but-real
+ * multiple never renders "~0x" (founder's live case: $9.63/mo vs a
+ * $200/mo plan printed "~0x" — now "~0.05x"), floored at 0.01 for any
+ * positive ratio so the tilde always marks a nonzero approximation.
+ */
+function roundValueMultiple(ratio: number): number {
+  if (ratio >= 1) return Math.round(ratio * 10) / 10;
+  return Math.max(0.01, Math.round(ratio * 100) / 100);
 }
