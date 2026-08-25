@@ -1141,3 +1141,46 @@ describe("cross-surface parity (terminal side)", () => {
     expect(full).not.toMatch(/│\s*\$150\.75/u);
   });
 });
+
+describe("overflow-row reconciliation (0.9.4 founder fix)", () => {
+  function pennyRecord(id: string, project: string, amountUsd: number, day: number): UsageRecord {
+    return {
+      id,
+      timestamp: `2026-08-${String(day).padStart(2, "0")}T00:00:00.000Z`,
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model: "claude-opus-4-8",
+      inputTokens: 10_000,
+      outputTokens: 1_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  it("the +N-more amount is header-minus-displayed-rows, so the column reconciles by construction", () => {
+    // Engineered penny exposure: ten $1.005 rows each display $1.01
+    // (half-up), so displayed rows sum $10.10 while the raw total is
+    // $10.67. An independently rounded remainder ($0.62) would make the
+    // column sum $10.72 — 5 cents off the header. The founder hit the
+    // 1-cent version of this live ($2,192.30 vs $2,192.31).
+    const records = [
+      ...Array.from({ length: 10 }, (_, index) =>
+        pennyRecord(`p-${index}`, `proj-${String(index).padStart(2, "0")}`, 1.005, 5 + index)),
+      pennyRecord("p-hidden", "proj-10", 0.62, 15)
+    ];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records, color: false, mode: "local-logs", view: "breakdown", groupBy: "project"
+    });
+    expect(text).toContain("+1 more");
+    // Reconciled remainder: $10.67 header − $10.10 displayed rows = $0.57
+    // (NOT the raw hidden $0.62).
+    expect(text).toContain("~$0.57");
+    expect(text).not.toContain("~$0.62");
+    const rowAmounts = [...text.matchAll(/~\$(\d+\.\d{2})/gu)].map((match) => Number(match[1]));
+    const tableSum = rowAmounts.reduce((total, value) => total + value, 0);
+    expect(tableSum).toBeCloseTo(10.67, 2);
+  });
+});
