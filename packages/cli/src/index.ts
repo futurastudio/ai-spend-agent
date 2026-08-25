@@ -4667,12 +4667,14 @@ async function confirmMappingCommand(args: ParsedArgs): Promise<CliResult> {
 }
 
 async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
-  if (!args.sample) {
-    // NEW-B3: live reports scan the root — same friendly guidance from a
-    // broad root, rendered clean (never nested in an error wrapper).
-    const rootGuard = await guardExactProjectRoot("report", args.path);
-    if (rootGuard) return rootGuard;
-  }
+  // NEW-B3 + adversary F2: guard UNCONDITIONALLY. Even --sample writes
+  // project state into the root (resolveSafeStateDirectory below), so a
+  // broad root must refuse with the friendly guidance — the sample gate
+  // alone still leaked the raw "Refusing to scan" from home. report-card
+  // --sample differs: it writes only the SVG artifact and keeps its
+  // deliberate home exemption.
+  const rootGuard = await guardExactProjectRoot("report", args.path);
+  if (rootGuard) return rootGuard;
   const rootPath = resolve(args.path);
 
   try {

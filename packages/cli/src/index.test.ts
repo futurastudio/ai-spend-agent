@@ -4121,6 +4121,9 @@ describe("minimal CLI vertical slice", () => {
       { argv: ["watch", "--cycles", "1"], commandName: "watch" },
       { argv: ["reset"], commandName: "reset" },
       { argv: ["report"], commandName: "report" },
+      // Adversary F2: --sample still writes project state into the root, so
+      // it guards too (report-card --sample keeps its true home exemption).
+      { argv: ["report", "--sample"], commandName: "report" },
       { argv: ["report-card"], commandName: "report-card" },
       { argv: ["apply"], commandName: "apply" },
       { argv: ["apply-artifact"], commandName: "apply" },
