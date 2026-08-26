@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeSpend,
+  buildContextHealth,
   parseClaudeCodeInvocations,
   computePlanChecks,
   generateCutList,
@@ -400,8 +401,11 @@ describe("producer output carries no untrusted fragment (structured fields inclu
 
   it("analyzeSpend: insights, recommendations and workflow watch, every field", () => {
     const records = [
-      connectedCall({ id: "a1", agentId: HOSTILE, operation: HOSTILE, clientId: HOSTILE, projectId: HOSTILE, model: HOSTILE, inputTokens: 1_000, amountUsd: 200 }),
-      connectedCall({ id: "a2", agentId: HOSTILE, operation: HOSTILE, clientId: HOSTILE, projectId: HOSTILE, model: HOSTILE, inputTokens: 1_000, amountUsd: 200, timestamp: "2026-08-11T10:00:00.000Z" })
+      // 400k input, not 1k: below the 100k threshold no context-trimming
+      // recommendation is generated, and its `relatedKeys` — a PLURAL-class
+      // site fed from `record.model` — goes unexercised.
+      connectedCall({ id: "a1", agentId: HOSTILE, operation: HOSTILE, clientId: HOSTILE, projectId: HOSTILE, model: HOSTILE, inputTokens: 400_000, amountUsd: 200 }),
+      connectedCall({ id: "a2", agentId: HOSTILE, operation: HOSTILE, clientId: HOSTILE, projectId: HOSTILE, model: HOSTILE, inputTokens: 400_000, amountUsd: 200, timestamp: "2026-08-11T10:00:00.000Z" })
     ];
     const summary = analyzeSpend(records);
     // The PLURAL class lives here: affectedClients/Projects/Agents/Models and
@@ -419,6 +423,11 @@ describe("producer output carries no untrusted fragment (structured fields inclu
     ]);
     expect(affected.length, "no affected* entries — the plural class is untested").toBeGreaterThan(0);
     expect(affected.every((entry) => entry.includes("reads like an instruction"))).toBe(true);
+
+    // The OTHER plural-class site, on a different producer.
+    const related = summary.recommendations.flatMap((entry) => entry.relatedKeys);
+    expect(related.length, "no relatedKeys — the second plural site is untested").toBeGreaterThan(0);
+    expect(related.every((entry) => entry.includes("reads like an instruction"))).toBe(true);
   });
 
   it("analyzeSpend: ordinary values survive in the plural fields too", () => {
@@ -481,6 +490,64 @@ describe("producer output carries no untrusted fragment (structured fields inclu
       expect(jsonOf(parsed.contextSignal.repeatedFileReads), file).toContain(file);
       expect(jsonOf(parsed.contextSignal.repeatedFileReads), file).not.toContain("reads like an instruction");
     }
+  });
+
+  it("buildContextHealth re-neutralizes a raw name from an older cache", () => {
+    // toolInvocations neutralizes at the source and contextHealth re-applies it.
+    // Each masks the other, so neither is pinned by a fixture that goes through
+    // both. This drives the SECOND layer alone: a session signal carrying a raw
+    // name, which is precisely what a cache written by an earlier version holds.
+    const parsed = parseClaudeCodeInvocations([0, 1].map((index) => JSON.stringify({
+      type: "assistant",
+      sessionId: "cache-session",
+      requestId: `req-${index}`,
+      timestamp: "2026-08-11T00:00:00.000Z",
+      message: {
+        id: `msg-${index}`,
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 150_000, output_tokens: 900 },
+        content: [{ type: "tool_use", name: "Read", input: { file_path: "/Users/dev/repo/notes.md" } }]
+      }
+    })).join("\n"));
+
+    // Put the raw name back, as a stale cache would have stored it.
+    const staleSignal = {
+      ...parsed.contextSignal,
+      sessionId: "cache-session",
+      fileReads: [{ name: HOSTILE, count: 3 }],
+      repeatedFileReads: [{ name: HOSTILE, count: 3 }]
+    };
+
+    const health = buildContextHealth({
+      calls: [{
+        agent: "claude-code",
+        sessionId: "cache-session",
+        model: "claude-opus-4-8",
+        timestamp: "2026-08-11T00:00:00.000Z",
+        project: "repo",
+        usageScope: "latest_turn",
+        latestTurnUsage: { inputTokens: 150_000, outputTokens: 900 },
+        usage: { inputTokens: 150_000, outputTokens: 900 }
+      }] as never,
+      invocations: {
+        invocations: parsed.invocations,
+        invokedMcpTools: parsed.invokedMcpTools,
+        invokedSkills: parsed.invokedSkills,
+        invokedSubagents: parsed.invokedSubagents,
+        invokedCommands: parsed.invokedCommands,
+        sessions: 1,
+        totalAssistantTurns: parsed.assistantTurns,
+        sessionTurnCounts: [parsed.assistantTurns],
+        sourceSessions: { claudeCode: 1, codex: 0 },
+        sessionSignals: [staleSignal]
+      } as never
+    });
+
+    const serialized = jsonOf(health);
+    expectClean(serialized, "buildContextHealth() from a stale signal");
+    // Not vacuous: the array is populated and carries the marker.
+    expect(health.contextChurn.repeatedFiles.length).toBeGreaterThan(0);
+    expect(serialized).toContain("reads like an instruction");
   });
 
   it("computePlanChecks: the embedded detectedPlan, not just the headline", () => {
