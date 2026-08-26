@@ -1,3 +1,5 @@
+import { normalizeCommand } from "../../../lib/telemetry-commands";
+
 export const runtime = "nodejs";
 
 // POST /api/telemetry — ingest endpoint for the CLI's disclosed opt-out usage
@@ -27,34 +29,10 @@ export const runtime = "nodejs";
 //   422 schema violation (whole batch rejected) · 429 rate limited
 //   503 storage unavailable
 
-// Every CLI command that may report usage. Anything else — typos, plugins,
-// injection attempts — is stored as the literal string "other".
-const COMMAND_ALLOWLIST = new Set([
-  "receipt",
-  "full",
-  "group-by",
-  "improve",
-  "improve-sample",
-  "index",
-  "identify",
-  "accountability",
-  "outcome",
-  "statusline",
-  "statusline-expand",
-  "signup",
-  "connect",
-  "sync-provider",
-  "doctor",
-  "report",
-  "report-card",
-  "apply",
-  "watch",
-  "init",
-  "verify",
-  "drop-slice",
-  "telemetry",
-  "other",
-]);
+// Every CLI command that may report usage lives in lib/telemetry-commands.ts —
+// anything else (typos, plugins, injection attempts) is stored as the literal
+// string "other". It is shared with the ops health route, which re-normalizes
+// on the way out so no free text can escape in either direction.
 
 const OS_VALUES = new Set(["darwin", "linux", "win32", "other"]);
 const ARCH_VALUES = new Set(["arm64", "x64", "other"]);
@@ -196,7 +174,7 @@ function parseEvent(value: unknown): TelemetryRow | null {
     install_id: installId.toLowerCase(),
     // The allowlist is the invariant: a command string outside it is never
     // stored raw — it becomes the literal "other".
-    command: COMMAND_ALLOWLIST.has(command) ? command : "other",
+    command: normalizeCommand(command),
     version,
     os,
     arch,
