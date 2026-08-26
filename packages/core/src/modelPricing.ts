@@ -246,14 +246,24 @@ export function estimateTokenCostUsd(model: string, usage: TokenUsage): number |
  * models whose entire request moves to a higher rate above a prompt-size
  * threshold; pricing a daily token sum would incorrectly treat many small
  * requests as one large request.
+ *
+ * `tierPromptTokens[i]`, when provided, fixes the tier of `usages[i]` from
+ * request-level evidence instead of the slice's own prompt total. A
+ * session-cumulative slice is a sum of many requests whose prompt total
+ * routinely clears a per-request threshold on cache reads alone, even though no
+ * single request did; supplying the largest single request's prompt keeps such
+ * a slice on the base tier (and pricing it there is exact, since the base rate
+ * distributes over the sum). Omitting the array preserves single-request
+ * behaviour: each slice's own prompt selects its tier.
  */
 export function estimateTokenCostsUsd(
   model: string,
-  usages: readonly TokenUsage[]
+  usages: readonly TokenUsage[],
+  tierPromptTokens?: readonly (number | undefined)[]
 ): number | undefined {
   let total = 0;
-  for (const usage of usages) {
-    const usd = rawTokenCostUsd(model, usage);
+  for (let index = 0; index < usages.length; index += 1) {
+    const usd = rawTokenCostUsd(model, usages[index], tierPromptTokens?.[index]);
     if (usd === undefined) return undefined;
     total += usd;
   }
@@ -274,25 +284,42 @@ export function promptTierThreshold(model: string): number | undefined {
  * Tiered prices are selected per request, never from a multi-request sum.
  * An aggregate is still unambiguous when its entire non-negative prompt-side
  * total is at or below the threshold; then no constituent request can have
- * crossed it. Larger aggregates fail closed until request-level evidence is
- * available.
+ * crossed it. It is also unambiguous when request-level evidence
+ * (`maxRequestPromptTokens`, the largest single request the aggregate contains)
+ * proves that no constituent request crossed the threshold: every request was
+ * base-tier, so the whole sum is base-tier and prices exactly at the base rate.
+ * Larger aggregates without such evidence fail closed to keep an unpriceable
+ * total honestly "missing" rather than guessing a tier.
  */
 export function canPriceTokenUsageAtScope(
   model: string,
   usage: TokenUsage,
-  scope: "request" | "aggregate"
+  scope: "request" | "aggregate",
+  maxRequestPromptTokens?: number
 ): boolean {
   const threshold = promptTierThreshold(model);
   if (threshold === undefined || scope === "request") return true;
-  return effectivePromptTokens(usage) <= threshold;
+  if (effectivePromptTokens(usage) <= threshold) return true;
+  return maxRequestPromptTokens !== undefined && maxRequestPromptTokens <= threshold;
 }
 
-function rawTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
+/**
+ * @param tierPromptTokens Prompt size used ONLY to select the request tier,
+ *   when it differs from the priced slice's own prompt total (e.g. a
+ *   session-cumulative slice whose tier is fixed by its largest single
+ *   request). Component pricing always uses `usage`; defaults to the slice's
+ *   own effective prompt so single-request callers are unchanged.
+ */
+function rawTokenCostUsd(
+  model: string,
+  usage: TokenUsage,
+  tierPromptTokens?: number
+): number | undefined {
   const rule = findPricingRule(model);
   if (!rule) {
     return undefined;
   }
-  const promptTokens = effectivePromptTokens(usage);
+  const promptTokens = tierPromptTokens ?? effectivePromptTokens(usage);
   const rates = rule.abovePromptTokens &&
       promptTokens > rule.abovePromptTokens.threshold
     ? rule.abovePromptTokens

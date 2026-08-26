@@ -3019,3 +3019,97 @@ describe("estimateTokenCostUsd", () => {
     expect(estimateTokenCostUsd("unknown-model", { inputTokens: 1, outputTokens: 1 })).toBeUndefined();
   });
 });
+
+describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
+  const codexRollout = (turns: ReadonlyArray<{
+    total: Record<string, number>;
+    last: Record<string, number>;
+    at: string;
+  }>): string => [
+    JSON.stringify({
+      type: "session_meta",
+      payload: { id: "codex-tier-sess", cwd: "/Users/testuser/agent-finops", timestamp: "2026-08-23T10:00:00.000Z" }
+    }),
+    JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+    ...turns.map((turn) => JSON.stringify({
+      type: "event_msg",
+      timestamp: turn.at,
+      payload: {
+        type: "token_count",
+        info: { total_token_usage: turn.total, last_token_usage: turn.last }
+      }
+    }))
+  ].join("\n");
+
+  it("prices a >272K cumulative Codex session at the base tier when every request stayed under the threshold", () => {
+    // The founder's real shape: cumulative prompt (500K) clears the 272K
+    // per-request tier on cache reads alone, but no single turn did — so the
+    // whole session is base-tier, not voided to "missing".
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+        last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+      },
+      {
+        at: "2026-08-23T10:20:00.000Z",
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const calls = parseCodexRollout(rollout);
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.model).toBe("gpt-5.6-sol");
+    expect(call.usageScope).toBe("session_cumulative");
+    // Largest single request across turns (200K, then 250K).
+    expect(call.maxRequestPromptTokens).toBe(250_000);
+    // Cumulative usage: 100K non-cached input, 400K cache reads, 1K output.
+    expect(call.usage).toMatchObject({
+      inputTokens: 100_000,
+      cacheReadTokens: 400_000,
+      outputTokens: 1_000
+    });
+    const record = aggregateCalls(calls)[0]!;
+    // Base tier: 100000*4 + 1000*20 + 400000*0.4, per million = 0.58 (not the
+    // 1.15 the 2x tier would have charged, and not null/"missing").
+    expect(record.amountUsd).toBeCloseTo(0.58, 4);
+    expect(record.costConfidence).toBe("estimated");
+  });
+
+  it("keeps a Codex session honestly 'missing' when a single request genuinely crossed the threshold", () => {
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 300_000, cached_input_tokens: 100_000, output_tokens: 500 },
+        last: { input_tokens: 300_000, cached_input_tokens: 100_000, output_tokens: 500, total_tokens: 300_500 }
+      },
+      {
+        at: "2026-08-23T10:20:00.000Z",
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const calls = parseCodexRollout(rollout);
+    expect(calls[0]!.maxRequestPromptTokens).toBe(300_000);
+    const record = aggregateCalls(calls)[0]!;
+    // A request that truly crossed 272K cannot be split from the cumulative sum
+    // with the evidence at hand: stay honestly unpriced rather than guess.
+    expect(record.amountUsd).toBeNull();
+    expect(record.costConfidence).toBe("missing");
+  });
+
+  it("still prices a small (<=272K cumulative) Codex session without needing request evidence", () => {
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 100_000, cached_input_tokens: 40_000, output_tokens: 500 },
+        last: { input_tokens: 100_000, cached_input_tokens: 40_000, output_tokens: 500, total_tokens: 100_500 }
+      }
+    ]);
+    const record = aggregateCalls(parseCodexRollout(rollout))[0]!;
+    // 60000*4 + 500*20 + 40000*0.4, per million = 0.266.
+    expect(record.amountUsd).toBeCloseTo(0.266, 4);
+    expect(record.costConfidence).toBe("estimated");
+  });
+});

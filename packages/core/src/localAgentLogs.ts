@@ -89,6 +89,16 @@ export type LocalAgentCall = {
   /** Whether `usage` is one model turn or the session's cumulative financial total. */
   usageScope?: "turn" | "session_cumulative";
   /**
+   * Largest single-request prompt (effective input, cache reads included)
+   * observed within a `session_cumulative` `usage`. Tiered per-request pricing
+   * is selected per request, never from a cumulative sum: a cache-heavy session
+   * routinely clears a per-request tier threshold in aggregate while no single
+   * request did. This evidence lets pricing keep such a total on the base tier
+   * (exact) instead of failing closed to "missing". Absent for turn-scoped
+   * calls, which are already a single request.
+   */
+  maxRequestPromptTokens?: number;
+  /**
    * Whether the transcript exposed the input/output components required for
    * pricing. A total-only snapshot is still usage evidence, but pricing it as
    * zero would be false precision.
@@ -470,7 +480,11 @@ export type LocalAgentStreamCheckpointAdapter = {
   ) => Promise<void>;
 };
 
-export const localAgentFinancialParserVersion = 1;
+// Bumped to 2 when session-cumulative Codex calls gained `maxRequestPromptTokens`
+// (largest single request in the session). Financial caches written by v1 lack
+// this per-request tier evidence, so a >272K-cumulative Codex session would
+// stay voided to "missing" on reuse; a version mismatch re-parses instead.
+export const localAgentFinancialParserVersion = 2;
 
 /**
  * Qualitative parser contract version. Bumped to 2 with the checkpointed
@@ -482,9 +496,13 @@ export const localAgentFinancialParserVersion = 1;
  * cross-file completion evidence (`subagentCompletions`, from both Task tool
  * results and background task-notifications): entries persisted by the
  * collapsing parser must re-parse rather than silently keep merging subagent
- * runs into their parent session.
+ * runs into their parent session. Bumped to 5 when Codex reducer checkpoints
+ * gained `maxTurnPromptTokens` (largest single request): a checkpoint written
+ * by v4 lacks the running per-request maximum, so restoring it could under-read
+ * the tier evidence for a cumulative session that crossed the boundary — a
+ * version mismatch discards it and re-parses from scratch instead.
  */
-export const localAgentQualitativeParserVersion = 4;
+export const localAgentQualitativeParserVersion = 5;
 
 /**
  * Conservative launch defaults for action-capable qualitative evidence.
@@ -1031,6 +1049,19 @@ function parseCodexTurnUsage(value: Record<string, unknown>): {
   };
 }
 
+/**
+ * The tier-relevant prompt size of one Codex `last_token_usage` turn: its full
+ * request input (Codex `input_tokens` already includes cached input), which is
+ * exactly `effectivePromptTokens` of the parsed turn usage. Returned only when
+ * the field parses to a non-negative number, so an unreadable turn never lowers
+ * a running maximum. Used to prove whether any single request in a cumulative
+ * session crossed a per-request tier threshold.
+ */
+function codexTurnPromptTokens(turn: Record<string, unknown>): number | undefined {
+  const input = tokenComponentOf(turn.input_tokens);
+  return input === undefined ? undefined : input;
+}
+
 /** Parse one Claude Code transcript (JSONL). Exported for tests. */
 export function parseClaudeCodeTranscript(
   content: string,
@@ -1297,6 +1328,8 @@ type CodexRolloutParserState = {
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  /** Largest single-request prompt seen since the (post-fork) session root. */
+  maxTurnPromptTokens?: number;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
   prompts: string[];
   /** Sanitized prompt survivors dropped from a checkpoint beyond the last 12. */
@@ -1420,6 +1453,7 @@ function consumeCodexRolloutLine(
     state.toolCallCount = 0;
     state.model = undefined;
     state.lastTurn = undefined;
+    state.maxTurnPromptTokens = undefined;
     state.lastRateLimits = undefined;
     state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
   }
@@ -1479,6 +1513,10 @@ function consumeCodexRolloutLine(
     if (turn) {
       state.lastTurn = turn;
       state.lastActivityAt = eventTimestamp;
+      const turnPrompt = codexTurnPromptTokens(turn);
+      if (turnPrompt !== undefined) {
+        state.maxTurnPromptTokens = Math.max(state.maxTurnPromptTokens ?? 0, turnPrompt);
+      }
     }
     const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
     if (rateLimits) {
@@ -1558,6 +1596,9 @@ function finishCodexRolloutParse(
       : {}),
     usageScope: "session_cumulative",
     usageSupport,
+    ...(usageSupport === "complete" && state.maxTurnPromptTokens !== undefined
+      ? { maxRequestPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
       : {}),
@@ -2036,6 +2077,8 @@ type CodexFinancialStreamState = {
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  /** Largest single-request prompt seen since the (post-fork) session root. */
+  maxTurnPromptTokens?: number;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
 };
 
@@ -2889,6 +2932,7 @@ type PersistedCodexReducerState = {
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  maxTurnPromptTokens?: number;
   inheritedUsageBaseline?: Record<string, unknown>;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
   rootCwd: RestoredCodexRootCwd;
@@ -2974,6 +3018,9 @@ function serializeCodexReducerState(state: CodexRolloutParserState): PersistedCo
     ...(state.lastActivityAt !== undefined ? { lastActivityAt: state.lastActivityAt } : {}),
     ...(state.lastTotal !== undefined ? { lastTotal: state.lastTotal } : {}),
     ...(state.lastTurn !== undefined ? { lastTurn: state.lastTurn } : {}),
+    ...(state.maxTurnPromptTokens !== undefined
+      ? { maxTurnPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(state.inheritedUsageBaseline !== undefined
       ? { inheritedUsageBaseline: state.inheritedUsageBaseline }
       : {}),
@@ -3040,6 +3087,7 @@ function isPersistedCodexReducerState(value: unknown): value is PersistedCodexRe
     optionalString(value.lastActivityAt) &&
     optionalRecord(value.lastTotal) &&
     optionalRecord(value.lastTurn) &&
+    optionalFinite(value.maxTurnPromptTokens) &&
     optionalRecord(value.inheritedUsageBaseline) &&
     validRateLimits &&
     validRootCwd &&
@@ -3072,6 +3120,7 @@ function restoreCodexReducerState(persisted: PersistedCodexReducerState): CodexR
   state.lastActivityAt = persisted.lastActivityAt;
   state.lastTotal = persisted.lastTotal;
   state.lastTurn = persisted.lastTurn;
+  state.maxTurnPromptTokens = persisted.maxTurnPromptTokens;
   state.inheritedUsageBaseline = persisted.inheritedUsageBaseline;
   state.lastRateLimits = persisted.lastRateLimits;
   state.restoredRootCwd = persisted.rootCwd;
@@ -4250,6 +4299,7 @@ function consumeCodexFinancialEntry(
     state.rootTaskStarted = true;
     state.model = undefined;
     state.lastTurn = undefined;
+    state.maxTurnPromptTokens = undefined;
     state.lastRateLimits = undefined;
     state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
   }
@@ -4271,6 +4321,10 @@ function consumeCodexFinancialEntry(
   if (turn) {
     state.lastTurn = turn;
     state.lastActivityAt = eventTimestamp;
+    const turnPrompt = codexTurnPromptTokens(turn);
+    if (turnPrompt !== undefined) {
+      state.maxTurnPromptTokens = Math.max(state.maxTurnPromptTokens ?? 0, turnPrompt);
+    }
   }
   const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
   if (rateLimits) state.lastRateLimits = rateLimits;
@@ -4310,6 +4364,9 @@ function finishCodexFinancialStream(
       : {}),
     usageScope: "session_cumulative",
     usageSupport,
+    ...(usageSupport === "complete" && state.maxTurnPromptTokens !== undefined
+      ? { maxRequestPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
       : {}),
@@ -4360,12 +4417,20 @@ export function aggregateCallsForFormats(
         canPriceTokenUsageAtScope(
           model,
           call.usage,
-          call.usageScope === "turn" ? "request" : "aggregate"
+          call.usageScope === "turn" ? "request" : "aggregate",
+          call.maxRequestPromptTokens
         ) && (agent !== "gemini-cli" || hasCompleteGeminiPromptEvidence(call))
       );
     const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
       ? usesPromptTieredPricing(model)
-        ? estimateTokenCostsUsd(model, groupCalls.map((call) => call.usage))
+        ? estimateTokenCostsUsd(
+            model,
+            groupCalls.map((call) => call.usage),
+            // Fix each cumulative slice's tier from its largest single request
+            // rather than its cache-inflated sum. Turn-scoped slices carry no
+            // such evidence and keep selecting their tier from their own prompt.
+            groupCalls.map((call) => call.maxRequestPromptTokens)
+          )
         : estimateTokenCostUsd(model, usage)
       : undefined;
     const priced = usageSupported && typeof amountUsd === "number";

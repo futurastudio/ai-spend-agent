@@ -246,4 +246,59 @@ describe("model pricing coverage", () => {
       "request"
     )).toBe(true);
   });
+
+  it("prices a large tiered aggregate at the base tier when request evidence proves no request crossed the threshold", () => {
+    // A session-cumulative slice whose own prompt total (300K) clears the 272K
+    // per-request threshold, but whose largest single request stayed at/below
+    // it. No request qualified for the above-tier rate, so the whole sum is
+    // base-tier and prices exactly there — not 2x.
+    const cumulative = { inputTokens: 300_000, outputTokens: 10_000 };
+    // Base: 300000*4/1e6 + 10000*20/1e6.
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [200_000])).toBe(1.4);
+    // Threshold is inclusive on the base side (<=272K stays base).
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_000])).toBe(1.4);
+    // Without evidence the slice's own 300K prompt still selects the 2x tier:
+    // 300000*8/1e6 + 10000*30/1e6. Turn-scoped callers are unchanged.
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative])).toBe(2.7);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [undefined])).toBe(2.7);
+    // Evidence that a single request DID cross the threshold keeps the 2x tier.
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_001])).toBe(2.7);
+  });
+
+  it("gates request-evidence tier pricing exactly at the inclusive threshold", () => {
+    const aggregate = { inputTokens: 300_000, outputTokens: 1 };
+    // Largest request at/below the threshold makes the aggregate priceable...
+    expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", 200_000)).toBe(true);
+    expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", 272_000)).toBe(true);
+    // ...one token over, and it fails closed to honest "missing".
+    expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", 272_001)).toBe(false);
+    // No evidence keeps the pre-fix conservative behaviour (unchanged).
+    expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate")).toBe(false);
+    expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", undefined)).toBe(false);
+  });
+
+  it("prices a real cache-heavy Codex session at base tier instead of voiding it (founder's #1 complaint)", () => {
+    // Shape of one of the founder's real gpt-5.6-sol days: a 1.26B-token
+    // cumulative dominated by cache reads, whose largest single request was
+    // 252,970 tokens (< 272K, capped by the model context window). Before the
+    // fix the cumulative cleared the tier check and voided to null/"missing";
+    // it must now price at the base tier, and pricing the whole sum there is
+    // exact because every request was base-tier.
+    const session = {
+      inputTokens: 30_186_579,
+      outputTokens: 2_896_454,
+      cacheReadTokens: 1_226_450_816
+    };
+    const maxRequestPromptTokens = 252_970;
+    expect(canPriceTokenUsageAtScope(
+      "gpt-5.6-sol", session, "aggregate", maxRequestPromptTokens
+    )).toBe(true);
+    // 30_186_579*4 + 2_896_454*20 + 1_226_450_816*0.4, all per million.
+    expect(estimateTokenCostsUsd(
+      "gpt-5.6-sol", [session], [maxRequestPromptTokens]
+    )).toBeCloseTo(669.2557, 4);
+    // Left ungated (no evidence) it would have priced ~2x on the above tier —
+    // the dishonest outcome this fix avoids.
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [session])).toBe(1309.5469);
+  });
 });
