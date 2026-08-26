@@ -511,7 +511,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
         ? [`- The matched before/after cohort is not formed yet. ${transcriptGapShortPointer(input)}`]
         : [
             ...(machineWide && rankedCandidates.length > 0
-              ? [`- Cohort for candidate ACT-001 (${safePromptMetadata(rankedCandidates[0]!.title, 180)}): the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with ${safePromptMetadata(rankedCandidates[0]!.projectLabels[0]!, 80)} — its largest observed share of this window` : ""}.`]
+              ? [`- Cohort for candidate ACT-001 (${safePromptIdentifier(rankedCandidates[0]!.title, 180)}): the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with ${safePromptIdentifier(rankedCandidates[0]!.projectLabels[0]!, 80)} — its largest observed share of this window` : ""}.`]
               : []),
             "- Save at least 3 comparable pre-change sessions for the same agent, project, work type, source version, and quality bar. If they do not exist, collect them before approval.",
             "- After one approved change and a passing canary, collect at least 3 new matched sessions. Do not reuse historical aggregates as post-change evidence.",
@@ -542,7 +542,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
           // while the same artifact had already ranked them.
           ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.${
               startHereProject
-                ? ` Start with ${safePromptMetadata(startHereProject, 80)}: the largest observed share of candidate ACT-001.`
+                ? ` Start with ${safePromptIdentifier(startHereProject, 80)}: the largest observed share of candidate ACT-001.`
                 : ""
             }`]
           : [`- Run \`${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with the same evidence window, candidate IDs, approval gate, rollback, and verification contract.`]),
@@ -572,18 +572,22 @@ function localRankedCandidateMarkdownLines(candidate: RankedCutCandidate): strin
     ? `${formatUsd(candidate.affectedSpendUsd)} API-equivalent value observed in window`
     : `${formatUsd(candidate.affectedSpendUsd)} in window`;
   return [
-    `- **${id}** ${safePromptMetadata(candidate.title, 180)} — ${opportunity}`,
+    `- **${id}** ${safePromptIdentifier(candidate.title, 180)} — ${opportunity}`,
     `  - Evidence: ${candidate.recordCount} ${unit} · ${value} · ${candidate.confidence.replaceAll("_", " ")}.`,
-    ...(candidate.projectMemberLabels.length > 0
-      ? [`  - Across ${candidate.members.length} projects: ${candidate.projectMemberLabels.slice(0, 4).map((label) => (
-          safePromptMetadata(label, 110)
-        )).join(" · ")}${candidate.projectMemberLabels.length > 4 ? ` · + ${candidate.projectMemberLabels.length - 4} more` : ""}.`]
+    // The NAME is bounded and sanitized; the money is appended afterwards.
+    // Bounding the joined string instead pushed the dollars past the cap for a
+    // long project name, so Markdown printed a member with no figure in it
+    // while the terminal printed the figure.
+    ...(candidate.projectLabels.length > 0
+      ? [`  - Across ${candidate.members.length} projects: ${candidate.projectLabels.slice(0, 4).map((label, index) => (
+          `${safePromptIdentifier(label, 80)}${candidate.projectMemberValueSuffixes[index] ?? ""}`
+        )).join(" · ")}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}.`]
       : []),
     // 700, not the pre-0.9.7 420: the guidance now carries the candidate's
     // observed median day, peak day, concentration, and model mix. 420 was
     // sized for a one-sentence checklist and would truncate a real finding
     // mid-clause.
-    `  - Read-only next step: ${safePromptMetadata(candidate.guidance, 700)}`
+    `  - Read-only next step: ${safePromptProse(candidate.guidance, 700)}`
   ];
 }
 
@@ -643,7 +647,11 @@ function localValueBreakdownLines(
   }
   return entries.map((entry) => {
     const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
-    const label = safePromptMetadata(entry.key, 140);
+    // A project or model name on its own, with the money outside the call —
+    // so the identifier-aware check applies: `ignore-list` is a directory, and
+    // blanking it here while the readout's own by-project table prints it is
+    // the same two-surfaces-disagree failure the guidance had.
+    const label = safePromptIdentifier(entry.key, 140);
     if (groupCoverage.pricedRecords.length === 0) {
       return `- ${label}: Unavailable across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"} (${entry.confidence}); missing/null is not zero.`;
     }
@@ -1446,7 +1454,7 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
     promptLines.push(
       "",
       `${id} — investigate high cumulative context before proposing a cut`,
-      `EVIDENCE ${id}: ${safePromptMetadata(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window${
+      `EVIDENCE ${id}: ${safePromptIdentifier(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window${
         cut.medianDailyInputTokens ? `; median day ${formatTokenCount(cut.medianDailyInputTokens)} input+cache tokens` : ""
       }; confidence=${cut.confidence}.`,
       `Interpretation: observed exposure only; modeled savings unavailable because there is no matched counterfactual.`,
@@ -1455,7 +1463,7 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
       // 300 would hand the coding agent half a clause. The follow-on sentence
       // asks it to VERIFY those specifics rather than restating "inspect the
       // sessions", which the guidance itself now says with a date attached.
-      `READ-ONLY NEXT STEP ${id}: ${safePromptMetadata(cut.action, 700)} Verify those dates and token figures against that project's own session transcripts before drafting one reversible change.`
+      `READ-ONLY NEXT STEP ${id}: ${safePromptProse(cut.action, 700)} Verify those dates and token figures against that project's own session transcripts before drafting one reversible change.`
     );
   }
   if (allContextCandidates.length > contextCandidates.length) {
@@ -1700,8 +1708,72 @@ function activationCaveat(activation: DeadContextResult["deadItems"][number]["ac
   return "Only the item's discoverable/catalog metadata is measured; future usefulness is unknown.";
 }
 
+/**
+ * PRODUCT-AUTHORED prose that interpolates untrusted fragments: the ranked
+ * candidate's guidance, the Apply artifact's read-only next step. Redact and
+ * truncate — never blank.
+ *
+ * {@link safePromptMetadata} blanks its whole input on a directive hit, which
+ * is right for a value that is untrusted end to end and catastrophic for a
+ * sentence we wrote. Our sentence says "input+cache tokens"; the guard pairs
+ * any of `delete|remove|overwrite|edit|write` within 60 characters of
+ * "tokens", and a project named `write-ahead-log` sits exactly that far in
+ * front of our own noun. 8 of 11 ordinary repo basenames deleted the entire
+ * recommendation that way — three of them taking the dollar figure with it —
+ * while the terminal, which does not sanitize, printed the finding intact. A
+ * guard that makes two surfaces disagree about a number is not a guard.
+ *
+ * The directive check belongs on the untrusted FRAGMENT, and that is where it
+ * now runs: `safeUntrustedLabel` in @agent-finops/core neutralizes the project
+ * label and the model ids before they are ever interpolated, so every surface
+ * — terminal, Markdown, HTML — carries the same already-safe sentence. What is
+ * left for this function is the part that is safe to do to our own prose:
+ * strip credentials and home paths, flatten structure characters, and cut to
+ * length.
+ */
+function safePromptProse(value: string, maxLength: number): string {
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+/**
+ * A short LABEL whose untrusted parts are identifiers: a project basename, a
+ * model id, a candidate title built around one of those. Blanking on a
+ * directive hit is still right — the label is short, so losing it costs a name
+ * rather than a finding — but the check is identifier-aware.
+ *
+ * A hyphen JOINS an identifier, it does not separate words. `ignore-list` is a
+ * directory and `ignore all previous instructions` is an instruction; `\b`
+ * already treats `_` that way, so normalizing `-` to `_` only makes
+ * `ignore-list` behave like `ignore_list`. Injected prose keeps its spaces and
+ * is still caught.
+ *
+ * Callers must keep any money OUTSIDE this call — a blanked label must never
+ * take a dollar figure with it. See {@link cutMemberLabelParts}.
+ */
+function safePromptIdentifier(value: string, maxLength: number): string {
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  if (looksLikePromptDirective(sanitized.replace(/-/g, "_"))) return "[unsafe metadata omitted]";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+function truncateForPrompt(sanitized: string, maxLength: number): string {
+  return sanitized.length <= maxLength
+    ? sanitized
+    : `${sanitized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
 function safePromptMetadata(value: string, maxLength: number): string {
-  const sanitized = sanitizeLocalActivityText(value)
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  if (looksLikePromptDirective(sanitized)) return "[unsafe metadata omitted]";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+function redactPromptMetadata(value: string): string {
+  return sanitizeLocalActivityText(value)
     .replace(/\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|secret|password|credential)\s*[:=]\s*[^\s,;]+/gi, "[redacted]")
     .replace(/\b(?:sk|pk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9._-]{8,}/gi, "[redacted]")
     .replace(/^\/Users\/[^/]+/, "~")
@@ -1709,11 +1781,6 @@ function safePromptMetadata(value: string, maxLength: number): string {
     .replace(/[`<>\[\]{}|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!sanitized) return "not available";
-  if (looksLikePromptDirective(sanitized)) return "[unsafe metadata omitted]";
-  return sanitized.length <= maxLength
-    ? sanitized
-    : `${sanitized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 }
 
 function looksLikePromptDirective(value: string): boolean {

@@ -66,14 +66,27 @@ export type CutAction = {
  * Lives in core because the cut-list guidance strings are built here, and is
  * re-used by the renderers so one candidate's token magnitude reads the same
  * on every surface.
+ *
+ * The ladder runs to T. It used to stop at B, so a fleet-scale window printed
+ * "4212.7B" — a number the reader has to count digits on to place, from a
+ * product whose whole claim is arithmetic you can read at a glance. Past T the
+ * mantissa gets thousands separators rather than a fourteenth silent digit.
  */
 export function formatTokenCount(tokens: number): string {
   if (!Number.isFinite(tokens)) return "0";
   const value = Math.max(0, tokens);
+  if (value >= 1_000_000_000_000) return `${formatMantissa(value / 1_000_000_000_000)}T`;
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(Math.round(value));
+}
+
+/** Top of the ladder: keep one decimal until the integer part needs commas. */
+function formatMantissa(value: number): string {
+  return value >= 1_000
+    ? Math.round(value).toLocaleString("en-US")
+    : value.toFixed(1);
 }
 
 /**
@@ -200,7 +213,7 @@ export function generateCutList(records: UsageRecord[]): CutAction[] {
   ));
   const actions: CutAction[] = [
     ...modelDowngradeActions(callLevelRecords),
-    ...contextTrimActions(contextEvidenceRecords, records),
+    ...contextTrimActions(contextEvidenceRecords),
     ...cacheActions(callLevelRecords),
     ...batchActions(callLevelRecords)
   ];
@@ -272,7 +285,7 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
   return actions;
 }
 
-function contextTrimActions(records: UsageRecord[], allRecords: readonly UsageRecord[]): CutAction[] {
+function contextTrimActions(records: UsageRecord[]): CutAction[] {
   const heavy = records.filter((record) => record.inputTokens >= 100_000);
   if (heavy.length === 0) {
     return [];
@@ -286,23 +299,17 @@ function contextTrimActions(records: UsageRecord[], allRecords: readonly UsageRe
     byOperation.set(key, [...(byOperation.get(key) ?? []), record]);
   }
 
-  // Denominator for the concentration sentence. ONE financial basis only:
-  // priced local-agent records, which are all API-equivalent estimates. A
-  // connected billing bucket, a seat charge, or a commitment must never be
-  // summed into this — that is the exact mixing the truth contract forbids,
-  // and the sentence is labeled "local-agent value" so the reader knows which
-  // total the percentage is a share OF.
-  const localObservedUsd = allRecords.reduce(
-    (total, record) => (
-      isLocalAgentRecord(record) && typeof record.amountUsd === "number"
-        ? total + record.amountUsd
-        : total
-    ),
-    0
-  );
-  // Rank a local candidate among the flagged projects of the SAME agent, so
-  // "rank 1 of 8" never silently compares a Claude Code project against a
-  // Codex one.
+  // ONE denominator, and it is the set the sentence is already talking about:
+  // this agent's OWN flagged projects. It is both the share's denominator and
+  // the rank clause's population, so the percentage, the rank, and the entry's
+  // own dollars two lines below all reconcile, and the members of one fan-out
+  // sum to 100%.
+  //
+  // 0.9.7 shipped three denominators in one sentence — a machine-wide local
+  // total for the share, this agent's flagged projects for the rank, and the
+  // entry's own total underneath. Every figure was individually true, which is
+  // exactly why the sentence read as an arithmetic error. Never reintroduce a
+  // denominator the sentence does not name.
   const flaggedSpendByAgent = new Map<string, number[]>();
   for (const [key, groupRecords] of byOperation) {
     const [scope, agentId] = key.split("::");
@@ -328,6 +335,13 @@ function contextTrimActions(records: UsageRecord[], allRecords: readonly UsageRe
     const project = groupRecords[0]?.projectId;
     const evidence = sessionAggregates ? dailyContextEvidence(groupRecords) : null;
     const flaggedSpend = flaggedSpendByAgent.get(agent) ?? [];
+    // The project label is UNTRUSTED — it is a directory name off the user's
+    // disk. Neutralize it ONCE, here, so the title, the guidance, and every
+    // surface that re-derives a label from the title all carry the same
+    // already-safe text and cannot disagree about it.
+    const projectLabel = project
+      ? safeUntrustedLabel(project, WITHHELD_PROJECT_LABEL)
+      : "Unattributed";
     // Large token volume proves exposure, not that context is removable or
     // what quality/cost delta a change would produce. Context remains an
     // inspect-only action until matched before/after evidence exists.
@@ -337,16 +351,15 @@ function contextTrimActions(records: UsageRecord[], allRecords: readonly UsageRe
         ? `inspect-context-${slug(agent)}-${slug(project ?? "unattributed")}`
         : `inspect-context-${slug(operation)}`,
       title: sessionAggregates
-        ? `Investigate cumulative context in ${agent}${project ? ` · ${project}` : " · Unattributed"}`
+        ? `Investigate cumulative context in ${agent} · ${projectLabel}`
         : `Inspect oversized context on ${operation}`,
       action: sessionAggregates
         ? localContextTrimGuidance({
             count,
             agent,
-            projectLabel: project ?? "Unattributed",
+            projectLabel,
             evidence,
             groupSpendUsd: affectedSpendUsd,
-            localObservedUsd,
             flaggedSpend
           })
         : `${count} call-level ${operation} record${count === 1 ? "" : "s"} exceeded 100k input tokens. Inspect retrieved chunks and prompt history, then run a matched before/after before claiming savings.`,
@@ -464,10 +477,14 @@ function localContextTrimGuidance(input: {
   projectLabel: string;
   evidence: DailyContextEvidence | null;
   groupSpendUsd: number;
-  localObservedUsd: number;
   flaggedSpend: readonly number[];
 }): string {
-  const { count, agent, projectLabel, evidence } = input;
+  const { count, evidence } = input;
+  // Idempotent: `contextTrimActions` already neutralized the label for the
+  // title, and re-running the check on an already-neutral label is a no-op.
+  // Repeating it here keeps the guarantee attached to the function that does
+  // the interpolating, not to one of its callers.
+  const projectLabel = safeUntrustedLabel(input.projectLabel, WITHHELD_PROJECT_LABEL);
   const plural = count === 1 ? "" : "s";
   if (!evidence) {
     // No day-level evidence to quote. Stay honest and short rather than
@@ -502,7 +519,10 @@ function localContextTrimGuidance(input: {
   if (share) sentences.push(share);
 
   if (evidence.models.length > 1) {
-    const shown = evidence.models.slice(0, 3);
+    // Model ids come off the same untrusted logs the project name does.
+    const shown = evidence.models
+      .slice(0, 3)
+      .map((model) => safeUntrustedLabel(model, WITHHELD_MODEL_LABEL));
     const rest = evidence.models.length - shown.length;
     sentences.push(
       `${evidence.models.length} models ran there: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`
@@ -518,37 +538,103 @@ function localContextTrimGuidance(input: {
 }
 
 /**
- * "…holds 46% of the local-agent value observed in this window (rank 1 of 8
- * flagged claude-code projects)." An accounting fact about one denominator —
- * not a savings claim, not a projection.
+ * "…holds 76% of the flagged claude-code value observed in this window (rank 1
+ * of 8 flagged projects)." An accounting fact about ONE denominator — not a
+ * savings claim, not a projection.
+ *
+ * The denominator is this agent's own flagged total, which is also the rank
+ * clause's population and the sum of the per-project dollars the same readout
+ * prints two lines below. So the percentage, the rank, and the entry's own
+ * total reconcile, and the members of one fan-out sum to 100%.
+ *
+ * 0.9.7 divided by a machine-wide local total instead: `--full` printed a
+ * by-project table saying 83%, this sentence said 46%, and the entry's own
+ * dollars implied 76% — three true numbers that read as an arithmetic error.
+ * No clamp is needed now and none belongs here: the numerator is one member of
+ * the set in the denominator, so a ratio above 1 would be a real bug worth
+ * seeing rather than a cosmetic one worth hiding.
  */
 function concentrationClause(input: {
   agent: string;
   groupSpendUsd: number;
-  localObservedUsd: number;
   flaggedSpend: readonly number[];
 }): string | null {
-  const { agent, groupSpendUsd, localObservedUsd, flaggedSpend } = input;
-  if (!(localObservedUsd > 0) || !(groupSpendUsd > 0)) return null;
-  const ratio = groupSpendUsd / localObservedUsd;
+  const { agent, groupSpendUsd, flaggedSpend } = input;
+  const flaggedTotalUsd = flaggedSpend.reduce((total, spend) => total + spend, 0);
+  if (!(flaggedTotalUsd > 0) || !(groupSpendUsd > 0)) return null;
+  const ratio = groupSpendUsd / flaggedTotalUsd;
   if (!Number.isFinite(ratio) || ratio <= 0) return null;
   const percent = Math.round(ratio * 100);
-  const share = percent < 1 ? "under 1%" : `${Math.min(100, percent)}%`;
+  const share = percent < 1 ? "under 1%" : `${percent}%`;
   const rank = flaggedSpend.filter((spend) => spend > groupSpendUsd).length + 1;
   const total = flaggedSpend.length;
-  const rankClause = total > 1
-    ? ` (rank ${rank} of ${total} flagged ${agent} projects)`
-    : "";
-  return `That project holds ${share} of the local-agent value observed in this window${rankClause}.`;
+  const rankClause = total > 1 ? ` (rank ${rank} of ${total} flagged projects)` : "";
+  return `That project holds ${share} of the flagged ${agent} value observed in this window${rankClause}.`;
 }
 
 /**
  * "519", "4.4" — integers once the ratio is big enough that a decimal is noise.
  * Shared by the input:output ratio and the "N× the median day" multiple so the
- * two never disagree about precision.
+ * two never disagree about precision. Separated above 999, because a bare
+ * "1904762:1" is a digit-counting exercise, not a figure.
  */
 function formatRatio(value: number): string {
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+  return value >= 10 ? Math.round(value).toLocaleString("en-US") : value.toFixed(1);
+}
+
+/**
+ * What a project label and a model id become when the name itself reads like an
+ * instruction. Deliberately plain prose: it has to slot into every sentence
+ * position the real label does, and it has to survive the report layer's own
+ * sanitizer UNCHANGED — a marker in brackets would be stripped there and the
+ * two surfaces would disagree about a string whose whole job is agreeing.
+ */
+const WITHHELD_PROJECT_LABEL = "a project whose name was withheld";
+const WITHHELD_MODEL_LABEL = "a model whose name was withheld";
+
+/**
+ * Neutralize ONE untrusted fragment before it is interpolated into
+ * product-authored prose.
+ *
+ * THE FRAGMENT ONLY. This is the whole point. The finished sentence contains
+ * our own words — "input+cache tokens", "credentials", "no output tokens
+ * recorded" — so a directive matcher run over the finished sentence pairs an
+ * ordinary basename like `write-ahead-log` with our own noun and blanks the
+ * entire finding. 8 of 11 ordinary repo names did exactly that in 0.9.7. Run
+ * the check over the user's text alone and an ordinary name has nothing to
+ * pair with.
+ *
+ * Hyphens are normalized to underscores first, because a hyphen JOINS an
+ * identifier rather than separating words: `ignore-list` is one directory
+ * name, `ignore all previous instructions` is an instruction. `\b` already
+ * treats `_` that way, so this only makes `-` behave like the `_` in
+ * `ignore_list`.
+ *
+ * Over-triggering here is cheap and under-triggering is not: a false positive
+ * costs one name while the finding and its dollars survive, so the patterns
+ * stay strict.
+ */
+function safeUntrustedLabel(value: string, withheld: string): string {
+  // Control characters and line breaks are structure, not name: a label that
+  // can open a new line can forge a new instruction on every surface at once.
+  const collapsed = value
+    .replace(/[\u0000-\u001F\u007F]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!collapsed) return withheld;
+  return looksLikeDirectiveFragment(collapsed) ? withheld : collapsed;
+}
+
+function looksLikeDirectiveFragment(value: string): boolean {
+  const identifierNormalized = value.replace(/-/g, "_");
+  return [
+    /\b(?:ignore|disregard|override|bypass)\b/i,
+    /\b(?:system|developer|assistant)\s*:/i,
+    /\b(?:execute|run)\b.{0,80}\b(?:command|shell|bash|powershell)\b/i,
+    /\b(?:delete|remove|overwrite|edit|write)\b.{0,60}\b(?:everything|all files?|configs?|credentials?|secrets?|tokens?)\b/i,
+    /\b(?:reveal|print|upload|send|exfiltrate)\b.{0,60}\b(?:credentials?|secrets?|tokens?|keys?|files?)\b/i,
+    /\b(?:do not|don't)\b.{0,60}\b(?:follow|obey|wait|ask|require)\b.{0,40}\b(?:approval|instructions?|rules?)\b/i
+  ].some((pattern) => pattern.test(identifierNormalized));
 }
 
 function cacheActions(records: UsageRecord[]): CutAction[] {

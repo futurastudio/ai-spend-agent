@@ -1561,11 +1561,34 @@ function cutProjectLabel(action: CutAction): string {
  * missing figure degrades to the pre-0.9.7 line, never to a placeholder.
  */
 export function cutMemberLabel(action: CutAction): string {
-  const dollars = `${cutProjectLabel(action)} ~$${Math.round(action.affectedSpendUsd).toLocaleString("en-US")}`;
+  const { projectLabel, valueSuffix } = cutMemberLabelParts(action);
+  return `${projectLabel}${valueSuffix}`;
+}
+
+/**
+ * The same member line, split at the seam between the UNTRUSTED half (the
+ * project label, off the user's disk) and the PRODUCT half (the money and the
+ * median day).
+ *
+ * The split exists because a renderer that has to bound the line must bound the
+ * NAME and keep the figure. 0.9.7 truncated the joined string instead, so a
+ * long project name pushed the dollars past the cap and the Markdown artifact
+ * printed a member with no money in it while the terminal printed the money.
+ * Anything that shortens or sanitizes a member label works on `projectLabel`
+ * and re-appends `valueSuffix` afterwards.
+ */
+export function cutMemberLabelParts(action: CutAction): {
+  projectLabel: string;
+  valueSuffix: string;
+} {
+  const dollars = ` ~$${Math.round(action.affectedSpendUsd).toLocaleString("en-US")}`;
   const median = action.medianDailyInputTokens;
-  return median !== undefined && median > 0
-    ? `${dollars} (${formatTokenCount(median)}/day)`
-    : dollars;
+  return {
+    projectLabel: cutProjectLabel(action),
+    valueSuffix: median !== undefined && median > 0
+      ? `${dollars} (${formatTokenCount(median)}/day)`
+      : dollars
+  };
 }
 
 const confidenceRank: Record<string, number> = { detected_unverified: 0, estimated: 1, verified: 2 };
@@ -1610,6 +1633,13 @@ export type RankedCutCandidate = {
    * differentiate the members of one fan-out.
    */
   projectMemberLabels: readonly string[];
+  /**
+   * The PRODUCT half of each member label — " ~$1,505 (67.5M/day)" —
+   * index-aligned with {@link projectLabels}, so a renderer that must bound or
+   * sanitize the untrusted project name can re-append the money afterwards
+   * instead of truncating it away. See {@link cutMemberLabelParts}.
+   */
+  projectMemberValueSuffixes: readonly string[];
   recordCount: number;
   recordUnit: CutAction["recordUnit"];
   affectedSpendUsd: number;
@@ -1642,7 +1672,13 @@ export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandi
   const candidates = collapseRepeatedCutActions(shown).slice(0, 5).map((entry, index) => {
     const members = entry.members;
     const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
-    const guidanceSource = members[0]!.action;
+    // The guidance names ONE project, and every other line on this candidate
+    // — the across-line's first member, the report's "start with X" pointer —
+    // names `ranked[0]`. Quote `ranked[0]` too. They coincide today only
+    // because context candidates all carry zero estimated savings and arrive
+    // in spend order; nothing enforces that, and the day it stops holding the
+    // readout quotes one project's median under another project's name.
+    const guidanceSource = ranked[0]!.action;
     const guidanceStart = guidanceSource.indexOf(". ");
     const weakest = [...members].sort((a, b) =>
       (confidenceRank[a.confidence] ?? 0) - (confidenceRank[b.confidence] ?? 0))[0]!;
@@ -1660,6 +1696,9 @@ export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandi
         ? []
         : ranked.map((action) => action.affectedSpendUsd),
       projectMemberLabels: members.length === 1 ? [] : ranked.map(cutMemberLabel),
+      projectMemberValueSuffixes: members.length === 1
+        ? []
+        : ranked.map((action) => cutMemberLabelParts(action).valueSuffix),
       recordCount: members.reduce((total, action) => total + action.recordCount, 0),
       recordUnit: members[0]!.recordUnit,
       affectedSpendUsd: members.reduce((total, action) => total + action.affectedSpendUsd, 0),
@@ -1695,8 +1734,9 @@ function groupedCutActionLines(
   if (ranked.length > 4) across.push(`+ ${ranked.length - 4} more`);
   const acrossLine = `     ${c.dim(`across ${members.length} projects — ${across.join(" · ")}`)}`;
   // The shared instruction: the action copy minus its leading per-project
-  // count sentence (every member carries the same guidance tail).
-  const guidanceSource = members[0]!.action;
+  // count sentence. The guidance NAMES its project, so it must come from the
+  // same member the across-line puts first — `ranked[0]`, not insertion order.
+  const guidanceSource = ranked[0]!.action;
   const guidanceStart = guidanceSource.indexOf(". ");
   const guidance = guidanceStart === -1 ? guidanceSource : guidanceSource.slice(guidanceStart + 2);
   const detail = `     ${c.dim(guidance)}`;
