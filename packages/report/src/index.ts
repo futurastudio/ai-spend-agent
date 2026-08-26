@@ -3,6 +3,7 @@ import {
   aibillCommandV0,
   analyzeSpend,
   computePlanChecks,
+  formatTokenCount,
   generateCutList,
   localAgentFormatSupports,
   sanitizeLocalActivityText
@@ -375,6 +376,9 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     ? []
     : rankCutCandidates(input.actionCandidates ?? []).candidates;
   const machineWide = input.analysisScope === "machine-wide";
+  // The largest member of the top-ranked candidate, when the ranking produced
+  // one. Never a guess — only the label the ranking itself emitted.
+  const startHereProject = rankedCandidates[0]?.projectLabels[0] ?? null;
   const candidateCount = canonicalFinding ? 1 : rankedCandidates.length;
   const lines = [
     "# aibill Local Evidence Report",
@@ -532,7 +536,15 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
       : !qualitativeComplete
         ? [`- Run \`${aibillCommandV0("index")}\` to finish reading the queued session transcripts, then re-run this report for Context Health, configuration evidence, and an Apply plan.`]
         : machineWide
-          ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.`]
+          // Name WHICH project to start in when the evidence says one. A
+          // machine-wide report knows its top candidate's largest member; the
+          // pre-0.9.7 line sent the reader to an unnamed "/path/to/project"
+          // while the same artifact had already ranked them.
+          ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.${
+              startHereProject
+                ? ` Start with ${safePromptMetadata(startHereProject, 80)}: the largest observed share of candidate ACT-001.`
+                : ""
+            }`]
           : [`- Run \`${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with the same evidence window, candidate IDs, approval gate, rollback, and verification contract.`]),
     ""
   ];
@@ -562,12 +574,16 @@ function localRankedCandidateMarkdownLines(candidate: RankedCutCandidate): strin
   return [
     `- **${id}** ${safePromptMetadata(candidate.title, 180)} — ${opportunity}`,
     `  - Evidence: ${candidate.recordCount} ${unit} · ${value} · ${candidate.confidence.replaceAll("_", " ")}.`,
-    ...(candidate.projectLabels.length > 0
-      ? [`  - Across ${candidate.members.length} projects: ${candidate.projectLabels.slice(0, 4).map((label, index) => (
-          `${safePromptMetadata(label, 80)} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
-        )).join(" · ")}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}.`]
+    ...(candidate.projectMemberLabels.length > 0
+      ? [`  - Across ${candidate.members.length} projects: ${candidate.projectMemberLabels.slice(0, 4).map((label) => (
+          safePromptMetadata(label, 110)
+        )).join(" · ")}${candidate.projectMemberLabels.length > 4 ? ` · + ${candidate.projectMemberLabels.length - 4} more` : ""}.`]
       : []),
-    `  - Read-only next step: ${safePromptMetadata(candidate.guidance, 420)}`
+    // 700, not the pre-0.9.7 420: the guidance now carries the candidate's
+    // observed median day, peak day, concentration, and model mix. 420 was
+    // sized for a one-sentence checklist and would truncate a real finding
+    // mid-clause.
+    `  - Read-only next step: ${safePromptMetadata(candidate.guidance, 700)}`
   ];
 }
 
@@ -1430,9 +1446,16 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
     promptLines.push(
       "",
       `${id} — investigate high cumulative context before proposing a cut`,
-      `EVIDENCE ${id}: ${safePromptMetadata(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window; confidence=${cut.confidence}.`,
+      `EVIDENCE ${id}: ${safePromptMetadata(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window${
+        cut.medianDailyInputTokens ? `; median day ${formatTokenCount(cut.medianDailyInputTokens)} input+cache tokens` : ""
+      }; confidence=${cut.confidence}.`,
       `Interpretation: observed exposure only; modeled savings unavailable because there is no matched counterfactual.`,
-      `READ-ONLY NEXT STEP ${id}: ${safePromptMetadata(cut.action, 300)} Identify the exact sessions and measured source before drafting one reversible change.`
+      // 700, not the pre-0.9.7 300: the guidance now names the median day, the
+      // heaviest date, the concentration, and the model mix. Truncating it at
+      // 300 would hand the coding agent half a clause. The follow-on sentence
+      // asks it to VERIFY those specifics rather than restating "inspect the
+      // sessions", which the guidance itself now says with a date attached.
+      `READ-ONLY NEXT STEP ${id}: ${safePromptMetadata(cut.action, 700)} Verify those dates and token figures against that project's own session transcripts before drafting one reversible change.`
     );
   }
   if (allContextCandidates.length > contextCandidates.length) {
@@ -3387,10 +3410,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
           : candidate.recordUnit === "tools"
             ? `tool${candidate.recordCount === 1 ? "" : "s"}`
             : `call${candidate.recordCount === 1 ? "" : "s"}`;
-        const across = candidate.projectLabels.length > 0
-          ? `<p class="dim">across ${candidate.members.length} projects — ${escapeHtml(candidate.projectLabels.slice(0, 4).map((label, index) => (
-              `${label} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
-            )).join(" · "))}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}</p>`
+        const across = candidate.projectMemberLabels.length > 0
+          ? `<p class="dim">across ${candidate.members.length} projects — ${escapeHtml(candidate.projectMemberLabels.slice(0, 4).join(" · "))}${candidate.projectMemberLabels.length > 4 ? ` · + ${candidate.projectMemberLabels.length - 4} more` : ""}</p>`
           : "";
         return `<div class="cut"><div><strong>${candidate.rank}. ${escapeHtml(candidate.title)}</strong>${across}<p>${escapeHtml(candidate.guidance)}</p></div><div class="cut-v"><strong class="estimated-value">${escapeHtml(candidate.observed ? "reduction unproven" : `~${formatUsd(candidate.estimatedMonthlySavingsUsd)}/mo modeled`)}</strong><span>${candidate.recordCount} ${unit} · ${escapeHtml(formatUsd(candidate.affectedSpendUsd))} observed in window · ${escapeHtml(candidate.confidence.replaceAll("_", " "))}</span></div></div>`;
       }).join("");

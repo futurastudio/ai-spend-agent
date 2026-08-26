@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { aibillCommandV0, analyzeSpend, buildContextHealth, normalizeOpenAiUsageResponse } from "@agent-finops/core";
+import { aibillCommandV0, analyzeSpend, buildContextHealth, generateCutList, normalizeOpenAiUsageResponse } from "@agent-finops/core";
 import type { SourceRegistry, UsageRecord } from "@agent-finops/core";
 import type { SpendReportInput } from "./index.js";
 import {
@@ -2090,5 +2090,127 @@ describe("html overflow reconciliation (0.9.4 founder fix)", () => {
     expect(html).toContain("+5 more projects");
     expect(html).toContain("$4.61");
     expect(html).not.toContain("$4.64");
+  });
+});
+
+/**
+ * 0.9.7 — the sharpened context-trim guidance has to survive the trip from
+ * core into every written surface. Two things used to eat it: a 300/420-char
+ * `safePromptMetadata` cap sized for a one-sentence checklist, and an
+ * across-line that carried only a rounded dollar.
+ */
+describe("sharpened action candidates across the written surfaces (0.9.7)", () => {
+  /** Two projects, two models, one heavy day — enough for every clause. */
+  function founderShapedRecords(): UsageRecord[] {
+    const day = (index: number): string =>
+      `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`;
+    const rows: UsageRecord[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const spike = index === 2 ? 6 : 1;
+      rows.push({
+        id: `af-opus-${index}`,
+        timestamp: day(index),
+        source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+        model: "claude-opus-4-8",
+        inputTokens: 4_000_000 * spike,
+        outputTokens: 10_000,
+        amountUsd: 120 * spike,
+        costConfidence: "estimated",
+        agentId: "claude-code",
+        projectId: "agent-finops",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate",
+        operation: "claude-code sessions"
+      } as UsageRecord);
+      rows.push({
+        id: `af-sonnet-${index}`,
+        timestamp: day(index),
+        source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+        model: "claude-sonnet-4-6",
+        inputTokens: 2_000_000 * spike,
+        outputTokens: 10_000,
+        amountUsd: 30 * spike,
+        costConfidence: "estimated",
+        agentId: "claude-code",
+        projectId: "agent-finops",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate",
+        operation: "claude-code sessions"
+      } as UsageRecord);
+      rows.push({
+        id: `av-${index}`,
+        timestamp: day(index),
+        source: { id: "local-agent-logs", name: "Local agent session logs", provider: "anthropic", confidence: "estimated", observedFrom: "test" },
+        model: "claude-opus-4-8",
+        inputTokens: 600_000,
+        outputTokens: 8_000,
+        amountUsd: 20,
+        costConfidence: "estimated",
+        agentId: "claude-code",
+        projectId: "action-verifier",
+        providerCostType: "local_agent_logs",
+        usageGranularity: "daily_aggregate",
+        operation: "claude-code sessions"
+      } as UsageRecord);
+    }
+    return rows;
+  }
+
+  function localReportInput(records: UsageRecord[]): SpendReportInput {
+    return {
+      ...input,
+      generatedAt: "2026-07-08T00:00:00.000Z",
+      dataMode: "local_logs",
+      analysisScope: "machine-wide",
+      allRecords: records,
+      providerRecords: [],
+      actionCandidates: generateCutList(records)
+    } as SpendReportInput;
+  }
+
+  it("carries the whole finding into the Markdown artifact, untruncated", () => {
+    const records = founderShapedRecords();
+    const markdown = generateMarkdownReport(localReportInput(records));
+
+    // The across-line differentiates the members by tokens, not only dollars.
+    expect(markdown).toContain("Across 2 projects: agent-finops ~$1,350 (6.0M/day) · action-verifier ~$80 (600.0K/day).");
+    // The read-only next step is the finding, in full.
+    expect(markdown).toContain("agent-finops — median day carried 6.0M input+cache tokens against 20.0K output (300:1).");
+    expect(markdown).toContain("Heaviest day 2026-07-03 carried 36.0M, 6.0× the median day; dates are each session's last activity.");
+    expect(markdown).toContain("2 models ran there: claude-opus-4-8, claude-sonnet-4-6.");
+    expect(markdown).toContain("Inspect the sessions behind 2026-07-03 before proposing one reversible change.");
+    // Not clipped by the pre-0.9.7 420-char cap.
+    expect(markdown).not.toContain("one reversible chan…");
+    // The next step names WHERE to start, instead of an unnamed placeholder.
+    expect(markdown).toContain("Start with agent-finops: the largest observed share of candidate ACT-001.");
+    // Truth contract intact.
+    expect(markdown).toContain("reduction unproven");
+    expect(markdown).toContain("API-equivalent value observed in window");
+  });
+
+  it("gives the HTML report the same differentiated across-line", () => {
+    const records = founderShapedRecords();
+    const html = generateHtmlReport(localReportInput(records));
+    expect(html).toContain("agent-finops ~$1,350 (6.0M/day) · action-verifier ~$80 (600.0K/day)");
+    expect(html).toContain("median day carried 6.0M input+cache tokens");
+    expect(html).not.toContain("`");
+  });
+
+  it("hands the apply artifact the specifics, not a truncated clause", () => {
+    const records = founderShapedRecords();
+    const artifact = generateApplyArtifactMarkdown(localReportInput(records));
+
+    expect(artifact).toContain("USAGE-001 — investigate high cumulative context before proposing a cut");
+    // The evidence block now states the magnitude that explains the dollars.
+    expect(artifact).toContain("median day 6.0M input+cache tokens");
+    // The next step carries the whole finding and then asks the coding agent
+    // to VERIFY it — it does not restate a generic checklist.
+    expect(artifact).toContain("Heaviest day 2026-07-03 carried 36.0M");
+    expect(artifact).toContain("Verify those dates and token figures against that project's own session transcripts before drafting one reversible change.");
+    expect(artifact).not.toContain("Identify the exact sessions and measured source");
+    expect(artifact).not.toContain("…");
+    // Still read-only, still unproven.
+    expect(artifact).toContain("modeled savings unavailable because there is no matched counterfactual");
+    expect(artifact).toContain("APPROVAL GATE: read-only inspection is allowed");
   });
 });

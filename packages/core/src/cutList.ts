@@ -48,7 +48,33 @@ export type CutAction = {
    * by two actions (see {@link buildRecommendedPlan}).
    */
   recordIds: string[];
+  /**
+   * Median DAY's summed input+cache tokens for this candidate, computed over
+   * calendar days (not over records — a project running two models emits two
+   * records per day, and calling that "per day" would halve the number).
+   *
+   * Exists so a grouped render can tell two members apart by the quantity that
+   * explains their dollars instead of by the rounded dollar alone. Optional and
+   * absent on candidates with no day-level evidence; every renderer MUST drop
+   * the figure rather than print a placeholder.
+   */
+  medianDailyInputTokens?: number;
 };
+
+/**
+ * Compact token count for prose: 2,140,000 -> "2.1M", 8,300 -> "8.3K".
+ * Lives in core because the cut-list guidance strings are built here, and is
+ * re-used by the renderers so one candidate's token magnitude reads the same
+ * on every surface.
+ */
+export function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens)) return "0";
+  const value = Math.max(0, tokens);
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
 
 /**
  * A non-overlapping "recommended plan" plus the leftover overlapping
@@ -174,7 +200,7 @@ export function generateCutList(records: UsageRecord[]): CutAction[] {
   ));
   const actions: CutAction[] = [
     ...modelDowngradeActions(callLevelRecords),
-    ...contextTrimActions(contextEvidenceRecords),
+    ...contextTrimActions(contextEvidenceRecords, records),
     ...cacheActions(callLevelRecords),
     ...batchActions(callLevelRecords)
   ];
@@ -246,7 +272,7 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
   return actions;
 }
 
-function contextTrimActions(records: UsageRecord[]): CutAction[] {
+function contextTrimActions(records: UsageRecord[], allRecords: readonly UsageRecord[]): CutAction[] {
   const heavy = records.filter((record) => record.inputTokens >= 100_000);
   if (heavy.length === 0) {
     return [];
@@ -260,6 +286,36 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
     byOperation.set(key, [...(byOperation.get(key) ?? []), record]);
   }
 
+  // Denominator for the concentration sentence. ONE financial basis only:
+  // priced local-agent records, which are all API-equivalent estimates. A
+  // connected billing bucket, a seat charge, or a commitment must never be
+  // summed into this — that is the exact mixing the truth contract forbids,
+  // and the sentence is labeled "local-agent value" so the reader knows which
+  // total the percentage is a share OF.
+  const localObservedUsd = allRecords.reduce(
+    (total, record) => (
+      isLocalAgentRecord(record) && typeof record.amountUsd === "number"
+        ? total + record.amountUsd
+        : total
+    ),
+    0
+  );
+  // Rank a local candidate among the flagged projects of the SAME agent, so
+  // "rank 1 of 8" never silently compares a Claude Code project against a
+  // Codex one.
+  const flaggedSpendByAgent = new Map<string, number[]>();
+  for (const [key, groupRecords] of byOperation) {
+    const [scope, agentId] = key.split("::");
+    if (scope !== "local" || !agentId) continue;
+    // roundMoney, matching `affectedSpendUsd` exactly: comparing a rounded
+    // group against unrounded peers made a candidate outrank ITSELF and
+    // report "rank 2 of 8" for the largest project on the list.
+    flaggedSpendByAgent.set(agentId, [
+      ...(flaggedSpendByAgent.get(agentId) ?? []),
+      roundMoney(sumRecords(groupRecords))
+    ]);
+  }
+
   const actions: CutAction[] = [];
   for (const [key, groupRecords] of byOperation) {
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
@@ -270,6 +326,8 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
     const count = groupRecords.length;
     const agent = groupRecords[0]?.agentId ?? "coding-agent";
     const project = groupRecords[0]?.projectId;
+    const evidence = sessionAggregates ? dailyContextEvidence(groupRecords) : null;
+    const flaggedSpend = flaggedSpendByAgent.get(agent) ?? [];
     // Large token volume proves exposure, not that context is removable or
     // what quality/cost delta a change would produce. Context remains an
     // inspect-only action until matched before/after evidence exists.
@@ -282,7 +340,15 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
         ? `Investigate cumulative context in ${agent}${project ? ` · ${project}` : " · Unattributed"}`
         : `Inspect oversized context on ${operation}`,
       action: sessionAggregates
-        ? `${count} day + agent + model + project aggregate${count === 1 ? "" : "s"} contained at least 100k summed input/cache tokens. Inspect per-session context, compactions, repeated reads, and measured instruction-file size before proposing one reversible change.`
+        ? localContextTrimGuidance({
+            count,
+            agent,
+            projectLabel: project ?? "Unattributed",
+            evidence,
+            groupSpendUsd: affectedSpendUsd,
+            localObservedUsd,
+            flaggedSpend
+          })
         : `${count} call-level ${operation} record${count === 1 ? "" : "s"} exceeded 100k input tokens. Inspect retrieved chunks and prompt history, then run a matched before/after before claiming savings.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
@@ -291,10 +357,198 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
       impactBasis: "observed_value_no_counterfactual",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
-      kind: "context_trim"
+      kind: "context_trim",
+      ...(evidence ? { medianDailyInputTokens: evidence.medianDailyInputTokens } : {})
     });
   }
   return actions;
+}
+
+/**
+ * Day-level shape of ONE context candidate. Everything here is a reduction over
+ * records the candidate already owns: no new I/O, no new estimate, no
+ * counterfactual. Days — not records — are the unit, because a project running
+ * two models emits two records for the same calendar day.
+ */
+type DailyContextEvidence = {
+  activeDays: number;
+  /** The median-by-input observed day's summed input+cache tokens. */
+  medianDailyInputTokens: number;
+  /** THAT SAME day's summed output tokens — never a separately-taken median. */
+  medianDailyOutputTokens: number;
+  /** Date (UTC, session last-activity dating) of the heaviest observed day. */
+  peakDay: string;
+  peakDayInputTokens: number;
+  /** Heaviest day ÷ median day; 0 when the median is 0. */
+  peakOverMedian: number;
+  /**
+   * The MEDIAN DAY's input:output ratio — not the window total's. The sentence
+   * prints the two median figures side by side, so the reader can divide them;
+   * a window-total ratio would sit next to numbers that do not produce it and
+   * read as an arithmetic error. Null when the median day recorded no output.
+   */
+  inputPerOutput: number | null;
+  /** Distinct models in this candidate, heaviest observed value first. */
+  models: string[];
+};
+
+function dailyContextEvidence(records: readonly UsageRecord[]): DailyContextEvidence | null {
+  if (records.length === 0) return null;
+  const byDay = new Map<string, { input: number; output: number }>();
+  for (const record of records) {
+    const day = record.timestamp.slice(0, 10);
+    const current = byDay.get(day) ?? { input: 0, output: 0 };
+    current.input += record.inputTokens;
+    current.output += record.outputTokens;
+    byDay.set(day, current);
+  }
+  const days = [...byDay.entries()].sort((left, right) => left[0].localeCompare(right[0]));
+  const first = days[0];
+  if (!first) return null;
+  // ONE REAL DAY, not two independent medians. The sentence says "median day
+  // carried X input+cache tokens against Y output"; if X and Y came from
+  // different calendar days that sentence would describe a day that never
+  // happened. So: order the days by input+cache, take the middle OBSERVED day
+  // (the lower of the two middles on an even sample, never their average), and
+  // read every median figure off that one day.
+  const byInput = [...days].sort(
+    (left, right) => left[1].input - right[1].input || left[0].localeCompare(right[0])
+  );
+  const medianDay = byInput[Math.floor((byInput.length - 1) / 2)]!;
+  const medianDailyInputTokens = medianDay[1].input;
+  const medianDailyOutputTokens = medianDay[1].output;
+  const peak = days.reduce((best, entry) => (entry[1].input > best[1].input ? entry : best), first);
+  const spendByModel = new Map<string, number>();
+  for (const record of records) {
+    spendByModel.set(record.model, (spendByModel.get(record.model) ?? 0) + (record.amountUsd ?? 0));
+  }
+  return {
+    activeDays: days.length,
+    medianDailyInputTokens,
+    medianDailyOutputTokens,
+    peakDay: peak[0],
+    peakDayInputTokens: peak[1].input,
+    peakOverMedian: medianDailyInputTokens > 0 ? peak[1].input / medianDailyInputTokens : 0,
+    inputPerOutput: medianDailyOutputTokens > 0
+      ? medianDailyInputTokens / medianDailyOutputTokens
+      : null,
+    models: [...spendByModel.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .map(([model]) => model)
+  };
+}
+
+/**
+ * The guidance a local context candidate carries.
+ *
+ * Two hard constraints shape it:
+ *
+ *  1. TRUTH. Every clause states something OBSERVED — a median, a date, a
+ *     ratio, a share of a single-basis total. Nothing predicts a reduction,
+ *     nothing prices a change, and no clause is emitted when the evidence
+ *     behind it is absent. Sharper means more specific about what was seen,
+ *     never more confident about what would happen.
+ *
+ *  2. GEOMETRY. The grouped terminal/report render quotes this string from its
+ *     LARGEST member and drops everything before the first ". " (see
+ *     `groupedCutActionLines` / `rankCutCandidates` in @agent-finops/report).
+ *     So sentence 1 carries only per-member counts, and sentence 2 onward
+ *     NAMES the project it describes — otherwise one project's median would be
+ *     read as the whole group's. For the same reason sentence 1 interpolates
+ *     no free text: a label containing ". " would truncate the string at the
+ *     wrong point.
+ */
+function localContextTrimGuidance(input: {
+  count: number;
+  agent: string;
+  projectLabel: string;
+  evidence: DailyContextEvidence | null;
+  groupSpendUsd: number;
+  localObservedUsd: number;
+  flaggedSpend: readonly number[];
+}): string {
+  const { count, agent, projectLabel, evidence } = input;
+  const plural = count === 1 ? "" : "s";
+  if (!evidence) {
+    // No day-level evidence to quote. Stay honest and short rather than
+    // reciting a checklist the product cannot perform.
+    return `${count} day + agent + model + project aggregate${plural} each carried at least 100k summed input/cache tokens. ` +
+      `Inspect the heaviest sessions in ${projectLabel} before proposing one reversible change.`;
+  }
+
+  const dayPlural = evidence.activeDays === 1 ? "" : "s";
+  const sentences: string[] = [
+    `${count} day + agent + model + project aggregate${plural} over ${evidence.activeDays} active day${dayPlural}.`
+  ];
+
+  const ratio = evidence.inputPerOutput === null ? null : formatRatio(evidence.inputPerOutput);
+  sentences.push(
+    evidence.medianDailyOutputTokens > 0
+      ? `${projectLabel} — median day carried ${formatTokenCount(evidence.medianDailyInputTokens)} input+cache tokens ` +
+        `against ${formatTokenCount(evidence.medianDailyOutputTokens)} output${ratio ? ` (${ratio}:1)` : ""}.`
+      : `${projectLabel} — median day carried ${formatTokenCount(evidence.medianDailyInputTokens)} input+cache tokens ` +
+        "with no output tokens recorded that day."
+  );
+
+  // Only when there is a real lead. A uniform project gets no false one.
+  if (evidence.peakOverMedian >= 2) {
+    sentences.push(
+      `Heaviest day ${evidence.peakDay} carried ${formatTokenCount(evidence.peakDayInputTokens)}, ` +
+      `${formatRatio(evidence.peakOverMedian)}× the median day; dates are each session's last activity.`
+    );
+  }
+
+  const share = concentrationClause(input);
+  if (share) sentences.push(share);
+
+  if (evidence.models.length > 1) {
+    const shown = evidence.models.slice(0, 3);
+    const rest = evidence.models.length - shown.length;
+    sentences.push(
+      `${evidence.models.length} models ran there: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`
+    );
+  }
+
+  sentences.push(
+    evidence.peakOverMedian >= 2
+      ? `Inspect the sessions behind ${evidence.peakDay} before proposing one reversible change.`
+      : `Inspect the heaviest sessions in ${projectLabel} before proposing one reversible change.`
+  );
+  return sentences.join(" ");
+}
+
+/**
+ * "…holds 46% of the local-agent value observed in this window (rank 1 of 8
+ * flagged claude-code projects)." An accounting fact about one denominator —
+ * not a savings claim, not a projection.
+ */
+function concentrationClause(input: {
+  agent: string;
+  groupSpendUsd: number;
+  localObservedUsd: number;
+  flaggedSpend: readonly number[];
+}): string | null {
+  const { agent, groupSpendUsd, localObservedUsd, flaggedSpend } = input;
+  if (!(localObservedUsd > 0) || !(groupSpendUsd > 0)) return null;
+  const ratio = groupSpendUsd / localObservedUsd;
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  const percent = Math.round(ratio * 100);
+  const share = percent < 1 ? "under 1%" : `${Math.min(100, percent)}%`;
+  const rank = flaggedSpend.filter((spend) => spend > groupSpendUsd).length + 1;
+  const total = flaggedSpend.length;
+  const rankClause = total > 1
+    ? ` (rank ${rank} of ${total} flagged ${agent} projects)`
+    : "";
+  return `That project holds ${share} of the local-agent value observed in this window${rankClause}.`;
+}
+
+/**
+ * "519", "4.4" — integers once the ratio is big enough that a decimal is noise.
+ * Shared by the input:output ratio and the "N× the median day" multiple so the
+ * two never disagree about precision.
+ */
+function formatRatio(value: number): string {
+  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
 }
 
 function cacheActions(records: UsageRecord[]): CutAction[] {

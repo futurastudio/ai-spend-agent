@@ -181,15 +181,40 @@ function reportCandidateTitles(markdown: string): string[] {
  * dollars to the WRONG project passed all 1,637 tests.
  */
 function projectAttribution(text: string): string[] {
-  return text.split("\n").flatMap((line) => {
-    // The readout writes "across 3 projects — a ~$2 · b ~$1"; the Markdown
-    // artifact writes "Across 3 projects: a ~$2 · b ~$1."; the HTML wraps the
-    // readout form in a <p>. Same facts, three renderings — normalize to the
-    // payload so the comparison is about ATTRIBUTION, not punctuation.
-    const match = /[Aa]cross \d+ projects(?:: | — )(.+?)(?:<\/p>|$)/u.exec(line);
-    if (!match) return [];
-    return [match[1]!.trim().replace(/\s+/gu, " ").replace(/\.$/u, "")];
-  });
+  // The readout writes "across 3 projects — a ~$2 (1.1M/day) · b ~$1 (…)";
+  // the Markdown artifact writes "Across 3 projects: a ~$2 (…) · b ~$1 (…).";
+  // the HTML wraps the readout form in a <p>. Same facts, three renderings.
+  //
+  // 0.9.7: the readout's across-line now carries each member's median day of
+  // input+cache tokens and WRAPS at the terminal width, so a line-scoped
+  // parser silently compared the terminal's first physical line against the
+  // artifact's whole line. Flatten first, then read ITEMS — the parser is now
+  // independent of where any surface happens to wrap, which is what this guard
+  // was always supposed to be about.
+  const flat = text.replace(/<\/p>/gu, " ").replace(/\s+/gu, " ");
+  const blocks = [...flat.matchAll(
+    /[Aa]cross \d+ projects(?:: | — )(.*?)(?=[Aa]cross \d+ projects|$)/gu
+  )];
+  return blocks.map((block) => {
+    const items: string[] = [];
+    for (const segment of block[1]!.split(" · ")) {
+      // Each member renders as "<label> ~$<amount>[ (<median day>)]"; the
+      // trailing "+ N more" closes the list. Anything else is the next
+      // rendered element and ends the attribution payload.
+      const member = /^(.*?~\$[\d,]+(?: \([^)]*\))?)/u.exec(segment)?.[1];
+      const more = /^(\+ \d+ more)/u.exec(segment)?.[1];
+      if (member) {
+        items.push(member.trim());
+        continue;
+      }
+      if (more) {
+        items.push(more);
+        break;
+      }
+      break;
+    }
+    return items.join(" · ");
+  }).filter((entry) => entry.length > 0);
 }
 
 /**

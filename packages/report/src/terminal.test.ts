@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
-import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions, shellPathPointer } from "./terminal.js";
+import { cutMemberLabel, generateCommandSummary, generatePlainEnglishSummary, groupByDimensions, shellPathPointer } from "./terminal.js";
 
 // Copy assertions follow the C-lane result-centralization design (§1.2/§1.5):
 // every money label routes through the basis vocabulary (committed /
@@ -1034,10 +1034,16 @@ describe("RECOMMEND grouped collapse (0.9.3 founder feedback)", () => {
     // ONE grouped headline, not five numbered near-duplicates.
     expect(text.match(/Investigate cumulative context in claude-code/gu)).toHaveLength(1);
     expect(text).not.toContain("2. Investigate cumulative context");
-    // The across-line carries per-project detail, largest first, ~rounded.
-    expect(normalized).toContain("across 5 projects — agent-finops ~$1,274 · action-verifier ~$408 · tilden-web ~$100 · glance-macos ~$56 · + 1 more");
-    // Shared guidance renders once; combined grounding sums the aggregates.
-    expect(text).toContain("Inspect per-session context");
+    // The across-line carries per-project detail, largest first, ~rounded —
+    // and, since 0.9.7, each member's median day of input+cache tokens, which
+    // is the quantity that explains its dollar. (Every project in this fixture
+    // carries the same 150K day on purpose: the suffix must render even when
+    // it does NOT separate the members.)
+    expect(normalized).toContain("across 5 projects — agent-finops ~$1,274 (150.0K/day) · action-verifier ~$408 (150.0K/day) · tilden-web ~$100 (150.0K/day) · glance-macos ~$56 (150.0K/day) · + 1 more");
+    // Shared guidance renders once, and names the project it describes so the
+    // grouped quote of the largest member cannot read as a group-wide claim.
+    expect(normalized).toContain("agent-finops — median day carried 150.0K input+cache tokens against 4.0K output (38:1)");
+    expect(text).not.toContain("Inspect per-session context");
     expect(normalized).toContain("5 daily aggregates");
     // Observed-value discipline: no modeled ~$/mo is invented for the group.
     expect(text).toContain("reduction unproven");
@@ -1478,5 +1484,195 @@ describe("shellPathPointer — un-half-copyable artifact pointers (0.9.6)", () =
       expect(shellPathPointer("start \"\"", "C:\\Users\\testuser\\100%.html", "C:\\Users\\testuser", "win32"))
         .toBe("start \"\" \"100%.html\"");
     });
+  });
+});
+
+/**
+ * 0.9.7 — the readout stops being the least informative surface about the
+ * evidence it already holds.
+ */
+describe("RECOMMEND / Context evidence specificity (0.9.7)", () => {
+  function localDay(overrides: {
+    id: string;
+    day: string;
+    project: string;
+    inputTokens: number;
+    outputTokens: number;
+    amountUsd: number;
+    model?: string;
+  }): UsageRecord {
+    return {
+      id: overrides.id,
+      timestamp: `${overrides.day}T00:00:00.000Z`,
+      source: { id: "local-agent-logs", name: "Local logs", provider: "anthropic", confidence: "estimated", observedFrom: "fixture" },
+      model: overrides.model ?? "claude-opus-4-8",
+      inputTokens: overrides.inputTokens,
+      outputTokens: overrides.outputTokens,
+      amountUsd: overrides.amountUsd,
+      costConfidence: "estimated",
+      projectId: overrides.project,
+      agentId: "claude-code",
+      operation: "claude-code sessions",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    } as UsageRecord;
+  }
+
+  it("differentiates the members of a fan-out by the tokens that explain their dollars", () => {
+    // The founder's complaint verbatim: "only the amount changes". Two projects
+    // with the SAME window dollars but very different daily context shapes must
+    // not render as two identical lines.
+    const records = [
+      localDay({ id: "a1", day: "2026-08-10", project: "agent-finops", inputTokens: 40_000_000, outputTokens: 40_000, amountUsd: 300 }),
+      localDay({ id: "a2", day: "2026-08-11", project: "agent-finops", inputTokens: 40_000_000, outputTokens: 40_000, amountUsd: 300 }),
+      localDay({ id: "b1", day: "2026-08-10", project: "docs-site", inputTokens: 400_000, outputTokens: 40_000, amountUsd: 300 }),
+      localDay({ id: "b2", day: "2026-08-11", project: "docs-site", inputTokens: 400_000, outputTokens: 40_000, amountUsd: 300 })
+    ];
+    const normalized = normalizeWhitespace(generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      width: 200
+    }));
+
+    expect(normalized).toContain("across 2 projects — agent-finops ~$600 (40.0M/day) · docs-site ~$600 (400.0K/day)");
+    // Identical dollars, 100x different context — the readout now says so.
+    expect(normalized).not.toContain("agent-finops ~$600 · docs-site ~$600");
+  });
+
+  it("drops the per-day figure rather than printing a placeholder when it is absent", () => {
+    // Connected call-level evidence produces a context candidate with no
+    // day-level aggregate behind it: the across-line degrades to the dollars.
+    const call = (id: string, project: string, amountUsd: number): UsageRecord => ({
+      id,
+      timestamp: "2026-08-10T10:00:00.000Z",
+      source: { id: "openai", name: "OpenAI", provider: "openai", confidence: "estimated", observedFrom: "fixture" },
+      model: "gpt-5.6-sol",
+      inputTokens: 400_000,
+      outputTokens: 4_000,
+      amountUsd,
+      costConfidence: "estimated",
+      projectId: project,
+      operation: "research",
+      providerCostType: "billed_cost",
+      usageGranularity: "call"
+    } as UsageRecord);
+    const records = [call("c1", "alpha", 40), call("c2", "beta", 20)];
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "connected",
+      width: 200
+    });
+    // No "(undefined/day)", no "(0/day)", no empty parentheses anywhere.
+    expect(text).not.toContain("undefined");
+    expect(text).not.toContain("(0/day)");
+    expect(text).not.toContain("()");
+
+    // …and directly, on the shared member renderer both artifacts call: a
+    // candidate with no day-level evidence degrades to exactly the pre-0.9.7
+    // line, never to a placeholder.
+    const bare = {
+      id: "inspect-context-claude-code-alpha",
+      title: "Investigate cumulative context in claude-code · alpha",
+      action: "n/a",
+      estimatedMonthlySavingsUsd: 0,
+      affectedSpendUsd: 1234.5,
+      recordCount: 3,
+      recordUnit: "daily-aggregates" as const,
+      impactBasis: "observed_value_no_counterfactual" as const,
+      confidence: "estimated" as const,
+      kind: "context_trim" as const,
+      recordIds: [] as string[]
+    } satisfies Parameters<typeof cutMemberLabel>[0];
+    expect(cutMemberLabel(bare)).toBe("alpha ~$1,235");
+    expect(cutMemberLabel({ ...bare, medianDailyInputTokens: 0 })).toBe("alpha ~$1,235");
+    expect(cutMemberLabel({ ...bare, medianDailyInputTokens: 6_300_000 })).toBe("alpha ~$1,235 (6.3M/day)");
+  });
+
+  it("names the heaviest measured context candidates instead of only counting them", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code" as const
+    }));
+    const text = normalizeWhitespace(generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      width: 200,
+      deadContext: {
+        hasData: true,
+        loadedCount: 5,
+        deadCount: 4,
+        measuredDeadCount: 3,
+        unmeasuredDeadCount: 1,
+        deadTokens: 90_000,
+        monthlyDeadTokens: 90_000,
+        wastePercent: 4 / 5,
+        monthlyUsd: 0.9,
+        monthlyUsdUpperBound: 3.4,
+        deadItems: [
+          { kind: "skill", name: "provider-contract-audit", scope: "user", activation: "discoverable", invocationTracking: "observable", alwaysLoadedTokens: 620, weightConfidence: "estimated" },
+          { kind: "subagent", name: "qa-verifier", scope: "user", activation: "discoverable", invocationTracking: "observable", alwaysLoadedTokens: 310, weightConfidence: "estimated" },
+          { kind: "skill", name: "landing-copy", scope: "user", activation: "discoverable", invocationTracking: "observable", alwaysLoadedTokens: 180, weightConfidence: "estimated" },
+          { kind: "mcp_server", name: "supabase", scope: "user", activation: "mcp_always_loaded", invocationTracking: "observable", alwaysLoadedTokens: 0, weightConfidence: "unmeasured" }
+        ],
+        sessions: 6,
+        totalTurns: 40,
+        pricingModel: "claude-sonnet-4",
+        windowDays: 30
+      }
+    } as Parameters<typeof generatePlainEnglishSummary>[1]));
+
+    // Heaviest first, names only — the Markdown artifact prints paths, a
+    // readout must stay screenshot-safe.
+    expect(text).toContain("heaviest measured of the 3 (name · kind · scope · modeled weight)");
+    expect(text).toContain("provider-contract-audit · skill · user · ~620/turn · estimated");
+    expect(text).toContain("qa-verifier · subagent · user · ~310/turn · estimated");
+    expect(text).toContain("landing-copy · skill · user · ~180/turn · estimated");
+    // The unmeasured MCP server is NOT named next to a weight it does not have.
+    expect(text).not.toContain("supabase · mcp");
+    expect(text).toContain("1 MCP server: loading/token weight unmeasured");
+    // Still a candidate, never removal or waste proof.
+    expect(text).toContain("candidate evidence, not removal or waste proof");
+    // And still its own section: no dead item is folded into the context
+    // recommendation, which would manufacture causation.
+    expect(text).not.toMatch(/median day carried[^.]*provider-contract-audit/u);
+  });
+
+  it("says nothing about named items when none was measured", async () => {
+    const records = (await sample()).map((record) => ({
+      ...record,
+      providerCostType: "local_agent_logs",
+      agentId: "claude-code" as const
+    }));
+    const text = generatePlainEnglishSummary(analyzeSpend(records), {
+      records,
+      color: false,
+      mode: "local-logs",
+      deadContext: {
+        hasData: true,
+        loadedCount: 3,
+        deadCount: 1,
+        measuredDeadCount: 0,
+        unmeasuredDeadCount: 1,
+        deadTokens: 0,
+        monthlyDeadTokens: 0,
+        wastePercent: 1 / 3,
+        monthlyUsd: 0,
+        monthlyUsdUpperBound: 0,
+        deadItems: [
+          { kind: "mcp_server", name: "supabase", scope: "user", activation: "mcp_always_loaded", invocationTracking: "observable", alwaysLoadedTokens: 0, weightConfidence: "unmeasured" }
+        ],
+        sessions: 2,
+        totalTurns: 5,
+        pricingModel: "claude-sonnet-4",
+        windowDays: 30
+      }
+    } as Parameters<typeof generatePlainEnglishSummary>[1]);
+
+    expect(text).toContain("inspect 1 context candidate with no matching invocation");
+    expect(text).not.toContain("heaviest measured");
   });
 });
