@@ -1759,10 +1759,20 @@ function safePromptIdentifier(value: string, maxLength: number): string {
   return truncateForPrompt(sanitized, maxLength);
 }
 
+/**
+ * Bound a string by CODE POINTS, not UTF-16 code units.
+ *
+ * `String.prototype.slice` cuts between the halves of a surrogate pair, so a
+ * project name carrying any astral character — an emoji, a mathematical
+ * alphanumeric, most of CJK Ext. B — landed on the 80-character bound as a
+ * lone surrogate and rendered as U+FFFD in report.md and the Apply artifact.
+ * The reader sees a replacement glyph where a name was, in a document whose
+ * job is to be trusted character for character.
+ */
 function truncateForPrompt(sanitized: string, maxLength: number): string {
-  return sanitized.length <= maxLength
-    ? sanitized
-    : `${sanitized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+  const points = [...sanitized];
+  if (points.length <= maxLength) return sanitized;
+  return `${points.slice(0, Math.max(1, maxLength - 1)).join("").trimEnd()}…`;
 }
 
 function safePromptMetadata(value: string, maxLength: number): string {
