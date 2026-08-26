@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
-import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions } from "./terminal.js";
+import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions, shellPathPointer } from "./terminal.js";
 
 // Copy assertions follow the C-lane result-centralization design (§1.2/§1.5):
 // every money label routes through the basis vocabulary (committed /
@@ -219,6 +219,58 @@ describe("generatePlainEnglishSummary", () => {
     expect(text).toContain("watch");
     expect(normalizeWhitespace(text)).toContain("no account was connected or authorized");
     expect(text.trimEnd().endsWith("› npx aibill report-card  write a redacted, shareable SVG + caption")).toBe(true);
+  });
+
+  it("local-logs date windows carry the last-activity dating note; demo does not claim it", async () => {
+    // Local agent records specifically: the dating claim is about session
+    // aggregates, so the fixture must be local_agent_logs (the shared sample
+    // fixture is provider-billed and correctly never makes this claim).
+    const records: UsageRecord[] = [1, 2, 3].map((day) => ({
+      id: `local-dating-${day}`,
+      timestamp: `2026-08-0${day}T00:00:00.000Z`,
+      source: {
+        id: "local-agent-logs",
+        name: "Local agent session logs",
+        provider: "anthropic",
+        confidence: "estimated",
+        observedFrom: "claude-code session JSONL (this machine)"
+      },
+      project: "app",
+      model: "claude-opus-4-8",
+      inputTokens: 1_000 * day,
+      outputTokens: 100 * day,
+      amountUsd: 1.5 * day,
+      costConfidence: "estimated",
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }));
+    const summary = analyzeSpend(records);
+    const note = "dates = each session's last activity; a long session records on its final day";
+
+    // Full readout: the note sits directly under the record-derived window
+    // line. The compact receipt has no window line, so ask for the full view.
+    // The note wraps at terminal width, so compare on normalized whitespace.
+    const full = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs", view: "full" });
+    expect(normalizeWhitespace(full)).toContain(note);
+    const fullLines = full.split("\n");
+    const windowIndex = fullLines.findIndex((line) => /window: \d+ days? of data/.test(line));
+    expect(windowIndex).toBeGreaterThan(-1);
+    expect(fullLines[windowIndex + 1]).toContain("dates = each session's last activity");
+
+    // Focused --group-by view renders the same qualifier with its window line.
+    const focused = generatePlainEnglishSummary(summary, {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "breakdown",
+      groupBy: "project"
+    });
+    expect(normalizeWhitespace(focused)).toContain(note);
+
+    // Demo/sample data is fictional; the local-agent dating claim stays off it.
+    const demo = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
+    expect(normalizeWhitespace(demo)).not.toContain(note);
   });
 
   it("prefixes every suggested command with npx (bare bins are not on PATH for npx users)", async () => {
@@ -1209,7 +1261,7 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
       nextSteps: [
         { command: `open ${home}/ai-spend-report.html`, description: "view the full report in your browser" },
         { command: `less ${home}/ai-spend-report.md`, description: "read it in the terminal" },
-        { command: "cd <project> && npx aibill apply --since-days 30", description: "per-project action plan from one exact project folder" }
+        { command: "cd /path/to/project && npx aibill apply --since-days 30", description: "per-project action plan from one exact project folder" }
       ],
       color: false,
       width
@@ -1235,7 +1287,7 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
     expect(nextIndex).toBeGreaterThan(0);
     const stepLines = lines.slice(nextIndex + 1).filter((line) => line.startsWith("  › "));
     expect(stepLines).toHaveLength(3);
-    const widest = "cd <project> && npx aibill apply --since-days 30".length;
+    const widest = "cd /path/to/project && npx aibill apply --since-days 30".length;
     for (const line of stepLines) {
       expect(line.slice(4 + widest, 4 + widest + 2)).toBe("  ");
       expect(line.charAt(4 + widest + 2)).not.toBe(" ");
@@ -1316,5 +1368,115 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
     expect(commandLine).toBeDefined();
     expect(commandLine).toContain("npx aibill");
     expect(text).not.toMatch(/npx\n/u);
+  });
+});
+
+describe("shellPathPointer — un-half-copyable artifact pointers (0.9.6)", () => {
+  // Founder-found: `report --no-open` printed `› open /Users/testuser/ai-spend-report.html`
+  // with the description on the NEXT line. He read "open" as a label, typed
+  // bare `open`, and got macOS's usage dump — "i don't know what im looking
+  // at." A pointer must not be mistakable for a label under a partial read.
+  it("names an artifact in the invoking directory relatively — one short unit that never wraps", () => {
+    expect(shellPathPointer("open", "/Users/testuser/work/ai-spend-report.html", "/Users/testuser/work"))
+      .toBe("open ai-spend-report.html");
+    expect(shellPathPointer("less", "/Users/testuser/work/ai-spend-report.md", "/Users/testuser/work"))
+      .toBe("less ai-spend-report.md");
+  });
+
+  it("quotes anything absolute, so the command and its argument read as one thing", () => {
+    expect(shellPathPointer("open", "/Users/testuser/work/.ai-spend-agent/report.html", "/Users/testuser"))
+      .toBe("open '/Users/testuser/work/.ai-spend-agent/report.html'");
+    // No cwd known at all: still quoted, never bare.
+    expect(shellPathPointer("open", "/Users/testuser/report.html"))
+      .toBe("open '/Users/testuser/report.html'");
+  });
+
+  it("quotes a same-directory name that a shell would re-parse (spaces and metacharacters)", () => {
+    expect(shellPathPointer("open", "/Users/testuser/my report.html", "/Users/testuser"))
+      .toBe("open 'my report.html'");
+    expect(shellPathPointer("open", "/Users/testuser/re(port).html", "/Users/testuser"))
+      .toBe("open 're(port).html'");
+  });
+
+  /**
+   * C1 (0.9.6): the pointer used DOUBLE quotes, which a POSIX shell still
+   * expands inside — so a path containing $(...) or backticks executed the
+   * moment it was pasted. 0.9.5 shipped it unquoted, which is worse. Single
+   * quotes expand nothing.
+   */
+  it("neutralizes command substitution instead of executing it on paste", () => {
+    expect(shellPathPointer("open", "/Users/testuser/$(id)/report.html"))
+      .toBe("open '/Users/testuser/$(id)/report.html'");
+    expect(shellPathPointer("open", "/Users/testuser/`id`/report.html"))
+      .toBe("open '/Users/testuser/`id`/report.html'");
+    // The whole argument sits inside ONE single-quoted literal: every
+    // expansion-triggering character is inert.
+    const pointer = shellPathPointer("open", "/tmp/$(rm -rf ~)/`whoami`/a b.html");
+    expect(pointer).toBe("open '/tmp/$(rm -rf ~)/`whoami`/a b.html'");
+    expect(pointer.slice("open ".length).startsWith("'")).toBe(true);
+    expect(pointer.endsWith("'")).toBe(true);
+    expect(pointer.slice("open '".length, -1)).not.toContain("'");
+  });
+
+  it("escapes an embedded single quote with the POSIX '\\'' idiom instead of leaving the path bare", () => {
+    expect(shellPathPointer("open", "/Users/testuser/it's here.html"))
+      .toBe("open '/Users/testuser/it'\\''s here.html'");
+  });
+
+  it("quotes a path containing a double quote rather than emitting it bare", () => {
+    // Previously left BARE (double-quoting would have mis-parsed), which put an
+    // unquoted metacharacter-bearing path on screen. Single quotes hold it.
+    expect(shellPathPointer("open", "/Users/testuser/we\"ird.html", "/Users/testuser"))
+      .toBe("open 'we\"ird.html'");
+  });
+
+  it("handles windows separators", () => {
+    expect(shellPathPointer("open", "C:\\Users\\testuser\\ai-receipt.html", "C:\\Users\\testuser"))
+      .toBe("open ai-receipt.html");
+    expect(shellPathPointer("open", "C:\\Users\\testuser\\out\\ai-receipt.html", "C:\\Users\\testuser", "linux"))
+      .toBe("open 'C:\\Users\\testuser\\out\\ai-receipt.html'");
+  });
+
+  /**
+   * F2 (0.9.6): quoting is per-PLATFORM, not one syntax everywhere. cmd.exe has
+   * no single-quote syntax at all — it passes `'` through as a literal
+   * character — so the POSIX form printed a command naming a file that does
+   * not exist. Windows is a launch audience.
+   */
+  describe("per-platform quoting", () => {
+    const spaced = "C:\\Users\\testuser\\out\\my report.html";
+    const meta = "C:\\Users\\testuser\\out\\r&d (v2).html";
+
+    it("win32 uses cmd double-quote rules", () => {
+      expect(shellPathPointer("start \"\"", spaced, undefined, "win32"))
+        .toBe("start \"\" \"C:\\Users\\testuser\\out\\my report.html\"");
+      // `&` and `(` are cmd metacharacters: unquoted, `&` would terminate the
+      // command and run the rest as a second one.
+      expect(shellPathPointer("start \"\"", meta, undefined, "win32"))
+        .toBe("start \"\" \"C:\\Users\\testuser\\out\\r&d (v2).html\"");
+      // Never POSIX quoting on win32 — cmd would treat these as literal.
+      expect(shellPathPointer("start \"\"", spaced, undefined, "win32")).not.toContain("'");
+    });
+
+    it("darwin and linux use POSIX single-quote rules", () => {
+      for (const platform of ["darwin", "linux"] as const) {
+        const posixSpaced = "/Users/testuser/out/my report.html";
+        const posixMeta = "/Users/testuser/out/r&d $(v2).html";
+        expect(shellPathPointer("open", posixSpaced, undefined, platform))
+          .toBe("open '/Users/testuser/out/my report.html'");
+        expect(shellPathPointer("open", posixMeta, undefined, platform))
+          .toBe("open '/Users/testuser/out/r&d $(v2).html'");
+        expect(shellPathPointer("open", posixSpaced, undefined, platform)).not.toContain("\"");
+      }
+    });
+
+    it("a same-directory name with a cmd metacharacter is still quoted on win32", () => {
+      expect(shellPathPointer("start \"\"", "C:\\Users\\testuser\\a&b.html", "C:\\Users\\testuser", "win32"))
+        .toBe("start \"\" \"a&b.html\"");
+      // A percent sign is the documented limit — it is quoted, not escaped,
+      // because cmd offers no in-quote escape for %VAR%.
+      expect(shellPathPointer("start \"\"", "C:\\Users\\testuser\\100%.html", "C:\\Users\\testuser", "win32"))
+        .toBe("start \"\" \"100%.html\"");
+    });
   });
 });

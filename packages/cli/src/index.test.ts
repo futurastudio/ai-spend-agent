@@ -16,6 +16,7 @@ import {
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
+import { decideReportAutoOpen, platformOpenCommand } from "./reportOpener.js";
 import {
   appendProjectApprovalEvent,
   loadProjectAccountabilityState,
@@ -94,10 +95,19 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).toContain("No sample data was substituted");
     expect(result.stdout).toContain("Looked for: Claude Code, Codex, and Gemini CLI");
     expect(result.stdout).toContain("doctor --sources");
-    // Exactly two commands: the doctor next step and the optional signup
-    // pointer (static, never a prompt — capture design moments map).
-    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(2);
+    // Exactly three commands: --sample, the doctor next step, and the
+    // optional signup pointer (static, never a prompt).
+    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(3);
+    // 0.9.6: a visitor with no evidence used to get a diagnostic and an email
+    // ask, and nothing that SHOWED them anything. `--sample` needs neither
+    // evidence nor an address, so it leads.
+    expect(result.stdout).toContain("npx aibill --sample");
+    expect(result.stdout.indexOf("npx aibill --sample"))
+      .toBeLessThan(result.stdout.indexOf("npx aibill signup"));
     expect(result.stdout).toContain("npx aibill signup <email>");
+    // …and the doctor pointer no longer promises setup instructions it does
+    // not print.
+    expect(result.stdout).not.toContain("setup paths");
     expect(result.stdout).not.toContain("connect openai");
     expect(result.stdout).not.toContain("connect anthropic");
     expect(result.stdout).not.toContain("$87.00");
@@ -229,7 +239,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.5$/);
+    expect(result.stdout).toMatch(/^0\.9\.6$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -777,7 +787,12 @@ describe("zero-key evidence-first receipt", () => {
 
     const report = await runCli(["report", "--since-days", "7", "--path", dir]);
     expect(report.exitCode).toBe(0);
-    expect(flat(report.stdout)).toContain("Action artifacts suppressed · qualitative index partial");
+    // 0.9.6: this row said "suppressed · qualitative index partial". It now
+    // names the real gap — and this fixture's gap is a budget skip, which a
+    // bare "4 of 4 read" hid completely.
+    expect(flat(report.stdout)).toContain(
+      "Action artifacts not drafted · 4 of 4 session transcripts read · 1 file skipped by budget"
+    );
     expect(flat(report.stdout)).toContain("· cost/value evidence");
     expect(report.stdout).toContain(aibillCommandV0("context --json --since-days 7"));
     expect(report.stdout).not.toContain(aibillCommandV0("apply --since-days 7"));
@@ -787,7 +802,7 @@ describe("zero-key evidence-first receipt", () => {
     const reportFiles = ["report.md", "report.html"];
     for (const name of reportFiles) {
       const contents = await readFile(join(stateDir, name), "utf8");
-      expect(contents).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(contents).toContain("SESSION TRANSCRIPTS NOT FULLY READ");
       expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
       expect(contents).not.toContain("trimming context (below)");
     }
@@ -800,8 +815,11 @@ describe("zero-key evidence-first receipt", () => {
     ];
     for (const name of sidecars) {
       const contents = await readFile(join(stateDir, name), "utf8");
-      expect(contents).toContain("NON-EXECUTABLE");
-      expect(contents).toContain("Qualitative indexing is partial");
+      // 0.9.6: demo-package.md is written to be SHARED. Its degradation header
+      // said "NON-EXECUTABLE. Qualitative indexing is partial." — internal
+      // state, in a file the user hands to someone else.
+      expect(contents).toContain("NO CHANGE IS DRAFTED IN THIS FILE");
+      expect(contents.toLowerCase()).not.toContain("qualitative index");
       expect(contents).toContain(aibillCommandV0("context --json --since-days 7"));
       expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
       expect(contents).not.toContain("Candidate key:");
@@ -4220,18 +4238,25 @@ describe("minimal CLI vertical slice", () => {
     expect(flat(opened.stdout)).toContain(
       "opened report.html in your browser · next time: --no-open to skip"
     );
-    expect(opened.stdout).not.toContain("view the full report in your browser");
+    expect(opened.stdout).not.toContain("double-click");
 
     // Suppressed (vitest stdout is not a TTY -> the real decide refuses):
     // the pointer line survives exactly and nothing claims to have opened.
     const suppressed = await runCli(["report", "--sample", "--path", dir]);
     expect(suppressed.exitCode).toBe(0);
-    // The pointer verb + absolute path + description survive as one step
-    // (paths realpath through /private/var, so pin the stable pieces).
-    expect(flat(suppressed.stdout)).toContain("› open /");
+    // 0.9.6: an artifact outside the invoking cwd is QUOTED, so the command
+    // and its argument read (and paste) as one thing — the founder typed a
+    // bare `open` off the old unquoted line and got macOS's usage dump.
+    // SINGLE quotes: double quotes still let a POSIX shell expand $(...) and
+    // backticks in the path, which made the pointer execute on paste.
+    // Paths realpath through /private/var, so pin the stable pieces.
+    // The opener is per-platform (`open` on darwin, `xdg-open` on linux CI),
+    // so derive it rather than hardcoding one host's command.
+    expect(flat(suppressed.stdout)).toContain(`› ${platformOpenCommand()} '/`);
     expect(flat(suppressed.stdout)).toContain(
-      `${join(".ai-spend-agent", "report.html")} view the full report in your browser`
+      `${join(".ai-spend-agent", "report.html")}' view in your browser — or double-click report.html in your file manager`
     );
+    expect(flat(suppressed.stdout)).toContain("› less '/");
     expect(suppressed.stdout).not.toContain("in your browser · next time");
 
     // --no-open reaches the decision, and a decision that failed to LAUNCH
@@ -4250,7 +4275,105 @@ describe("minimal CLI vertical slice", () => {
     });
     expect(launchFailed.exitCode).toBe(0);
     expect(launchFailed.stdout).not.toContain("in your browser · next time");
-    expect(flat(launchFailed.stdout)).toContain("view the full report in your browser");
+    expect(flat(launchFailed.stdout)).toContain("view in your browser — or double-click");
+  });
+
+  it("report-card auto-opens its receipt through the SAME opener as report, with the same suppression matrix (0.9.6)", async () => {
+    // Founder-found: `report-card` wrote the SVG and stopped — "not
+    // automatically showing on a html or opening the file: making it
+    // inefficient." The receipt now opens itself, through the one opener.
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-card-autoopen-"));
+    const decisions: string[] = [];
+    const opened = await runCli(["report-card", "--sample", "--path", dir, "--no-color"], {
+      reportOpenDecide: (input) => {
+        decisions.push(input.htmlPath);
+        expect(input.noOpenFlag).toBe(false);
+        return { open: true, command: "open", args: [input.htmlPath] };
+      },
+      reportOpenLaunch: (decision) => decision.open
+    });
+    expect(opened.exitCode).toBe(0);
+    // The opener is handed the COMPANION HTML, never the bare .svg: platform
+    // openers route .svg to whatever claims the extension, which on a
+    // developer machine is very often an editor.
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatch(/ai-receipt\.html$/u);
+    expect(decisions[0]).not.toMatch(/\.svg$/u);
+    expect(flat(opened.stdout)).toContain(
+      "opened ai-receipt.html in your browser · next time: --no-open to skip"
+    );
+    expect(opened.stdout).not.toContain("double-click");
+
+    // Suppressed (vitest stdout is not a TTY -> the real decide refuses):
+    // the plain pointer survives and nothing claims to have opened.
+    const suppressed = await runCli(["report-card", "--sample", "--path", dir, "--no-color"]);
+    expect(suppressed.exitCode).toBe(0);
+    expect(flat(suppressed.stdout)).toContain(`› ${platformOpenCommand()} '/`);
+    expect(flat(suppressed.stdout)).toContain(
+      "ai-receipt.html' view the receipt — or double-click ai-receipt.html in your file manager"
+    );
+    expect(suppressed.stdout).not.toContain("in your browser · next time");
+
+    // --no-open reaches the decision; a decision that failed to LAUNCH also
+    // keeps the honest pointer.
+    const flagged = await runCli(["report-card", "--sample", "--path", dir, "--no-open", "--no-color"], {
+      reportOpenDecide: (input) => {
+        expect(input.noOpenFlag).toBe(true);
+        return { open: false, reason: "no-open-flag" };
+      }
+    });
+    expect(flagged.exitCode).toBe(0);
+    expect(flagged.stdout).not.toContain("in your browser · next time");
+    const launchFailed = await runCli(["report-card", "--sample", "--path", dir, "--no-color"], {
+      reportOpenDecide: (input) => ({ open: true, command: "open", args: [input.htmlPath] }),
+      reportOpenLaunch: () => false
+    });
+    expect(launchFailed.exitCode).toBe(0);
+    expect(launchFailed.stdout).not.toContain("in your browser · next time");
+    expect(flat(launchFailed.stdout)).toContain("view the receipt — or double-click");
+
+    // Both artifacts are named in the summary's label column; the SVG stays
+    // the canonical shareable file.
+    expect(flat(suppressed.stdout)).toMatch(/Receipt \S+ai-receipt\.svg/u);
+    expect(flat(suppressed.stdout)).toMatch(/Preview \S+ai-receipt\.html/u);
+    // The one non-command line under Next must not read as a command — a
+    // `post ai-receipt.svg` line beside two real commands is the same trap
+    // that made the founder type a bare `open`.
+    expect(flat(suppressed.stdout)).toContain("ai-receipt.svg is the file to share — post that one");
+    expect(flat(suppressed.stdout)).not.toContain("› post ");
+
+    // The metacharacter refusal applies to the companion path exactly as it
+    // does to a report path — same pure decision function, no second path.
+    expect(decideReportAutoOpen({
+      htmlPath: "/tmp/proj&calc/ai-receipt.html",
+      noOpenFlag: false,
+      env: { PATH: "/usr/bin" } as NodeJS.ProcessEnv,
+      platform: "win32",
+      stdoutIsTty: true
+    })).toEqual({ open: false, reason: "unsafe-path" });
+  });
+
+  it("the report-card companion page embeds the card and its caption, and adds no data of its own (0.9.6)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-card-companion-"));
+    const run = await runCli(["report-card", "--sample", "--path", dir, "--no-color"]);
+    expect(run.exitCode).toBe(0);
+    const svg = await readFile(join(dir, "ai-receipt.svg"), "utf8");
+    const companion = await readFile(join(dir, "ai-receipt.html"), "utf8");
+    // The SVG is inlined verbatim — the companion cannot show a different
+    // card than the one being shared.
+    expect(companion).toContain(svg.trim());
+    // Self-contained: no script, and nothing fetched at render time. (The
+    // SVG's own xmlns is a namespace identifier, not a request, so the URL
+    // check runs on everything the companion adds around it.)
+    const extra = companion.replace(svg.trim(), "");
+    expect(companion).not.toContain("<script");
+    expect(extra).not.toMatch(/https?:\/\//u);
+    expect(extra).not.toMatch(/\b(?:src|href)\s*=/u);
+    // The caption appears verbatim so the card and its caption share a screen.
+    expect(flat(companion)).toContain("My AI receipt:");
+    expect(flat(companion)).toContain(
+      flat(run.stdout).slice(flat(run.stdout).indexOf("My AI receipt:")).split(" Next ")[0]!.trim()
+    );
   });
 
   it("--full from a broad root cd-prefixes project-scoped pointers; project mode keeps them bare (0.9.5)", async () => {
@@ -4260,17 +4383,17 @@ describe("minimal CLI vertical slice", () => {
     // their bare forms.
     const fromHome = await runCli(["--sample", "--full", "--path", homedir(), "--no-color"]);
     expect(fromHome.exitCode).toBe(0);
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply --sample");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply-artifact");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill watch");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect openai");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect anthropic");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill apply --sample");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill apply-artifact");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill watch");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill connect openai");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill connect anthropic");
 
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-full-project-scope-"));
     const fromProject = await runCli(["--sample", "--full", "--path", dir, "--no-color"]);
     expect(fromProject.exitCode).toBe(0);
     expect(fromProject.stdout).toContain("npx aibill apply --sample");
-    expect(fromProject.stdout).not.toContain("cd <project>");
+    expect(fromProject.stdout).not.toContain("cd /path/to/project");
   });
 
   it("adds and lists approved sources without scanning them immediately", async () => {

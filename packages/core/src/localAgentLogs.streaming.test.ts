@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  aggregateCalls,
   defaultStreamedBytesPerRun,
   loadLocalAgentUsage,
   localAgentQualitativeParserVersion,
@@ -218,6 +219,88 @@ describe("A4b checkpointed streaming for oversized Codex rollouts", () => {
     expect(warmScan.qualitativeBytesStreamed ?? 0).toBe(0);
     expect(warmScan.qualitativeProjectCoverage).toBe("complete");
     expect(warm.calls.find((entry2) => entry2.agent === "codex")).toEqual(call);
+  });
+
+  it("carries the largest single request across a checkpoint boundary for tiered pricing", async () => {
+    // The tier of a session-cumulative Codex call is fixed by its LARGEST
+    // single request, tracked as `maxRequestPromptTokens`. That maximum must
+    // survive checkpointing: here the biggest turn (250K, still under the 272K
+    // tier) is the FIRST token_count and is streamed away in an early run,
+    // while the cumulative later balloons past 272K on cache reads. If the
+    // running maximum were not persisted, the restored parse would see only the
+    // small later turns and mis-tier (or void) the session.
+    const { home, cacheDirectory, codexDir } = await isolatedFixture();
+    const turnContextSol = JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-17T10:01:00.000Z",
+      payload: { model: "gpt-5.6-sol" }
+    });
+    const tokenCountWithTurn = (
+      minute: number,
+      total: Record<string, number>,
+      last: Record<string, number>
+    ): string => JSON.stringify({
+      type: "event_msg",
+      timestamp: `2026-08-17T10:${String(minute).padStart(2, "0")}:30.000Z`,
+      payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: last } }
+    });
+    const filler: string[] = [];
+    for (let index = 0; index < 16; index += 1) {
+      const cumInput = 260_000 + (index + 1) * 10_000;
+      filler.push(tokenCountWithTurn(
+        11 + index,
+        { input_tokens: cumInput, cached_input_tokens: cumInput - 60_000, output_tokens: 200 + index },
+        { input_tokens: 5_000, cached_input_tokens: 0, output_tokens: 10, total_tokens: 5_010 }
+      ));
+    }
+    const content = [
+      sessionMetaLine(homedir(), {}, "codex-maxreq"),
+      turnContextSol,
+      // First and largest request: 250K prompt, under the 272K tier.
+      tokenCountWithTurn(
+        5,
+        { input_tokens: 250_000, cached_input_tokens: 200_000, output_tokens: 100 },
+        { input_tokens: 250_000, cached_input_tokens: 200_000, output_tokens: 100, total_tokens: 250_100 }
+      ),
+      ...filler,
+      // Final cumulative: ~660K input, cache-dominated — well past 272K.
+      tokenCountWithTurn(
+        56,
+        { input_tokens: 660_000, cached_input_tokens: 600_000, output_tokens: 2_000 },
+        { input_tokens: 5_000, cached_input_tokens: 0, output_tokens: 10, total_tokens: 5_010 }
+      )
+    ].join("\n") + "\n";
+    const rollout = join(codexDir, "rollout-maxreq.jsonl");
+    await writeFile(rollout, content, { mode: 0o600 });
+    // Larger than one run's budget so the file must stream over several runs,
+    // forcing at least one checkpoint after the large first turn.
+    expect(content.length).toBeGreaterThan(policy.maxStreamedBytesPerRun);
+    const adapters = createProjectIndexAdapters({ cacheDirectory });
+    const options = loaderOptions(home, codexDir, adapters);
+
+    // Run until the whole file has been streamed and the codex call emerges.
+    // Runs before it appears are partial (checkpointed) runs — at least one
+    // must precede it, proving the large first turn crossed a boundary.
+    let call: LocalAgentCall | undefined;
+    let checkpointedRuns = 0;
+    for (let attempt = 0; attempt < 10 && !call; attempt += 1) {
+      const result = await loadLocalAgentUsage(options);
+      call = result.calls.find((entry) => entry.agent === "codex");
+      if (!call) checkpointedRuns += 1;
+    }
+    expect(checkpointedRuns).toBeGreaterThan(0);
+    expect(call).toBeDefined();
+    expect(call!.model).toBe("gpt-5.6-sol");
+    // The pre-checkpoint maximum survived restore; it equals the unbounded
+    // whole-file parse and is under the 272K tier threshold. (Other fields such
+    // as workingDirectory are deliberately privacy-reduced across checkpoints;
+    // only the tier evidence is asserted here.)
+    expect(call!.maxRequestPromptTokens).toBe(250_000);
+    expect(call!.maxRequestPromptTokens).toBe(parseCodexRollout(content)[0]!.maxRequestPromptTokens);
+    // And it prices at the base tier despite a >272K cumulative (660K input).
+    const record = aggregateCalls([call!])[0]!;
+    expect(record.amountUsd).toBeCloseTo(0.52, 4);
+    expect(record.costConfidence).toBe("estimated");
   });
 
   it("preserves invocation evidence across checkpointed runs", async () => {

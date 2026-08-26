@@ -39,6 +39,7 @@
       },
       "usageScope": "session_cumulative",
       "usageSupport": "complete",
+      "maxRequestPromptTokens": 500,
       "reportedTotalTokens": 2750,
       "tokenComponentEvidence": {
         "inputTokens": "observed",

@@ -10,7 +10,7 @@ import { localAgentFormatDescriptors } from "./localAgentFormats/registry.js";
 import type { LocalAgentFormatId } from "./localAgentFormats/types.js";
 import {
   canPriceTokenUsageAtScope,
-  estimateTokenCostUsd,
+  estimateTokenCostsUsd,
   PRICING_TABLE_AS_OF
 } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
@@ -1168,6 +1168,20 @@ function apiEquivalentObservations(
   return observations;
 }
 
+/**
+ * One call's API-equivalent cost with its tier taken from the largest single
+ * request it contains, matching the report's aggregation. Weighting a
+ * session-cumulative slice at its own cache-inflated prompt would put it on the
+ * wrong tier and skew the allocation.
+ */
+function callAmountUsd(call: LocalAgentCall): number | undefined {
+  return estimateTokenCostsUsd(
+    call.model,
+    [call.usage],
+    [call.maxRequestPromptTokens]
+  );
+}
+
 function allocateAggregateAmount(
   amountUsd: number | null,
   calls: readonly LocalAgentCall[]
@@ -1177,11 +1191,12 @@ function allocateAggregateAmount(
     canPriceTokenUsageAtScope(
       call.model,
       call.usage,
-      call.usageScope === "turn" ? "request" : "aggregate"
-    ) && estimateTokenCostUsd(call.model, call.usage) !== undefined
+      call.usageScope === "turn" ? "request" : "aggregate",
+      call.maxRequestPromptTokens
+    ) && callAmountUsd(call) !== undefined
   );
   if (priceable.some((supported) => !supported)) return calls.map(() => null);
-  const weights = calls.map((call) => estimateTokenCostUsd(call.model, call.usage) ?? 0);
+  const weights = calls.map((call) => callAmountUsd(call) ?? 0);
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
   if (totalWeight <= 0) {
     return amountUsd === 0 ? calls.map(() => 0) : calls.map(() => null);

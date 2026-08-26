@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
-import { generateReportCardSvg, generateReportCardCaption } from "./reportCard.js";
+import { generateReceiptCompanionHtml, generateReportCardSvg, generateReportCardCaption } from "./reportCard.js";
 
 let cachedRecords: UsageRecord[] | undefined;
 async function sample(): Promise<UsageRecord[]> {
@@ -35,7 +35,7 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain('stroke="rgba(255,255,255,0.08)"');
     expect(svg).toContain('.big { fill: #EDEDED;');
     expect(svg).toContain('.meta { fill: rgba(255,255,255,0.62);');
-    expect(svg).toContain('.label { fill: rgba(255,255,255,0.42);');
+    expect(svg).toContain('.label { fill: rgba(255,255,255,0.47);');
     expect(svg).not.toContain("#0b1020");
     expect(svg).not.toContain("#121a33");
     expect(svg).not.toContain("#26304f");
@@ -471,6 +471,42 @@ describe("cross-surface parity (SVG receipt card)", () => {
     expect(svg).not.toMatch(/\$\d{4,}\.\d{2}/u);
     expect(caption).not.toMatch(/\$\d{4,}\.\d{2}/u);
     expect(svg).toMatch(/\$\d{1,3}(,\d{3})+\.\d{2}/u);
+  });
+
+  /**
+   * N1 (0.9.6): `user-select: all` sat on `.caption`, which ALSO wraps the
+   * "Caption to share" UI label, under `white-space: pre-wrap`. A single
+   * click-and-copy therefore yielded 208 characters for a ~190-character
+   * caption — the label, a newline and the template's indentation, pasted
+   * straight into the user's post. This page exists so that one line can be
+   * pasted into a post; it pasted broken.
+   *
+   * The pin extracts the text a browser would select (the element carrying
+   * `user-select: all`) and asserts it equals the caption EXACTLY.
+   */
+  it("the selectable region holds the caption and nothing else", async () => {
+    const records = await sample();
+    const summary = analyzeSpend(records);
+    const caption = generateReportCardCaption({ summary, records, mode: "demo" });
+    const html = generateReceiptCompanionHtml({ svg: "<svg/>", caption });
+
+    // The one element that carries `user-select: all`.
+    const selectable = /<div class="caption-text">([\s\S]*?)<\/div>/u.exec(html);
+    expect(selectable, "no single element carries the selectable caption").not.toBeNull();
+    const copied = selectable![1]!
+      .replaceAll("&amp;", "&").replaceAll("&lt;", "<")
+      .replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&#39;", "'");
+
+    expect(copied).toBe(caption);
+    expect(copied).not.toContain("Caption to share");
+    // No leading/trailing whitespace: `pre-wrap` would preserve indentation.
+    expect(copied).toBe(copied.trim());
+    expect(copied.length).toBe(caption.length);
+
+    // And the label is still on the page — outside the selectable region.
+    expect(html).toContain(">Caption to share<");
+    const labelIndex = html.indexOf("Caption to share");
+    expect(labelIndex).toBeLessThan(html.indexOf('class="caption-text"'));
   });
 
   it("shareable footer: the card points at asktilden.com", async () => {

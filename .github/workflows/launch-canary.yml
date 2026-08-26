@@ -83,6 +83,85 @@ jobs:
             echo "FAIL: crash-wrapper voice leaked into the no-evidence report path"; exit 1
           fi
 
+      - name: no internal jargon on the degraded machine-wide path
+        run: |
+          # 0.9.6 founder-found regression class, guarded in PRODUCTION.
+          #
+          # The previous version of this check ran in an EMPTY mktemp home,
+          # where `report` exits 1 and writes nothing. Both greps therefore
+          # scanned a zero-byte stdout and a zero-file `find` — structurally
+          # incapable of failing, and green 48 times a day. Verified: all four
+          # phrases scored 0 hits against a genuinely degraded artifact.
+          #
+          # Three things make it able to bite now:
+          #   1. The home is SEEDED, so the commands produce real artifacts.
+          #   2. One transcript is unreadable, so the run takes the DEGRADED
+          #      rendering path — the one that speaks in internal state. A
+          #      complete-coverage fixture never reaches that code.
+          #   3. A `test -f` precondition fails the step when the expected
+          #      artifacts are absent, so "nothing to scan" can never again be
+          #      mistaken for "nothing to find".
+          H="$(mktemp -d "$RUNNER_TEMP/canary-jargon.XXXXXX")"
+          day() { date -u -d "-$1 days" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null \
+                  || date -u -v-"$1"d +%Y-%m-%dT%H:%M:%S.000Z; }
+          for project in alpha-app beta-svc gamma-lib; do
+            d="$H/.claude/projects/-Users-testuser-$project"
+            mkdir -p "$d"
+            : > "$d/sess-$project.jsonl"
+            for i in 2 3 4; do
+              printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"$(day $i)\",\"cwd\":\"/Users/testuser/$project\",\"sessionId\":\"sess-$project\",\"requestId\":\"req-$project-$i\",\"message\":{\"id\":\"msg-$project-$i\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":40000,\"output_tokens\":4000,\"cache_read_input_tokens\":100000,\"cache_creation_input_tokens\":10000}}}" \
+                >> "$d/sess-$project.jsonl"
+            done
+          done
+          # The degraded branch: one transcript the scanner cannot read.
+          chmod 000 "$H/.claude/projects/-Users-testuser-gamma-lib/sess-gamma-lib.jsonl"
+
+          cd "$H"
+          HOME="$H" npx -y aibill@latest report </dev/null > report-out.txt 2> report-err.txt || true
+          HOME="$H" npx -y aibill@latest --full </dev/null > full-out.txt 2> full-err.txt || true
+          HOME="$H" npx -y aibill@latest report-card </dev/null > card-out.txt 2> card-err.txt || true
+          echo "--- report stdout ---"; cat report-out.txt
+
+          # PRECONDITION. Without this an empty scan set reads as a pass, which
+          # is exactly how the old check stayed green through the regression.
+          for artifact in ai-spend-report.md ai-spend-report.html ai-receipt.svg; do
+            if [ ! -f "$H/$artifact" ]; then
+              echo "FAIL: expected artifact $artifact was not written — this check scanned nothing"; exit 1
+            fi
+          done
+          # …and the degraded path must actually have run, or we are only
+          # sweeping the happy path under a misleading name.
+          if ! grep -qi "session transcripts" "$H/ai-spend-report.md"; then
+            echo "FAIL: fixture did not trip partial coverage — the degraded branch was never rendered"; exit 1
+          fi
+
+          # Recursive: sidecar artifacts land under .ai-spend-agent/, which a
+          # -maxdepth 1 find could never reach.
+          artifacts="$(find "$H" -type f \( -name '*.md' -o -name '*.html' -o -name '*.svg' \) 2>/dev/null)"
+          echo "--- artifacts swept ---"; echo "$artifacts"
+          for phrase in \
+            "qualitative index" \
+            "qualitative indexing is" \
+            "bounded transcript index" \
+            "bounded index" \
+            "NON-EXECUTABLE."
+          do
+            # -i: the code emitted a capital-Q "Qualitative indexing is", which
+            # a case-sensitive sweep missed entirely.
+            if grep -qiF "$phrase" ./*-out.txt ./*-err.txt 2>/dev/null; then
+              echo "FAIL: internal-jargon degradation voice reached the user: [$phrase]"; exit 1
+            fi
+            if [ -n "$artifacts" ] && printf '%s\n' "$artifacts" | tr '\n' '\0' \
+                 | xargs -0 grep -liF "$phrase" 2>/dev/null | grep -q .; then
+              echo "FAIL: internal-jargon degradation voice reached a written artifact: [$phrase]"; exit 1
+            fi
+          done
+          # B1: a markdown-voiced command must never render its grave accents
+          # into HTML that auto-opens in a browser.
+          if grep -l '`' "$H"/*.html 2>/dev/null | grep -q .; then
+            echo "FAIL: literal backtick rendered in an HTML artifact"; exit 1
+          fi
+
       - name: telemetry endpoint alive
         run: |
           # An intentionally INVALID body: {} fails the exactly-one-"events"-

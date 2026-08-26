@@ -1593,7 +1593,7 @@ describe("aggregateCalls", () => {
 
     expect(turns[0]).toMatchObject({
       quantity: 2,
-      amountUsd: 2.1,
+      amountUsd: 1.6,
       costConfidence: "estimated"
     });
     expect(cumulative[0]).toMatchObject({
@@ -3017,5 +3017,255 @@ describe("estimateTokenCostUsd", () => {
 
   it("returns undefined for unknown models", () => {
     expect(estimateTokenCostUsd("unknown-model", { inputTokens: 1, outputTokens: 1 })).toBeUndefined();
+  });
+});
+
+describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
+  const codexRollout = (turns: ReadonlyArray<{
+    total: Record<string, number>;
+    last: Record<string, number>;
+    at: string;
+  }>): string => [
+    JSON.stringify({
+      type: "session_meta",
+      payload: { id: "codex-tier-sess", cwd: "/Users/testuser/agent-finops", timestamp: "2026-08-23T10:00:00.000Z" }
+    }),
+    JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" } }),
+    ...turns.map((turn) => JSON.stringify({
+      type: "event_msg",
+      timestamp: turn.at,
+      payload: {
+        type: "token_count",
+        info: { total_token_usage: turn.total, last_token_usage: turn.last }
+      }
+    }))
+  ].join("\n");
+
+  it("prices a >272K cumulative Codex session at the base tier when every request stayed under the threshold", () => {
+    // The founder's real shape: cumulative prompt (500K) clears the 272K
+    // per-request tier on cache reads alone, but no single turn did — so the
+    // whole session is base-tier, not voided to "missing".
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+        last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+      },
+      {
+        at: "2026-08-23T10:20:00.000Z",
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const calls = parseCodexRollout(rollout);
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.model).toBe("gpt-5.6-sol");
+    expect(call.usageScope).toBe("session_cumulative");
+    // Largest single request across turns (200K, then 250K).
+    expect(call.maxRequestPromptTokens).toBe(250_000);
+    // Cumulative usage: 100K non-cached input, 400K cache reads, 1K output.
+    expect(call.usage).toMatchObject({
+      inputTokens: 100_000,
+      cacheReadTokens: 400_000,
+      outputTokens: 1_000
+    });
+    const record = aggregateCalls(calls)[0]!;
+    // Base tier: 100000*4 + 1000*20 + 400000*0.4, per million = 0.58 (not the
+    // 1.15 the 2x tier would have charged, and not null/"missing").
+    expect(record.amountUsd).toBeCloseTo(0.58, 4);
+    expect(record.costConfidence).toBe("estimated");
+  });
+
+  it("keeps a Codex session honestly 'missing' when a single request genuinely crossed the threshold", () => {
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 300_000, cached_input_tokens: 100_000, output_tokens: 500 },
+        last: { input_tokens: 300_000, cached_input_tokens: 100_000, output_tokens: 500, total_tokens: 300_500 }
+      },
+      {
+        at: "2026-08-23T10:20:00.000Z",
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const calls = parseCodexRollout(rollout);
+    expect(calls[0]!.maxRequestPromptTokens).toBe(300_000);
+    const record = aggregateCalls(calls)[0]!;
+    // A request that truly crossed 272K cannot be split from the cumulative sum
+    // with the evidence at hand: stay honestly unpriced rather than guess.
+    expect(record.amountUsd).toBeNull();
+    expect(record.costConfidence).toBe("missing");
+  });
+
+  it("still prices a small (<=272K cumulative) Codex session without needing request evidence", () => {
+    const rollout = codexRollout([
+      {
+        at: "2026-08-23T10:10:00.000Z",
+        total: { input_tokens: 100_000, cached_input_tokens: 40_000, output_tokens: 500 },
+        last: { input_tokens: 100_000, cached_input_tokens: 40_000, output_tokens: 500, total_tokens: 100_500 }
+      }
+    ]);
+    const record = aggregateCalls(parseCodexRollout(rollout))[0]!;
+    // 60000*4 + 500*20 + 40000*0.4, per million = 0.266.
+    expect(record.amountUsd).toBeCloseTo(0.266, 4);
+    expect(record.costConfidence).toBe("estimated");
+  });
+});
+
+describe("Codex USER forks inherit a baseline, not a bill", () => {
+  // Real shape from ~/.codex: a user fork carries thread_source "user", a
+  // string `source` (not the subagent record), and `forked_from_id`. It then
+  // replays the parent's entire transcript before its own first task. Before
+  // this fix only `thread_source: "subagent"` reset the baseline, so a fork
+  // was billed for its parent's history — and again down each fork chain.
+  const rootStartedAt = "2026-08-11T21:53:39.509Z";
+  const ownTaskStartedAt = "2026-08-11T22:11:19.000Z";
+  const userFork = (options: { includeOwnTask?: boolean } = {}) => [
+    JSON.stringify({
+      type: "session_meta",
+      timestamp: rootStartedAt,
+      payload: {
+        id: "fork-child",
+        cwd: "/Users/testuser/project-alpha",
+        timestamp: rootStartedAt,
+        thread_source: "user",
+        source: "vscode",
+        forked_from_id: "parent-session"
+      }
+    }),
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-11T21:53:40.000Z",
+      payload: { model: "gpt-5.6-sol" }
+    }),
+    // --- replayed PARENT history: task_started keeps the parent's own
+    // started_at (hours earlier), so isRootSpecificTaskStart rejects it.
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-11T21:53:41.000Z",
+      payload: {
+        type: "task_started",
+        started_at: Date.parse("2026-08-08T20:23:01.000Z") / 1_000,
+        turn_id: "parent-turn"
+      }
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-11T21:53:44.342Z",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 900_000,
+            output_tokens: 20_000
+          },
+          last_token_usage: {
+            input_tokens: 200_000, cached_input_tokens: 190_000,
+            output_tokens: 100, total_tokens: 200_100
+          }
+        }
+      }
+    }),
+    // --- the child's OWN first task: started_at matches this rollout's root.
+    ...(options.includeOwnTask === false ? [] : [JSON.stringify({
+      type: "event_msg",
+      timestamp: ownTaskStartedAt,
+      payload: {
+        type: "task_started",
+        started_at: Date.parse(ownTaskStartedAt) / 1_000,
+        turn_id: "own-turn"
+      }
+    })]),
+    // The boundary deliberately clears the inherited model; Codex re-declares
+    // it per turn, so the child's own turn_context follows its first task.
+    JSON.stringify({
+      type: "turn_context",
+      timestamp: "2026-08-11T22:11:20.000Z",
+      payload: { model: "gpt-5.6-sol" }
+    }),
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-08-11T22:30:00.000Z",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 1_100_000,
+            cached_input_tokens: 980_000,
+            output_tokens: 25_000
+          },
+          last_token_usage: {
+            input_tokens: 150_000, cached_input_tokens: 140_000,
+            output_tokens: 200, total_tokens: 150_200
+          }
+        }
+      }
+    })
+  ].join("\n") + "\n";
+
+  it("charges a user fork only its own post-boundary usage", () => {
+    const calls = parseCodexRollout(userFork());
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    // Own usage = final cumulative MINUS the inherited baseline:
+    // input 1_100_000-1_000_000 = 100_000 (of which cache 980_000-900_000 =
+    // 80_000), output 25_000-20_000 = 5_000.
+    expect(call.usage).toMatchObject({
+      inputTokens: 20_000,
+      cacheReadTokens: 80_000,
+      outputTokens: 5_000
+    });
+    // The replayed parent turn (200_000) must not survive as tier evidence.
+    expect(call.maxRequestPromptTokens).toBe(150_000);
+    const record = aggregateCalls(calls)[0]!;
+    // 20000*4 + 5000*20 + 80000*0.4, per million = 0.212.
+    expect(record.amountUsd).toBeCloseTo(0.212, 4);
+    // Without the fix this priced the parent's 1.1M-token history instead.
+    expect(record.amountUsd).toBeLessThan(1);
+  });
+
+  it("emits nothing for a user fork whose own task never starts", () => {
+    // Only inherited history is present: charging the parent's cumulative
+    // again would be worse than staying honestly absent.
+    expect(parseCodexRollout(userFork({ includeOwnTask: false }))).toEqual([]);
+  });
+
+  it("reads a user fork whole on the financial path (no tail shortcut)", async () => {
+    // The financial reader may stop early once it has proof-complete tail
+    // evidence. A fork's baseline boundary sits mid-file, so an inherited-
+    // history rollout must be read whole or the fork fix would not apply to
+    // the surface that actually prices the founder's spend.
+    const root = await mkdtemp(join(tmpdir(), "aibill-userfork-"));
+    const claudeDir = join(root, "claude");
+    const codexDir = join(root, "codex");
+    await mkdir(claudeDir);
+    await mkdir(codexDir);
+    await writeFile(join(codexDir, "rollout-userfork.jsonl"), userFork(), { mode: 0o600 });
+    const financial = await loadLocalAgentFinancialUsage({
+      claudeProjectsDir: claudeDir,
+      codexSessionsDir: codexDir,
+      geminiSessionsDir: join(root, "no-gemini")
+    });
+    const call = financial.calls.find((entry) => entry.agent === "codex")!;
+    expect(call).toBeDefined();
+    expect(call.usage).toMatchObject({
+      inputTokens: 20_000,
+      cacheReadTokens: 80_000,
+      outputTokens: 5_000
+    });
+    // Byte-identical to the full parser on the same bytes.
+    expect(call.usage).toEqual(parseCodexRollout(userFork())[0]!.usage);
+    expect(financial.records[0]!.amountUsd).toBeCloseTo(0.212, 4);
+  });
+
+  it("still treats subagent rollouts as inherited history", () => {
+    const subagent = userFork()
+      .replace('"thread_source":"user"', '"thread_source":"subagent"')
+      .replace('"forked_from_id":"parent-session"', '"parent_thread_id":"parent-session"');
+    const call = parseCodexRollout(subagent)[0]!;
+    expect(call.usage).toMatchObject({ inputTokens: 20_000, outputTokens: 5_000 });
   });
 });

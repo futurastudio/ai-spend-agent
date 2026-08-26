@@ -52,9 +52,29 @@ export const groupByDimensions: GroupByDimension[] = [
   "apiKey"
 ];
 
+/** One footer CTA: a command the user can copy, and what it does. */
+export type TerminalNextStep = {
+  /** The literal command. Rendered bold; never wrapped or merged with prose. */
+  command: string;
+  /** What it does. Rendered dim, always separated from the command. */
+  description?: string;
+};
+
 export type PlainEnglishSummaryOptions = {
   /** Records the summary was computed from (used to derive the cut list). */
   records: UsageRecord[];
+  /**
+   * Ranked action candidates, ALREADY derived from {@link records}. Supplied
+   * by a caller that must render the identical candidate set on a second
+   * surface (0.9.6: the machine-wide `report` artifact and this readout are
+   * fed one array from one CLI call site, so the two can never diverge —
+   * the founder-found regression where `--full` from home showed real
+   * recommendations and the report from the same home showed none).
+   *
+   * Omitted — every library caller and project mode — derives the list here
+   * exactly as before via {@link generateCutList}.
+   */
+  cutList?: readonly CutAction[];
   /** Drill-down dimension for the breakdown table. Defaults to "model". */
   groupBy?: GroupByDimension;
   /** Force-enable or force-disable color. Defaults to TTY auto-detection. */
@@ -82,8 +102,20 @@ export type PlainEnglishSummaryOptions = {
    * estimated from supported local coding-agent session evidence.
    */
   mode?: "demo" | "connected" | "local-logs";
-  /** Optional next-step CTA lines printed in the footer. */
-  nextSteps?: string[];
+  /**
+   * Next-step CTA lines printed in the footer.
+   *
+   * A COMMAND step must be given as `{ command, description }`, never as one
+   * hand-padded string (0.9.6). Every option handed to this function goes
+   * through `sanitizeTerminalText`, which collapses `\s+` to a single space —
+   * so `"npx aibill report              write a shareable report"` reached the
+   * user as `"npx aibill report write a shareable report"` and the reader had
+   * no way to see where the command ended. Structure survives sanitization;
+   * padding does not.
+   *
+   * Plain strings remain supported for prose-only lines that carry no command.
+   */
+  nextSteps?: readonly (string | TerminalNextStep)[];
   /**
    * When the CLI entrypoint runs with telemetry enabled AND noticed, the
    * receipt's "nothing uploaded" claim is replaced by this line so the
@@ -124,7 +156,7 @@ export type PlainEnglishSummaryOptions = {
    * Where this readout is being rendered from (0.9.5). From a broad root
    * ("machine-wide", e.g. the user's home directory) the full view's
    * project-scoped command pointers (apply, apply-artifact, watch, connect)
-   * render with the same `cd <project> && …` prefix the machine-wide report
+   * render with the same `cd /path/to/project && …` prefix the machine-wide report
    * summary uses, so a readout printed from home never advertises a command
    * that then friendly-refuses the broad root. Omitted or "project" renders
    * the bare commands exactly as before.
@@ -142,7 +174,44 @@ export type PlainEnglishSummaryOptions = {
    * deliberately select the compact default without changing library callers.
    */
   view?: "compact" | "full" | "breakdown";
+  /**
+   * How much of the session-transcript evidence was actually read (0.9.6).
+   *
+   * The written artifact has always disclosed this; the readout did not, so
+   * the terminal drew plan and candidate conclusions from partly-read
+   * evidence with NO caveat while the artifact next to it disclosed the gap.
+   * Two surfaces, one set of facts: whenever coverage is partial BOTH say so.
+   *
+   * This does not gate anything. Ranked candidates come from local financial
+   * records, not transcripts, so an unread transcript cannot make them wrong
+   * — it only means the transcript-derived analyses are not drafted yet.
+   */
+  qualitativeCoverage?: {
+    status: "complete" | "partial" | "unknown";
+    selectedFiles: number;
+    readCompletely: number;
+    skippedForBudget: number;
+  };
 };
+
+/**
+ * The readout's half of the shared coverage disclosure (0.9.6). Same counts,
+ * same voice, same command as the artifact's banner.
+ */
+export function terminalCoverageCaveat(
+  coverage: PlainEnglishSummaryOptions["qualitativeCoverage"]
+): string | undefined {
+  if (!coverage || coverage.status === "complete") return undefined;
+  if (coverage.selectedFiles === 0) {
+    return "No session transcripts were read for this window, so Context Health and configuration evidence are not drafted. " +
+      "Candidates above come from local financial records.";
+  }
+  const remaining = Math.max(0, coverage.selectedFiles - coverage.readCompletely);
+  return `${coverage.readCompletely} of ${coverage.selectedFiles} session transcripts read so far` +
+    `${remaining > 0 ? ` (${remaining} still queued)` : ""}` +
+    `${coverage.skippedForBudget > 0 ? `; ${coverage.skippedForBudget} ${coverage.skippedForBudget === 1 ? "file was" : "files were"} skipped by budget` : ""}. ` +
+    "Candidates above come from local financial records and are unaffected; Context Health and configuration evidence wait on the rest — run npx aibill index.";
+}
 
 /**
  * Evidence-first terminal receipt: mode/trust, headline, sources, plan context,
@@ -167,7 +236,10 @@ function renderPlainEnglishSummary(
   const c = makeColors(useColor);
   const width = options.width ?? 72;
   const groupBy = options.groupBy ?? "model";
-  const cutList = generateCutList(options.records);
+  // One candidate set per invocation. A caller that also renders these
+  // candidates into a written artifact hands the SAME array in, so the
+  // terminal and the artifact are provably one derivation (0.9.6).
+  const cutList = options.cutList ? [...options.cutList] : generateCutList(options.records);
   // Deduplicated so the modeled opportunity can never exceed the value it draws
   // from (overlapping recommendations are shown separately, non-additively).
   const plan = buildRecommendedPlan(cutList);
@@ -297,6 +369,9 @@ function renderPlainEnglishSummary(
       lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
     lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
+    if (options.mode === "local-logs") {
+      lines.push(`  ${c.dim(sessionDatingNote)}`);
+    }
     lines.push("");
     lines.push(indentBlock(renderBreakdownTable(
       focusedEntries,
@@ -353,6 +428,9 @@ function renderPlainEnglishSummary(
     lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
   lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
+  if (options.mode === "local-logs") {
+    lines.push(`  ${c.dim(sessionDatingNote)}`);
+  }
   lines.push("");
   lines.push(indentBlock(renderBreakdownTable(
     entries,
@@ -435,30 +513,27 @@ function renderPlainEnglishSummary(
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence opportunity found in this window. Collect more evidence before changing anything."));
   } else {
-    // Sub-$1/mo cuts are noise on the readout (often near-duplicates of a big
-    // cut) — collapse them into one line. They still count in the plan math
-    // and still ship in the apply-artifact.
-    const visibleCuts = cutList.filter((action) => (
-      action.impactBasis === "observed_value_no_counterfactual" ||
-      action.estimatedMonthlySavingsUsd >= 1
-    ));
-    const minorCuts = cutList.filter((action) => (
-      action.impactBasis === "modeled_savings" &&
-      action.estimatedMonthlySavingsUsd < 1
-    ));
-    const shown = visibleCuts.length > 0 ? visibleCuts : cutList;
     // 0.9.3 (founder feedback: "the five recommendations seem generic — only
     // the amount changes"): the same candidate-action kind+agent repeating
     // across projects renders as ONE grouped recommendation with per-project
     // amounts under it, followed by any different-kind items. Display-level
     // only — plan math, dedup, and the apply-artifact see the full list.
-    const collapsedCuts = collapseRepeatedCutActions(shown);
-    for (const [index, entry] of collapsedCuts.slice(0, 5).entries()) {
+    // 0.9.6: selection/collapse/ordering moved into rankCutCandidates so the
+    // written report renders the SAME candidates in the SAME order.
+    const { candidates, minorCuts } = rankCutCandidates(cutList);
+    for (const entry of candidates) {
       lines.push(...(entry.members.length === 1
-        ? cutActionLines(entry.members[0]!, index + 1, c, options.mode)
-        : groupedCutActionLines(entry, index + 1, c, options.mode)));
+        ? cutActionLines(entry.members[0]!, entry.rank, c, options.mode)
+        : groupedCutActionLines(
+            { sharedTitle: entry.title, members: [...entry.members] },
+            entry.rank,
+            c,
+            options.mode
+          )));
     }
-    if (visibleCuts.length > 0 && minorCuts.length > 0) {
+    // Unchanged guard, restated: only when at least one NON-minor cut was
+    // displayed (minor cuts are the exact complement of the visible set).
+    if (minorCuts.length > 0 && minorCuts.length < cutList.length) {
       const minorTotal = minorCuts.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
       lines.push(
         `  ${c.dim(`+ ${minorCuts.length} smaller cut${minorCuts.length === 1 ? "" : "s"} under $1/mo (~${formatUsd(minorTotal)}/mo combined) — included in apply-artifact`)}`
@@ -517,6 +592,14 @@ function renderPlainEnglishSummary(
       );
     }
   }
+  // 0.9.6: the artifact discloses partial transcript coverage and this readout
+  // did not — so the terminal drew conclusions from partly-read evidence with
+  // no caveat while the file next to it disclosed the gap. Both say it now.
+  const coverageCaveat = terminalCoverageCaveat(options.qualitativeCoverage);
+  if (coverageCaveat) {
+    lines.push("");
+    lines.push(`  ${c.dim(coverageCaveat)}`);
+  }
   lines.push("");
 
   // Context evidence follows the actionable cuts: it explains why a context
@@ -528,7 +611,7 @@ function renderPlainEnglishSummary(
   // and have NO `aibill` on PATH — a bare command is a guaranteed
   // "command not found" for exactly the person who just got motivated.
   // From a broad root the project-scoped commands additionally carry the
-  // machine-wide report's `cd <project> && …` prefix (0.9.5): apply,
+  // machine-wide report's `cd /path/to/project && …` prefix (0.9.5): apply,
   // apply-artifact, watch, and connect friendly-refuse a broad root, and a
   // --full readout printed from home must never advertise a command that
   // then refuses to run where it was printed.
@@ -604,8 +687,28 @@ function renderPlainEnglishSummary(
   if (nextSteps.length > 0) {
     lines.push(c.dim(rule(width)));
     lines.push(c.bold("  Next"));
+    // The command column is shared across the block and the gap is REBUILT
+    // here, after sanitization, so it cannot be collapsed away.
+    const commandSteps = nextSteps.filter((step): step is TerminalNextStep => typeof step !== "string");
+    const commandWidth = Math.max(0, ...commandSteps.map((step) => step.command.length));
     for (const step of nextSteps) {
-      lines.push(`  ${c.cyan("›")} ${step}`);
+      if (typeof step === "string") {
+        lines.push(`  ${c.cyan("›")} ${step}`);
+        continue;
+      }
+      if (step.description === undefined) {
+        lines.push(`  ${c.cyan("›")} ${c.bold(step.command)}`);
+        continue;
+      }
+      const aligned = 4 + commandWidth + 2 + step.description.length <= width;
+      if (aligned) {
+        lines.push(`  ${c.cyan("›")} ${c.bold(step.command.padEnd(commandWidth))}  ${c.dim(step.description)}`);
+        continue;
+      }
+      // Too wide to align: the description drops to its own line rather than
+      // running into the command with a single space.
+      lines.push(`  ${c.cyan("›")} ${c.bold(step.command)}`);
+      lines.push(`    ${c.dim(step.description)}`);
     }
     lines.push("");
   }
@@ -943,7 +1046,9 @@ function compactNextStep(
     return {
       title: "Read your own local evidence",
       evidence: "sample values are illustrative; no user change is authorized",
-      command: "npx aibill init"
+      // `init` needs one exact project folder, and `--sample` runs anywhere —
+      // including a home directory, where the bare pointer refused (0.9.6).
+      command: scopedCommandRenderer(options.commandScope)("npx aibill init")
     };
   }
 
@@ -1377,6 +1482,16 @@ function modeTrustLine(
   return `${prefix}  ${c.yellow(c.bold("ESTIMATED EVIDENCE"))}\n  ${c.dim("confirm the source before acting")}`;
 }
 
+/**
+ * Label honesty (0.9.6): a local agent session aggregate is dated to the
+ * session's LAST activity, so a session spanning several days records once,
+ * on its final day. Dating math is unchanged — this phrase makes the label
+ * say so wherever record-derived dates sit next to local dollar amounts.
+ * Shared with the HTML report header so the two surfaces cannot drift.
+ */
+export const sessionDatingNote =
+  "dates = each session's last activity; a long session records on its final day";
+
 /** "window: 14 days of data (2026-06-20 → 2026-07-04)" for drill-down tables. */
 function dataWindowLine(records: UsageRecord[]): string {
   const days = [...new Set(records.map((record) => record.timestamp.slice(0, 10)))].sort();
@@ -1436,6 +1551,97 @@ function cutProjectLabel(action: CutAction): string {
 }
 
 const confidenceRank: Record<string, number> = { detected_unverified: 0, estimated: 1, verified: 2 };
+
+/**
+ * ONE ranked action-candidate set, shared by every surface that shows the
+ * user "what to investigate" (0.9.6).
+ *
+ * The founder-found regression this exists to make impossible: `--full` from
+ * home rendered real ranked candidates while the `report` artifact written
+ * from the SAME home rendered none, because the two surfaces derived (or
+ * failed to derive) their candidates independently. Selection, collapsing,
+ * ordering, and the display facts now live here; each surface only decides
+ * how to PAINT them (ANSI, Markdown, HTML).
+ *
+ * Do not re-implement the filter/collapse/slice anywhere else — call this.
+ */
+export type RankedCutCandidate = {
+  /** 1-based rank, matching the number the terminal readout prints. */
+  rank: number;
+  /**
+   * The title as displayed. A lone candidate keeps its full title (project
+   * suffix included); a repeated per-project fan-out shows the shared
+   * headline, with the projects carried in {@link projectLabels}.
+   */
+  title: string;
+  /** The shared read-only instruction, minus any per-project count sentence. */
+  guidance: string;
+  members: readonly CutAction[];
+  /** Per-project labels, largest observed value first (grouped entries only). */
+  projectLabels: readonly string[];
+  /** Per-project observed value, index-aligned with {@link projectLabels}. */
+  projectAffectedSpendUsd: readonly number[];
+  recordCount: number;
+  recordUnit: CutAction["recordUnit"];
+  affectedSpendUsd: number;
+  estimatedMonthlySavingsUsd: number;
+  /** True when the evidence proves exposure only — reduction is unproven. */
+  observed: boolean;
+  /** The weakest member's confidence: a group is never stronger than its parts. */
+  confidence: CostConfidence;
+};
+
+export type RankedCutCandidates = {
+  /** At most 5 displayed candidates, in rank order. */
+  candidates: RankedCutCandidate[];
+  /** Sub-$1/mo modeled cuts collapsed out of the display (still in the math). */
+  minorCuts: CutAction[];
+};
+
+export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandidates {
+  // Sub-$1/mo cuts are noise on a readout (often near-duplicates of a big
+  // cut). They still count in the plan math and still ship in the artifact.
+  const visibleCuts = cutList.filter((action) => (
+    action.impactBasis === "observed_value_no_counterfactual" ||
+    action.estimatedMonthlySavingsUsd >= 1
+  ));
+  const minorCuts = cutList.filter((action) => (
+    action.impactBasis === "modeled_savings" &&
+    action.estimatedMonthlySavingsUsd < 1
+  ));
+  const shown = visibleCuts.length > 0 ? visibleCuts : [...cutList];
+  const candidates = collapseRepeatedCutActions(shown).slice(0, 5).map((entry, index) => {
+    const members = entry.members;
+    const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
+    const guidanceSource = members[0]!.action;
+    const guidanceStart = guidanceSource.indexOf(". ");
+    const weakest = [...members].sort((a, b) =>
+      (confidenceRank[a.confidence] ?? 0) - (confidenceRank[b.confidence] ?? 0))[0]!;
+    return {
+      rank: index + 1,
+      // A lone entry keeps the full title the terminal prints for it; only a
+      // real group trades the project suffix for the across-line.
+      title: members.length === 1 ? members[0]!.title : entry.sharedTitle,
+      guidance: members.length === 1
+        ? guidanceSource
+        : guidanceStart === -1 ? guidanceSource : guidanceSource.slice(guidanceStart + 2),
+      members,
+      projectLabels: members.length === 1 ? [] : ranked.map(cutProjectLabel),
+      projectAffectedSpendUsd: members.length === 1
+        ? []
+        : ranked.map((action) => action.affectedSpendUsd),
+      recordCount: members.reduce((total, action) => total + action.recordCount, 0),
+      recordUnit: members[0]!.recordUnit,
+      affectedSpendUsd: members.reduce((total, action) => total + action.affectedSpendUsd, 0),
+      estimatedMonthlySavingsUsd: members.reduce(
+        (total, action) => total + action.estimatedMonthlySavingsUsd, 0
+      ),
+      observed: members[0]!.impactBasis === "observed_value_no_counterfactual",
+      confidence: weakest.confidence
+    } satisfies RankedCutCandidate;
+  });
+  return { candidates, minorCuts };
+}
 
 function groupedCutActionLines(
   entry: CollapsedCutEntry,
@@ -1918,21 +2124,23 @@ function sourceBreakdownLabel(basis: FinancialPresentationBasis): string {
   }
 }
 
-function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
+function defaultNextSteps(
+  mode: PlainEnglishSummaryOptions["mode"]
+): readonly (string | TerminalNextStep)[] {
   if (mode === "connected") {
     return [
-      "npx aibill --group-by agent drill into another dimension"
+      { command: "npx aibill --group-by agent", description: "drill into another dimension" }
     ];
   }
   if (mode === "local-logs") {
     return [
-      "npx aibill --group-by project  see which project has the most observed activity",
+      { command: "npx aibill --group-by project", description: "see which project has the most observed activity" },
       "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com"
     ];
   }
   return [
-    "npx aibill connect openai    set up OpenAI Admin; then run the printed sync command",
-    "npx aibill connect anthropic set up Anthropic Admin; then run the printed sync command"
+    { command: "npx aibill connect openai", description: "set up OpenAI Admin; then run the printed sync command" },
+    { command: "npx aibill connect anthropic", description: "set up Anthropic Admin; then run the printed sync command" }
   ];
 }
 
@@ -2077,10 +2285,10 @@ function wrapProseLine(line: string, width: number): string[] {
       : leading.length >= 5
         ? leading
         : `${leading}  `;
-  // The optional `cd <project> && ` prefix (0.9.5 machine-wide pointers) is
+  // The optional `cd /path/to/project && ` prefix (0.9.5 machine-wide pointers) is
   // part of the copy-pasteable command and must never wrap away from it.
   const protectedText = text.replace(
-    /(?:cd <project> && )?npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
+    /(?:cd \/path\/to\/project && )?npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
     (command) => command.replace(/ /gu, "\uE000")
   );
   const words = protectedText.split(/\s+/u);
@@ -2168,15 +2376,79 @@ function tableChars(): Record<string, string> {
 
 /**
  * Bare project-scoped commands render as-is in project scope and with the
- * machine-wide report's `cd <project> && …` prefix from a broad root, where
- * they would otherwise friendly-refuse (0.9.5 rider on the 0.9.4 fix).
+ * machine-wide report's `cd /path/to/project && …` prefix from a broad root,
+ * where they would otherwise friendly-refuse (0.9.5 rider on the 0.9.4 fix).
+ *
+ * The placeholder is a PATH, not `<project>` (0.9.6). Angle brackets are shell
+ * redirection: pasting `cd <project> && npx aibill apply` verbatim is a syntax
+ * error, and the founder has already been burned once copying a printed
+ * pointer literally. `/path/to/project` pastes as a plain command and fails,
+ * if it fails at all, with a legible "no such file or directory".
  */
 function scopedCommandRenderer(
   commandScope: PlainEnglishSummaryOptions["commandScope"]
 ): (command: string) => string {
   return (command: string) => (
-    commandScope === "machine-wide" ? `cd <project> && ${command}` : command
+    commandScope === "machine-wide" ? `cd /path/to/project && ${command}` : command
   );
+}
+
+/**
+ * Render `<tool> <path>` as ONE un-half-copyable shell command (0.9.6).
+ *
+ * Founder-found: `report --no-open` printed `› open <a long absolute path>`
+ * with its description on the next line. He read "open" as a LABEL, typed
+ * bare `open`, and got macOS's usage dump — "i don't know what im looking
+ * at." Two changes make a partial read impossible to mistake for a label:
+ *
+ *   1. An artifact sitting in the invoking directory is named RELATIVELY —
+ *      `open ai-spend-report.html` — short enough to read as one unit and
+ *      short enough never to wrap.
+ *   2. Anything else (an absolute path, or any path containing a space or a
+ *      shell-significant character) is QUOTED — `open "<abs>/r.html"` —
+ *      so the quotes visually glue the command to its argument.
+ *
+ * The quoting is SAFETY, not only optics. An unquoted path with a space was
+ * already two arguments when pasted; worse, the double quotes this used to
+ * emit do not stop a POSIX shell expanding `$(...)`, backticks, or `$VAR`, so
+ * a path containing them executed on paste. Single quotes expand nothing.
+ */
+export function shellPathPointer(
+  tool: string,
+  path: string,
+  cwd?: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const separator = path.lastIndexOf("/") === -1 ? path.lastIndexOf("\\") : path.lastIndexOf("/");
+  const directory = separator === -1 ? "" : path.slice(0, separator);
+  const base = separator === -1 ? path : path.slice(separator + 1);
+  const relative = cwd !== undefined && directory === cwd && base.length > 0;
+  const argument = relative ? base : path;
+  const needsQuotes = !relative || /[\s'"$`\\&;|<>()*?!#~%^]/u.test(argument);
+  if (!needsQuotes) return `${tool} ${argument}`;
+  if (platform === "win32") {
+    // cmd.exe quotes with DOUBLE quotes and has no single-quote syntax at all,
+    // so the POSIX form printed `start 'C:\Users\<you>\r.html'` — quotes that
+    // cmd passes through as literal characters, naming a file that does not
+    // exist. Windows filenames may not contain `"`, so a double-quoted path
+    // never needs escaping and can never be left unterminated.
+    //
+    // Known limit, stated rather than papered over: cmd expands %VAR% inside
+    // double quotes and offers no in-quote escape for it. A path containing
+    // %NAME% where NAME is a defined variable will still be substituted. The
+    // auto-open path does not have this problem — it never goes through a
+    // shell (see decideReportAutoOpen's rundll32 branch).
+    return `${tool} "${argument}"`;
+  }
+  // SINGLE quotes. Inside double quotes a POSIX shell still expands $(...),
+  // backticks and $VAR, so a double-quoted path containing a command
+  // substitution ran it the moment it was pasted — the previous quoted form
+  // (and 0.9.5's unquoted form) were both code-execution-on-paste. Inside
+  // single quotes nothing expands. The only character that cannot appear
+  // literally is the single quote itself; the standard '\'' idiom closes the
+  // literal, emits an escaped quote, and reopens it, so every path is
+  // representable and none is left bare.
+  return `${tool} '${argument.replaceAll("'", "'\\''")}'`;
 }
 
 export type CommandSummaryRow = {

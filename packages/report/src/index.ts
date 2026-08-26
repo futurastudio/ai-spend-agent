@@ -12,6 +12,7 @@ import type {
   ActionVerificationProjectionV0,
   ConfirmedMapping,
   ContextHealthResult,
+  CutAction,
   DeadContextResult,
   DetectedPlan,
   LocalDiscoveryResult,
@@ -26,20 +27,28 @@ import type {
   WasteFindingV0
 } from "@agent-finops/core";
 
+import { rankCutCandidates, sessionDatingNote, type RankedCutCandidate } from "./terminal.js";
+
 export {
   generateCommandSummary,
   generatePlainEnglishSummary,
   groupByDimensions,
+  rankCutCandidates,
+  shellPathPointer,
   type CommandSummaryNextStep,
   type CommandSummaryOptions,
   type CommandSummaryRow,
   type GroupByDimension,
-  type PlainEnglishSummaryOptions
+  type PlainEnglishSummaryOptions,
+  type TerminalNextStep,
+  type RankedCutCandidate,
+  type RankedCutCandidates
 } from "./terminal.js";
 
 export {
   generateReportCardSvg,
   generateReportCardCaption,
+  generateReceiptCompanionHtml,
   type ReportCardInput
 } from "./reportCard.js";
 
@@ -86,6 +95,24 @@ export type SpendReportInput = {
   sessionVitals?: SessionVitalsV0;
   /** Exactly one canonical, evidence-addressed local action candidate. */
   wasteFinding?: WasteFindingV0;
+  /**
+   * Ranked action candidates the CALLER already derived from this report's
+   * records (0.9.6). Supplied only when the same candidate set is being shown
+   * on another surface in the same run — machine-wide `report` receives the
+   * exact array the `--full` terminal readout renders, so the artifact and
+   * the screen can never disagree about what to investigate.
+   *
+   * Project mode omits this and keeps its canonical-candidate contract
+   * unchanged: exactly one evidence-addressed candidate, or none.
+   */
+  actionCandidates?: readonly CutAction[];
+  /**
+   * Analysis breadth (0.9.6). "machine-wide" means the evidence spans every
+   * project on this machine and no single project folder owns the run, so
+   * per-project artifacts are legitimately unavailable and must say so in
+   * plain, actionable words rather than reading as a failure.
+   */
+  analysisScope?: "project" | "machine-wide";
   /** Coverage of the bounded qualitative/session reader used for local claims. */
   qualitativeCoverage?: {
     status: "complete" | "partial" | "unknown";
@@ -184,13 +211,101 @@ function reportQualitativeCoverage(input: SpendReportInput): ReportQualitativeCo
   };
 }
 
+/**
+ * THE single coverage disclosure, printed once at the top of every artifact
+ * and once on the `--full` readout (0.9.6).
+ *
+ * Three things changed here and they are all the same bug:
+ *  - It spoke in internal state ("QUALITATIVE INDEX PARTIAL"). Nobody outside
+ *    this codebase knows what a qualitative index is. It now counts files.
+ *  - It said new action candidates are "suppressed". They are not, and were
+ *    never derived from transcripts — they come from local FINANCIAL records
+ *    (cli/index.ts `actionCandidates: generateCutList(analysisRecords)`), so
+ *    transcript coverage was never the right gate for them.
+ *  - It pluralized by concatenation ("1 eligible files").
+ *
+ * The full instruction lives HERE and only here. Sections that genuinely do
+ * wait on transcript evidence point back at it in one short clause rather
+ * than reprinting this paragraph six times down one page.
+ */
 function qualitativeCoverageNotice(input: SpendReportInput): string | undefined {
   const coverage = reportQualitativeCoverage(input);
   if (coverage.status === "complete") return undefined;
-  return `QUALITATIVE INDEX ${coverage.status.toUpperCase()} · ` +
-    `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
-    `${coverage.skippedForBudget} eligible files skipped by budget. ` +
-    "Context Health, configuration/dead-context conclusions, and new action candidates are suppressed; financial evidence remains available.";
+  return `SESSION TRANSCRIPTS NOT FULLY READ · ${transcriptGapInstruction(input)} ` +
+    "Ranked action candidates below are computed from local financial records and are unaffected. " +
+    "Current-session Context Health and configuration/dead-context conclusions are the parts that wait on the transcript read.";
+}
+
+/** "1 file was" / "2 files were" — plural by count, never by concatenation. */
+function fileCountPhrase(count: number): string {
+  return `${count} ${count === 1 ? "file was" : "files were"}`;
+}
+
+/**
+ * The SHORT pointer every transcript-gated section uses instead of restating
+ * the whole instruction (0.9.6).
+ *
+ * The instruction string was DRY'd but the PRESENTATION was not: the same
+ * ~40-word paragraph rendered six times down a single degraded page. It is
+ * printed once now, in the coverage notice at the top, and referenced here.
+ */
+function transcriptGapShortPointer(input: SpendReportInput): string {
+  const coverage = reportQualitativeCoverage(input);
+  return coverage.selectedFiles === 0
+    ? "No session transcripts have been read for this window yet — see the coverage note at the top of this report."
+    : `Waiting on the transcript read noted at the top of this report (${coverage.readCompletely} of ${coverage.selectedFiles} read).`;
+}
+
+/**
+ * ONE plain-language sentence for every place a transcript-evidence gap
+ * suppresses advice (0.9.6).
+ *
+ * Founder-found: a real report degraded to "No action candidate is emitted
+ * because qualitative indexing is unknown; financial aggregates cannot fill
+ * the missing transcript evidence." That is an internal state description,
+ * not something a user can act on — nobody outside this codebase knows what
+ * "qualitative indexing" is or what to do about it. Every degradation now
+ * names the concrete next step instead, and the report says WHY the gap
+ * exists in words the user can check.
+ *
+ * The first honest attempt at the analysis always comes first; this copy is
+ * for the case where the evidence genuinely is not there yet.
+ */
+function transcriptGapInstruction(
+  input: SpendReportInput,
+  windowDaysOverride?: number
+): string {
+  const windowDays = windowDaysOverride ?? input.evidenceWindowDays ?? 30;
+  const coverage = reportQualitativeCoverage(input);
+  if (coverage.selectedFiles === 0) {
+    return "No coding-agent session transcripts could be read for this window, so session-level analysis is not drafted. " +
+      "Use Claude Code or Codex normally for a few sessions, then re-run this report — " +
+      `\`${aibillCommandV0("doctor --sources")}\` lists every source location checked and what each one returned.`;
+  }
+  const remaining = Math.max(0, coverage.selectedFiles - coverage.readCompletely);
+  return `${coverage.readCompletely} of ${coverage.selectedFiles} session transcripts have been read so far` +
+    `${remaining > 0 ? ` (${remaining} still queued)` : ""}` +
+    `${coverage.skippedForBudget > 0 ? `; ${fileCountPhrase(coverage.skippedForBudget)} skipped by budget` : ""}. ` +
+    `Run \`${aibillCommandV0("index")}\` to finish reading them — it resumes where it left off — ` +
+    `then re-run this report over the same ${windowDays}-day window.`;
+}
+
+/**
+ * What the report offers INSTEAD when an analysis is real but genuinely
+ * project-scoped and this run spans the whole machine (0.9.6). Never a
+ * failure voice: machine-wide is the advertised default path.
+ */
+function machineWideProjectScopeNote(kind: "context-health" | "verification"): string {
+  // The command carries its own `cd` (0.9.6), matching the readout's
+  // machine-wide pointers. A machine-wide report is normally written in a home
+  // folder, where a bare `apply` friendly-refuses; printing the prefix means
+  // the string a reader copies is the string that works, and the placeholder
+  // is a path rather than `<project>`, which the shell reads as a redirect.
+  return kind === "context-health"
+    ? "Current-session Context Health belongs to one project's live session. " +
+      `Run \`cd /path/to/project && ${aibillCommandV0("")}\` for that project's session health.`
+    : "This machine-wide report ranks candidates across every project. " +
+      `Run \`cd /path/to/project && ${aibillCommandV0("apply")}\` for that project's approval, rollback, and matched-verification plan.`;
 }
 
 function measuredTokenChangeLabel(experiment: ReportTokenExperiment): string {
@@ -244,7 +359,23 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
   const planChecks = computePlanChecks(actionRecords, input.detectedPlans ?? []);
   const contextHealth = tokenExperiment || !qualitativeComplete ? undefined : input.contextHealth;
   const sessionCandidate = contextHealth?.recommendation === "start_fresh";
-  const candidateCount = canonicalFinding ? 1 : 0;
+  // 0.9.6: ranked candidates supplied by the caller (machine-wide report)
+  // are the SAME array the --full readout renders. Project mode omits them
+  // and keeps the canonical single-candidate contract byte-for-byte.
+  //
+  // NOT gated on transcript coverage. These candidates are computed from local
+  // FINANCIAL records (cli/index.ts, `generateCutList(analysisRecords)`), so
+  // an unread transcript cannot make them wrong — it only makes the SEPARATE
+  // transcript-derived analyses (Context Health, dead context) unavailable.
+  // Gating them here while `--full` rendered them ungated is exactly how the
+  // two surfaces came to disagree in front of the founder: same home, same
+  // minute, a ranked candidate in the terminal and "No candidate is ranked
+  // yet" in the artifact. One decision, taken once, for both surfaces.
+  const rankedCandidates = tokenExperiment
+    ? []
+    : rankCutCandidates(input.actionCandidates ?? []).candidates;
+  const machineWide = input.analysisScope === "machine-wide";
+  const candidateCount = canonicalFinding ? 1 : rankedCandidates.length;
   const lines = [
     "# aibill Local Evidence Report",
     "",
@@ -263,7 +394,8 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "",
     `- Shared UTC window: ${evidenceWindow} (${windowDays} days).`,
     `- ${localFinancialHeadline(financialCoverage, "day + agent + model + project aggregate")}`,
-    `- Qualitative index: ${qualitativeCoverage.status}; ${qualitativeCoverage.readCompletely}/${qualitativeCoverage.selectedFiles} selected files read completely; ${qualitativeCoverage.skippedForBudget} skipped by budget.`,
+    "- Dates are each session's last activity; a long session records on its final day.",
+    `- Session transcripts: ${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} read completely${qualitativeCoverage.skippedForBudget > 0 ? `; ${fileCountPhrase(qualitativeCoverage.skippedForBudget)} skipped by budget` : ""}.`,
     `- Scoped candidates: ${candidateCount}. A candidate opens an investigation; it does not prove that a change is safe, useful, or financially material.`,
     "- Provider-billed cost is not inferred from local transcripts. Connect an official provider report separately when a cash claim is required.",
     ...localBillingContextLines(input.detectedPlans ?? []).map((line) => `- ${line}`),
@@ -283,7 +415,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     ...(tokenExperiment
       ? [`- Plan or limit advice is suppressed while canonical token test \`${tokenExperiment.id}\` owns this action/result lineage.`]
       : !qualitativeComplete
-        ? [`- Plan or limit action advice is suppressed because qualitative indexing is ${qualitativeCoverage.status}. Any detected billing label remains descriptive only.`]
+        ? [`- Plan and limit advice is not drafted yet. ${transcriptGapShortPointer(input)} Any detected billing label remains descriptive only.`]
       : planChecks.length === 0
       ? ["- No supported local plan comparison is available. Missing entitlement or limit evidence remains missing."]
       : planChecks.flatMap((check) => [
@@ -295,7 +427,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "## Canonical Context Health",
     "",
     ...(!qualitativeComplete
-      ? [`- Suppressed because qualitative indexing is ${qualitativeCoverage.status}. Do not infer current-session health or a handoff from incomplete transcript coverage.`]
+      ? [`- Not drafted yet. ${transcriptGapShortPointer(input)} Current-session health is never inferred from partly-read transcripts.`]
       : contextHealth
       ? [
           sessionCandidate
@@ -305,12 +437,12 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
           `- Session handoff: ${safePromptMetadata(contextHealth.action, 400)}`,
           "- Hook payloads were not executed or assigned an inferred token size; this result uses local configuration and observable transcript evidence only."
         ]
-      : ["- Current-session Context Health was unavailable. Do not invent a session recommendation from daily financial aggregates."]),
+      : [`- Current-session Context Health was unavailable. ${machineWide ? machineWideProjectScopeNote("context-health") : "Do not invent a session recommendation from daily financial aggregates."}`]),
     "",
     "## Configuration and invocation evidence",
     "",
     ...(!qualitativeComplete
-      ? [`- Suppressed because qualitative indexing is ${qualitativeCoverage.status}. No configured item is labeled unused, dead, removable, or safe to change.`]
+      ? [`- Not drafted yet. ${transcriptGapShortPointer(input)} Until then no configured item is labeled unused, dead, removable, or safe to change.`]
       : dead && dead.deadItems.length > 0
       ? dead.deadItems.slice(0, 12).flatMap((item, index) => {
           const id = `CONFIG-${String(index + 1).padStart(3, "0")}`;
@@ -327,8 +459,18 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "",
     ...(tokenExperiment
       ? [`- Suppressed while canonical token test \`${tokenExperiment.id}\` (${tokenExperiment.lifecycle}) owns this report's action/result lineage. ${tokenExperimentEvidenceSummary(tokenExperiment)}.`]
+      : rankedCandidates.length > 0
+        ? [
+            ...rankedCandidates.flatMap((candidate) => localRankedCandidateMarkdownLines(candidate)),
+            // Shown, and captioned. Partial transcript coverage does not
+            // withhold these — they are computed from financial records —
+            // but the reader is told what was NOT read before they act.
+            ...(qualitativeComplete
+              ? []
+              : [`- Coverage: these candidates come from local financial records and are complete. ${transcriptGapShortPointer(input)}`])
+          ]
       : !qualitativeComplete
-        ? [`- No action candidate is emitted because qualitative indexing is ${qualitativeCoverage.status}; financial aggregates cannot fill the missing transcript evidence.`]
+        ? [`- No candidate is ranked from the financial records in this window. ${transcriptGapShortPointer(input)}`]
       : canonicalFinding
         ? [
             `- **ONE CANONICAL CANDIDATE** ${safePromptMetadata(canonicalFinding.findingType.replaceAll("_", " "), 180)}`,
@@ -337,6 +479,8 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
             "  - Interpretation: the signal is not proven causal. Reduction, accepted-outcome impact, and cash savings remain unproven until the guarded test completes.",
             `  - Read-only next step: ${safePromptMetadata(wasteActionInstruction(canonicalFinding), 420)}`
           ]
+        : machineWide
+        ? ["- No action candidate is supported by the complete indexed evidence on this machine. Collect more comparable completed sessions; do not invent a cut from financial aggregates."]
         : ["- No canonical action candidate is supported by the complete indexed evidence for this project. Collect more comparable completed sessions; do not invent a cut from financial aggregates."]),
     "",
     "## Approval and rollback boundary",
@@ -344,11 +488,12 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "- Read-only inspection is allowed. This report does not approve file edits, mutating shell commands, routing/model changes, provider changes, or budget controls.",
     ...(tokenExperiment
       ? [`- Do not draft a competing intervention in this report; canonical token test \`${tokenExperiment.id}\` is the preferred lineage.`]
-      : !qualitativeComplete
-        ? ["- No intervention is authorized while qualitative coverage is incomplete or unknown. Complete the bounded index before drafting a candidate."]
       : [
           "- Before changing anything, choose one candidate ID, identify its owner and dependency, define acceptance criteria, and prepare a permission-preserving scoped backup or secret-safe patch.",
-          "- Apply at most one explicitly approved configuration/documentation change. Restore the exact scoped entry if the functional canary or accepted-output quality fails."
+          "- Apply at most one explicitly approved configuration/documentation change. Restore the exact scoped entry if the functional canary or accepted-output quality fails.",
+          ...(qualitativeComplete
+            ? []
+            : [`- ${transcriptGapShortPointer(input)} Approve nothing that depends on Context Health or configuration/dead-context evidence until that read finishes.`])
         ]),
     "",
     "## Matched future verification",
@@ -358,26 +503,72 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
           `- Canonical experiment: \`${tokenExperiment.id}\`; ${tokenExperimentEvidenceSummary(tokenExperiment)}.`,
           "- Preserve its frozen cohort and claim boundary. A completed or rolled-back attempt remains historical evidence and is not rewritten by this report."
         ]
-      : !qualitativeComplete
-        ? ["- Matched verification is not drafted from partial or unknown qualitative coverage. Complete the bounded transcript index, then form one exact source-version cohort."]
+      : rankedCandidates.length === 0 && !qualitativeComplete
+        ? [`- The matched before/after cohort is not formed yet. ${transcriptGapShortPointer(input)}`]
         : [
+            ...(machineWide && rankedCandidates.length > 0
+              ? [`- Cohort for candidate ACT-001 (${safePromptMetadata(rankedCandidates[0]!.title, 180)}): the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with ${safePromptMetadata(rankedCandidates[0]!.projectLabels[0]!, 80)} — its largest observed share of this window` : ""}.`]
+              : []),
             "- Save at least 3 comparable pre-change sessions for the same agent, project, work type, source version, and quality bar. If they do not exist, collect them before approval.",
             "- After one approved change and a passing canary, collect at least 3 new matched sessions. Do not reuse historical aggregates as post-change evidence.",
             "- Compare per-session input/cache tokens, compactions, repeated explicit reads, reported limit burn when available, latency, tests, and accepted output quality.",
-            "- On subscriptions, report operational effects such as headroom, reliability, or speed. Report cash savings only when matched provider-reported cost supports them."
+            "- On subscriptions, report operational effects such as headroom, reliability, or speed. Report cash savings only when matched provider-reported cost supports them.",
+            ...(machineWide ? [`- ${machineWideProjectScopeNote("verification")}`] : []),
+            ...(qualitativeComplete ? [] : [`- ${transcriptGapShortPointer(input)}`])
           ]),
     "",
     "## Next",
     "",
-    tokenExperiment
-      ? `- Review canonical token test \`${tokenExperiment.id}\` with \`${tokenExperiment.nextCommand}\`; this report did not regenerate action artifacts.`
+    ...(tokenExperiment
+      ? [`- Review canonical token test \`${tokenExperiment.id}\` with \`${tokenExperiment.nextCommand}\`; this report did not regenerate action artifacts.`]
+      // Every command printed here must run from the directory this report was
+      // written in — including a broad root such as your home folder.
+      //
+      // Apply stays behind the transcript read on purpose: the ranked
+      // candidates above are financial evidence and are safe to READ, but
+      // Apply drafts a change, and its artifact is the one place that still
+      // needs the transcript-derived analyses. The report must never point at
+      // a next step that answers with a refusal.
       : !qualitativeComplete
-        ? `- Run \`${aibillCommandV0(`context --json --since-days ${windowDays}`)}\` after the bounded qualitative index can read every eligible selected file; do not run Apply from this coverage gap.`
-        : `- Run \`${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with the same evidence window, candidate IDs, approval gate, rollback, and verification contract.`,
+        ? [`- Run \`${aibillCommandV0("index")}\` to finish reading the queued session transcripts, then re-run this report for Context Health, configuration evidence, and an Apply plan.`]
+        : machineWide
+          ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.`]
+          : [`- Run \`${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with the same evidence window, candidate IDs, approval gate, rollback, and verification contract.`]),
     ""
   ];
 
   return lines.join("\n");
+}
+
+/**
+ * One ranked candidate, in the written report's voice (0.9.6). The TITLE is
+ * reproduced verbatim from {@link rankCutCandidates} so the artifact and the
+ * `--full` readout name the same thing — that identity is what the parity
+ * test asserts.
+ */
+function localRankedCandidateMarkdownLines(candidate: RankedCutCandidate): string[] {
+  const id = `ACT-${String(candidate.rank).padStart(3, "0")}`;
+  const unit = candidate.recordUnit === "daily-aggregates"
+    ? `daily aggregate${candidate.recordCount === 1 ? "" : "s"}`
+    : candidate.recordUnit === "tools"
+      ? `tool${candidate.recordCount === 1 ? "" : "s"}`
+      : `call${candidate.recordCount === 1 ? "" : "s"}`;
+  const opportunity = candidate.observed
+    ? "reduction unproven"
+    : `modeled ~${formatUsd(candidate.estimatedMonthlySavingsUsd)}/mo`;
+  const value = candidate.observed
+    ? `${formatUsd(candidate.affectedSpendUsd)} API-equivalent value observed in window`
+    : `${formatUsd(candidate.affectedSpendUsd)} in window`;
+  return [
+    `- **${id}** ${safePromptMetadata(candidate.title, 180)} — ${opportunity}`,
+    `  - Evidence: ${candidate.recordCount} ${unit} · ${value} · ${candidate.confidence.replaceAll("_", " ")}.`,
+    ...(candidate.projectLabels.length > 0
+      ? [`  - Across ${candidate.members.length} projects: ${candidate.projectLabels.slice(0, 4).map((label, index) => (
+          `${safePromptMetadata(label, 80)} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
+        )).join(" · ")}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}.`]
+      : []),
+    `  - Read-only next step: ${safePromptMetadata(candidate.guidance, 420)}`
+  ];
 }
 
 type LocalBreakdownDimension = "project" | "model";
@@ -654,7 +845,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
   const impactLine = tokenExperiment
     ? `Suppressed while canonical token test \`${tokenExperiment.id}\` owns this action/result lineage`
     : !qualitativeComplete && !isSample
-    ? `Unavailable while qualitative indexing is ${qualitativeCoverage.status}`
+    ? `Not modeled yet — ${transcriptGapInstruction(input)}`
     : !financialAmountAvailable
     ? "Unavailable until priced financial evidence is present"
     : isUnlabeled
@@ -682,12 +873,12 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
         ]
       : !qualitativeComplete
         ? [
-            `- Decision needed: none. The qualitative index is ${qualitativeCoverage.status}; do not infer context health, dead configuration, or a change candidate.`,
+            "- Decision needed: none yet. Context health, dead configuration, and change candidates are not inferred from partly-read transcripts.",
             isConnected
               ? connectedReadoutLine(input, financialBasis)
               : `- Current readout: ${headlineAmount} of ${headlineLabel.toLowerCase()} across ${input.summary.recordCount} records with ${input.summary.confidence} confidence.`,
             `- Coverage: ${qualitativeCoverage.readCompletely}/${qualitativeCoverage.selectedFiles} selected files read completely; ${qualitativeCoverage.skippedForBudget} eligible files skipped by budget.`,
-            "- Safe next step: complete the bounded qualitative index; financial aggregates remain readable but cannot fill the missing transcript evidence."
+            `- Safe next step: ${transcriptGapInstruction(input)} Financial evidence remains readable in the meantime.`
           ]
     : isUnlabeled
       ? [
@@ -749,7 +940,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     ...(tokenExperiment
       ? [`- Opportunity math: suppressed; canonical token test \`${tokenExperiment.id}\` is reported only with its exact matched-session evidence.`]
       : !qualitativeComplete && !isSample
-        ? [`- Opportunity math: unavailable while qualitative indexing is ${qualitativeCoverage.status}; intentionally suppressed recommendations are not reported as zero.`]
+        ? [`- Opportunity math: not modeled yet; a deliberately withheld recommendation is never reported as zero. ${transcriptGapInstruction(input)}`]
         : isUnlabeled
           ? ["- Opportunity math: disabled until the evidence mode and accounting basis are verified."]
           : [`- Opportunity math: recommendations are deduplicated by the records they target, so the modeled total never exceeds the cost/value evidence it draws from; overlapping opportunities are listed separately and are not additive.${isSample ? " Sample math is a product demonstration—not your savings, invoice, margin, or ROI." : ""}`]),
@@ -764,9 +955,9 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
         ]
       : !qualitativeComplete && !isSample
         ? [
-            `- Diagnose: financial evidence remains readable, but qualitative indexing is ${qualitativeCoverage.status}.`,
-            "- Recommend / Apply: suppressed; incomplete transcript coverage cannot authorize a new action.",
-            "- Verify: complete the bounded qualitative index before forming an exact source-version cohort."
+            `- Diagnose: financial evidence remains readable; the session transcripts are still being read. ${transcriptGapInstruction(input)}`,
+            "- Recommend / Apply: not drafted yet; partly-read transcripts cannot authorize a new action.",
+            "- Verify: the matched before/after cohort is formed once those transcripts are read."
           ]
       : isUnlabeled
         ? unlabeledOperatingLoopMarkdownLines()
@@ -861,7 +1052,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
       ? [tokenExperiment
           ? `No competing recommendation was generated. Canonical token test \`${tokenExperiment.id}\` owns this report's action/result lineage.`
           : !qualitativeComplete && !isSample
-            ? `Recommendations suppressed because qualitative indexing is ${qualitativeCoverage.status}; financial aggregates cannot establish a safe change candidate.`
+            ? `No recommendation is drafted yet. ${transcriptGapInstruction(input)}`
             : isUnlabeled
               ? "Recommendations disabled: refresh this legacy state to establish a verified evidence mode."
               : "No recommendations generated from the current evidence."]
@@ -879,7 +1070,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     ...(tokenExperiment
       ? [`Continue only canonical token test \`${tokenExperiment.id}\` with \`${tokenExperiment.nextCommand}\`; no competing action is approved or generated.`]
       : !qualitativeComplete && !isSample
-        ? [`No action is approved while qualitative indexing is ${qualitativeCoverage.status}. Complete the bounded index before drafting a candidate, approval, rollback, or verification plan.`]
+        ? [`No action is approved yet. ${transcriptGapInstruction(input)}`]
       : isSample
       ? ["No action is approved from bundled sample data. Collect real evidence, inspect one candidate, request approval, and verify one reversible change with matched future records."]
       : isUnlabeled
@@ -948,18 +1139,22 @@ function generateActionArtifactSuppression(
   if (coverage.status === "complete") return undefined;
   const windowDays = input.evidenceWindowDays ?? 30;
   return [
-    `# ${title} — Qualitative Coverage Required`,
+    `# ${title} — Transcripts Still Being Read`,
     "",
-    `> **NON-EXECUTABLE.** Qualitative indexing is ${coverage.status}. Context Health, configuration/dead-context conclusions, new action candidates, approval, rollback, and matched verification are suppressed.`,
+    // This file is shared (demo-package.md is made for sharing), so it speaks
+    // in the same user-facing voice as every other surface: what was read,
+    // what that blocks, what to run. No internal state vocabulary.
+    "> **NO CHANGE IS DRAFTED IN THIS FILE.** Drafting a change needs the session transcripts, and they are still being read. " +
+      "The ranked action candidates in the main report come from local financial records and are unaffected — this artifact is the part that waits.",
     "",
-    "## Coverage gap",
+    "## What has been read",
     "",
-    `- ${coverage.readCompletely}/${coverage.selectedFiles} selected files were read completely; ${coverage.skippedForBudget} eligible files were skipped by budget.`,
-    "- Financial aggregates remain readable, but they cannot fill missing transcript evidence or establish that any item is unused, dead, removable, or safe to change.",
+    `- ${coverage.readCompletely} of ${coverage.selectedFiles} session transcripts read completely${coverage.skippedForBudget > 0 ? `; ${fileCountPhrase(coverage.skippedForBudget)} skipped by budget` : ""}.`,
+    "- Financial records remain readable, but they cannot establish that any configured item is unused, dead, removable, or safe to change.",
     "",
     "## Safe next step",
     "",
-    `- Complete the bounded qualitative index, then inspect it with \`${aibillCommandV0(`context --json --since-days ${windowDays}`)}\`. No intervention is authorized by this artifact.`,
+    `- ${transcriptGapInstruction(input, windowDays)} Then inspect the result with \`${aibillCommandV0(`context --json --since-days ${windowDays}`)}\`. No intervention is authorized by this artifact.`,
     ""
   ].join("\n");
 }
@@ -2170,7 +2365,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       </aside>
       ${isSample ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative mixed cost/value evidence—not your logs, account, bill, margin, savings, or ROI. No local logs or provider account data were used.</span></aside>` : ""}
       ${isUnlabeled ? `<aside class="privacy-banner" aria-label="Unlabeled legacy state notice" style="border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08);"><strong>UNLABELED LEGACY STATE</strong><span>Inspect only. The evidence mode and accounting basis are unverified; recommendations and actions are disabled until a fresh read or explicit provider sync creates labeled state.</span></aside>` : ""}
-      ${qualitativeNotice && !isSample ? `<aside class="privacy-banner" aria-label="Qualitative coverage notice"><strong>${escapeHtml(qualitativeNotice)}</strong></aside>` : ""}
+      ${qualitativeNotice && !isSample ? `<aside class="privacy-banner" aria-label="Session transcript coverage notice"><strong>${formatProse(qualitativeNotice)}</strong></aside>` : ""}
       ${tokenExperiment ? tokenExperimentHtmlNotice(tokenExperiment) : ""}
     </section>
 
@@ -2179,7 +2374,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       ${tokenExperiment
         ? metricCard("New optimization action", "Suppressed", `Canonical token test ${tokenExperiment.id} owns this action/result lineage`)
         : !qualitativeComplete && !isSample
-          ? metricCard("New optimization action", "Unavailable", `Qualitative indexing is ${qualitativeCoverage.status}; transcript evidence is incomplete`)
+          ? metricCard("New optimization action", "Unavailable", `${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} session transcripts read so far`)
         : isUnlabeled || !financialAmountAvailable
           ? metricCard("Optimization impact", "Unavailable", isUnlabeled ? "Refresh the evidence mode before modeling an action" : "Priced financial evidence is required before modeling an action")
           : metricCard(isSample ? "Illustrative modeled opportunity" : "Optimization impact", formatUsd(recommendedImpactUsd), `${isSample ? "demo hypothesis—not verified savings" : "recommended plan"}, deduplicated (${recommendedPlan.recommended.length} of ${recommendations.length})`, "estimated")}
@@ -2207,10 +2402,10 @@ export function generateHtmlReport(input: SpendReportInput): string {
             ]
           : !qualitativeComplete && !isSample
             ? [
-                `<article class="loop-card"><span class="loop-step">01 · Diagnose</span><h3>Financial evidence remains readable</h3><p>Qualitative indexing is ${escapeHtml(qualitativeCoverage.status)}; transcript-level conclusions are suppressed.</p></article>`,
-                `<article class="loop-card"><span class="loop-step">02 · Recommend</span><h3>No new candidate</h3><p>Financial aggregates cannot fill the qualitative evidence gap.</p></article>`,
-                `<article class="loop-card"><span class="loop-step">03 · Apply</span><h3>Suppressed</h3><p>No intervention is authorized from partial or unknown qualitative coverage.</p></article>`,
-                `<article class="loop-card"><span class="loop-step">04 · Verify</span><h3>Complete the bounded index</h3><p>Form an exact source-version cohort only after every selected eligible file was read completely.</p></article>`
+                `<article class="loop-card"><span class="loop-step">01 · Diagnose</span><h3>Financial evidence remains readable</h3><p>${formatProse(`${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} session transcripts have been read, so transcript-level conclusions are not drafted.`)}</p></article>`,
+                `<article class="loop-card"><span class="loop-step">02 · Recommend</span><h3>No new candidate</h3><p>Financial records alone cannot establish that a configured item is unused, dead, or safe to change.</p></article>`,
+                `<article class="loop-card"><span class="loop-step">03 · Apply</span><h3>Not drafted</h3><p>No change is drafted until the session transcripts have been read.</p></article>`,
+                `<article class="loop-card"><span class="loop-step">04 · Verify</span><h3>Finish reading the transcripts</h3><p>${formatProse(transcriptGapInstruction(input))}</p></article>`
               ]
           : isUnlabeled
             ? unlabeledOperatingLoopCards()
@@ -2221,12 +2416,12 @@ export function generateHtmlReport(input: SpendReportInput): string {
     <section class="artifact-grid">
       <article class="artifact-card artifact-card--wide">
         <div class="section-label">Executive accountability brief</div>
-        <h2>${tokenExperiment ? `Review canonical token test ${escapeHtml(tokenExperiment.id)}` : !qualitativeComplete && !isSample ? "Complete qualitative coverage before any action" : isUnlabeled ? "Refresh required before any decision" : "Decision needed before adding more sources"}</h2>
+        <h2>${tokenExperiment ? `Review canonical token test ${escapeHtml(tokenExperiment.id)}` : !qualitativeComplete && !isSample ? "Finish reading the session transcripts before any action" : isUnlabeled ? "Refresh required before any decision" : "Decision needed before adding more sources"}</h2>
         <ul class="brief-list">
           <li><span>Current readout</span><strong>${financialBasis === "connected_missing" ? `Unavailable across ${input.summary.recordCount} records · missing/null is not zero` : `${totalMetricValue} of ${escapeHtml(totalMetricLabel.toLowerCase())} across ${input.summary.recordCount} ${isSample ? "illustrative" : "evidence"} records`}</strong></li>
           <li><span>${isSample ? "Largest evidence concentration" : "Biggest cost driver"}</span><strong>${escapeHtml(topDriverLine(input.summary.byModel, reportRecords, "model"))}</strong></li>
           <li><span>Attribution risk</span><strong>${mappingQuestions.length} mapping question${mappingQuestions.length === 1 ? "" : "s"}</strong></li>
-          <li><span>${isSample ? "Illustrative modeled opportunity" : "Modeled opportunity"}</span><strong>${tokenExperiment ? `Suppressed · canonical token test ${escapeHtml(tokenExperiment.id)} · ${escapeHtml(measuredTokenChangeLabel(tokenExperiment))}` : !qualitativeComplete && !isSample ? `Suppressed · qualitative index ${escapeHtml(qualitativeCoverage.status)}` : isUnlabeled ? "Disabled until evidence mode is verified" : !financialAmountAvailable ? "Unavailable until priced financial evidence is present" : `${formatUsd(recommendedImpactUsd)} deduplicated ${isSample ? "demo impact—not verified savings" : "impact to test"}`}</strong></li>
+          <li><span>${isSample ? "Illustrative modeled opportunity" : "Modeled opportunity"}</span><strong>${tokenExperiment ? `Suppressed · canonical token test ${escapeHtml(tokenExperiment.id)} · ${escapeHtml(measuredTokenChangeLabel(tokenExperiment))}` : !qualitativeComplete && !isSample ? `Not drafted · ${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} transcripts read` : isUnlabeled ? "Disabled until evidence mode is verified" : !financialAmountAvailable ? "Unavailable until priced financial evidence is present" : `${formatUsd(recommendedImpactUsd)} deduplicated ${isSample ? "demo impact—not verified savings" : "impact to test"}`}</strong></li>
         </ul>
       </article>
 
@@ -2358,10 +2553,10 @@ export function generateHtmlReport(input: SpendReportInput): string {
           <div class="section-label">Priority recommendations</div>
           <h2>What to do next</h2>
         </div>
-        <span class="impact-pill impact-pill--attention">${tokenExperiment ? `Suppressed · canonical test ${escapeHtml(tokenExperiment.id)}` : !qualitativeComplete && !isSample ? `Suppressed · qualitative index ${escapeHtml(qualitativeCoverage.status)}` : isUnlabeled ? "Disabled · mode required" : !financialAmountAvailable ? "Unavailable · priced evidence required" : `${formatUsd(recommendedImpactUsd)} ${isSample ? "illustrative modeled impact" : "recommended-plan impact"}`}</span>
+        <span class="impact-pill impact-pill--attention">${tokenExperiment ? `Suppressed · canonical test ${escapeHtml(tokenExperiment.id)}` : !qualitativeComplete && !isSample ? `Not drafted · ${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} transcripts read` : isUnlabeled ? "Disabled · mode required" : !financialAmountAvailable ? "Unavailable · priced evidence required" : `${formatUsd(recommendedImpactUsd)} ${isSample ? "illustrative modeled impact" : "recommended-plan impact"}`}</span>
       </div>
       <div class="recommendation-grid">
-        ${recommendations.length === 0 ? emptyState(tokenExperiment ? `No competing recommendation was generated. Review canonical token test ${tokenExperiment.id} with ${tokenExperiment.nextCommand}.` : !qualitativeComplete && !isSample ? `Recommendations suppressed because qualitative indexing is ${qualitativeCoverage.status}.` : isUnlabeled ? "Recommendations disabled: refresh this legacy state to establish a verified evidence mode." : "No recommendations generated from the current evidence.") : recommendations.map((recommendation) => recommendationCard(recommendation, isSample)).join("\n")}
+        ${recommendations.length === 0 ? emptyState(tokenExperiment ? `No competing recommendation was generated. Review canonical token test ${tokenExperiment.id} with ${tokenExperiment.nextCommand}.` : !qualitativeComplete && !isSample ? `No recommendation is drafted yet. ${transcriptGapInstruction(input)}` : isUnlabeled ? "Recommendations disabled: refresh this legacy state to establish a verified evidence mode." : "No recommendations generated from the current evidence.") : recommendations.map((recommendation) => recommendationCard(recommendation, isSample)).join("\n")}
       </div>
     </section>
 
@@ -2373,12 +2568,12 @@ export function generateHtmlReport(input: SpendReportInput): string {
           ${(tokenExperiment
             ? [`Review canonical token test ${tokenExperiment.id} with ${tokenExperiment.nextCommand}; ${tokenExperimentEvidenceSummary(tokenExperiment)}; do not start or draft a second intervention.`]
             : !qualitativeComplete && !isSample
-              ? [`No action is approved while qualitative indexing is ${qualitativeCoverage.status}. Complete the bounded index before drafting a candidate, approval, rollback, or verification plan.`]
+              ? [`No action is approved yet. ${transcriptGapInstruction(input)}`]
             : isSample
             ? ["No action is approved from bundled sample data. Collect real evidence before assigning an owner or requesting a change."]
             : isUnlabeled
               ? ["No action is approved from unlabeled legacy state. Refresh the evidence mode before generating or assigning any action."]
-            : executiveActionPlanLines(recommendations, mappingQuestions.length)).map((line) => `<li>${escapeHtml(stripOrderedPrefix(line))}</li>`).join("\n")}
+            : executiveActionPlanLines(recommendations, mappingQuestions.length)).map((line) => `<li>${formatProse(stripOrderedPrefix(line))}</li>`).join("\n")}
         </ol>
       </article>
       <article class="artifact-card">
@@ -3174,9 +3369,31 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
   const sectionHead = (name: string, blurb: string): string =>
     `<div class="sec"><span class="rule"></span><span class="name">${name}</span><span class="rule"></span><span class="blurb">${blurb}</span></div>`;
 
+  // 0.9.6: ranked candidates handed in by the caller (machine-wide report)
+  // are the SAME array the --full readout renders, in the same order. Project
+  // mode supplies none and keeps its canonical-candidate rendering unchanged.
+  // Not gated on transcript coverage — see generateMarkdownReport. These come
+  // from local financial records, so this surface and `--full` render the same
+  // set or the two surfaces contradict each other in front of the user.
+  const rankedCandidates = tokenExperiment
+    ? []
+    : rankCutCandidates(input.actionCandidates ?? []).candidates;
+  const machineWide = input.analysisScope === "machine-wide";
   const cutRows = canonicalFinding
     ? `<div class="cut"><div><strong>${escapeHtml(canonicalFinding.findingType.replaceAll("_", " "))}</strong><p>${escapeHtml(wasteActionInstruction(canonicalFinding))}</p></div><div class="cut-v"><strong class="estimated-value">one test</strong><span>${canonicalFinding.metric.sampleCount} matched evidence row${canonicalFinding.metric.sampleCount === 1 ? "" : "s"} · ${escapeHtml(canonicalFinding.metric.evidence)}</span></div></div>`
-    : "";
+    : rankedCandidates.map((candidate) => {
+        const unit = candidate.recordUnit === "daily-aggregates"
+          ? `daily aggregate${candidate.recordCount === 1 ? "" : "s"}`
+          : candidate.recordUnit === "tools"
+            ? `tool${candidate.recordCount === 1 ? "" : "s"}`
+            : `call${candidate.recordCount === 1 ? "" : "s"}`;
+        const across = candidate.projectLabels.length > 0
+          ? `<p class="dim">across ${candidate.members.length} projects — ${escapeHtml(candidate.projectLabels.slice(0, 4).map((label, index) => (
+              `${label} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
+            )).join(" · "))}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}</p>`
+          : "";
+        return `<div class="cut"><div><strong>${candidate.rank}. ${escapeHtml(candidate.title)}</strong>${across}<p>${escapeHtml(candidate.guidance)}</p></div><div class="cut-v"><strong class="estimated-value">${escapeHtml(candidate.observed ? "reduction unproven" : `~${formatUsd(candidate.estimatedMonthlySavingsUsd)}/mo modeled`)}</strong><span>${candidate.recordCount} ${unit} · ${escapeHtml(formatUsd(candidate.affectedSpendUsd))} observed in window · ${escapeHtml(candidate.confidence.replaceAll("_", " "))}</span></div></div>`;
+      }).join("");
 
   const deadChips = dead
     ? dead.deadItems.slice(0, 8).map((item) => `<span class="chip">${escapeHtml(item.kind.replace("_", " "))} · ${escapeHtml(item.name)}</span>`).join("")
@@ -3200,8 +3417,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     <div class="term">
       <div class="term-bar"><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
-        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
-        ${qualitativeNotice ? `<p class="dim note-line"><strong>${escapeHtml(qualitativeNotice)}</strong></p>` : ""}
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · ${escapeHtml(sessionDatingNote)} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
+        ${qualitativeNotice ? `<p class="dim note-line"><strong>${formatProse(qualitativeNotice)}</strong></p>` : ""}
         ${tokenExperiment ? `<p class="dim note-line"><strong>CANONICAL TOKEN TEST ${escapeHtml(tokenExperiment.lifecycle.toUpperCase())} · ${escapeHtml(tokenExperiment.id)}</strong> · ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))} · matched-session token evidence only, not provider-billed savings, accepted-outcome proof, or ROI · continue with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span></p>` : ""}
 
         <div class="hero">
@@ -3218,10 +3435,12 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
             ? statCard("Action candidate", "1", "canonical · read-only until approved", "estimated-card")
             : tokenExperiment
               ? statCard("Action candidate", "Suppressed", `canonical token test ${tokenExperiment.id} owns this lineage`, "estimated-card")
+              : rankedCandidates.length > 0
+                ? statCard("Action candidates", String(rankedCandidates.length), "ranked · read-only until approved", "estimated-card")
               : !qualitativeComplete
-                ? statCard("Action candidate", "Unavailable", `qualitative index ${qualitativeCoverage.status}`, "estimated-card")
-                : statCard("Action candidate", "Unavailable", "no canonical project candidate from complete indexed evidence", "estimated-card")}
-          ${dead ? statCard("Config candidates", `${dead.deadCount} of ${dead.loadedCount}`, `no matching invocation in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : tokenExperiment ? statCard("Config candidates", "Suppressed", `canonical token test ${tokenExperiment.id}`) : !qualitativeComplete ? statCard("Config candidates", "Unavailable", `qualitative index ${qualitativeCoverage.status} · no dead/unused conclusion`) : statCard("Config candidates", "none", "no supported candidate evidence")}
+                ? statCard("Action candidate", "Not yet", `${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} transcripts read · run npx aibill index`, "estimated-card")
+                : statCard("Action candidate", "Unavailable", machineWide ? "no candidate from complete indexed evidence on this machine" : "no canonical project candidate from complete indexed evidence", "estimated-card")}
+          ${dead ? statCard("Config candidates", `${dead.deadCount} of ${dead.loadedCount}`, `no matching invocation in ${dead.windowDays} days`, dead.deadCount > 0 ? "warn-card" : "") : tokenExperiment ? statCard("Config candidates", "Suppressed", `canonical token test ${tokenExperiment.id}`) : !qualitativeComplete ? statCard("Config candidates", "Not yet", `${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} transcripts read · run npx aibill index`) : statCard("Config candidates", "none", "no supported candidate evidence")}
         </div>
 
         ${sectionHead("WHY", "where it goes")}
@@ -3234,22 +3453,25 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
         ${sectionHead("ACT", "ranked evidence to inspect, approve, and verify")}
         ${tokenExperiment
           ? `<p class="dim">Suppressed while canonical token test <strong>${escapeHtml(tokenExperiment.id)}</strong> owns the action/result lineage. ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))}. Do not draft or start a second intervention.</p>`
-          : !qualitativeComplete
-            ? `<p class="dim">No action candidate is emitted because qualitative indexing is ${escapeHtml(qualitativeCoverage.status)}; financial aggregates cannot fill the missing transcript evidence.</p>`
-            : cutRows || `<p class="dim">No supported scoped action in this window. Keep observing; aggregate evidence alone does not authorize a configuration change.</p>`}
-        <p class="dim note-line">${escapeHtml(tokenExperiment ? "No new plan, limit, configuration, or action advice is generated while the canonical token test owns this lineage." : !qualitativeComplete ? `Plan, limit, context, configuration, and action advice is suppressed because qualitative indexing is ${qualitativeCoverage.status}.` : actionCaveat)}</p>
+          : cutRows || `<p class="dim">${formatProse(qualitativeComplete
+              ? "No supported scoped action in this window. Keep observing; aggregate evidence alone does not authorize a configuration change."
+              : `No candidate is ranked from the financial records in this window. ${transcriptGapShortPointer(input)}`)}</p>`}
+        ${!tokenExperiment && !qualitativeComplete && cutRows
+          ? `<p class="dim note-line">${formatProse(`These candidates come from local financial records and are complete. ${transcriptGapShortPointer(input)}`)}</p>`
+          : ""}
+        <p class="dim note-line">${formatProse(tokenExperiment ? "No new plan, limit, configuration, or action advice is generated while the canonical token test owns this lineage." : !qualitativeComplete ? `Plan, limit, context, and configuration advice waits on the same transcripts. ${transcriptGapShortPointer(input)}` : actionCaveat)}</p>
 
         ${sectionHead("VERIFY", "prove it, then trust it")}
         ${planRows}
         <p class="dim note-line">${tokenExperiment
           ? `Review only canonical token test <strong>${escapeHtml(tokenExperiment.id)}</strong> with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span>. ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))}. This report did not replace its frozen cohort, intervention, or evidence boundary.`
-          : !qualitativeComplete
-            ? `Matched verification is not drafted from ${escapeHtml(qualitativeCoverage.status)} qualitative coverage. Complete the bounded transcript index, then form one exact source-version cohort.`
-            : `Plan label detected from local metadata or supplied by the user; list prices only. This does not prove entitlement, remaining capacity, or the cheapest plan. Apply one approved change, then re-run <span class="g-accent">npx aibill</span> and compare matched quality plus ${escapeHtml(verificationEvidence)}.`}</p>
+          : rankedCandidates.length === 0 && !qualitativeComplete
+            ? `The matched before/after cohort is not formed yet. ${formatProse(transcriptGapShortPointer(input))}`
+            : `${rankedCandidates.length > 0 ? `Cohort for <strong>${escapeHtml(rankedCandidates[0]!.title)}</strong>: the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with <strong>${escapeHtml(rankedCandidates[0]!.projectLabels[0]!)}</strong> — its largest observed share of this window` : ""}. ` : ""}Plan label detected from local metadata or supplied by the user; list prices only. This does not prove entitlement, remaining capacity, or the cheapest plan. Apply one approved change, then re-run <span class="g-accent">npx aibill</span> and compare matched quality plus ${escapeHtml(verificationEvidence)}.${machineWide ? ` ${formatProse(machineWideProjectScopeNote("verification"))}` : ""}`}</p>
 
         <div class="footer">
           <span><span class="g-accent">$</span> npx aibill <span class="dim">· reproduce this</span></span>
-          <span><span class="g-accent">$</span> ${escapeHtml(tokenExperiment ? tokenExperiment.nextCommand : !qualitativeComplete ? aibillCommandV0(`context --json --since-days ${windowDays}`) : aibillCommandV0(`apply --since-days ${windowDays}`))} <span class="dim">· ${tokenExperiment ? "review canonical token test" : !qualitativeComplete ? "complete bounded qualitative evidence" : "inspection plan, approval + rollback"}</span></span>
+          <span><span class="g-accent">$</span> ${escapeHtml(tokenExperiment ? tokenExperiment.nextCommand : !qualitativeComplete ? aibillCommandV0("index") : machineWide ? `cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}` : aibillCommandV0(`apply --since-days ${windowDays}`))} <span class="dim">· ${tokenExperiment ? "review canonical token test" : !qualitativeComplete ? "finish reading the queued transcripts" : machineWide ? "run from a project folder for its approval + rollback plan" : "inspection plan, approval + rollback"}</span></span>
           <span class="dim">free · MIT · deterministic arithmetic over local transcripts · made with aibill · asktilden.com</span>
         </div>
       </div>
@@ -3287,7 +3509,16 @@ function terminalReportCss(): string {
     .term-bar { display: flex; align-items: center; padding: 10px 14px; background: #0A0B07; border-bottom: 1px solid rgba(255,255,255,0.08); }
     .term-title { font-size: 12px; color: rgba(255,255,255,0.62); }
     .term-body { padding: 26px 28px 22px; }
-    .dim { color: rgba(255,255,255,0.42); }
+    /* Faint tier: 0.47 alpha over the #0C0D09 ground computes to ~4.8:1, over
+       the #12140E panel to ~4.77:1 — both clear WCAG AA 4.5:1. It was 0.42
+       (~4.07:1), which failed, and this is the tier that carries the
+       "treat API-equivalent value as estimated" honesty line: the most
+       important sentence on the page was in the least legible type, and video
+       compression eats this tier first. Still well below the 0.62 muted tier,
+       so the three-step hierarchy is unchanged. */
+    .dim { color: rgba(255,255,255,0.47); }
+    /* Inline commands converted out of markdown-voiced prose by formatProse. */
+    code { font-family: inherit; color: #4CC98A; }
     .warn { color: #C9A24B; }
     .g-accent { color: #4CC98A; }
     .estimated-value { color: #C9A24B; }
@@ -3298,26 +3529,26 @@ function terminalReportCss(): string {
     .sec { display: flex; align-items: center; gap: 10px; margin: 26px 0 14px; font-size: 12px; }
     .sec .rule { height: 1px; width: 26px; background: rgba(255,255,255,0.08); }
     .sec .name { color: rgba(255,255,255,0.62); font-weight: 700; letter-spacing: 2px; }
-    .sec .blurb { color: rgba(255,255,255,0.42); }
+    .sec .blurb { color: rgba(255,255,255,0.47); }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
     .stat { border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; padding: 14px; background: #0A0B07; display: flex; flex-direction: column; gap: 5px; }
     .stat.estimated-card { border-color: rgba(201,162,75,0.4); }
     .stat.warn-card { border-color: rgba(201,162,75,0.4); }
-    .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.42); }
+    .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.47); }
     .stat strong { font-size: 24px; color: #EDEDED; font-variant-numeric: tabular-nums; }
     .stat.estimated-card strong { color: #C9A24B; }
     .stat.warn-card strong { color: #C9A24B; }
     .stat .note { font-size: 11px; color: rgba(255,255,255,0.62); }
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
     @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } .hero-big { font-size: 46px; } }
-    .col h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.42); margin-bottom: 9px; }
+    .col h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.47); margin-bottom: 9px; }
     .row { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 12px; }
     .row .k { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,0.62); }
     .row .bar { flex: 1; height: 9px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
     .row .bar i { display: block; height: 100%; background: rgba(255,255,255,0.75); }
     .row .v { flex: 0 0 96px; text-align: right; color: #EDEDED; font-variant-numeric: tabular-nums; }
     .row .v.estimated-value { color: #C9A24B; }
-    .row .v em { font-style: normal; color: rgba(255,255,255,0.42); margin-left: 5px; }
+    .row .v em { font-style: normal; color: rgba(255,255,255,0.47); margin-left: 5px; }
     .deadbox { margin-top: 14px; border: 1px dashed rgba(201,162,75,0.35); border-radius: 2px; padding: 11px 13px; font-size: 12px; }
     .deadbox .label { color: #C9A24B; margin-right: 6px; }
     .chip { display: inline-block; border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; padding: 2px 9px; margin: 3px 3px 0 0; font-size: 11px; color: rgba(255,255,255,0.62); }
@@ -3326,7 +3557,7 @@ function terminalReportCss(): string {
     .cut p { font-size: 11.5px; color: rgba(255,255,255,0.62); margin-top: 5px; line-height: 1.5; max-width: 60ch; }
     .cut-v { text-align: right; flex-shrink: 0; }
     .cut-v strong.estimated-value { color: #C9A24B; font-size: 15px; font-variant-numeric: tabular-nums; }
-    .cut-v span { display: block; font-size: 10.5px; color: rgba(255,255,255,0.42); margin-top: 4px; }
+    .cut-v span { display: block; font-size: 10.5px; color: rgba(255,255,255,0.47); margin-top: 4px; }
     .plan-row { border-left: 2px solid rgba(255,255,255,0.14); padding: 2px 0 2px 12px; margin-bottom: 11px; font-size: 12px; }
     .plan-row strong { color: #EDEDED; }
     .plan-row p { color: rgba(255,255,255,0.62); margin-top: 4px; line-height: 1.55; }
@@ -3338,6 +3569,8 @@ function terminalReportCss(): string {
 
 function premiumReportCss(): string {
   return `
+    /* Inline commands converted out of markdown-voiced prose by formatProse. */
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.94em; }
     :root {
       color-scheme: dark;
       --bg: #08090a;
@@ -3561,7 +3794,9 @@ function confidenceBreakdownHtml(summary: SpendSummary, records: readonly UsageR
 }
 
 function emptyState(message: string): string {
-  return `<div class="empty-state">${escapeHtml(message)}</div>`;
+  // Markdown-voiced: several callers pass the same strings the .md artifact
+  // prints, so inline marks are converted rather than shown raw.
+  return `<div class="empty-state">${formatProse(message)}</div>`;
 }
 
 function stripOrderedPrefix(line: string): string {
@@ -3629,4 +3864,29 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/**
+ * Markdown-voiced prose → HTML (0.9.6, founder-visible on the DEFAULT path).
+ *
+ * Several strings in this file are printed verbatim into the .md artifact AND
+ * interpolated into the .html one, so they carry markdown inline marks. Passed
+ * through `escapeHtml` alone they left literal grave accents on screen in the
+ * report that auto-opens in the browser — "Run `npx aibill apply` from one
+ * project folder".
+ *
+ * We CONVERT rather than strip. A backtick in this file always wraps a command
+ * the reader is meant to type; stripping it would erase that signal, while
+ * `<code>` preserves it and matches how every other command already renders
+ * here. Escaping runs FIRST, so only marks in already-inert text are
+ * converted and no caller can inject markup through this path.
+ *
+ * The trailing strip is the belt-and-braces invariant the tests assert: an
+ * unbalanced mark can never put a raw grave accent in front of a user.
+ */
+function formatProse(text: string): string {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`/g, "");
 }

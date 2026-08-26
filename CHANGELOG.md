@@ -5,6 +5,130 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.6 — 2026-08-26
+
+Two things ship together: your Codex spend is now counted on a corrected
+basis, and the report you read it in stopped contradicting itself.
+
+### Your Codex total changed, and you deserve the whole story
+
+If you run Codex, the number this release shows you is different from the
+one 0.9.5 showed — and the honest account of why has two parts, because we
+got it wrong twice before getting it right.
+
+- **0.9.5 undercounted you.** Codex writes one running total per session,
+  and a long session's cached prompt made that total look larger than any
+  single request the model actually priced. Rather than guess, aibill
+  refused to price those sessions at all — it voided them. That is the
+  safe failure, but it is still a wrong answer: real spend was quietly
+  missing from your total, and the sessions most likely to be voided were
+  the expensive ones. Sessions are now tiered from the largest single
+  request they contain, which is evidence the transcript already carries,
+  so cache-heavy sessions get priced instead of dropped.
+- **Our first fix then overcounted forked sessions.** When you fork a Codex
+  session, the child transcript replays the parent's entire history before
+  its own work begins. Priced naively, that replay is billed twice — and
+  three times down a fork chain. On our own corpus one forked session
+  carried 1.26B cumulative input tokens of which 95.9% was replayed parent
+  history; it was priced at $669.26 when its true cost was $29.05. The
+  arithmetic was right and the basis was wrong, which is the more dangerous
+  of the two failures, because an overstatement reads as confidence.
+- **What ships is the corrected basis.** Forked sessions are now charged
+  only for work that happens after the replayed history ends. On the
+  corpus we test against, 5 of 352 sessions were forks; the 30-day Codex
+  total settles at $2,299.79, down from the $4,187.54 the intermediate fix
+  would have reported and up from the voided-session undercount before it.
+  If your total moved between 0.9.5 and 0.9.6, this is why.
+
+Caches and checkpoints written by earlier versions are discarded rather
+than reused, so no fork-inflated amount survives the upgrade. Sessions on a
+model we have no published rate for — `codex-auto-review`, for one — still
+report as honestly missing rather than as zero, and the report says so.
+
+### The statusline and the receipt now agree
+
+The statusline, Glance snapshot, and macOS Glance priced sessions through a
+different code path than the receipt did, and that path had not been
+updated — so it kept voiding sessions the receipt had priced. Every surface
+now prices from the same evidence, verified across 348 real sessions with
+zero disagreements. If your statusline and your receipt ever showed you
+different money for the same work, they no longer can.
+
+### Corrected OpenAI rates
+
+- OpenAI pricing correction. `gpt-5.6-sol` carried GPT-5.5's rates
+  ($5.00/$0.50/$30.00) instead of its own published $4.00/$0.40/$20.00, so
+  every Codex record on the default OpenAI model was overstated by 25% on
+  input and 50% on output; the long-context leg moved $10/$45 → $8/$30.
+  `gpt-5.6-terra` and `gpt-5.6-luna` were already correct and are unchanged.
+  Added `gpt-5-nano` ($0.05/$0.005/$0.40), which had been falling through to
+  the `^gpt-5` fallback at 25x its real rate, and the published >272K
+  long-context tiers for `gpt-5.5` and `gpt-5.4`. Rates verified twice
+  against developers.openai.com/api/docs/pricing and each model's own doc
+  page (2026-08-25).
+- Rule ordering hardened, same doctrine as 0.9.4's Kimi fix: the GPT-5.6/5.5/
+  5.4 rules are end-anchored and the `^gpt-5` fallback no longer crosses a
+  dot-minor boundary, so an unverified or future sibling (`gpt-5.7-sol`,
+  `gpt-5.6-cyber`, `gpt-5.6-<newvariant>`) reports honest "missing" instead
+  of silently inheriting a neighbour's price.
+
+### The report and the screen tell the same story
+
+- `npx aibill report` run from your home folder wrote an artifact whose ACT
+  and VERIFY sections were empty while `npx aibill --full`, run from the
+  same folder in the same minute, showed real ranked recommendations. Two
+  builders had drifted apart; there is now one. Both surfaces read the same
+  records and rank the same candidates in the same order, and both disclose
+  what could not be read. The "transcript coverage" gate now applies only
+  to the sections that genuinely come from transcripts (Context Health and
+  dead-context) instead of suppressing recommendations that never needed it.
+- Degradation messages no longer describe our internals to you. Lines like
+  "no action candidate is emitted because qualitative indexing is unknown"
+  told you nothing you could act on; every gap now names the next step and
+  the command that closes it. Swept across every artifact, including the
+  shareable demo package.
+
+### Every printed command runs where it was printed
+
+- We harvested all 30 commands the CLI prints as next steps across 26
+  surfaces and ran each one from the directory that printed it. Four
+  failed: `npx aibill init` from the sample screen, `npx aibill apply` from
+  the HTML report footer, `npx aibill improve` from `index`, and
+  `npx aibill statusline refresh` from `statusline expand` — which also
+  reported its own deliberate safety check as if it were a crash. All four
+  now carry the `cd` they need or speak in the guard's voice. This is
+  pinned as a class: the test re-harvests and re-runs every printed command
+  on each build, so a new surface with a bad pointer fails immediately.
+- Padding in next-step lists was being collapsed by the text sanitizer, so
+  `npx aibill report        write a shareable report` reached you with the
+  boundary between command and description gone. Next steps are structured
+  now and the gap is rebuilt after sanitization.
+- Windows: commands were quoted with POSIX single quotes, which `cmd` passes
+  through literally, so the printed command named a file that did not
+  exist. Quoting is per-platform now, and `start` no longer swallows the
+  file path as a window title.
+
+### Smaller fixes
+
+- `npx aibill report-card` now opens your receipt instead of leaving you to
+  find the file. It opens a small companion HTML alongside the SVG, because
+  platform openers frequently route `.svg` to a text editor — the `.svg`
+  remains the canonical shareable file and the companion adds no data of
+  its own. Same suppression rules as `report` (`--no-open`,
+  `AI_SPEND_NO_OPEN=1`, non-TTY, CI, SSH).
+- The shareable caption no longer copies its own UI label to your clipboard.
+- The no-evidence screen offers `--sample` first, so a first run with
+  nothing to read has somewhere to go.
+- Contrast fix: the faint text tier failed AA at 4.07:1 while carrying the
+  honesty line about estimates. It passes now.
+- `report-card --out` no longer silently overwrites a second file.
+- Backticks in report prose render as code instead of printing literally.
+- Four internal guards that could not fail — a canary greping an empty
+  directory, a coverage test whose fixtures were all complete, a
+  case-sensitive assertion against differently-cased output, and a parity
+  test asserting order over a single-element list — were rebuilt and each
+  verified to fail against the bug it is meant to catch.
+
 ## 0.9.5 — 2026-08-25
 
 Terminal polish from direct founder feedback ("really hard to read… I wonder
