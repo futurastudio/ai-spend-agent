@@ -4,6 +4,7 @@ import {
   type InventoryHost,
   type InventoryItem
 } from "./agentInventory.js";
+import { safeUntrustedLabel, WITHHELD_ENTITY_LABEL } from "./untrustedLabel.js";
 import { findPricingRule } from "./modelPricing.js";
 import {
   loadToolInvocations,
@@ -174,7 +175,9 @@ export function computeDeadContext(
     }
     dead.push({
       kind: item.kind,
-      name: item.name,
+      // Skill, subagent, slash-command, hook and MCP SERVER names, read off
+      // disk. They are printed by name on the readout and in the artifact.
+      name: safeUntrustedLabel(item.name, WITHHELD_ENTITY_LABEL),
       scope: item.scope,
       activation: item.activation,
       host: item.host,

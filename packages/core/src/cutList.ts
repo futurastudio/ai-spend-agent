@@ -6,6 +6,13 @@ import {
   type UsageRecord
 } from "./schema.js";
 import { localAgentFormatSupports } from "./localAgentFormats/registry.js";
+import {
+  safeUntrustedLabel,
+  WITHHELD_AGENT_LABEL,
+  WITHHELD_MODEL_LABEL,
+  WITHHELD_OPERATION_LABEL,
+  WITHHELD_PROJECT_LABEL
+} from "./untrustedLabel.js";
 
 /**
  * Actionable, dollar-specific "cut" suggestions.
@@ -340,6 +347,10 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
       : key.replace(/^connected::/, "");
     const count = groupRecords.length;
     const agent = groupRecords[0]?.agentId ?? "coding-agent";
+    // `agent` stays raw as the map key and the id slug; only the DISPLAY
+    // form is neutralized. Bounded to the adapter enum for local rows in
+    // practice, but nothing in the type system enforces that.
+    const agentLabel = safeUntrustedLabel(agent, WITHHELD_AGENT_LABEL);
     const project = groupRecords[0]?.projectId;
     const evidence = sessionAggregates ? dailyContextEvidence(groupRecords) : null;
     const flaggedSpend = flaggedSpendByAgent.get(agent) ?? [];
@@ -365,12 +376,12 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
         ? `inspect-context-${slug(agent)}-${slug(project ?? "unattributed")}`
         : `inspect-context-${slug(operation)}`,
       title: sessionAggregates
-        ? `Investigate cumulative context in ${agent} · ${projectLabel}`
+        ? `Investigate cumulative context in ${agentLabel} · ${projectLabel}`
         : `Inspect oversized context on ${operationLabel}`,
       action: sessionAggregates
         ? localContextTrimGuidance({
             count,
-            agent,
+            agent: agentLabel,
             projectLabel,
             evidence,
             groupSpendUsd: affectedSpendUsd,
@@ -604,114 +615,6 @@ function concentrationClause(input: {
 function formatRatio(value: number): string {
   return value >= 10 ? Math.round(value).toLocaleString("en-US") : value.toFixed(1);
 }
-
-/**
- * What an untrusted label becomes when the name itself reads like an
- * instruction. Each one says WHY, because "withheld" with no reason reads like
- * the product failed rather than declined: the `diagnose` table still shows the
- * real folder name, so this is only about not REPEATING a name that looked like
- * an instruction inside a sentence a coding agent will read.
- *
- * All three must survive the report layer's own sanitizer UNCHANGED — a marker
- * in brackets would be stripped there and the two surfaces would disagree about
- * a string whose whole job is agreeing. Parentheses survive; brackets do not.
- *
- * The project label sits in appositive and prepositional slots ("X — median day
- * carried…", "the heaviest sessions in X"), so it can carry the reason as
- * prose. Model and operation labels sit in ATTRIBUTIVE slots ("Cache repeated X
- * calls"), where a clause would not parse, so they carry the short form.
- */
-const WITHHELD_PROJECT_LABEL = "a project whose name reads like an instruction";
-const WITHHELD_MODEL_LABEL = "(model name reads like an instruction; withheld)";
-const WITHHELD_OPERATION_LABEL = "(operation name reads like an instruction; withheld)";
-
-/**
- * Neutralize ONE untrusted fragment before it is interpolated into
- * product-authored prose.
- *
- * THE FRAGMENT ONLY. This is the whole point. The finished sentence contains
- * our own words — "input+cache tokens", "credentials", "no output tokens
- * recorded" — so a directive matcher run over the finished sentence pairs an
- * ordinary basename like `write-ahead-log` with our own noun and blanks the
- * entire finding. 8 of 11 ordinary repo names did exactly that in 0.9.7. Run
- * the check over the user's text alone and an ordinary name has nothing to
- * pair with.
- *
- * Over-triggering here is cheap and under-triggering is not: a false positive
- * costs one name while the finding and its dollars survive, so the patterns
- * stay strict.
- */
-function safeUntrustedLabel(value: string, withheld: string): string {
-  // Control characters and line breaks are structure, not name: a label that
-  // can open a new line can forge a new instruction on every surface at once.
-  const collapsed = value
-    .replace(/[\u0000-\u001F\u007F]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  if (!collapsed) return withheld;
-  return looksLikeDirectiveFragment(collapsed) ? withheld : collapsed;
-}
-
-/**
- * Characters that are invisible to the reader but split a word for the
- * matcher: zero-width spaces and joiners, bidi controls, variation selectors,
- * the soft hyphen, the BOM. `i\u200Bgnore all previous instructions` reads as
- * an instruction and matched nothing. Stripped for DETECTION ONLY — the label
- * that gets printed is always the original text.
- */
-const INVISIBLE_SEPARATORS = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]/gu;
-
-/**
- * The eight Latin/Cyrillic confusables that carry the directive verbs we look
- * for: `\u0456gnore`, `d\u0435lete`, `\u0455ystem:` are indistinguishable on screen
- * and invisible to an ASCII pattern. Folded for DETECTION ONLY.
- */
-const CONFUSABLE_FOLD: ReadonlyMap<string, string> = new Map([
-  ["\u0430", "a"], ["\u0435", "e"], ["\u043E", "o"], ["\u0440", "p"],
-  ["\u0441", "c"], ["\u0445", "x"], ["\u0455", "s"], ["\u0456", "i"]
-]);
-
-/**
- * The fragment is read TWICE, because a name and an instruction disagree about
- * what a hyphen means.
- *
- * As ONE IDENTIFIER (`-` behaves like `_`): `ignore-list` is a directory, so
- * the blunt single-word patterns cannot fire on it. This is what keeps ordinary
- * repo names whole.
- *
- * As SEPARATED WORDS (`-` and `_` are spaces): `ignore-all-previous-instructions`
- * is an instruction wearing a filename's punctuation. Only the PAIRED patterns
- * run in this pass — each needs a directive verb next to an injection-flavored
- * object — so an ordinary compound name has nothing to pair with. The unpaired
- * verb list and the execute/run pattern deliberately stay out: `run-command-service`
- * is a real directory, and a name-shaped `run-shell` cannot instruct anything.
- */
-function looksLikeDirectiveFragment(value: string): boolean {
-  const folded = value
-    .normalize("NFKC")
-    .replace(INVISIBLE_SEPARATORS, "")
-    .replace(/[\u0430\u0435\u043E\u0440\u0441\u0445\u0455\u0456]/gu, (char) => CONFUSABLE_FOLD.get(char) ?? char);
-  const asIdentifier = folded.replace(/-/gu, "_");
-  const asWords = folded.replace(/[-_]+/gu, " ");
-  return IDENTIFIER_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(asIdentifier)) ||
-    SEPARATED_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(asWords));
-}
-
-const IDENTIFIER_DIRECTIVE_PATTERNS = [
-  /\b(?:ignore|disregard|override|bypass)\b/i,
-  /\b(?:system|developer|assistant)\s*:/i,
-  /\b(?:execute|run)\b.{0,80}\b(?:command|shell|bash|powershell)\b/i,
-  /\b(?:delete|remove|overwrite|edit|write)\b.{0,60}\b(?:everything|all files?|configs?|credentials?|secrets?|tokens?)\b/i,
-  /\b(?:reveal|print|upload|send|exfiltrate)\b.{0,60}\b(?:credentials?|secrets?|tokens?|keys?|files?)\b/i,
-  /\b(?:do not|don't)\b.{0,60}\b(?:follow|obey|wait|ask|require)\b.{0,40}\b(?:approval|instructions?|rules?)\b/i
-];
-
-const SEPARATED_DIRECTIVE_PATTERNS = [
-  /\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b(?:previous|prior|above|earlier|preceding|instructions?|approval|rules?|guardrails?|system|developer|prompts?)\b/i,
-  /\b(?:delete|remove|overwrite|edit|write)\b.{0,60}\b(?:everything|all files?|configs?|credentials?|secrets?|tokens?)\b/i,
-  /\b(?:reveal|print|upload|send|exfiltrate|leak|dump)\b.{0,60}\b(?:credentials?|secrets?|tokens?|keys?|files?|prompts?)\b/i,
-  /\b(?:do not|don't|never)\b.{0,60}\b(?:follow|obey|wait|ask|require)\b.{0,40}\b(?:approval|instructions?|rules?)\b/i
-];
 
 function cacheActions(records: UsageRecord[]): CutAction[] {
   const window = windowDays(records);

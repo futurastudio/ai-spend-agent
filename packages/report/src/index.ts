@@ -2052,8 +2052,12 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     `    sourceSummary: ${yamlString(connectedSourceSummary(records))}`,
     `    candidateStatus: ${yamlString(candidate ? "canonical_modeled_candidate_requires_approval" : "no_scoped_change_candidate")}`,
     `    financialClaim: ${yamlString(candidate ? "modeled_unverified" : "none")}`,
-    `    canonicalCandidateId: ${yamlString(candidate?.id ?? "none")}`,
-    `    recordIds: ${yamlString(candidate?.recordIds.join(",") ?? "none")}`,
+    // The cut id is slugged from `record.model` + `record.operation`, and the
+    // record ids come straight off a provider response. `yamlString` keeps the
+    // YAML well-formed but checks nothing — and this is a file the user is told
+    // to install. Three sibling sites already guard the identical values.
+    `    canonicalCandidateId: ${yamlString(candidate ? safePromptIdentifier(candidate.id, 120) : "none")}`,
+    `    recordIds: ${yamlString(candidate ? candidate.recordIds.map((id) => safePromptIdentifier(id, 100)).join(",") : "none")}`,
     `  targetOwnership: ${yamlString(candidate ? connectedOwnerSummary(candidateRecords) : "unmapped")}`,
     `  currentCostValueEvidenceUsd: ${financialAmountAvailable ? formatMachineUsd(candidate?.affectedSpendUsd ?? input.summary.totalUsd) : "null"}`,
     `  modeledOpportunityUsd: ${candidate ? formatMachineUsd(candidate.estimatedMonthlySavingsUsd) : "null"}`,
@@ -3098,7 +3102,9 @@ function breakdownLines(
     const amount = dimension
       ? reportBreakdownAmount(entry, records, dimension)
       : formatUsd(entry.amountUsd);
-    return `- ${entry.key}: ${amount} across ${entry.recordCount} records (${entry.confidence})`;
+    // The connected branch of report.md rendered breakdown keys raw while the
+    // local branch guarded the identical value. Same file, one standard.
+    return `- ${safePromptIdentifier(entry.key, 140)}: ${amount} across ${entry.recordCount} records (${entry.confidence})`;
   });
 }
 
@@ -3147,6 +3153,22 @@ function entityBreakdownHtml(
   </div>`).join("\n");
 }
 
+/**
+ * "client / project / workflow" — three BARE identifiers off provider metadata,
+ * with no product prose around them. Blanking is the right answer for each, and
+ * each is guarded separately so one hostile field cannot take the other two
+ * down with it.
+ *
+ * The entry's fields stay raw in core (`workflowWatchAmount` matches them back
+ * against the records to recompute the amount), so this is where they are made
+ * safe for the page.
+ */
+function workflowIdentity(entry: SpendSummary["workflowWatch"][number]): string {
+  return [entry.clientId, entry.projectId, entry.workflowKey]
+    .map((value) => safePromptIdentifier(value, 100))
+    .join(" / ");
+}
+
 function workflowWatchMarkdownLines(
   entries: SpendSummary["workflowWatch"],
   isSample = false,
@@ -3158,21 +3180,21 @@ function workflowWatchMarkdownLines(
 
   if (isSample) {
     return entries.flatMap((entry) => [
-      `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence}; fictional sample entities)`,
+      `- **${workflowIdentity(entry)}** (${entry.confidence}; fictional sample entities)`,
       `  - Illustrative cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
       "  - Financial inference: attribution concentration only; no margin or savings amount is inferred.",
-      `  - Example hypothesis (do not execute): ${entry.suggestedOptimization}`,
+      `  - Example hypothesis (do not execute): ${safePromptProse(entry.suggestedOptimization, 700)}`,
       "  - Apply status: disabled until real evidence is collected",
       "  - Verification status: rerunning sample cannot verify a result"
     ]);
   }
 
   return entries.flatMap((entry) => [
-    `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence})`,
+    `- **${workflowIdentity(entry)}** (${entry.confidence})`,
     `  - Observed cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
     `  - Evidence share: ${formatPercent(entry.shareOfSpend)}`,
     "  - Interpretation: ownership/concentration diagnostic only; no margin, savings, or safe change is inferred.",
-    `  - Read-only next step: ${entry.suggestedOptimization}`,
+    `  - Read-only next step: ${safePromptProse(entry.suggestedOptimization, 700)}`,
     "  - Apply status: not a change candidate; require explicit call/invocation workload evidence and a canonical modeled action first.",
     "  - Verification: reconcile the source records and confirm owner/outcome mapping before using this entry operationally."
   ]);
@@ -3194,15 +3216,17 @@ function workflowWatchCard(
   const actionLabel = isSample ? "Apply disabled:" : "Read-only next step:";
   const actionText = isSample
     ? "collect real evidence before requesting a change"
-    : entry.suggestedOptimization;
+    // The HTML twin of the Markdown line: same entry, same treatment, so the
+    // two surfaces cannot say different things about the same workflow.
+    : safePromptProse(entry.suggestedOptimization, 700);
   const verificationText = isSample
     ? "rerunning sample cannot verify a result"
     : "ownership/concentration is not savings or change evidence; reconcile records and confirm the owner/outcome mapping";
   return `<article class="workflow-card">
     <div class="workflow-card-main">
       <div>
-        <h3>${escapeHtml(entry.clientId)} / ${escapeHtml(entry.projectId)} / ${escapeHtml(entry.workflowKey)}</h3>
-        <p>${escapeHtml(entry.agentId)} · ${escapeHtml(entry.confidence)}</p>
+        <h3>${escapeHtml(workflowIdentity(entry))}</h3>
+        <p>${escapeHtml(safePromptIdentifier(entry.agentId, 100))} · ${escapeHtml(entry.confidence)}</p>
       </div>
       <strong>${escapeHtml(workflowWatchAmount(entry, records))}</strong>
     </div>
@@ -3463,8 +3487,11 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     return `<div class="row"><span class="k">${key}</span><span class="bar"><i class="estimated-bar" style="width:${pct}%"></i></span><span class="v estimated-value">${formatUsd(groupCoverage.amountUsd)}${groupCoverage.missingRecords.length > 0 ? " partial" : ""}<em>${coverageNote}</em></span></div>`;
   };
 
+  // Escapes like its siblings `metricCard` and `loopCard`. It was the one card
+  // helper that interpolated raw, and two of its call sites pass a
+  // `tokenExperiment.id` that arrives as an unnarrowed string.
   const statCard = (label: string, value: string, note: string, tone = ""): string =>
-    `<div class="stat ${tone}"><span class="label">${label}</span><strong>${value}</strong><span class="note">${note}</span></div>`;
+    `<div class="stat ${escapeHtml(tone)}"><span class="label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span class="note">${escapeHtml(note)}</span></div>`;
 
   const sectionHead = (name: string, blurb: string): string =>
     `<div class="sec"><span class="rule"></span><span class="name">${name}</span><span class="rule"></span><span class="blurb">${blurb}</span></div>`;
