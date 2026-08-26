@@ -105,6 +105,61 @@ own baseline to zero and switch the alert off.
 If the answer to (2) is 503, the waitlist is almost certainly broken too — go
 straight to the storage alert below, because that is the one that costs money.
 
+### Waitlist storage — `WAITLIST STORAGE IS BROKEN`
+
+**Means:** signups are being lost or refused **right now**. This is the most
+expensive alert on the page — every minute it stays red is launch traffic
+arriving at a form that cannot save anything.
+
+The `waitlist-storage` job inserts a real row into the real `waitlist` table
+through the real service-role key, deletes it, and verifies it is gone. The
+failing stage is printed in the log:
+
+| `failedStage` | Means |
+| --- | --- |
+| `preclean` + `supabase_not_configured` | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are missing from the Vercel env. Real signups are already being refused with 503. |
+| `preclean` / `insert` + `http 401` or `http 403` | **The service-role key is rotated, expired, or wrong.** The single most likely cause. |
+| `insert` + `unreachable` | Supabase is down or unreachable from Vercel. |
+| `delete` + `removed 0` | The insert reported success but nothing persisted. Suspect the table, the unique index, or an RLS policy change. |
+| `verify` + `canary row survived cleanup` | Cleanup failed. See "the canary row" below — remove it by hand. |
+| `insert` + `missing_source_ref` | Storage works, but the `source_ref` column is gone, so signups are being stored **without attribution**. Users notice nothing; your launch-channel numbers are quietly wrong. |
+
+**Check first:**
+1. **Supabase project status and the service-role key.** Dashboard → Project
+   Settings → API. Compare it to `SUPABASE_SERVICE_ROLE_KEY` in Vercel →
+   project → Settings → Environment Variables. A key rotation is the most
+   common cause and needs a redeploy (or an env change + redeploy) to take.
+2. **Try a real signup yourself**, on the real site, with a real address. A
+   201 means the funnel is fine and the probe is misconfigured; a 503 means
+   the alert is right and every visitor is hitting the same wall.
+3. **Vercel → Logs**, filtered to `/api/waitlist`, for
+   `supabase insert failed` or `supabase unreachable` — the status code there
+   names the cause directly.
+
+For `missing_source_ref` specifically, the fix is one statement:
+
+```sql
+alter table waitlist add column if not exists source_ref text not null default 'direct';
+```
+
+**The canary row.** The probe writes and deletes
+`aibill-storage-canary@canary.invalid` — a fixed address in a reserved-invalid
+TLD (RFC 2606), so it can never be a real person and can never receive mail.
+Because it is fixed, at most one can ever exist, and each run deletes it
+before and after its own write. If a run ever dies mid-probe, the next run
+cleans up automatically. To check or clear it by hand:
+
+```sql
+select * from waitlist where email = 'aibill-storage-canary@canary.invalid';
+delete from waitlist where email = 'aibill-storage-canary@canary.invalid';
+```
+
+Exclude it from any signup count taken while a probe is mid-flight:
+
+```sql
+select count(*) from waitlist where email <> 'aibill-storage-canary@canary.invalid';
+```
+
 ## Job-level failures (before any threshold is evaluated)
 
 These come from the workflow itself, not from a threshold, and each prints its
@@ -126,7 +181,25 @@ export OPS_HEALTH_TOKEN=...   # same value as Vercel
 # Error monitor — aggregate counts only, safe to run any time.
 curl -sS -H "x-ops-token: $OPS_HEALTH_TOKEN" \
   https://asktilden.com/api/ops/telemetry-health | jq
+
+# Storage probe — writes and deletes one synthetic row. Safe to run any time,
+# but do not run it concurrently with a scheduled run (:05 / :35).
+curl -sS -X POST -H "x-ops-token: $OPS_HEALTH_TOKEN" \
+  https://asktilden.com/api/ops/storage-health | jq
 ```
 
 `ok: true` means no threshold tripped. The `alerts` array carries the same
 text the failure email would have shown.
+
+## What is deliberately NOT alerted
+
+- **Individual user errors.** One person hitting one error is not an outage
+  and must never page — that is what the volume floors are for.
+- **Why a command failed.** Telemetry is enum-only by design: no paths, no
+  stack traces, no free text. You get *that* something failed and *which*
+  command, never the message. Closing that gap needs a bounded `errorKind`
+  enum on the event, which is a CLI release plus an ingest-schema change —
+  deliberately held until after launch day rather than shipped into the
+  freeze.
+- **Signup volume.** Nobody is watching for "too few signups"; there is no
+  baseline yet to judge it against.

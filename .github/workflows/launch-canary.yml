@@ -189,6 +189,16 @@ jobs:
           # with 422 (apps/web/app/api/waitlist/route.ts; 400 is reserved for
           # malformed JSON). Nothing is stored, and no real-looking email is
           # ever sent. One POST per run stays far under the 5/min rate limit.
+          #
+          # SCOPE — READ THIS BEFORE TRUSTING IT: 422 is returned at email
+          # validation, BEFORE storeInSupabase() is called. This step proves
+          # the route is alive and enforcing its schema. It proves NOTHING
+          # about whether a signup can actually be stored — a rotated
+          # service-role key would 503 every real signup while this stayed
+          # green. The storage path is proven by the `waitlist-storage` job
+          # in .github/workflows/launch-alerts.yml, which does a real
+          # insert+delete round trip. Do not delete that job believing this
+          # one covers it.
           code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
             -X POST -H 'content-type: application/json' -d '{}' \
             https://asktilden.com/api/waitlist)"
