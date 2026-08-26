@@ -1,0 +1,114 @@
+name: Launch alerts
+
+# Launch-week pager. The canary (launch-canary.yml) proves the published
+# package installs and the public endpoints ANSWER. This workflow watches what
+# the canary structurally cannot see: whether real users are hitting errors,
+# and whether the storage behind the endpoints still works.
+#
+# HOW AN ALERT REACHES A HUMAN: GitHub emails repo watchers when a scheduled
+# workflow fails. That is the whole delivery mechanism — no notification
+# vendor, no new infrastructure, no secrets beyond one narrow token. A job
+# here failing IS the email.
+#   -> Requires "Watch -> All Activity" (or at least Actions) on the repo, and
+#      Settings -> Notifications -> "Send notifications for failed workflows
+#      only" enabled for the account that must be paged.
+#
+# WHY A SEPARATE WORKFLOW FROM THE CANARY: the failure email names the
+# WORKFLOW, not the step. "Launch alerts" in the subject means "users or
+# storage are affected"; "Launch canary" means "the published artifact or a
+# public endpoint is affected". That distinction is worth an entire file at
+# 6am. It also keeps the canary credential-free — this is the only workflow
+# that holds a token.
+#
+# SECRET SAFETY (this repo is PUBLIC): the only credential here is
+# OPS_HEALTH_TOKEN, which grants read access to AGGREGATE COUNTS and to a
+# self-cleaning storage probe — never the Supabase service-role key, which
+# stays server-side in Vercel and must never enter GitHub secrets. The
+# triggers are `schedule` and `workflow_dispatch` only; neither runs from a
+# fork, so a pull request can never reach this secret.
+#
+# Runbook for every alert below: docs/RUNBOOK.md
+
+on:
+  schedule:
+    # Every 30 minutes during launch week, offset from the canary's :00/:30 so
+    # the two never contend for the same runner minute. Relax to hourly once
+    # launch week is over — edit this cron, nothing else.
+    - cron: "5,35 * * * *"
+  workflow_dispatch:
+
+jobs:
+  telemetry-errors:
+    name: Users hitting CLI errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query the aggregate error monitor
+        env:
+          OPS_HEALTH_TOKEN: ${{ secrets.OPS_HEALTH_TOKEN }}
+        run: |
+          set -eu
+          # No `set -x` anywhere in this file: the token travels in a header.
+          # (GitHub masks registered secrets in logs, but do not rely on it.)
+
+          if [ -z "${OPS_HEALTH_TOKEN}" ]; then
+            echo "FAIL: OPS_HEALTH_TOKEN is not set as a repository secret."
+            echo "Set it under Settings -> Secrets and variables -> Actions,"
+            echo "to the SAME value as OPS_HEALTH_TOKEN in the Vercel project env."
+            exit 1
+          fi
+
+          code="$(curl -sS -m 25 -o response.json -w '%{http_code}' \
+            -H "x-ops-token: ${OPS_HEALTH_TOKEN}" \
+            https://asktilden.com/api/ops/telemetry-health)" || code="000"
+          echo "GET /api/ops/telemetry-health -> ${code}"
+
+          case "${code}" in
+            200) : ;;
+            000)
+              echo "FAIL: the ops endpoint did not answer at all (timeout, DNS, or TLS)."
+              echo "This is the site-down signature — check https://asktilden.com and Vercel."
+              exit 1 ;;
+            401)
+              echo "FAIL: 401 — the token in GitHub secrets does not match the one in Vercel."
+              echo "Rotate both to the same value. Nothing is wrong with the product."
+              exit 1 ;;
+            404)
+              echo "FAIL: 404 — /api/ops/telemetry-health is not deployed."
+              echo "The alerting branch has not shipped to production yet."
+              exit 1 ;;
+            503)
+              echo "FAIL: 503 — the endpoint is up but cannot read telemetry."
+              cat response.json 2>/dev/null || true
+              echo ""
+              echo "Either OPS_HEALTH_TOKEN is unset/too short in Vercel, or the"
+              echo "Supabase service-role key is rotated/expired, or Supabase is down."
+              exit 1 ;;
+            *)
+              echo "FAIL: unexpected status ${code} from the ops endpoint."
+              cat response.json 2>/dev/null || true
+              exit 1 ;;
+          esac
+
+          # Always print the numbers, green or red — a passing run is the
+          # cheapest available record of what launch-day traffic looked like.
+          echo "--- last 60 minutes ---"
+          jq -r '"runs=\(.window.events)  failures=\(.window.errors)  rate=\(.window.errorRatePct)%  truncated=\(.window.truncated)"' response.json
+          echo "--- 24h baseline ---"
+          jq -r '"runs=\(.baseline.events)  failures=\(.baseline.errors)  rate=\(.baseline.errorRatePct)%"' response.json
+          echo "--- per command (last 60 minutes) ---"
+          jq -r '.commands[] | "  \(.command): \(.runs) runs, \(.errors) failures"' response.json
+          echo "--- silence check ---"
+          jq -r '"events in last \(.silence.minutes)m=\(.silence.events)  (preceding period=\(.silence.priorEvents))"' response.json
+
+          if [ "$(jq -r '.ok' response.json)" != "true" ]; then
+            echo ""
+            echo "================ LAUNCH ALERT ================"
+            jq -r '.alerts[] | "[\(.code)] \(.detail)"' response.json
+            echo "=============================================="
+            echo "What each code means and what to check first: docs/RUNBOOK.md"
+            exit 1
+          fi
+
+          echo ""
+          echo "OK: no error thresholds tripped."
