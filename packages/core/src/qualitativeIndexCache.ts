@@ -192,6 +192,11 @@ const callSchema = z.object({
   latestTurnUsage: turnUsageSchema.optional(),
   usageScope: z.enum(["turn", "session_cumulative"]).optional(),
   usageSupport: z.enum(["complete", "unsupported_token_shape"]).optional(),
+  // Per-request tier evidence for session-cumulative slices. The strict schema
+  // must carry it: without this key the entry fails validation on write, the
+  // failure is swallowed by the caller, and every run re-parses the whole
+  // corpus instead of reusing the cache.
+  maxRequestPromptTokens: finiteNonnegativeInteger.optional(),
   reportedTotalTokens: finiteNonnegativeInteger.optional(),
   tokenComponentEvidence: tokenComponentEvidenceSchema.optional(),
   sourceVersion: z.string().min(1).max(64).optional(),

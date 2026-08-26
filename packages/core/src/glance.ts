@@ -8,7 +8,7 @@ import {
 } from "./localAgentLogs.js";
 import {
   canPriceTokenUsageAtScope,
-  estimateTokenCostUsd,
+  estimateTokenCostsUsd,
   PRICING_TABLE_AS_OF
 } from "./modelPricing.js";
 import type { DetectedPlan } from "./planDetection.js";
@@ -1165,9 +1165,18 @@ function callCost(call: LocalAgentCall): number | undefined {
   if (!canPriceTokenUsageAtScope(
     call.model,
     call.usage,
-    call.usageScope === "turn" ? "request" : "aggregate"
+    call.usageScope === "turn" ? "request" : "aggregate",
+    call.maxRequestPromptTokens
   )) return undefined;
-  return estimateTokenCostUsd(call.model, call.usage);
+  // Tier must come from the largest single request, exactly as the report's
+  // aggregation does — otherwise the statusline and the receipt disagree on
+  // the same session (a cache-heavy Codex session voided here while the
+  // receipt prices it, or priced here at 2x).
+  return estimateTokenCostsUsd(
+    call.model,
+    [call.usage],
+    [call.maxRequestPromptTokens]
+  );
 }
 
 function inputSideTokens(call: LocalAgentCall): number {

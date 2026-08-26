@@ -1101,3 +1101,50 @@ describe("buildUsageGlance", () => {
     expect(snapshot.plan?.planLabel).not.toContain("CUSTOM_ACCESS_TOKEN");
   });
 });
+
+describe("Glance prices Codex sessions exactly as the report does", () => {
+  // The statusline reads Glance while the receipt reads the report
+  // aggregation. Before this fix Glance called the pricing gate without
+  // per-request tier evidence, so a cache-heavy Codex session was voided here
+  // while the receipt priced it — the two surfaces disagreed by ~1000x on the
+  // same session, visible if both are on screen at once.
+  const cumulativeCodexCall = {
+    agent: "codex",
+    model: "gpt-5.6-sol",
+    timestamp: "2026-08-23T16:45:09.225Z",
+    startedAt: "2026-08-23T10:00:00.000Z",
+    sessionId: "codex-cumulative",
+    project: "agent-finops",
+    usageScope: "session_cumulative",
+    usageSupport: "complete",
+    // Cumulative prompt (500K) clears the 272K per-request tier, but the
+    // largest single request stayed under it.
+    maxRequestPromptTokens: 250_000,
+    usage: {
+      inputTokens: 100_000,
+      outputTokens: 1_000,
+      cacheReadTokens: 400_000
+    }
+  } as unknown as LocalAgentCall;
+
+  it("prices a >272K cumulative session instead of voiding it", () => {
+    const snapshot = buildUsageGlance([cumulativeCodexCall], {
+      filesParsed: 1,
+      detectedAgents: ["codex"]
+    });
+    // Base tier: 100000*4 + 1000*20 + 400000*0.4, per million = 0.58.
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBeCloseTo(0.58, 4);
+    expect(snapshot.currentSession?.costConfidence).toBe("estimated");
+  });
+
+  it("keeps voiding a session whose own request crossed the tier", () => {
+    const snapshot = buildUsageGlance([{
+      ...cumulativeCodexCall,
+      maxRequestPromptTokens: 272_001
+    } as unknown as LocalAgentCall], {
+      filesParsed: 1,
+      detectedAgents: ["codex"]
+    });
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBeNull();
+  });
+});

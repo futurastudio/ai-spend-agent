@@ -73,6 +73,34 @@ function financialKey(
 }
 
 describe("projectIndexStore", () => {
+  it("round-trips per-request tier evidence instead of rejecting the entry", async () => {
+    // `maxRequestPromptTokens` must be part of the strict value contract. When
+    // it was missing, every write failed with `unrecognized_keys`, the caller
+    // swallowed the failure, and the cache never populated — turning the warm
+    // sub-second path back into a full multi-GB re-parse on EVERY run.
+    const { adapters } = await isolatedStore();
+    const value = {
+      calls: [{
+        agent: "codex",
+        model: "gpt-5.6-sol",
+        timestamp: "2026-08-17T12:00:00.000Z",
+        usageScope: "session_cumulative",
+        usageSupport: "complete",
+        maxRequestPromptTokens: 250_000,
+        usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 400_000 }
+      }],
+      diagnostics: []
+    } as unknown as LocalAgentQualitativeIndexValue;
+
+    await adapters.financial.write(financialKey(), value);
+    const hit = await adapters.financial.read(financialKey());
+    expect(hit?.calls[0]?.maxRequestPromptTokens).toBe(250_000);
+
+    await adapters.qualitative.write(qualitativeKey(), value);
+    expect((await adapters.qualitative.read(qualitativeKey()))?.calls[0]?.maxRequestPromptTokens)
+      .toBe(250_000);
+  });
+
   it("round-trips a qualitative entry and misses on identity change", async () => {
     const { adapters } = await isolatedStore();
     await adapters.qualitative.write(qualitativeKey(), callValue("gpt-5.6"));
