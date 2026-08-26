@@ -146,6 +146,28 @@ for (const releasePackage of packages) {
   const falseTelemetryClaims = [];
   const staleVersionClaims = [];
   const canSendTelemetry = telemetryCapablePackages.has(releasePackage.name);
+  // npm renders package.json "description" ABOVE the README on the package
+  // page, so a false claim there is read first and would otherwise be swept
+  // last. Run it through the same patterns as the shipped prose.
+  const manifestDescription = String(
+    JSON.parse(
+      await readFile(resolve(root, releasePackage.directory, "package.json"), "utf8")
+    ).description ?? ""
+  );
+  if (manifestDescription) {
+    if (canSendTelemetry) {
+      for (const pattern of falseNoTelemetryClaimPatterns) {
+        const match = pattern.exec(manifestDescription);
+        pattern.lastIndex = 0;
+        if (match) falseTelemetryClaims.push(`package.json description: ${match[0]}`);
+      }
+    }
+    for (const claimed of manifestDescription.match(/\bv?\d+\.\d+\.\d+\b/g) ?? []) {
+      if (claimed.replace(/^v/, "") !== expectedVersion) {
+        staleVersionClaims.push(`package.json description: "${claimed}"`);
+      }
+    }
+  }
   for (const filePath of filePaths) {
     const absolutePath = resolve(root, releasePackage.directory, filePath);
     const info = await lstat(absolutePath).catch(() => undefined);

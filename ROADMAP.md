@@ -12,9 +12,9 @@ notes](CHANGELOG.md), and the client-friendly version of this roadmap lives at
 
 Last updated: August 23, 2026.
 
-## Available now — npm v0.9.1
+## Available now — the published npm `latest`
 
-The deliberately narrow launch loop shipped in v0.9.0/v0.9.1:
+The deliberately narrow launch loop, shipped and since extended:
 
 **Why is usage high? → What one safe change should I test? → Did token usage
 change while quality held?**

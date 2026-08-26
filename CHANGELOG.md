@@ -87,8 +87,26 @@ fixes in the same pass:
   producer now screens the data and the prose together, and a test walks
   the full inventory of both.
 
-Nothing about your numbers changes: the arithmetic, the accounting basis,
-and every truth caveat are identical to 0.9.6.
+- **Unknown cost no longer prints as `$0.00`.** When a model is missing from
+  the pricing table, the receipt card, its caption, the companion page and
+  the `report` total said `$0.00` — while `report.md`, written by the same
+  command, correctly said `Unavailable`. "3 aggregates, $0.00" reads as
+  "these cost me nothing"; the truth was "cost unknown". Every surface now
+  says `Unavailable`, and when only part of a window can be priced, the
+  real total is shown *with* the count of records that could not be —
+  previously disclosed in the terminal but silently dropped from the card
+  you are invited to share. A genuinely tiny bill still reads `<$0.01`.
+- **The package pages on npm stopped claiming something untrue.** A shipped
+  README said "No product telemetry is sent" beside code that posts
+  anonymous command counts; the package `npx aibill` resolves to carried no
+  disclosure at all; two others still advertised v0.9.1, six releases back.
+  All corrected, and the release gate now reads the exact bytes npm would
+  publish and refuses a no-telemetry claim from any package that ships the
+  CLI.
+
+The accounting basis and every truth caveat are unchanged from 0.9.6. The
+arithmetic is unchanged too — but what a total *renders as* when it cannot
+be priced is not, and that is the point of the first entry above.
 
 ## 0.9.6 — 2026-08-26
 
