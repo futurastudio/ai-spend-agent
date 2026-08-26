@@ -82,6 +82,31 @@ jobs:
           if grep -qi "unexpected error" out.txt err.txt; then
             echo "FAIL: crash-wrapper voice leaked into the no-evidence report path"; exit 1
           fi
+          # 0.9.6 founder-found regression class, guarded in production:
+          # machine-wide report is the DEFAULT path we advertise, and it once
+          # degraded its ACT and VERIFY sections to internal state description
+          # ("No action candidate is emitted because qualitative indexing is
+          # unknown") while `--full` from the same home showed real ranked
+          # recommendations. That voice is never acceptable to a user in ANY
+          # mode. This canary's home is empty, so the honest no-evidence voice
+          # is expected here — but if the jargon ever reaches production
+          # again, on stdout, stderr, or a written artifact, this fails and
+          # emails repo watchers.
+          for phrase in \
+            "qualitative indexing is" \
+            "Complete the bounded transcript index" \
+            "Complete the bounded index" \
+            "bounded qualitative index"
+          do
+            if grep -qiF "$phrase" out.txt err.txt 2>/dev/null; then
+              echo "FAIL: internal-jargon degradation voice reached the user: [$phrase]"; exit 1
+            fi
+            # Any artifact this run wrote into the sandbox home, too.
+            if find "$H" -maxdepth 1 -type f \( -name '*.md' -o -name '*.html' -o -name '*.svg' \) \
+                 -exec grep -liF "$phrase" {} + 2>/dev/null | grep -q .; then
+              echo "FAIL: internal-jargon degradation voice reached a written artifact: [$phrase]"; exit 1
+            fi
+          done
 
       - name: telemetry endpoint alive
         run: |
