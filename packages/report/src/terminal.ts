@@ -52,6 +52,14 @@ export const groupByDimensions: GroupByDimension[] = [
   "apiKey"
 ];
 
+/** One footer CTA: a command the user can copy, and what it does. */
+export type TerminalNextStep = {
+  /** The literal command. Rendered bold; never wrapped or merged with prose. */
+  command: string;
+  /** What it does. Rendered dim, always separated from the command. */
+  description?: string;
+};
+
 export type PlainEnglishSummaryOptions = {
   /** Records the summary was computed from (used to derive the cut list). */
   records: UsageRecord[];
@@ -94,8 +102,20 @@ export type PlainEnglishSummaryOptions = {
    * estimated from supported local coding-agent session evidence.
    */
   mode?: "demo" | "connected" | "local-logs";
-  /** Optional next-step CTA lines printed in the footer. */
-  nextSteps?: string[];
+  /**
+   * Next-step CTA lines printed in the footer.
+   *
+   * A COMMAND step must be given as `{ command, description }`, never as one
+   * hand-padded string (0.9.6). Every option handed to this function goes
+   * through `sanitizeTerminalText`, which collapses `\s+` to a single space —
+   * so `"npx aibill report              write a shareable report"` reached the
+   * user as `"npx aibill report write a shareable report"` and the reader had
+   * no way to see where the command ended. Structure survives sanitization;
+   * padding does not.
+   *
+   * Plain strings remain supported for prose-only lines that carry no command.
+   */
+  nextSteps?: readonly (string | TerminalNextStep)[];
   /**
    * When the CLI entrypoint runs with telemetry enabled AND noticed, the
    * receipt's "nothing uploaded" claim is replaced by this line so the
@@ -661,8 +681,28 @@ function renderPlainEnglishSummary(
   if (nextSteps.length > 0) {
     lines.push(c.dim(rule(width)));
     lines.push(c.bold("  Next"));
+    // The command column is shared across the block and the gap is REBUILT
+    // here, after sanitization, so it cannot be collapsed away.
+    const commandSteps = nextSteps.filter((step): step is TerminalNextStep => typeof step !== "string");
+    const commandWidth = Math.max(0, ...commandSteps.map((step) => step.command.length));
     for (const step of nextSteps) {
-      lines.push(`  ${c.cyan("›")} ${step}`);
+      if (typeof step === "string") {
+        lines.push(`  ${c.cyan("›")} ${step}`);
+        continue;
+      }
+      if (step.description === undefined) {
+        lines.push(`  ${c.cyan("›")} ${c.bold(step.command)}`);
+        continue;
+      }
+      const aligned = 4 + commandWidth + 2 + step.description.length <= width;
+      if (aligned) {
+        lines.push(`  ${c.cyan("›")} ${c.bold(step.command.padEnd(commandWidth))}  ${c.dim(step.description)}`);
+        continue;
+      }
+      // Too wide to align: the description drops to its own line rather than
+      // running into the command with a single space.
+      lines.push(`  ${c.cyan("›")} ${c.bold(step.command)}`);
+      lines.push(`    ${c.dim(step.description)}`);
     }
     lines.push("");
   }
@@ -1000,7 +1040,9 @@ function compactNextStep(
     return {
       title: "Read your own local evidence",
       evidence: "sample values are illustrative; no user change is authorized",
-      command: "npx aibill init"
+      // `init` needs one exact project folder, and `--sample` runs anywhere —
+      // including a home directory, where the bare pointer refused (0.9.6).
+      command: scopedCommandRenderer(options.commandScope)("npx aibill init")
     };
   }
 
@@ -2066,21 +2108,23 @@ function sourceBreakdownLabel(basis: FinancialPresentationBasis): string {
   }
 }
 
-function defaultNextSteps(mode: PlainEnglishSummaryOptions["mode"]): string[] {
+function defaultNextSteps(
+  mode: PlainEnglishSummaryOptions["mode"]
+): readonly (string | TerminalNextStep)[] {
   if (mode === "connected") {
     return [
-      "npx aibill --group-by agent drill into another dimension"
+      { command: "npx aibill --group-by agent", description: "drill into another dimension" }
     ];
   }
   if (mode === "local-logs") {
     return [
-      "npx aibill --group-by project  see which project has the most observed activity",
+      { command: "npx aibill --group-by project", description: "see which project has the most observed activity" },
       "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com"
     ];
   }
   return [
-    "npx aibill connect openai    set up OpenAI Admin; then run the printed sync command",
-    "npx aibill connect anthropic set up Anthropic Admin; then run the printed sync command"
+    { command: "npx aibill connect openai", description: "set up OpenAI Admin; then run the printed sync command" },
+    { command: "npx aibill connect anthropic", description: "set up Anthropic Admin; then run the printed sync command" }
   ];
 }
 
@@ -2353,12 +2397,33 @@ function scopedCommandRenderer(
  * emit do not stop a POSIX shell expanding `$(...)`, backticks, or `$VAR`, so
  * a path containing them executed on paste. Single quotes expand nothing.
  */
-export function shellPathPointer(tool: string, path: string, cwd?: string): string {
+export function shellPathPointer(
+  tool: string,
+  path: string,
+  cwd?: string,
+  platform: NodeJS.Platform = process.platform
+): string {
   const separator = path.lastIndexOf("/") === -1 ? path.lastIndexOf("\\") : path.lastIndexOf("/");
   const directory = separator === -1 ? "" : path.slice(0, separator);
   const base = separator === -1 ? path : path.slice(separator + 1);
   const relative = cwd !== undefined && directory === cwd && base.length > 0;
   const argument = relative ? base : path;
+  const needsQuotes = !relative || /[\s'"$`\\&;|<>()*?!#~%^]/u.test(argument);
+  if (!needsQuotes) return `${tool} ${argument}`;
+  if (platform === "win32") {
+    // cmd.exe quotes with DOUBLE quotes and has no single-quote syntax at all,
+    // so the POSIX form printed `start 'C:\Users\<you>\r.html'` — quotes that
+    // cmd passes through as literal characters, naming a file that does not
+    // exist. Windows filenames may not contain `"`, so a double-quoted path
+    // never needs escaping and can never be left unterminated.
+    //
+    // Known limit, stated rather than papered over: cmd expands %VAR% inside
+    // double quotes and offers no in-quote escape for it. A path containing
+    // %NAME% where NAME is a defined variable will still be substituted. The
+    // auto-open path does not have this problem — it never goes through a
+    // shell (see decideReportAutoOpen's rundll32 branch).
+    return `${tool} "${argument}"`;
+  }
   // SINGLE quotes. Inside double quotes a POSIX shell still expands $(...),
   // backticks and $VAR, so a double-quoted path containing a command
   // substitution ran it the moment it was pasted — the previous quoted form
@@ -2367,8 +2432,7 @@ export function shellPathPointer(tool: string, path: string, cwd?: string): stri
   // literally is the single quote itself; the standard '\'' idiom closes the
   // literal, emits an escaped quote, and reopens it, so every path is
   // representable and none is left bare.
-  const needsQuotes = !relative || /[\s'"$`\\&;|<>()*?!#~]/u.test(argument);
-  return `${tool} ${needsQuotes ? `'${argument.replaceAll("'", "'\\''")}'` : argument}`;
+  return `${tool} '${argument.replaceAll("'", "'\\''")}'`;
 }
 
 export type CommandSummaryRow = {

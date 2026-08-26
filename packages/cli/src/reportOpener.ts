@@ -82,7 +82,11 @@ export type ReportOpenDecision =
  */
 export function platformOpenCommand(platform: NodeJS.Platform = process.platform): string {
   if (platform === "darwin") return "open";
-  if (platform === "win32") return "start";
+  // `start ""`, not bare `start`. cmd's `start` reads a QUOTED first argument
+  // as the new window's title, so `start "C:\...\ai-receipt.html"` opens an
+  // empty console window titled with the path and never opens the file. The
+  // empty title is the canonical fix, and every path we print is quoted.
+  if (platform === "win32") return 'start ""';
   return "xdg-open";
 }
 

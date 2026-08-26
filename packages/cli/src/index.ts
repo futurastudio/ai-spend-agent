@@ -233,6 +233,7 @@ import {
   groupByDimensions,
   shellPathPointer,
   type CommandSummaryNextStep,
+  type TerminalNextStep,
   type CommandSummaryRow,
   type GroupByDimension,
   type SpendReportInput
@@ -1079,15 +1080,23 @@ function renderContextHealth(health: ContextHealthResult, telemetryDisclosure?: 
 function quickstartNextSteps(
   mode: "demo" | "connected" | "local-logs",
   detected: DetectedCredential[]
-): string[] {
+): (string | TerminalNextStep)[] {
   // Connect/verify guidance now lives in the readout's APPLY/VERIFY sections;
   // this footer only carries what those can't know (detected local keys) and
   // the report/waitlist pointers.
-  const steps: string[] = [];
+  // Command steps are STRUCTURED, never hand-padded: every option handed to
+  // the readout passes through a sanitizer that collapses whitespace runs, so
+  // "npx aibill report              write a shareable report" reached the user
+  // as "npx aibill report write a shareable report" — no visible boundary
+  // between the command and its description (0.9.6).
+  const steps: (string | TerminalNextStep)[] = [];
   if (detected.length > 0) {
     const names = detected.map((credential) => `${credential.provider} (${credential.hint})`).join(", ");
     steps.push(`Found local key${detected.length === 1 ? "" : "s"}: ${names}`);
-    steps.push(`npx aibill connect ${detected[0]!.provider}   set up the admin connector, then sync provider-reported cost`);
+    steps.push({
+      command: `npx aibill connect ${detected[0]!.provider}`,
+      description: "set up the admin connector, then sync provider-reported cost"
+    });
   }
   steps.push(
     mode === "demo"
@@ -1095,10 +1104,13 @@ function quickstartNextSteps(
       // roots write ./ai-spend-report.{md,html} machine-wide-style, project
       // folders keep .ai-spend-agent/report.* (the old mkdir demo-workspace
       // preamble is no longer needed for the command to run as printed).
-      ? "npx aibill report --sample     write a clearly labeled demo report right here"
-      : "npx aibill report              write a shareable Markdown + HTML report"
+      ? { command: "npx aibill report --sample", description: "write a clearly labeled demo report right here" }
+      : { command: "npx aibill report", description: "write a shareable Markdown + HTML report" }
   );
-  steps.push("npx aibill --group-by project  see which project has the most observed activity");
+  steps.push({
+    command: "npx aibill --group-by project",
+    description: "see which project has the most observed activity"
+  });
   steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com");
   if (mode === "demo") {
     // Static pointer only — sample output is built for recordings and
@@ -1529,7 +1541,7 @@ async function indexEvidenceCommand(
           `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
             `${formatBytes(totalBytes)} streamed across ${passes} pass(es)`
         ],
-        next: { reason: "your evidence is fully indexed — run the token test", command: improveRuntimeCommand }
+        next: { reason: "your evidence is fully indexed — run the token test", command: projectScopedPointer(improveRuntimeCommand, args.path) }
       }));
     }
     if (passBytes === 0 && stillConverging === 0) {
@@ -1541,7 +1553,7 @@ async function indexEvidenceCommand(
           `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
             `${coverage.skippedForBudget} file(s) remain outside the read budget`
         ],
-        next: { reason: "run the token test on the evidence that is indexed", command: improveRuntimeCommand }
+        next: { reason: "run the token test on the evidence that is indexed", command: projectScopedPointer(improveRuntimeCommand, args.path) }
       }));
     }
   }
@@ -2618,7 +2630,7 @@ async function statuslineCommand(
   if (action === "install") return installStatuslineCommand(args, runtime);
   if (action === "uninstall") return uninstallStatuslineCommand(runtime);
   if (action === "refresh") return refreshStatuslineCommand(args, runtime);
-  if (action === "expand") return expandStatuslineCommand(runtime);
+  if (action === "expand") return expandStatuslineCommand(args, runtime);
   return {
     exitCode: 1,
     stdout: "",
@@ -2979,6 +2991,18 @@ async function refreshStatuslineCommand(
     detectedPlanOverride = [override];
   }
 
+  // `statusline refresh` scans an approved workspace root, so a broad root is
+  // a genuine refusal — but it must SOUND like one (0.9.6). It used to let
+  // resolveSafeScanRoot throw, which the crash wrapper rendered as "aibill hit
+  // an unexpected error: Refusing to scan …" plus "run diagnostics before
+  // retrying" — the tool reporting its own deliberate safety check as a bug.
+  // `statusline refresh` scans an approved workspace root, so a broad root is
+  // a genuine refusal — but it must SOUND like one (0.9.6). It used to let
+  // resolveSafeScanRoot throw, which the crash wrapper rendered as "aibill hit
+  // an unexpected error: Refusing to scan …" plus "run diagnostics before
+  // retrying" — the tool reporting its own deliberate safety check as a bug.
+  const refreshGuard = await guardExactProjectRoot("statusline refresh", args.path);
+  if (refreshGuard) return refreshGuard;
   const rootPath = await resolveSafeScanRoot(args.path);
   const cacheDirectory = process.env.AIBILL_CACHE_DIR;
   await preflightInitCache(cacheDirectory);
@@ -3045,7 +3069,7 @@ async function refreshStatuslineCommand(
  * snapshot; `runways[]` carries both limits), never bypassing the contract.
  * Printed command output, not a hook line.
  */
-async function expandStatuslineCommand(runtime: CliRuntimeOptions): Promise<CliResult> {
+async function expandStatuslineCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
   const cache = await readStatuslineCache({
     cacheDirectory: process.env.AIBILL_CACHE_DIR,
     homeDirectory: runtime.homeDirectory
@@ -3055,8 +3079,8 @@ async function expandStatuslineCommand(runtime: CliRuntimeOptions): Promise<CliR
       exitCode: 1,
       stdout: "",
       stderr: cache.status === "missing"
-        ? "aibill statusline expand needs a refreshed private cache: run `npx aibill statusline refresh` first."
-        : "aibill statusline expand could not read the private cache safely; run `npx aibill statusline refresh`."
+        ? `aibill statusline expand needs a refreshed private cache: run \`${projectScopedPointer(actionRuntimeCommand("statusline refresh"), args.path)}\` first.`
+        : `aibill statusline expand could not read the private cache safely; run \`${projectScopedPointer(actionRuntimeCommand("statusline refresh"), args.path)}\`.`
     };
   }
   const now = runtime.statuslineNow ?? new Date();
@@ -3065,7 +3089,7 @@ async function expandStatuslineCommand(runtime: CliRuntimeOptions): Promise<CliR
     return ok([
       "aibill subscriptions · 30d window",
       "  no detected subscription evidence in the private cache",
-      "  run `npx aibill statusline refresh` after using Claude Code or Codex"
+      `  run \`${projectScopedPointer(actionRuntimeCommand("statusline refresh"), args.path)}\` after using Claude Code or Codex`
     ].join("\n"));
   }
   const card = statuslineSnapshotToResultCard(snapshot, now);
@@ -5225,6 +5249,20 @@ async function reportCardCommand(args: ParsedArgs, runtime: CliRuntimeOptions = 
  */
 function isBroadScanRoot(requestedPath: string): boolean {
   return broadScanRootKind(requestedPath) !== undefined;
+}
+
+/**
+ * A project-scoped command, printed so it WORKS from where it was printed.
+ *
+ * The founder's most-repeated complaint class (0.9.4 report, 0.9.6 index, and
+ * these): a surface running machine-wide prints a bare project-scoped command,
+ * the user copies it, and it friendly-refuses in the very directory that
+ * printed it. Commands that genuinely need one project carry their own `cd`
+ * from a broad root — a PATH placeholder, never `<project>`, which the shell
+ * would read as redirection.
+ */
+function projectScopedPointer(command: string, requestedPath: string): string {
+  return isBroadScanRoot(requestedPath) ? `cd /path/to/project && ${command}` : command;
 }
 
 type BroadScanRootKind = "home" | "filesystem-root" | "contains-home" | "system-directory";

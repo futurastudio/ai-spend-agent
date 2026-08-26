@@ -40,6 +40,7 @@ export {
   type CommandSummaryRow,
   type GroupByDimension,
   type PlainEnglishSummaryOptions,
+  type TerminalNextStep,
   type RankedCutCandidate,
   type RankedCutCandidates
 } from "./terminal.js";
@@ -3469,7 +3470,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         <div class="footer">
           <span><span class="g-accent">$</span> npx aibill <span class="dim">· reproduce this</span></span>
-          <span><span class="g-accent">$</span> ${escapeHtml(tokenExperiment ? tokenExperiment.nextCommand : !qualitativeComplete ? aibillCommandV0("index") : aibillCommandV0(`apply --since-days ${windowDays}`))} <span class="dim">· ${tokenExperiment ? "review canonical token test" : !qualitativeComplete ? "finish reading the queued transcripts" : machineWide ? "run from a project folder for its approval + rollback plan" : "inspection plan, approval + rollback"}</span></span>
+          <span><span class="g-accent">$</span> ${escapeHtml(tokenExperiment ? tokenExperiment.nextCommand : !qualitativeComplete ? aibillCommandV0("index") : machineWide ? `cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}` : aibillCommandV0(`apply --since-days ${windowDays}`))} <span class="dim">· ${tokenExperiment ? "review canonical token test" : !qualitativeComplete ? "finish reading the queued transcripts" : machineWide ? "run from a project folder for its approval + rollback plan" : "inspection plan, approval + rollback"}</span></span>
           <span class="dim">free · MIT · deterministic arithmetic over local transcripts · made with aibill · asktilden.com</span>
         </div>
       </div>

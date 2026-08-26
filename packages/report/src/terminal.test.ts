@@ -1381,7 +1381,50 @@ describe("shellPathPointer — un-half-copyable artifact pointers (0.9.6)", () =
   it("handles windows separators", () => {
     expect(shellPathPointer("open", "C:\\Users\\testuser\\ai-receipt.html", "C:\\Users\\testuser"))
       .toBe("open ai-receipt.html");
-    expect(shellPathPointer("open", "C:\\Users\\testuser\\out\\ai-receipt.html", "C:\\Users\\testuser"))
+    expect(shellPathPointer("open", "C:\\Users\\testuser\\out\\ai-receipt.html", "C:\\Users\\testuser", "linux"))
       .toBe("open 'C:\\Users\\testuser\\out\\ai-receipt.html'");
+  });
+
+  /**
+   * F2 (0.9.6): quoting is per-PLATFORM, not one syntax everywhere. cmd.exe has
+   * no single-quote syntax at all — it passes `'` through as a literal
+   * character — so the POSIX form printed a command naming a file that does
+   * not exist. Windows is a launch audience.
+   */
+  describe("per-platform quoting", () => {
+    const spaced = "C:\\Users\\testuser\\out\\my report.html";
+    const meta = "C:\\Users\\testuser\\out\\r&d (v2).html";
+
+    it("win32 uses cmd double-quote rules", () => {
+      expect(shellPathPointer("start \"\"", spaced, undefined, "win32"))
+        .toBe("start \"\" \"C:\\Users\\testuser\\out\\my report.html\"");
+      // `&` and `(` are cmd metacharacters: unquoted, `&` would terminate the
+      // command and run the rest as a second one.
+      expect(shellPathPointer("start \"\"", meta, undefined, "win32"))
+        .toBe("start \"\" \"C:\\Users\\testuser\\out\\r&d (v2).html\"");
+      // Never POSIX quoting on win32 — cmd would treat these as literal.
+      expect(shellPathPointer("start \"\"", spaced, undefined, "win32")).not.toContain("'");
+    });
+
+    it("darwin and linux use POSIX single-quote rules", () => {
+      for (const platform of ["darwin", "linux"] as const) {
+        const posixSpaced = "/Users/testuser/out/my report.html";
+        const posixMeta = "/Users/testuser/out/r&d $(v2).html";
+        expect(shellPathPointer("open", posixSpaced, undefined, platform))
+          .toBe("open '/Users/testuser/out/my report.html'");
+        expect(shellPathPointer("open", posixMeta, undefined, platform))
+          .toBe("open '/Users/testuser/out/r&d $(v2).html'");
+        expect(shellPathPointer("open", posixSpaced, undefined, platform)).not.toContain("\"");
+      }
+    });
+
+    it("a same-directory name with a cmd metacharacter is still quoted on win32", () => {
+      expect(shellPathPointer("start \"\"", "C:\\Users\\testuser\\a&b.html", "C:\\Users\\testuser", "win32"))
+        .toBe("start \"\" \"a&b.html\"");
+      // A percent sign is the documented limit — it is quoted, not escaped,
+      // because cmd offers no in-quote escape for %VAR%.
+      expect(shellPathPointer("start \"\"", "C:\\Users\\testuser\\100%.html", "C:\\Users\\testuser", "win32"))
+        .toBe("start \"\" \"100%.html\"");
+    });
   });
 });

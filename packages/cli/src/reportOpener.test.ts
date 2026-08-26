@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { decideReportAutoOpen, openReportInBrowser, type ReportOpenDecision } from "./reportOpener.js";
+import { decideReportAutoOpen, openReportInBrowser, platformOpenCommand, type ReportOpenDecision } from "./reportOpener.js";
 
 /**
  * 0.9.5 auto-open: the platform-opener decision is pure and synchronous, the
@@ -24,6 +24,32 @@ function baseline(overrides: Partial<Parameters<typeof decideReportAutoOpen>[0]>
     ...overrides
   });
 }
+
+/**
+ * The command a USER is told to type, which is not always the one we spawn
+ * (0.9.6). Every printed "open this report" pointer hardcoded macOS `open`,
+ * so Linux and Windows users were handed a command they do not have.
+ */
+describe("platformOpenCommand — the TYPED opener", () => {
+  it("names the opener each platform actually ships", () => {
+    expect(platformOpenCommand("darwin")).toBe("open");
+    expect(platformOpenCommand("linux")).toBe("xdg-open");
+    expect(platformOpenCommand("freebsd")).toBe("xdg-open");
+  });
+
+  it("win32 carries the empty title cmd's `start` requires", () => {
+    // `start "C:\\path\\r.html"` reads the quoted argument as the new WINDOW
+    // TITLE and opens an empty console instead of the file. The empty title
+    // makes the following quoted path the actual target.
+    expect(platformOpenCommand("win32")).toBe('start ""');
+  });
+
+  it("never prints macOS `open` to a non-macOS user", () => {
+    for (const platform of ["linux", "win32", "freebsd"] as const) {
+      expect(platformOpenCommand(platform)).not.toBe("open");
+    }
+  });
+});
 
 describe("decideReportAutoOpen — platform openers", () => {
   it("darwin uses the built-in `open`", () => {
