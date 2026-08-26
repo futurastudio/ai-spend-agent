@@ -38,6 +38,26 @@ Generate a token with `openssl rand -hex 32`. Rotating it means changing both
 places; until both match, the alert jobs fail with `401` — which is loud, not
 silent, and therefore safe.
 
+### Setup order matters — do this before merging
+
+The alerts are deliberately loud about their own misconfiguration, so a
+half-finished setup emails you every 30 minutes. Do it in this order and that
+never happens:
+
+1. **Vercel** → project → Settings → Environment Variables → add
+   `OPS_HEALTH_TOKEN` (Production). Don't redeploy yet.
+2. **GitHub** → Settings → Secrets and variables → Actions → add
+   `OPS_HEALTH_TOKEN` with the identical value.
+3. **Merge the branch.** The Vercel deploy that follows ships the
+   `/api/ops/*` routes with the env var already in place.
+4. **Confirm** with a manual run: Actions → *Launch alerts* → Run workflow.
+   Both jobs should go green within a minute.
+
+Doing it in any other order means the workflow exists before the endpoints
+or the secret do, and every scheduled run fails with `404` or `401` until you
+catch up. Nothing breaks — the emails are just noise you'd have to ignore,
+which is the one habit this whole system depends on you not forming.
+
 ## Alerts
 
 ### `error_rate_high` — the fleet is failing more than usual
