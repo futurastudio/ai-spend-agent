@@ -369,6 +369,9 @@ function renderPlainEnglishSummary(
       lines.push(`  ${c.dim(localProjectDefinition())}`);
     }
     lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
+    if (options.mode === "local-logs") {
+      lines.push(`  ${c.dim(sessionDatingNote)}`);
+    }
     lines.push("");
     lines.push(indentBlock(renderBreakdownTable(
       focusedEntries,
@@ -425,6 +428,9 @@ function renderPlainEnglishSummary(
     lines.push(`  ${c.dim(localProjectDefinition())}`);
   }
   lines.push(`  ${c.dim(dataWindowLine(fullRecords))}`);
+  if (options.mode === "local-logs") {
+    lines.push(`  ${c.dim(sessionDatingNote)}`);
+  }
   lines.push("");
   lines.push(indentBlock(renderBreakdownTable(
     entries,
@@ -1475,6 +1481,16 @@ function modeTrustLine(
   }
   return `${prefix}  ${c.yellow(c.bold("ESTIMATED EVIDENCE"))}\n  ${c.dim("confirm the source before acting")}`;
 }
+
+/**
+ * Label honesty (0.9.6): a local agent session aggregate is dated to the
+ * session's LAST activity, so a session spanning several days records once,
+ * on its final day. Dating math is unchanged — this phrase makes the label
+ * say so wherever record-derived dates sit next to local dollar amounts.
+ * Shared with the HTML report header so the two surfaces cannot drift.
+ */
+export const sessionDatingNote =
+  "dates = each session's last activity; a long session records on its final day";
 
 /** "window: 14 days of data (2026-06-20 → 2026-07-04)" for drill-down tables. */
 function dataWindowLine(records: UsageRecord[]): string {

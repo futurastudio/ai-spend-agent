@@ -1976,6 +1976,27 @@ describe("cross-surface parity (report.md / report.html)", () => {
     }
   });
 
+  it("D5: md and html date groupings carry the last-activity dating note", () => {
+    // A record's day is the session's LAST activity (a long session records on
+    // its final day). The label says so on every surface that dates local
+    // dollars; the dating math itself is pinned elsewhere and unchanged.
+    const records = [
+      localDayRecord("d-1", "app", "claude-opus-4-8", 10, 5),
+      localDayRecord("d-2", "app", "claude-opus-4-8", 10, 25)
+    ];
+    const reportInput = parityInput(records);
+    const markdown = generateMarkdownReport(reportInput);
+    const html = generateHtmlReport(reportInput);
+    expect(markdown).toContain(
+      "- Dates are each session's last activity; a long session records on its final day."
+    );
+    // escapeHtml covers & < > and double quotes; an apostrophe in text content
+    // needs no entity, so the note renders with a literal '.
+    expect(html).toContain(
+      "dates = each session's last activity; a long session records on its final day"
+    );
+  });
+
   it("D2: the html header states the derived days of data with span, never the request window", () => {
     // 3 days of data inside a 30-day request window.
     const records = [

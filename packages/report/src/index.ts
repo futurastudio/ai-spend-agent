@@ -27,7 +27,7 @@ import type {
   WasteFindingV0
 } from "@agent-finops/core";
 
-import { rankCutCandidates, type RankedCutCandidate } from "./terminal.js";
+import { rankCutCandidates, sessionDatingNote, type RankedCutCandidate } from "./terminal.js";
 
 export {
   generateCommandSummary,
@@ -394,6 +394,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     "",
     `- Shared UTC window: ${evidenceWindow} (${windowDays} days).`,
     `- ${localFinancialHeadline(financialCoverage, "day + agent + model + project aggregate")}`,
+    "- Dates are each session's last activity; a long session records on its final day.",
     `- Session transcripts: ${qualitativeCoverage.readCompletely} of ${qualitativeCoverage.selectedFiles} read completely${qualitativeCoverage.skippedForBudget > 0 ? `; ${fileCountPhrase(qualitativeCoverage.skippedForBudget)} skipped by budget` : ""}.`,
     `- Scoped candidates: ${candidateCount}. A candidate opens an investigation; it does not prove that a change is safe, useful, or financially material.`,
     "- Provider-billed cost is not inferred from local transcripts. Connect an official provider report separately when a cash claim is required.",
@@ -3416,7 +3417,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     <div class="term">
       <div class="term-bar"><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
-        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · ${escapeHtml(sessionDatingNote)} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
         ${qualitativeNotice ? `<p class="dim note-line"><strong>${formatProse(qualitativeNotice)}</strong></p>` : ""}
         ${tokenExperiment ? `<p class="dim note-line"><strong>CANONICAL TOKEN TEST ${escapeHtml(tokenExperiment.lifecycle.toUpperCase())} · ${escapeHtml(tokenExperiment.id)}</strong> · ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))} · matched-session token evidence only, not provider-billed savings, accepted-outcome proof, or ROI · continue with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span></p>` : ""}
 

@@ -221,6 +221,58 @@ describe("generatePlainEnglishSummary", () => {
     expect(text.trimEnd().endsWith("› npx aibill report-card  write a redacted, shareable SVG + caption")).toBe(true);
   });
 
+  it("local-logs date windows carry the last-activity dating note; demo does not claim it", async () => {
+    // Local agent records specifically: the dating claim is about session
+    // aggregates, so the fixture must be local_agent_logs (the shared sample
+    // fixture is provider-billed and correctly never makes this claim).
+    const records: UsageRecord[] = [1, 2, 3].map((day) => ({
+      id: `local-dating-${day}`,
+      timestamp: `2026-08-0${day}T00:00:00.000Z`,
+      source: {
+        id: "local-agent-logs",
+        name: "Local agent session logs",
+        provider: "anthropic",
+        confidence: "estimated",
+        observedFrom: "claude-code session JSONL (this machine)"
+      },
+      project: "app",
+      model: "claude-opus-4-8",
+      inputTokens: 1_000 * day,
+      outputTokens: 100 * day,
+      amountUsd: 1.5 * day,
+      costConfidence: "estimated",
+      agentId: "claude-code",
+      providerCostType: "local_agent_logs",
+      usageGranularity: "daily_aggregate"
+    }));
+    const summary = analyzeSpend(records);
+    const note = "dates = each session's last activity; a long session records on its final day";
+
+    // Full readout: the note sits directly under the record-derived window
+    // line. The compact receipt has no window line, so ask for the full view.
+    // The note wraps at terminal width, so compare on normalized whitespace.
+    const full = generatePlainEnglishSummary(summary, { records, color: false, mode: "local-logs", view: "full" });
+    expect(normalizeWhitespace(full)).toContain(note);
+    const fullLines = full.split("\n");
+    const windowIndex = fullLines.findIndex((line) => /window: \d+ days? of data/.test(line));
+    expect(windowIndex).toBeGreaterThan(-1);
+    expect(fullLines[windowIndex + 1]).toContain("dates = each session's last activity");
+
+    // Focused --group-by view renders the same qualifier with its window line.
+    const focused = generatePlainEnglishSummary(summary, {
+      records,
+      color: false,
+      mode: "local-logs",
+      view: "breakdown",
+      groupBy: "project"
+    });
+    expect(normalizeWhitespace(focused)).toContain(note);
+
+    // Demo/sample data is fictional; the local-agent dating claim stays off it.
+    const demo = generatePlainEnglishSummary(summary, { records, color: false, mode: "demo" });
+    expect(normalizeWhitespace(demo)).not.toContain(note);
+  });
+
   it("prefixes every suggested command with npx (bare bins are not on PATH for npx users)", async () => {
     const records = await sample();
     const summary = analyzeSpend(records);
