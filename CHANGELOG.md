@@ -5,6 +5,91 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.7 — 2026-08-27
+
+Your recommendations now quote the evidence they were built from, and the
+guard that protects those recommendations stopped eating them.
+
+### The context recommendation tells you what it saw
+
+Before this release, every ranked context finding carried the same sentence.
+A fan-out across six projects differed only in a rounded dollar, so there
+was no way to tell which project to open first. Worse, the sentence quoted
+the TRIGGER — "at least 100k summed input/cache tokens" — while the median
+day it was describing was 13x to 153x larger, and it told you to inspect
+"measured instruction-file size", a step aibill does not perform.
+
+It now says what was actually observed, using values it already had:
+
+> agent-finops — median day carried 116.3M input+cache tokens against
+> 224.0K output (519:1). Heaviest day 2026-08-19 carried 511.6M, 4.4x the
+> median day; dates are each session's last activity. That project holds
+> 76% of the flagged claude-code value observed in this window (rank 1 of 8
+> flagged projects). 2 models ran there: claude-opus-4-8, claude-sonnet-4-6.
+> Inspect the sessions behind 2026-08-19 before proposing one reversible
+> change.
+
+Every figure is a reduction over records the candidate already owned: no new
+reads, no new estimate, no counterfactual, no new dollar. Each clause
+disappears when its evidence is absent — no peak day under 2x, no model mix
+under two models, no rank with one flagged project. The truth contract is
+unchanged: reduction is still unproven, and value is still API-equivalent
+value observed in a window, not billed spend.
+
+The fan-out line now separates its members by the quantity that explains
+their dollars — `agent-finops ~$1,505 (116.3M/day)` — instead of by price
+alone.
+
+**One arithmetic correction.** The concentration percentage used to divide
+by a machine-wide total while the table above it divided by something else,
+so one screen could show 83%, 46% and 76% for the same project. All three
+were true and it read like a mistake. The percentage now divides by the
+same set its rank clause counts, so it reconciles with the dollars printed
+beside it and the members of a fan-out sum to 100%.
+
+### An ordinary repo name no longer deletes your recommendation
+
+aibill screens text it did not write — folder names, model ids, operation
+labels off your provider's invoice — before putting it into a sentence a
+coding agent will read. That screen was running on the finished sentence
+instead of on the borrowed words, so it kept pairing a name of yours with a
+word of ours and deleting the whole finding.
+
+If your repo was called `write-ahead-log`, `delete-queue`, `ignore-list` or
+`edit-service`, `report.md` printed `[unsafe metadata omitted]` where the
+recommendation should have been — and for three of those names it took the
+dollar figure with it. The terminal, which does not screen, printed the
+finding in full. Two surfaces disagreeing about a number is the one thing
+this product cannot do. Eight of eleven ordinary repo names were affected.
+
+The screen now runs on the borrowed words alone, before they reach any
+sentence, so an ordinary name has nothing of ours to pair with. Related
+fixes in the same pass:
+
+- **Your provider's own billing words are no longer withheld.** `cache
+  write tokens` is Anthropic's prompt-caching vocabulary and arrives on
+  real invoice lines; it was being treated as an instruction. A directive
+  now has to include a quantifier — `write ALL tokens` is an instruction,
+  `cache write tokens` is a line item. Across 146 real strings (Anthropic
+  and OpenAI caching vocabulary, real invoice line items, real filenames,
+  ordinary repo names) false positives went from 18 to 0, with hostile
+  detection unchanged.
+- **`aibill context` names your files again.** Dotted filenames like
+  `override.ts` and `ignore.md` were being withheld by a command whose
+  entire job is naming exact files.
+- **Long names keep their money.** A project name past the display bound
+  used to push the dollar figure off the end of the line in `report.md`
+  while the terminal still showed it.
+- **What reaches your coding agent matches what reaches you.** The MCP
+  tools return structured data alongside the sentences built from it. A
+  screened sentence could sit beside an unscreened array holding the same
+  values, so the agent received text the report had redacted. Every
+  producer now screens the data and the prose together, and a test walks
+  the full inventory of both.
+
+Nothing about your numbers changes: the arithmetic, the accounting basis,
+and every truth caveat are identical to 0.9.6.
+
 ## 0.9.6 — 2026-08-26
 
 Two things ship together: your Codex spend is now counted on a corrected

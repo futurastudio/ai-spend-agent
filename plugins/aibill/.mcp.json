@@ -5,7 +5,7 @@
       "args": [
         "--yes",
         "--package",
-        "@agent-finops/mcp@0.9.6",
+        "@agent-finops/mcp@0.9.7",
         "ai-spend-mcp"
       ]
     }
