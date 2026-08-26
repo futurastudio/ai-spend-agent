@@ -1713,7 +1713,14 @@ describe("board-style report generation", () => {
     for (const report of [localMarkdown, localHtml]) {
       expect(report).toContain("QUALITATIVE INDEX PARTIAL");
       expect(report).toContain("2/4 selected files read completely");
-      expect(report).toContain(contextCommand);
+      // 0.9.6 (founder-found): a suppressed section must state what the user
+      // should DO, in words they can act on — not describe internal state.
+      // The old copy read "No action candidate is emitted because qualitative
+      // indexing is unknown"; nobody outside this codebase can act on that.
+      expect(report).toContain("2 of 4 session transcripts have been read so far");
+      expect(report).toContain(aibillCommandV0("index"));
+      expect(report).not.toContain("qualitative indexing is");
+      expect(report).not.toContain("Complete the bounded transcript index");
       expect(report).not.toContain(contextHealth.headline);
       expect(report).not.toContain("partial-only-config-item");
       expect(report).not.toContain("trimming context (below)");
@@ -1730,7 +1737,13 @@ describe("board-style report generation", () => {
     const connectedHtml = generateHtmlReport(connectedGapInput);
     for (const report of [connectedMarkdown, connectedHtml]) {
       expect(report).toContain("QUALITATIVE INDEX PARTIAL");
-      expect(report).toContain("qualitative index");
+      // 0.9.6: the connected/board renderer degrades in the same actionable
+      // voice as the local one — no "qualitative indexing is <state>" copy
+      // survives on ANY report surface.
+      expect(report).toContain("2 of 4 session transcripts have been read so far");
+      expect(report).toContain(aibillCommandV0("index"));
+      expect(report).not.toContain("qualitative indexing is");
+      expect(report).not.toContain("Complete the bounded transcript index");
       expect(report).not.toContain("Route workloads by cost sensitivity");
       expect(report).not.toContain("Approve a routing policy");
       expect(report).not.toContain("$0.00 (recommended plan");

@@ -101,6 +101,9 @@ import {
   verifyConnectedSourceRegistryTrustReceipt,
   writeConnectedSpendTrustReceipt,
   type DetectedPlan,
+  generateCutList,
+  type CutAction,
+  type DeadContextResult,
   loadDeadContext,
   sampleDeadContext,
   sanitizeLocalActivityText,
@@ -223,10 +226,12 @@ import {
   generateMarkdownReport,
   generatePlainEnglishSummary,
   generatePolicyConfigDraftMarkdown,
+  generateReceiptCompanionHtml,
   generateReportCardCaption,
   generateReportCardSvg,
   generateVerificationPlanMarkdown,
   groupByDimensions,
+  shellPathPointer,
   type CommandSummaryNextStep,
   type CommandSummaryRow,
   type GroupByDimension,
@@ -468,7 +473,7 @@ export async function runCli(
   }
 
   if (args.command === "report-card") {
-    return reportCardCommand(args);
+    return reportCardCommand(args, runtime);
   }
 
   if (args.command === "glance") {
@@ -559,6 +564,48 @@ type InstantReadData = {
   financialCoverageComplete?: boolean;
 };
 
+/**
+ * The ONE evidence bundle every whole-machine surface renders from (0.9.6).
+ *
+ * Founder-found regression this exists to make structurally impossible:
+ * `npx aibill --full` run from HOME produced real ranked recommendations and
+ * real plan context, while `npx aibill report` run from the SAME home wrote
+ * an artifact whose ACT and VERIFY sections had degraded to "qualitative
+ * indexing is unknown". Both commands called {@link loadInstantReadData},
+ * but the report path threw away everything except the financial records —
+ * including the transcript index that gates every action claim — and then
+ * built its own thinner input. Two parallel builders, one of them wrong.
+ *
+ * There is now one builder. The readout and the written report receive the
+ * same records, the same transcript index, the same detected plans, the same
+ * dead-context inventory, and — critically — the SAME `actionCandidates`
+ * array, derived once here. Neither surface derives candidates on its own,
+ * so they cannot disagree about what to investigate.
+ */
+type BroadScanEvidence = {
+  records: UsageRecord[];
+  mode: InstantReadMode;
+  warnings: string[];
+  providerCoverage?: ProviderCoverageStatus;
+  /** Headline records: provider-billed rows in connected mode, else all. */
+  summaryRecords: UsageRecord[];
+  /**
+   * The exact record set every candidate/analysis surface reads. Connected
+   * mode keeps the local API-equivalent axis alongside billed rows so the
+   * two never blend but neither is erased.
+   */
+  analysisRecords: UsageRecord[];
+  summary: SpendSummary;
+  /** Derived ONCE from {@link analysisRecords}; shared by every surface. */
+  actionCandidates: CutAction[];
+  detectedPlans: DetectedPlan[];
+  deadContext?: DeadContextResult;
+  actionEvidence?: LocalAgentLogResult;
+  codexInvocationFiles?: ParsedInvocationFile[];
+  localFinancialRecords?: UsageRecord[];
+  financialCoverageComplete: boolean;
+};
+
 async function quickstartCommand(
   args: ParsedArgs,
   runtime: CliRuntimeOptions = {}
@@ -572,60 +619,30 @@ async function quickstartCommand(
       stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
     };
   }
+  // ONE evidence bundle, shared with the machine-wide `report` (0.9.6) so the
+  // readout and the written artifact can never disagree.
+  const evidence = await loadBroadScanEvidence(args, sinceDays);
   const {
     records,
     mode,
     warnings,
     providerCoverage,
-    codexInvocationFiles,
     actionEvidence,
-    localFinancialRecords,
-    financialCoverageComplete
-  } = await loadInstantReadData(args);
+    financialCoverageComplete,
+    summaryRecords,
+    summary,
+    detectedPlans,
+    deadContext
+  } = evidence;
   if (records.length === 0) {
     return noEvidenceResult("receipt", warnings, sinceDays, runtime.telemetryDisclosure);
   }
-  const summaryRecords = mode === "connected"
-    ? selectProviderFinancialHeadlineRecords(records)
-    : records;
-  const summary = analyzeSpend(summaryRecords);
-  // Connected receipts stay billed-primary but never ERASE the estimated
-  // axis: local transcript records ride along so subscription rows keep
-  // their ~ API-equivalent figures next to billed money (C-lane §1.4). The
-  // renderer classifies each record by basis and never blends the totals.
-  const receiptRecords = mode === "connected" && (localFinancialRecords?.length ?? 0) > 0
-    ? [...summaryRecords, ...localFinancialRecords!]
-    : summaryRecords;
+  const receiptRecords = evidence.analysisRecords;
   // For real local-log users the by-project view is the flagship table
   // ("which project burns my plan"); demo/connected keep by-model.
   const groupBy = args.groupBy ?? (mode === "local-logs" ? "project" : "model");
   const color = args.noColor ? false : undefined;
   const outputWidth = terminalOutputWidth();
-
-  // Persona: --plan override wins; otherwise read the plans the coding agents
-  // themselves persisted locally (read-only, whitelisted fields, no network).
-  let detectedPlans: DetectedPlan[];
-  if (args.sample) {
-    // An explicit sample run must be deterministic and safe to record/share.
-    // Never mix the developer's real local plan into illustrative output.
-    detectedPlans = [];
-  } else if (args.plan) {
-    const override = planOverrideFromFlag(args.plan);
-    if (!override) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: `Unknown --plan "${sanitizeSecretishError(args.plan)}". Valid plans: ${subscriptionPlans.map((plan) => plan.id).join(", ")}`
-      };
-    }
-    detectedPlans = [override];
-  } else {
-    detectedPlans = await detectLocalPlans({
-      // Env overrides keep tests (and unusual installs) isolated from $HOME.
-      claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
-      codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
-    }).catch(() => []);
-  }
 
   // Surface auto-detected credentials so the user knows their next 2-min step,
   // without ever printing a raw secret.
@@ -640,33 +657,6 @@ async function quickstartCommand(
       });
   const nextSteps = quickstartNextSteps(mode, detection.credentials);
 
-  // Dead-context cost, globalized across the user's whole Claude Code setup
-  // (all projects' MCP + user-scope skills/agents/commands, vs. every
-  // transcript) so it's populated from ANY directory on the first run.
-  // Never throws into the readout.
-  let deadContext = args.sample
-    ? undefined
-    : await loadDeadContext({
-        // Env overrides keep tests (and unusual installs) isolated from $HOME.
-        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
-        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
-        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
-        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
-        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
-        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
-        projectDir: resolve(args.path),
-        includeAllProjectMcp: true,
-        sinceIso: sinceIsoForDays(sinceDays),
-        windowDays: sinceDays,
-        codexInvocationFiles
-      }).catch(() => undefined);
-  // Sample dead-context is shown ONLY on the demo readout. A real readout
-  // (local logs / connected billing) never gets fabricated waste injected —
-  // a genuinely clean setup earns its congratulation line instead.
-  if (mode === "demo" && (!deadContext || !deadContext.hasData)) {
-    deadContext = sampleDeadContext();
-  }
-
   const guidedExperience = !args.sample && actionEvidence
     ? await buildQuickstartGuidedExperience({
         args,
@@ -680,6 +670,8 @@ async function quickstartCommand(
 
   const summaryText = generatePlainEnglishSummary(summary, {
     records: receiptRecords,
+    // The same array the machine-wide report renders into its ACT section.
+    cutList: evidence.actionCandidates,
     groupBy,
     color,
     mode,
@@ -1341,6 +1333,93 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
     financialCoverageComplete: financialLogs
       ? localFinancialEvidenceComplete(financialLogs)
       : false
+  };
+}
+
+/**
+ * Build the one {@link BroadScanEvidence} bundle. Called by the receipt /
+ * `--full` readout AND by the machine-wide `report`; nothing else may
+ * re-derive these facts.
+ *
+ * Everything here was previously inline in the receipt path. The machine-wide
+ * report used to call {@link loadInstantReadData} directly and keep only
+ * `records`, which is exactly how its ACT and VERIFY sections lost the
+ * transcript index and degraded to internal-jargon "unknown" copy while the
+ * readout from the same directory showed real, ranked candidates.
+ */
+async function loadBroadScanEvidence(
+  args: ParsedArgs,
+  sinceDays: number
+): Promise<BroadScanEvidence> {
+  const instant = await loadInstantReadData(args);
+  const { records, mode, warnings, providerCoverage } = instant;
+  const summaryRecords = mode === "connected"
+    ? selectProviderFinancialHeadlineRecords(records)
+    : records;
+  // Connected receipts stay billed-primary but never ERASE the estimated
+  // axis: local transcript records ride along so subscription rows keep
+  // their ~ API-equivalent figures next to billed money (C-lane §1.4).
+  const analysisRecords = mode === "connected" && (instant.localFinancialRecords?.length ?? 0) > 0
+    ? [...summaryRecords, ...instant.localFinancialRecords!]
+    : summaryRecords;
+
+  // Persona: --plan override wins; otherwise read the plans the coding agents
+  // themselves persisted locally (read-only, whitelisted fields, no network).
+  // An explicit sample run must be deterministic and safe to record/share:
+  // never mix the developer's real local plan into illustrative output.
+  const planOverride = args.plan ? planOverrideFromFlag(args.plan) : undefined;
+  const detectedPlans: DetectedPlan[] = args.sample
+    ? []
+    : planOverride
+      ? [planOverride]
+      : await detectLocalPlans({
+          // Env overrides keep tests (and unusual installs) isolated from $HOME.
+          claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+          codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
+        }).catch(() => []);
+
+  // Dead-context cost, globalized across the user's whole Claude Code setup
+  // (all projects' MCP + user-scope skills/agents/commands, vs. every
+  // transcript) so it's populated from ANY directory on the first run.
+  // Never throws into the readout.
+  let deadContext = args.sample
+    ? undefined
+    : await loadDeadContext({
+        claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+        codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
+        claudeHomeDir: process.env.AI_SPEND_CLAUDE_HOME_DIR,
+        codexHomeDir: process.env.AI_SPEND_CODEX_HOME_DIR,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
+        claudeSettingsPath: process.env.AI_SPEND_CLAUDE_SETTINGS,
+        projectDir: resolve(args.path),
+        includeAllProjectMcp: true,
+        sinceIso: sinceIsoForDays(sinceDays),
+        windowDays: sinceDays,
+        codexInvocationFiles: instant.codexInvocationFiles
+      }).catch(() => undefined);
+  // Sample dead-context is shown ONLY on the demo readout. A real readout
+  // (local logs / connected billing) never gets fabricated waste injected —
+  // a genuinely clean setup earns its congratulation line instead.
+  if (mode === "demo" && (!deadContext || !deadContext.hasData)) {
+    deadContext = sampleDeadContext();
+  }
+
+  return {
+    records,
+    mode,
+    warnings,
+    ...(providerCoverage ? { providerCoverage } : {}),
+    summaryRecords,
+    analysisRecords,
+    summary: analyzeSpend(summaryRecords),
+    // THE parity anchor: derived once, handed to every surface.
+    actionCandidates: generateCutList(analysisRecords),
+    detectedPlans,
+    ...(deadContext ? { deadContext } : {}),
+    ...(instant.actionEvidence ? { actionEvidence: instant.actionEvidence } : {}),
+    ...(instant.codexInvocationFiles ? { codexInvocationFiles: instant.codexInvocationFiles } : {}),
+    ...(instant.localFinancialRecords ? { localFinancialRecords: instant.localFinancialRecords } : {}),
+    financialCoverageComplete: instant.financialCoverageComplete === true
   };
 }
 
@@ -4889,10 +4968,23 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
     const nextSteps: CommandSummaryNextStep[] = [
       // Summary-line truth: only a fired opener may claim it opened; every
       // suppression path keeps the plain copy-pasteable pointer.
+      // 0.9.6: the pointer must survive a NAIVE PARTIAL READ. The founder saw
+      // `› open <the full absolute path>` with its description on the
+      // next line, read "open" as a label rather than the command, typed bare
+      // `open`, and got macOS's usage dump — "i don't know what im looking
+      // at." shellPathPointer names an artifact in the current directory
+      // relatively (one short unit) and quotes anything absolute so the
+      // command and its argument read — and paste — as one thing.
       openedInBrowser
         ? { command: `opened ${basename(htmlPath)} in your browser · next time: --no-open to skip` }
-        : { command: `open ${htmlPath}`, description: "view the full report in your browser" },
-      { command: `less ${markdownPath}`, description: "read it in the terminal" },
+        : {
+            command: shellPathPointer("open", htmlPath, process.cwd()),
+            description: `view in your browser — or double-click ${basename(htmlPath)} in your file manager`
+          },
+      {
+        command: shellPathPointer("less", markdownPath, process.cwd()),
+        description: "read it in the terminal"
+      },
       machineWide
         // apply/improve need one exact project folder — a machine-wide
         // report must never point at a command that then refuses (the exact
@@ -4938,7 +5030,7 @@ async function resolveReceiptPath(rootPath: string, out?: string): Promise<strin
   return extname(resolved) ? resolved : `${resolved}.svg`;
 }
 
-async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
+async function reportCardCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}): Promise<CliResult> {
   // 0.9.4: a broad root (home, /) runs MACHINE-WIDE — identical read-only
   // scanning to the bare receipt (loadInstantReadData below), SVG written to
   // the current directory. The card renders machine-wide content anyway, so
@@ -4973,16 +5065,46 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
     const summary = analyzeSpend(headlineRecords);
     const outPath = await resolveReceiptPath(rootPath, args.out);
     await mkdir(dirname(outPath), { recursive: true });
+    const svg = generateReportCardSvg({
+      summary,
+      records: headlineRecords,
+      mode,
+      ...(providerCoverage ? { providerCoverage } : {})
+    });
+    await writeSafeStateText(dirname(outPath), basename(outPath), svg);
+
+    const caption = generateReportCardCaption({
+      summary,
+      records: headlineRecords,
+      mode,
+      ...(providerCoverage ? { providerCoverage } : {})
+    });
+
+    // 0.9.6: the receipt now SHOWS itself. 0.9.5 wrote the SVG and stopped,
+    // leaving the user to go find and open it by hand ("not automatically
+    // showing on a html or opening the file: making it inefficient").
+    //
+    // We auto-open a companion .html rather than the .svg itself: platform
+    // openers hand a .svg to whatever claims that extension, which on a
+    // developer machine is frequently an editor, so "show me my receipt"
+    // could open a wall of XML. An .html is claimed by a browser everywhere.
+    // The .svg remains the canonical shareable artifact; the companion just
+    // renders it next to the caption, embedding both verbatim so it inherits
+    // the card's redaction guarantees exactly.
+    const companionPath = `${outPath.replace(/\.svg$/iu, "")}.html`;
     await writeSafeStateText(
-      dirname(outPath),
-      basename(outPath),
-      generateReportCardSvg({
-        summary,
-        records: headlineRecords,
-        mode,
-        ...(providerCoverage ? { providerCoverage } : {})
-      })
+      dirname(companionPath),
+      basename(companionPath),
+      generateReceiptCompanionHtml({ svg, caption })
     );
+
+    // Same decision function, same suppression matrix, same metacharacter
+    // refusal, same detached launch as `report` — one opener, two commands.
+    const openDecision = (runtime.reportOpenDecide ?? decideReportAutoOpen)({
+      htmlPath: companionPath,
+      noOpenFlag: args.noOpen === true
+    });
+    const openedInBrowser = (runtime.reportOpenLaunch ?? openReportInBrowser)(openDecision);
 
     const dataRow = mode === "demo"
       ? args.sample
@@ -5000,18 +5122,29 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
       note: "a shareable, redacted spend card (no client/project/user names)",
       rows: [
         { label: "Receipt", value: outPath },
+        { label: "Preview", value: companionPath },
         { label: "Data", value: dataRow },
         { label: "Privacy", value: "rendered locally; only totals, generic candidate categories, and evidence labels are included" }
       ],
       sections: [{
         heading: "Caption to share",
-        body: [generateReportCardCaption({
-          summary,
-          records: headlineRecords,
-          mode,
-          ...(providerCoverage ? { providerCoverage } : {})
-        })]
+        body: [caption]
       }],
+      nextSteps: [
+        // Summary-line truth: only a fired opener may claim it opened; every
+        // suppression path keeps the plain copy-pasteable pointer.
+        openedInBrowser
+          ? { command: `opened ${basename(companionPath)} in your browser · next time: --no-open to skip` }
+          : {
+              command: shellPathPointer("open", companionPath, process.cwd()),
+              description: `view the receipt — or double-click ${basename(companionPath)} in your file manager`
+            },
+        // NOT a command, so it must not LOOK like one: `post ai-receipt.svg`
+        // sitting under "Next" beside two real commands is exactly the trap
+        // that made the founder type a bare `open`. Description-less lines
+        // render verbatim, so this one states a fact instead.
+        { command: `${basename(outPath)} is the file to share — post that one` }
+      ],
       color: args.noColor ? false : undefined,
       width: terminalOutputWidth()
     }));
@@ -7257,10 +7390,19 @@ function applyEvidenceAcquisitionLines(input: SpendReportInput): string[] {
 }
 
 /**
- * Machine-wide report input (0.9.4): the bare receipt's own data path —
- * loadInstantReadData over the agent transcript dirs (read-only) — rendered
- * through the report package. No project state is read or created; plan
- * detection is home-scoped metadata, exactly as the receipt reads it.
+ * Machine-wide report input — built from {@link loadBroadScanEvidence}, the
+ * SAME call the `--full` readout makes from the same directory (0.9.6).
+ *
+ * 0.9.4 shipped this as a parallel thin builder over `loadInstantReadData`,
+ * keeping only the financial records. Everything that gates an action claim —
+ * the bounded transcript index above all — was dropped, so the report package
+ * fell back to `qualitativeCoverage: "unknown"` and every ACT/VERIFY branch
+ * degraded, while `--full` from the same home showed real ranked candidates.
+ * The evidence is not project-scoped and never was; only the builder was
+ * withholding it.
+ *
+ * No project state is read or created. Everything below comes from the shared
+ * bundle; nothing is re-derived here.
  */
 async function buildMachineWideReportInput(
   args: ParsedArgs,
@@ -7269,30 +7411,35 @@ async function buildMachineWideReportInput(
   | { kind: "input"; input: SpendReportInput }
   | { kind: "no_evidence"; warnings: readonly string[] }
 > {
-  const { records, mode, providerCoverage, warnings } = await loadInstantReadData(args);
-  if (records.length === 0) {
+  const evidence = await loadBroadScanEvidence(args, sinceDays);
+  if (evidence.records.length === 0) {
     // Same honest empty-state voice the receipt/report-card use — an empty
     // report file would just look broken.
-    return { kind: "no_evidence", warnings };
+    return { kind: "no_evidence", warnings: evidence.warnings };
   }
-  const detectedPlans = await detectLocalPlans({
-    claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG,
-    codexAuthPath: process.env.AI_SPEND_CODEX_AUTH
-  }).catch(() => []);
-  const headlineRecords = mode === "connected"
-    ? selectProviderFinancialHeadlineRecords(records)
-    : records;
+  const { records, mode, actionEvidence } = evidence;
   return {
     kind: "input",
     input: {
       generatedAt: new Date().toISOString(),
-      summary: analyzeSpend(headlineRecords),
+      summary: evidence.summary,
       allRecords: records,
       dataMode: mode === "connected" ? "connected_provider" : "local_logs",
       evidenceWindowDays: sinceDays,
-      detectedPlans,
+      detectedPlans: evidence.detectedPlans,
+      // The ranked set the readout prints, verbatim — not a second derivation.
+      actionCandidates: evidence.actionCandidates,
+      analysisScope: "machine-wide",
+      // The bounded transcript index the 0.9.4 builder dropped. This is what
+      // un-degrades ACT, VERIFY, plan context, and the configuration section.
+      qualitativeCoverage: summarizeCliQualitativeCoverage(actionEvidence),
+      qualitativeCoverageByAgent: summarizeCliQualitativeCoverageByAgent(actionEvidence),
+      ...(evidence.deadContext ? { deadContext: evidence.deadContext } : {}),
       ...(mode === "connected" ? { providerRecords: records } : {}),
-      ...(providerCoverage ? { providerCoverage } : {})
+      ...(mode === "connected" && (evidence.localFinancialRecords?.length ?? 0) > 0
+        ? { localFinancialRecords: evidence.localFinancialRecords! }
+        : {}),
+      ...(evidence.providerCoverage ? { providerCoverage: evidence.providerCoverage } : {})
     }
   };
 }

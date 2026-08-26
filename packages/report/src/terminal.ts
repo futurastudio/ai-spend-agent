@@ -55,6 +55,18 @@ export const groupByDimensions: GroupByDimension[] = [
 export type PlainEnglishSummaryOptions = {
   /** Records the summary was computed from (used to derive the cut list). */
   records: UsageRecord[];
+  /**
+   * Ranked action candidates, ALREADY derived from {@link records}. Supplied
+   * by a caller that must render the identical candidate set on a second
+   * surface (0.9.6: the machine-wide `report` artifact and this readout are
+   * fed one array from one CLI call site, so the two can never diverge —
+   * the founder-found regression where `--full` from home showed real
+   * recommendations and the report from the same home showed none).
+   *
+   * Omitted — every library caller and project mode — derives the list here
+   * exactly as before via {@link generateCutList}.
+   */
+  cutList?: readonly CutAction[];
   /** Drill-down dimension for the breakdown table. Defaults to "model". */
   groupBy?: GroupByDimension;
   /** Force-enable or force-disable color. Defaults to TTY auto-detection. */
@@ -167,7 +179,10 @@ function renderPlainEnglishSummary(
   const c = makeColors(useColor);
   const width = options.width ?? 72;
   const groupBy = options.groupBy ?? "model";
-  const cutList = generateCutList(options.records);
+  // One candidate set per invocation. A caller that also renders these
+  // candidates into a written artifact hands the SAME array in, so the
+  // terminal and the artifact are provably one derivation (0.9.6).
+  const cutList = options.cutList ? [...options.cutList] : generateCutList(options.records);
   // Deduplicated so the modeled opportunity can never exceed the value it draws
   // from (overlapping recommendations are shown separately, non-additively).
   const plan = buildRecommendedPlan(cutList);
@@ -435,30 +450,27 @@ function renderPlainEnglishSummary(
   if (cutList.length === 0) {
     lines.push(c.dim("  No high-confidence opportunity found in this window. Collect more evidence before changing anything."));
   } else {
-    // Sub-$1/mo cuts are noise on the readout (often near-duplicates of a big
-    // cut) — collapse them into one line. They still count in the plan math
-    // and still ship in the apply-artifact.
-    const visibleCuts = cutList.filter((action) => (
-      action.impactBasis === "observed_value_no_counterfactual" ||
-      action.estimatedMonthlySavingsUsd >= 1
-    ));
-    const minorCuts = cutList.filter((action) => (
-      action.impactBasis === "modeled_savings" &&
-      action.estimatedMonthlySavingsUsd < 1
-    ));
-    const shown = visibleCuts.length > 0 ? visibleCuts : cutList;
     // 0.9.3 (founder feedback: "the five recommendations seem generic — only
     // the amount changes"): the same candidate-action kind+agent repeating
     // across projects renders as ONE grouped recommendation with per-project
     // amounts under it, followed by any different-kind items. Display-level
     // only — plan math, dedup, and the apply-artifact see the full list.
-    const collapsedCuts = collapseRepeatedCutActions(shown);
-    for (const [index, entry] of collapsedCuts.slice(0, 5).entries()) {
+    // 0.9.6: selection/collapse/ordering moved into rankCutCandidates so the
+    // written report renders the SAME candidates in the SAME order.
+    const { candidates, minorCuts } = rankCutCandidates(cutList);
+    for (const entry of candidates) {
       lines.push(...(entry.members.length === 1
-        ? cutActionLines(entry.members[0]!, index + 1, c, options.mode)
-        : groupedCutActionLines(entry, index + 1, c, options.mode)));
+        ? cutActionLines(entry.members[0]!, entry.rank, c, options.mode)
+        : groupedCutActionLines(
+            { sharedTitle: entry.title, members: [...entry.members] },
+            entry.rank,
+            c,
+            options.mode
+          )));
     }
-    if (visibleCuts.length > 0 && minorCuts.length > 0) {
+    // Unchanged guard, restated: only when at least one NON-minor cut was
+    // displayed (minor cuts are the exact complement of the visible set).
+    if (minorCuts.length > 0 && minorCuts.length < cutList.length) {
       const minorTotal = minorCuts.reduce((total, action) => total + action.estimatedMonthlySavingsUsd, 0);
       lines.push(
         `  ${c.dim(`+ ${minorCuts.length} smaller cut${minorCuts.length === 1 ? "" : "s"} under $1/mo (~${formatUsd(minorTotal)}/mo combined) — included in apply-artifact`)}`
@@ -1437,6 +1449,97 @@ function cutProjectLabel(action: CutAction): string {
 
 const confidenceRank: Record<string, number> = { detected_unverified: 0, estimated: 1, verified: 2 };
 
+/**
+ * ONE ranked action-candidate set, shared by every surface that shows the
+ * user "what to investigate" (0.9.6).
+ *
+ * The founder-found regression this exists to make impossible: `--full` from
+ * home rendered real ranked candidates while the `report` artifact written
+ * from the SAME home rendered none, because the two surfaces derived (or
+ * failed to derive) their candidates independently. Selection, collapsing,
+ * ordering, and the display facts now live here; each surface only decides
+ * how to PAINT them (ANSI, Markdown, HTML).
+ *
+ * Do not re-implement the filter/collapse/slice anywhere else — call this.
+ */
+export type RankedCutCandidate = {
+  /** 1-based rank, matching the number the terminal readout prints. */
+  rank: number;
+  /**
+   * The title as displayed. A lone candidate keeps its full title (project
+   * suffix included); a repeated per-project fan-out shows the shared
+   * headline, with the projects carried in {@link projectLabels}.
+   */
+  title: string;
+  /** The shared read-only instruction, minus any per-project count sentence. */
+  guidance: string;
+  members: readonly CutAction[];
+  /** Per-project labels, largest observed value first (grouped entries only). */
+  projectLabels: readonly string[];
+  /** Per-project observed value, index-aligned with {@link projectLabels}. */
+  projectAffectedSpendUsd: readonly number[];
+  recordCount: number;
+  recordUnit: CutAction["recordUnit"];
+  affectedSpendUsd: number;
+  estimatedMonthlySavingsUsd: number;
+  /** True when the evidence proves exposure only — reduction is unproven. */
+  observed: boolean;
+  /** The weakest member's confidence: a group is never stronger than its parts. */
+  confidence: CostConfidence;
+};
+
+export type RankedCutCandidates = {
+  /** At most 5 displayed candidates, in rank order. */
+  candidates: RankedCutCandidate[];
+  /** Sub-$1/mo modeled cuts collapsed out of the display (still in the math). */
+  minorCuts: CutAction[];
+};
+
+export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandidates {
+  // Sub-$1/mo cuts are noise on a readout (often near-duplicates of a big
+  // cut). They still count in the plan math and still ship in the artifact.
+  const visibleCuts = cutList.filter((action) => (
+    action.impactBasis === "observed_value_no_counterfactual" ||
+    action.estimatedMonthlySavingsUsd >= 1
+  ));
+  const minorCuts = cutList.filter((action) => (
+    action.impactBasis === "modeled_savings" &&
+    action.estimatedMonthlySavingsUsd < 1
+  ));
+  const shown = visibleCuts.length > 0 ? visibleCuts : [...cutList];
+  const candidates = collapseRepeatedCutActions(shown).slice(0, 5).map((entry, index) => {
+    const members = entry.members;
+    const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
+    const guidanceSource = members[0]!.action;
+    const guidanceStart = guidanceSource.indexOf(". ");
+    const weakest = [...members].sort((a, b) =>
+      (confidenceRank[a.confidence] ?? 0) - (confidenceRank[b.confidence] ?? 0))[0]!;
+    return {
+      rank: index + 1,
+      // A lone entry keeps the full title the terminal prints for it; only a
+      // real group trades the project suffix for the across-line.
+      title: members.length === 1 ? members[0]!.title : entry.sharedTitle,
+      guidance: members.length === 1
+        ? guidanceSource
+        : guidanceStart === -1 ? guidanceSource : guidanceSource.slice(guidanceStart + 2),
+      members,
+      projectLabels: members.length === 1 ? [] : ranked.map(cutProjectLabel),
+      projectAffectedSpendUsd: members.length === 1
+        ? []
+        : ranked.map((action) => action.affectedSpendUsd),
+      recordCount: members.reduce((total, action) => total + action.recordCount, 0),
+      recordUnit: members[0]!.recordUnit,
+      affectedSpendUsd: members.reduce((total, action) => total + action.affectedSpendUsd, 0),
+      estimatedMonthlySavingsUsd: members.reduce(
+        (total, action) => total + action.estimatedMonthlySavingsUsd, 0
+      ),
+      observed: members[0]!.impactBasis === "observed_value_no_counterfactual",
+      confidence: weakest.confidence
+    } satisfies RankedCutCandidate;
+  });
+  return { candidates, minorCuts };
+}
+
 function groupedCutActionLines(
   entry: CollapsedCutEntry,
   rank: number,
@@ -2177,6 +2280,37 @@ function scopedCommandRenderer(
   return (command: string) => (
     commandScope === "machine-wide" ? `cd <project> && ${command}` : command
   );
+}
+
+/**
+ * Render `<tool> <path>` as ONE un-half-copyable shell command (0.9.6).
+ *
+ * Founder-found: `report --no-open` printed `› open <a long absolute path>`
+ * with its description on the next line. He read "open" as a LABEL, typed
+ * bare `open`, and got macOS's usage dump — "i don't know what im looking
+ * at." Two changes make a partial read impossible to mistake for a label:
+ *
+ *   1. An artifact sitting in the invoking directory is named RELATIVELY —
+ *      `open ai-spend-report.html` — short enough to read as one unit and
+ *      short enough never to wrap.
+ *   2. Anything else (an absolute path, or any path containing a space or a
+ *      shell-significant character) is QUOTED — `open "<abs>/r.html"` —
+ *      so the quotes visually glue the command to its argument.
+ *
+ * Quoting is also correctness, not only optics: an unquoted path with a
+ * space was already two arguments when pasted.
+ */
+export function shellPathPointer(tool: string, path: string, cwd?: string): string {
+  const separator = path.lastIndexOf("/") === -1 ? path.lastIndexOf("\\") : path.lastIndexOf("/");
+  const directory = separator === -1 ? "" : path.slice(0, separator);
+  const base = separator === -1 ? path : path.slice(separator + 1);
+  const relative = cwd !== undefined && directory === cwd && base.length > 0;
+  const argument = relative ? base : path;
+  // A double quote inside the path would break the quoting itself; such a
+  // path is left bare rather than rendered as a command that mis-parses.
+  const needsQuotes = !argument.includes("\"") &&
+    (!relative || /[\s'"$`\\&;|<>()*?!#~]/u.test(argument));
+  return `${tool} ${needsQuotes ? `"${argument}"` : argument}`;
 }
 
 export type CommandSummaryRow = {
