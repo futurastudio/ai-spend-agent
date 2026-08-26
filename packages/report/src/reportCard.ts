@@ -348,3 +348,75 @@ function escapeXml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+/**
+ * A tiny, self-contained companion page that shows the receipt SVG together
+ * with its caption (0.9.6).
+ *
+ * Why this exists: `report-card` wrote `ai-receipt.svg` and then left the
+ * user to go find and open it — "not automatically showing on a html or
+ * opening the file: making it inefficient." Auto-opening the bare .svg was
+ * the obvious fix and the wrong one: the platform opener hands a .svg to
+ * whatever claims that extension, which on a developer's machine is very
+ * often an EDITOR (VS Code, Xcode, Inkscape), not a viewer. A user who asked
+ * to see their receipt would get a wall of XML. An .html file is claimed by a
+ * browser essentially everywhere, so opening the companion is the only way to
+ * guarantee the artifact actually renders — and it puts the shareable card
+ * and the caption a poster needs on ONE screen.
+ *
+ * The SVG stays the canonical shareable file. This page carries the SAME
+ * redaction guarantees because it embeds the SAME generated SVG and caption
+ * verbatim and adds no data of its own — no project, client, user, workspace,
+ * or api-key names can enter here that were not already in the card.
+ *
+ * Deliberately self-contained: inline CSS only, no script, no network. It is
+ * opened from a local file path, sometimes on a machine with no connectivity.
+ */
+export function generateReceiptCompanionHtml(input: {
+  /** The generated card markup, inlined verbatim. */
+  svg: string;
+  /** The generated caption, rendered verbatim and selectable for pasting. */
+  caption: string;
+}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Receipt</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 20px; background: #0C0D09; color: #EDEDED;
+      font: 14px/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      display: flex; flex-direction: column; align-items: center; gap: 24px;
+      /* A narrow window must not auto-inflate the label out of proportion
+         with the card it sits under. */
+      -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
+    }
+    .card { width: 100%; max-width: 640px; }
+    .card svg { width: 100%; height: auto; display: block; border: 1px solid rgba(255,255,255,.08); }
+    .caption {
+      width: 100%; max-width: 640px; padding: 16px; background: #12140E;
+      border: 1px solid rgba(255,255,255,.08); white-space: pre-wrap; user-select: all;
+    }
+    .label { color: rgba(255,255,255,.42); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; margin-bottom: 8px; }
+    .foot { color: rgba(255,255,255,.42); font-size: 12px; text-align: center; max-width: 640px; }
+    .foot strong { color: #4CC98A; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">${input.svg}</div>
+  <div class="caption">
+    <div class="label">Caption to share</div>
+    ${escapeXml(input.caption)}
+  </div>
+  <p class="foot">
+    The shareable file is <strong>the .svg next to this page</strong> — post that.
+    Rendered locally; only totals, generic candidate categories, and evidence labels are included.
+  </p>
+</body>
+</html>
+`;
+}

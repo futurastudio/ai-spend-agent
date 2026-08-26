@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSpend, loadSampleUsageData, type UsageRecord } from "@agent-finops/core";
-import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions } from "./terminal.js";
+import { generateCommandSummary, generatePlainEnglishSummary, groupByDimensions, shellPathPointer } from "./terminal.js";
 
 // Copy assertions follow the C-lane result-centralization design (§1.2/§1.5):
 // every money label routes through the basis vocabulary (committed /
@@ -1316,5 +1316,48 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
     expect(commandLine).toBeDefined();
     expect(commandLine).toContain("npx aibill");
     expect(text).not.toMatch(/npx\n/u);
+  });
+});
+
+describe("shellPathPointer — un-half-copyable artifact pointers (0.9.6)", () => {
+  // Founder-found: `report --no-open` printed `› open /Users/testuser/ai-spend-report.html`
+  // with the description on the NEXT line. He read "open" as a label, typed
+  // bare `open`, and got macOS's usage dump — "i don't know what im looking
+  // at." A pointer must not be mistakable for a label under a partial read.
+  it("names an artifact in the invoking directory relatively — one short unit that never wraps", () => {
+    expect(shellPathPointer("open", "/Users/testuser/work/ai-spend-report.html", "/Users/testuser/work"))
+      .toBe("open ai-spend-report.html");
+    expect(shellPathPointer("less", "/Users/testuser/work/ai-spend-report.md", "/Users/testuser/work"))
+      .toBe("less ai-spend-report.md");
+  });
+
+  it("quotes anything absolute, so the command and its argument read as one thing", () => {
+    expect(shellPathPointer("open", "/Users/testuser/work/.ai-spend-agent/report.html", "/Users/testuser"))
+      .toBe("open \"/Users/testuser/work/.ai-spend-agent/report.html\"");
+    // No cwd known at all: still quoted, never bare.
+    expect(shellPathPointer("open", "/Users/testuser/report.html"))
+      .toBe("open \"/Users/testuser/report.html\"");
+  });
+
+  it("quotes a same-directory name that a shell would re-parse (spaces and metacharacters)", () => {
+    expect(shellPathPointer("open", "/Users/testuser/my report.html", "/Users/testuser"))
+      .toBe("open \"my report.html\"");
+    expect(shellPathPointer("open", "/Users/testuser/re(port).html", "/Users/testuser"))
+      .toBe("open \"re(port).html\"");
+  });
+
+  it("never emits broken quoting for a path that already contains a double quote", () => {
+    // Quoting this would produce a command that mis-parses; leave it bare and
+    // let the (separately pinned) auto-open metacharacter refusal handle it.
+    const pointer = shellPathPointer("open", "/Users/testuser/we\"ird.html", "/Users/testuser");
+    expect(pointer).toBe("open we\"ird.html");
+    expect(pointer.split("\"").length - 1).toBe(1);
+  });
+
+  it("handles windows separators", () => {
+    expect(shellPathPointer("open", "C:\\Users\\testuser\\ai-receipt.html", "C:\\Users\\testuser"))
+      .toBe("open ai-receipt.html");
+    expect(shellPathPointer("open", "C:\\Users\\testuser\\out\\ai-receipt.html", "C:\\Users\\testuser"))
+      .toBe("open \"C:\\Users\\testuser\\out\\ai-receipt.html\"");
   });
 });
