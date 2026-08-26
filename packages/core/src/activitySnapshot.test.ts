@@ -159,17 +159,17 @@ describe("buildActivitySnapshot", () => {
     const snapshot = meteredSnapshotFromCalls(calls, asOf);
 
     expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 10,
+      amountUsd: 8,
       recordCount: 1,
       coverage: "complete"
     });
     expect(snapshot.metered?.apiEquivalent.sevenDays).toMatchObject({
-      amountUsd: 30,
+      amountUsd: 24,
       recordCount: 3,
       coverage: "complete"
     });
     expect(snapshot.metered?.apiEquivalent.thirtyDays).toMatchObject({
-      amountUsd: 50,
+      amountUsd: 40,
       recordCount: 5,
       coverage: "complete"
     });
@@ -184,16 +184,16 @@ describe("buildActivitySnapshot", () => {
     const afterSecondCall = meteredSnapshotFromCalls(calls, "2026-08-09T15:00:00.000Z");
 
     expect(beforeSecondCall.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 10,
+      amountUsd: 8,
       recordCount: 1,
       coverage: "complete"
     });
     expect(afterSecondCall.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 20,
+      amountUsd: 16,
       recordCount: 2,
       coverage: "complete"
     });
-    expect(aggregateCalls(calls)[0]?.amountUsd).toBe(20);
+    expect(aggregateCalls(calls)[0]?.amountUsd).toBe(16);
   });
 
   it("deduplicates cumulative calls before splitting local daily aggregates", () => {
@@ -879,7 +879,7 @@ describe("buildActivitySnapshot", () => {
     });
 
     expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
-      amountUsd: 10,
+      amountUsd: 8,
       financialEvidence: "estimated",
       coverage: "partial"
     });

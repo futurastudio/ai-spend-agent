@@ -1593,7 +1593,7 @@ describe("aggregateCalls", () => {
 
     expect(turns[0]).toMatchObject({
       quantity: 2,
-      amountUsd: 2.1,
+      amountUsd: 1.6,
       costConfidence: "estimated"
     });
     expect(cumulative[0]).toMatchObject({

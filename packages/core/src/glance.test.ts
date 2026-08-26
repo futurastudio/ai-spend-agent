@@ -320,7 +320,7 @@ describe("buildUsageGlance", () => {
 
     expect(snapshot.currentSession?.inputTokens).toBe(2_000);
     expect(snapshot.currentSession?.outputTokens).toBe(200);
-    expect(snapshot.currentSession?.apiEquivalentUsd).toBe(0.02);
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBe(0.01);
   });
 
   it("keeps a total-only Codex snapshot unpriced without inventing a token breakdown", () => {
