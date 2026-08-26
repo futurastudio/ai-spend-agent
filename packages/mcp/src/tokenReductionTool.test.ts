@@ -199,7 +199,9 @@ describe("get_token_reduction_test", () => {
     });
   });
 
-  it("keeps same-basename projects isolated by opaque working-directory identity", async () => {
+  // Real mkdtemp filesystem work; borderline against the 5s default only under
+  // full-suite parallel load. Per-test, not a global bump.
+  it("keeps same-basename projects isolated by opaque working-directory identity", { timeout: 120_000 }, async () => {
     const fixture = await resultFixture([70, 75], "passed");
     const otherRoot = await mkdtemp(join(tmpdir(), "aibill-mcp-same-basename-other-"));
     for (let index = 0; index < 3; index += 1) {

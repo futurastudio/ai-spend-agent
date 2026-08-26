@@ -3064,7 +3064,9 @@ describe("MCP protocol contract", () => {
     await server.close();
   });
 
-  it("never echoes hostile malformed spend, source, or provider state on the wire", async () => {
+  // Real mkdtemp filesystem work; borderline against the 5s default only under
+  // full-suite parallel load. Per-test, not a global bump.
+  it("never echoes hostile malformed spend, source, or provider state on the wire", { timeout: 120_000 }, async () => {
     const spendRoot = await mkdtemp(join(tmpdir(), "aibill-mcp-hostile-spend-"));
     const accountingRoot = await mkdtemp(join(tmpdir(), "aibill-mcp-hostile-accounting-"));
     const checkedAtRoot = await mkdtemp(join(tmpdir(), "aibill-mcp-hostile-checked-at-"));
