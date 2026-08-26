@@ -232,6 +232,7 @@ import {
   generateVerificationPlanMarkdown,
   groupByDimensions,
   shellPathPointer,
+  spendReportTotalLine,
   type CommandSummaryNextStep,
   type TerminalNextStep,
   type CommandSummaryRow,
@@ -5025,12 +5026,14 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
         : []),
       {
         label: "Total",
-        value: reportInput.dataMode === "sample"
-          ? `${formatOptionalUsd(reportInput.summary.totalUsd)} · DEMO SAMPLE · illustrative cost/value evidence · not user data`
-          : reportInput.dataMode === "connected_provider" &&
-              !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
-            ? "Unavailable · cost/value evidence · no priced financial evidence; missing/null is not zero"
-            : `${formatOptionalUsd(reportInput.summary.totalUsd)} · cost/value evidence`
+        // B1: the row is rendered by the report package from this exact
+        // input, so the terminal summary and the report.md/report.html this
+        // command just wrote cannot disagree about whether the money is zero
+        // or unknown. The local branch used to fall straight through to
+        // `formatOptionalUsd(summary.totalUsd)` — and `analyzeSpend` returns
+        // a plain 0 for a window where nothing could be priced, so `report`
+        // printed "$0.00" beside artifacts that said "Unavailable".
+        value: spendReportTotalLine(reportInput)
       },
       {
         label: "Privacy",

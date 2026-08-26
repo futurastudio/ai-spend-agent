@@ -1,4 +1,11 @@
-import { roundUsdCents } from "./money.js";
+import {
+  costCoverage,
+  missingCostPhrase,
+  roundUsdCents,
+  MISSING_NOT_ZERO,
+  UNAVAILABLE_TOTAL,
+  type CostCoverage
+} from "./money.js";
 import {
   aibillCommandV0,
   analyzeSpend,
@@ -624,6 +631,45 @@ function localFinancialHeadline(coverage: LocalFinancialCoverage, unit: string):
     return `Observed API-equivalent value: ${formatUsd(coverage.amountUsd)} (partial) across ${count} ${suffix}; ${coverage.pricedRecords.length} priced and ${coverage.missingRecords.length} missing. Missing/null is not zero.`;
   }
   return `Observed API-equivalent value: ${formatUsd(coverage.amountUsd)} across ${count} ${suffix}.`;
+}
+
+/**
+ * The `report` command's terminal "Total" row — rendered HERE, from the SAME
+ * {@link SpendReportInput} (and, for local logs, the SAME evidence window)
+ * that report.md and report.html are built from.
+ *
+ * B1 (0.9.7): the CLI used to format this row itself, straight off
+ * `summary.totalUsd`, and `analyzeSpend` returns `0` for a window in which
+ * nothing could be priced. One `npx aibill report` therefore printed
+ * "Total $0.00 · cost/value evidence" to the terminal while the report.md and
+ * report.html it wrote in that same second said "Unavailable … Missing/null
+ * is not zero" about those same records. Two surfaces, one command, opposite
+ * claims about whether the money is zero or unknown.
+ *
+ * Deriving the row from the report input — not from a separately summed total
+ * — is what makes the disagreement unrepresentable: the terminal and the
+ * artifacts now read the same coverage off the same records.
+ */
+export function spendReportTotalLine(input: SpendReportInput): string {
+  // Local reports headline their own evidence WINDOW, which can be narrower
+  // than the persisted record set the summary was computed over. Reading the
+  // same window here is the difference between agreeing with report.md and
+  // merely agreeing most of the time.
+  const records = input.dataMode === "local_logs"
+    ? localFinancialEvidenceWindow(input).windowRecords
+    : input.allRecords ?? input.providerRecords ?? [];
+  const coverage = costCoverage(records);
+  const amount = formatUsd(input.summary.totalUsd);
+  if (input.dataMode === "sample") {
+    return `${amount} · DEMO SAMPLE · illustrative cost/value evidence · not user data`;
+  }
+  if (coverage.totalUnknown) {
+    return `${UNAVAILABLE_TOTAL} · cost/value evidence · no priced financial evidence; ${MISSING_NOT_ZERO}`;
+  }
+  if (coverage.partial) {
+    return `${amount} · cost/value evidence · ${missingCostPhrase(coverage.missingCount)}; ${MISSING_NOT_ZERO}`;
+  }
+  return `${amount} · cost/value evidence`;
 }
 
 function localBreakdownRecords(
@@ -3384,14 +3430,28 @@ function breakdownOverflowRow(
   /** Sum of the VISIBLE rows' displayed values (their own coverage basis). */
   shownDisplayedUsd: number,
   /** The displayed hero total the column must reconcile to. */
-  heroTotalUsd: number
+  heroTotalUsd: number,
+  /** Coverage over the records behind the HIDDEN rows. */
+  hiddenCoverage: CostCoverage
 ): string {
   if (entries.length <= cap) return "";
   const hidden = entries.slice(cap);
   // Reconciles by construction: remainder = displayed hero − displayed rows
   // (an independently rounded raw remainder could land a penny off).
   const hiddenTotal = Math.max(0, roundUsdCents(roundUsdCents(heroTotalUsd) - roundUsdCents(shownDisplayedUsd)));
-  return `<div class="row"><span class="k">+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>full list in report.md</em></span></div>`;
+  const label = `+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}`;
+  // B1: the remainder is arithmetic, not evidence. When every hidden row is
+  // unpriced, that remainder is pure display rounding — and this row printed
+  // it as their value, so report.html's by-model column showed
+  // "+1 more model … $0.01" for a model report.md called Unavailable in the
+  // same file. An unknown remainder gets the word, like every sibling row.
+  if (hiddenCoverage.totalUnknown) {
+    return `<div class="row"><span class="k">${label}</span><span class="bar"></span><span class="v estimated-value">${UNAVAILABLE_TOTAL}<em>${missingCostPhrase(hiddenCoverage.missingCount)} · ${MISSING_NOT_ZERO}</em></span></div>`;
+  }
+  const note = hiddenCoverage.partial
+    ? `${missingCostPhrase(hiddenCoverage.missingCount)} · full list in report.md`
+    : "full list in report.md";
+  return `<div class="row"><span class="k">${label}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>${note}</em></span></div>`;
 }
 
 function formatMachineUsd(amount: number): string {
@@ -3466,6 +3526,14 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
     return groupCoverage.pricedRecords.length === 0 ? 0 : roundUsdCents(groupCoverage.amountUsd);
   };
+  /** Coverage over the records behind the rows a column had to hide. */
+  const hiddenRowCoverage = (
+    entries: SpendSummary["bySource"],
+    cap: number,
+    dimension: LocalBreakdownDimension
+  ): CostCoverage => costCoverage(
+    entries.slice(cap).flatMap((entry) => localBreakdownRecords(records, dimension, entry.key))
+  );
   const barRow = (
     entry: SpendSummary["bySource"][number],
     dimension: LocalBreakdownDimension
@@ -3570,8 +3638,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         ${sectionHead("WHY", "where it goes")}
         <div class="cols">
-          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project", summary.byProject.slice(0, 6).reduce((sum, entry) => sum + displayedRowUsd(entry, "project"), 0), financialCoverage.amountUsd)}</div>
-          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model", summary.byModel.slice(0, 5).reduce((sum, entry) => sum + displayedRowUsd(entry, "model"), 0), financialCoverage.amountUsd)}</div>
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project", summary.byProject.slice(0, 6).reduce((sum, entry) => sum + displayedRowUsd(entry, "project"), 0), financialCoverage.amountUsd, hiddenRowCoverage(summary.byProject, 6, "project"))}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model", summary.byModel.slice(0, 5).reduce((sum, entry) => sum + displayedRowUsd(entry, "model"), 0), financialCoverage.amountUsd, hiddenRowCoverage(summary.byModel, 5, "model"))}</div>
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Configured/catalogued with no matching invocation (loading and future need may be unmeasured):</span> ${deadChips}</div>` : ""}
 

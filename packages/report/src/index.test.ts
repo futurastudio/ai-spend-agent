@@ -10,7 +10,8 @@ import {
   generateHtmlReport,
   generateMarkdownReport,
   generatePolicyConfigDraftMarkdown,
-  generateVerificationPlanMarkdown
+  generateVerificationPlanMarkdown,
+  spendReportTotalLine
 } from "./index.js";
 import { generatePlainEnglishSummary } from "./terminal.js";
 
@@ -2651,5 +2652,125 @@ describe("truncation never splits a character", () => {
     expect(markdown).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
     // …and the money still survives the bound (blocker 3 stays fixed).
     expect(markdown.replace(/\s+/gu, " ")).toContain("~$1,975 (116.3M/day)");
+  });
+});
+
+/**
+ * B1 (0.9.7): `npx aibill report` printed "Total $0.00 · cost/value evidence"
+ * to the terminal while the report.md and report.html it wrote in that same
+ * second said "Unavailable … Missing/null is not zero" about the same
+ * records. One command, two surfaces, opposite claims about whether the money
+ * was zero or unknown.
+ *
+ * The row is now rendered here, from the same input and the same evidence
+ * window the artifacts are built from, so the disagreement is
+ * unrepresentable. These pins hold the three cases AND the agreement.
+ */
+describe("B1 — spendReportTotalLine agrees with the artifacts it is printed beside", () => {
+  const localRecord = (id: string, model: string, amountUsd: number | null): UsageRecord => ({
+    id,
+    timestamp: "2026-07-28T00:00:00.000Z",
+    source: {
+      id: "local-agent-logs",
+      name: "Local agent session logs",
+      provider: "anthropic",
+      confidence: amountUsd === null ? "missing" : "estimated",
+      observedFrom: "test"
+    },
+    model,
+    inputTokens: 120_000,
+    outputTokens: 3_000,
+    amountUsd,
+    costConfidence: amountUsd === null ? "missing" : "estimated",
+    agentId: "claude-code",
+    projectId: "demo-proj",
+    providerCostType: "local_agent_logs",
+    operation: "claude-code sessions"
+  });
+
+  const localInput = (records: UsageRecord[]): SpendReportInput => ({
+    ...input,
+    generatedAt: "2026-07-30T00:00:00.000Z",
+    dataMode: "local_logs",
+    evidenceWindowDays: 30,
+    allRecords: records,
+    summary: analyzeSpend(records)
+  });
+
+  const unpriced = [
+    localRecord("unknown-1", "gpt-6-preview", null),
+    localRecord("unknown-2", "gpt-6-preview", null),
+    localRecord("unknown-3", "gpt-6-preview", null)
+  ];
+  const mixed = [
+    localRecord("priced-1", "claude-opus-4-8", 1.2),
+    localRecord("priced-2", "claude-opus-4-8", 0.61),
+    localRecord("unknown-1", "gpt-6-preview", null)
+  ];
+  const priced = [
+    localRecord("priced-1", "claude-opus-4-8", 1.2),
+    localRecord("priced-2", "claude-opus-4-8", 0.61)
+  ];
+
+  it("renders an all-unknown window as Unavailable, never as $0.00", () => {
+    const line = spendReportTotalLine(localInput(unpriced));
+    expect(line).toBe(
+      "Unavailable · cost/value evidence · no priced financial evidence; missing/null is not zero"
+    );
+    expect(line).not.toContain("$0.00");
+  });
+
+  it("keeps a real total in the mixed case AND discloses the count it could not price", () => {
+    const line = spendReportTotalLine(localInput(mixed));
+    expect(line).toBe("$1.81 · cost/value evidence · 1 record missing cost; missing/null is not zero");
+  });
+
+  it("leaves a fully priced window untouched — no invented caveat", () => {
+    expect(spendReportTotalLine(localInput(priced))).toBe("$1.81 · cost/value evidence");
+  });
+
+  it("keeps the demo row's sample labeling", () => {
+    const line = spendReportTotalLine({ ...localInput(priced), dataMode: "sample" });
+    expect(line).toContain("DEMO SAMPLE · illustrative cost/value evidence · not user data");
+  });
+
+  it("never claims a dollar total the markdown beside it calls Unavailable", () => {
+    for (const [name, records] of Object.entries({ unpriced, mixed, priced })) {
+      const reportInput = localInput(records);
+      const line = spendReportTotalLine(reportInput);
+      const markdown = generateMarkdownReport(reportInput);
+      const markdownUnknown = markdown.includes("Observed API-equivalent value: Unavailable");
+      expect(line.startsWith("Unavailable"), `${name}: terminal and report.md disagree`)
+        .toBe(markdownUnknown);
+      // And when either says something is missing, both name the same count.
+      const missing = /(\d+) records? missing cost/u.exec(line);
+      if (missing) {
+        expect(markdown, `${name}: report.md hides the count the terminal shows`)
+          .toContain(`${missing[1]} missing`);
+      }
+    }
+  });
+
+  /**
+   * The by-model column caps at five rows and printed the ARITHMETIC
+   * remainder (hero total − displayed rows) as the hidden rows' value. With
+   * an unpriced model hidden, that remainder is pure display rounding — the
+   * shipped report.html read "+1 more model … $0.01" for a model report.md
+   * called Unavailable in the same file.
+   */
+  it("the html by-model overflow row calls an unpriced remainder Unavailable, not $0.01", () => {
+    const records = [
+      ...["m1", "m2", "m3", "m4", "m5"].map((model, index) => (
+        localRecord(`priced-${index}`, model, 1.005 + index)
+      )),
+      localRecord("hidden-unpriced", "gpt-6-preview", null)
+    ];
+    const html = generateHtmlReport(localInput(records));
+    const overflow = /<div class="row"><span class="k">\+1 more model<\/span>[\s\S]*?<\/div>/u.exec(html);
+    expect(overflow, "no by-model overflow row was rendered").not.toBeNull();
+    expect(overflow![0]).toContain("Unavailable");
+    expect(overflow![0]).toContain("1 record missing cost");
+    expect(overflow![0]).not.toContain("$0.01");
+    expect(overflow![0]).not.toContain("$0.00");
   });
 });
