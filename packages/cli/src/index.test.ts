@@ -16,7 +16,7 @@ import {
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
-import { decideReportAutoOpen } from "./reportOpener.js";
+import { decideReportAutoOpen, platformOpenCommand } from "./reportOpener.js";
 import {
   appendProjectApprovalEvent,
   loadProjectAccountabilityState,
@@ -4250,7 +4250,9 @@ describe("minimal CLI vertical slice", () => {
     // SINGLE quotes: double quotes still let a POSIX shell expand $(...) and
     // backticks in the path, which made the pointer execute on paste.
     // Paths realpath through /private/var, so pin the stable pieces.
-    expect(flat(suppressed.stdout)).toContain("› open '/");
+    // The opener is per-platform (`open` on darwin, `xdg-open` on linux CI),
+    // so derive it rather than hardcoding one host's command.
+    expect(flat(suppressed.stdout)).toContain(`› ${platformOpenCommand()} '/`);
     expect(flat(suppressed.stdout)).toContain(
       `${join(".ai-spend-agent", "report.html")}' view in your browser — or double-click report.html in your file manager`
     );
@@ -4306,7 +4308,7 @@ describe("minimal CLI vertical slice", () => {
     // the plain pointer survives and nothing claims to have opened.
     const suppressed = await runCli(["report-card", "--sample", "--path", dir, "--no-color"]);
     expect(suppressed.exitCode).toBe(0);
-    expect(flat(suppressed.stdout)).toContain("› open '/");
+    expect(flat(suppressed.stdout)).toContain(`› ${platformOpenCommand()} '/`);
     expect(flat(suppressed.stdout)).toContain(
       "ai-receipt.html' view the receipt — or double-click ai-receipt.html in your file manager"
     );
