@@ -37,6 +37,35 @@ const forbiddenPackedContentPatterns = [
   /(?:^|[\s`"'])docs\/(?:gtm|research|internal|private)\//im
 ];
 
+/**
+ * B2 (0.9.7): the shipped 0.9.6 tarball for `ai-spend-agent` carried
+ * "No product telemetry is sent." in its README while its own
+ * `dist/telemetry.js` held `telemetryUrl = "https://asktilden.com/api/telemetry"`
+ * and stamped `enabled: true` on notice. The repo had already corrected that
+ * exact sentence publicly — a dated blog correction, docs/TELEMETRY.md, the
+ * homepage FAQ — and only the package README still said it, which is a
+ * ready-made "which is it?" screenshot for anyone checking npmjs.com.
+ *
+ * Prose cannot be typechecked, so the invariant is enforced where it actually
+ * matters: at the tarball boundary, over the exact bytes npm would publish.
+ *
+ * The packages that CAN send telemetry are the two that ship the CLI. A
+ * package with no telemetry code may keep its scoped claim (the MCP server
+ * genuinely sends none; importing @agent-finops/core genuinely sends none) —
+ * so the ban is applied per package, from what that package actually does.
+ */
+const telemetryCapablePackages = new Set(["ai-spend-agent", "aibill"]);
+const falseNoTelemetryClaimPatterns = [
+  // "No product telemetry is sent", "sends no telemetry", "no telemetry is
+  // sent". `\s` never matches the underscore in AI_SPEND_NO_TELEMETRY.
+  /\b(?:no|zero)\s+(?:product\s+|aibill\s+)?telemetry\b/i,
+  /\bsends?\s+(?:no|zero)\s+(?:product\s+|aibill\s+)?telemetry\b/i,
+  /\btelemetry\s+is\s+(?:not\s+sent|never\s+sent)\b/i,
+  /\bnever\s+sends?\s+(?:any\s+)?telemetry\b/i
+];
+/** The disclosure a telemetry-capable package must carry instead. */
+const requiredTelemetryDisclosure = "aibill telemetry off";
+
 const manifests = new Map();
 for (const releasePackage of packages) {
   const packageRoot = resolve(root, releasePackage.directory);
@@ -114,6 +143,9 @@ for (const releasePackage of packages) {
   );
   const contentLeaks = [];
   const symbolicLinks = [];
+  const falseTelemetryClaims = [];
+  const staleVersionClaims = [];
+  const canSendTelemetry = telemetryCapablePackages.has(releasePackage.name);
   for (const filePath of filePaths) {
     const absolutePath = resolve(root, releasePackage.directory, filePath);
     const info = await lstat(absolutePath).catch(() => undefined);
@@ -129,7 +161,48 @@ for (const releasePackage of packages) {
     ) {
       contentLeaks.push(filePath);
     }
+    // Only human-authored docs are swept. The RUNTIME may still say "no
+    // aibill telemetry" — every such string is branched on the live
+    // telemetry state (receipt-line truth, docs/TELEMETRY.md), so it is a
+    // true statement about the run that printed it. A README cannot branch:
+    // whatever it claims, it claims to everyone, forever.
+    if (!/\.(?:md|markdown|txt)$/i.test(filePath)) continue;
+    if (canSendTelemetry) {
+      for (const pattern of falseNoTelemetryClaimPatterns) {
+        const match = pattern.exec(content);
+        if (match) falseTelemetryClaims.push(`${filePath}: "${match[0]}"`);
+      }
+    }
+    // Prose that names a release version rots at the next release, and a
+    // stale one is indistinguishable from a lie to a reader on npmjs.com:
+    // 0.9.6's core and mcp READMEs both still described "v0.9.1".
+    for (const claimed of content.match(/\bv?\d+\.\d+\.\d+\b/g) ?? []) {
+      if (claimed.replace(/^v/, "") !== expectedVersion) {
+        staleVersionClaims.push(`${filePath}: "${claimed}"`);
+      }
+    }
   }
+  assert(
+    falseTelemetryClaims.length === 0,
+    `${releasePackage.name} ships the CLI, which sends disclosed anonymous command ` +
+    `counts, yet would publish a no-telemetry claim in: ${falseTelemetryClaims.join(", ")}. ` +
+    `Use the honest wording (anonymous command counts, disclosed at first run, ` +
+    `"${requiredTelemetryDisclosure}" turns it off) — see docs/TELEMETRY.md.`
+  );
+  if (canSendTelemetry) {
+    assert(
+      filePaths.includes("README.md") &&
+      (await readFile(resolve(root, releasePackage.directory, "README.md"), "utf8"))
+        .includes(requiredTelemetryDisclosure),
+      `${releasePackage.name} ships the CLI but its published README never tells a ` +
+      `reader how to turn telemetry off ("${requiredTelemetryDisclosure}")`
+    );
+  }
+  assert(
+    staleVersionClaims.length === 0,
+    `${releasePackage.name} would publish a version claim that is not ${expectedVersion}: ` +
+    `${staleVersionClaims.join(", ")}. Prefer wording with no version in it.`
+  );
   assert(
     contentLeaks.length === 0,
     `${releasePackage.name} would publish internal/private content in: ${contentLeaks.join(", ")}`
@@ -169,7 +242,9 @@ console.log(JSON.stringify({
   expectedVersion,
   packages: packed,
   internalPrivatePaths: 0,
-  internalPrivateContentFiles: 0
+  internalPrivateContentFiles: 0,
+  falseTelemetryClaims: 0,
+  staleVersionClaims: 0
 }));
 
 function normalizePath(path) {

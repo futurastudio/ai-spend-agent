@@ -49,9 +49,9 @@ rejected. aibill never sits in the inference path and never stores, prints, or p
 
 ## Tools
 
-The published `@agent-finops/mcp@latest` package is `v0.9.1` and exposes all
-ten tools below, including the read-only experiment pair
-`get_token_reduction_test` and `draft_improve_command`.
+The published `@agent-finops/mcp@latest` package exposes all ten tools below,
+including the read-only experiment pair `get_token_reduction_test` and
+`draft_improve_command`.
 
 | Tool | Purpose |
 | --- | --- |
@@ -82,7 +82,9 @@ or claims savings, an accepted outcome, or ROI. See the
 configuration, and troubleshooting.
 
 This MCP server sends no telemetry or transcripts to an aibill service; the
-CLI's own optional, disclosed command counting is documented in docs/TELEMETRY.md. Explicit
+CLI's own optional anonymous command counts are disclosed at first run, end
+with `aibill telemetry off`, and are documented in
+[`docs/TELEMETRY.md`](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/TELEMETRY.md). Explicit
 provider sync sends the referenced credential only to the selected provider's
 official read-only API; raw credentials are never persisted or returned. An MCP
 tool result is returned to the invoking AI client under that client's
