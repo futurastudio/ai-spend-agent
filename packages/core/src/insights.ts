@@ -119,7 +119,10 @@ function agentCostDriverInsights(records: UsageRecord[], summary: SpendSummary):
   const hasRunLevelEvidence = agentRecords.length > 0 && agentRecords.every(hasCallLevelProvenance);
 
   return [{
-    id: `agent-spend-concentration-${topAgent.key}`,
+    // The id is a STRUCTURED field beside the neutralized title, and it is
+    // rendered (`Canonical candidate ID: ...`). Slug the neutralized form, not
+    // the raw key.
+    id: `agent-spend-concentration-${slug(safeEntity(topAgent.key))}`,
     kind: "optimization_opportunity",
     severity: "medium",
     title: `${safeEntity(topAgent.key)} spend concentration needs owner and budget review`,

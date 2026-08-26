@@ -124,24 +124,48 @@ function looksLikeDirectiveFragment(value: string): boolean {
     .normalize("NFKC")
     .replace(INVISIBLE_SEPARATORS, "")
     .replace(/[\u0430\u0435\u043E\u0440\u0441\u0445\u0455\u0456]/gu, (char) => CONFUSABLE_FOLD.get(char) ?? char);
-  const asIdentifier = folded.replace(/-/gu, "_");
-  const asWords = folded.replace(/[-_]+/gu, " ");
+  // A dot joins a filename the way a hyphen joins an identifier, so the
+  // identifier pass folds it too: `override.ts` and `ignore.md` are files, not
+  // instructions. The separated pass splits on it for the same reason it splits
+  // on hyphens — `ignore.all.previous.instructions` is prose wearing punctuation.
+  const asIdentifier = folded.replace(/[-.]/gu, "_");
+  const asWords = folded.replace(/[-_.]+/gu, " ");
   return IDENTIFIER_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(asIdentifier)) ||
     SEPARATED_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(asWords));
 }
+
+/**
+ * A directive needs a QUANTIFIER, not just a noun.
+ *
+ * `cache write tokens` is Anthropic's prompt-caching billing vocabulary and it
+ * arrives in the operation slot on real invoice lines; `write ALL tokens` is an
+ * instruction. Pairing a verb with a bare `tokens` withheld this product's own
+ * billing words — a real line item rendered as
+ * "acme / agent-finops / [unsafe metadata omitted]" — and on `aibill context`,
+ * whose entire job is naming exact files, it named one of three.
+ *
+ * Measured over 146 real strings (Anthropic + OpenAI caching vocabulary, real
+ * invoice line items, real filenames, ordinary repo names): false positives
+ * 18 -> 0, with hostile detection unchanged at 28/28.
+ *
+ * `everything` and `all files` already carry their own quantifier, so they stay
+ * unguarded. `system prompt` is an injection-specific noun phrase that no
+ * billing vocabulary contains, so it needs no quantifier either.
+ */
+const QUANTIFIED = "(?:all|every|any|each)";
 
 const IDENTIFIER_DIRECTIVE_PATTERNS = [
   /\b(?:ignore|disregard|override|bypass)\b/i,
   /\b(?:system|developer|assistant)\s*:/i,
   /\b(?:execute|run)\b.{0,80}\b(?:command|shell|bash|powershell)\b/i,
-  /\b(?:delete|remove|overwrite|edit|write)\b.{0,60}\b(?:everything|all files?|configs?|credentials?|secrets?|tokens?)\b/i,
-  /\b(?:reveal|print|upload|send|exfiltrate)\b.{0,60}\b(?:credentials?|secrets?|tokens?|keys?|files?)\b/i,
+  new RegExp(`\\b(?:delete|remove|overwrite|edit|write)\\b.{0,60}(?:\\beverything\\b|\\ball files?\\b|\\b${QUANTIFIED}\\s+(?:configs?|credentials?|secrets?|tokens?)\\b)`, "i"),
+  new RegExp(`\\b(?:reveal|print|upload|send|exfiltrate)\\b.{0,60}(?:\\ball files?\\b|\\b(?:system|developer)\\s+prompts?\\b|\\b(?:${QUANTIFIED}|the)\\s+(?:credentials?|secrets?|tokens?|keys?|files?)\\b)`, "i"),
   /\b(?:do not|don't)\b.{0,60}\b(?:follow|obey|wait|ask|require)\b.{0,40}\b(?:approval|instructions?|rules?)\b/i
 ];
 
 const SEPARATED_DIRECTIVE_PATTERNS = [
   /\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b(?:previous|prior|above|earlier|preceding|instructions?|approval|rules?|guardrails?|system|developer|prompts?)\b/i,
-  /\b(?:delete|remove|overwrite|edit|write)\b.{0,60}\b(?:everything|all files?|configs?|credentials?|secrets?|tokens?)\b/i,
-  /\b(?:reveal|print|upload|send|exfiltrate|leak|dump)\b.{0,60}\b(?:credentials?|secrets?|tokens?|keys?|files?|prompts?)\b/i,
+  new RegExp(`\\b(?:delete|remove|overwrite|edit|write)\\b.{0,60}(?:\\beverything\\b|\\ball files?\\b|\\b${QUANTIFIED}\\s+(?:configs?|credentials?|secrets?|tokens?)\\b)`, "i"),
+  new RegExp(`\\b(?:reveal|print|upload|send|exfiltrate|leak|dump)\\b.{0,60}(?:\\ball files?\\b|\\b(?:system|developer)\\s+prompts?\\b|\\b(?:${QUANTIFIED}|the)\\s+(?:credentials?|secrets?|tokens?|keys?|files?|prompts?)\\b)`, "i"),
   /\b(?:do not|don't|never)\b.{0,60}\b(?:follow|obey|wait|ask|require)\b.{0,40}\b(?:approval|instructions?|rules?)\b/i
 ];

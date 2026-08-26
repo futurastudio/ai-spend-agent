@@ -191,11 +191,27 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
       const suggestedOptimization = workflowDiagnosticFor(workflowKey, agentId, hasRunLevelEvidence);
 
       return {
-        id: slugify(["workflow", clientId, projectId, workflowKey].join("-")),
-        clientId,
-        projectId,
-        workflowKey,
-        agentId,
+        // The id is a STRUCTURED field beside the neutralized prose and it is
+        // rendered. Slug the neutralized forms, not the raw grouping keys.
+        id: slugify([
+          "workflow",
+          safeEntity(clientId),
+          safeEntity(projectId),
+          safeWorkflowLabel(workflowKey)
+        ].join("-")),
+        // Neutralized, not raw. These fields ship inside the SpendSummary that
+        // the MCP tools hand to an agent, so leaving them raw beside neutralized
+        // prose is the same inversion as the repeated-read array: the human sees
+        // the redaction and the agent gets the payload.
+        //
+        // workflowWatchAmount re-matches these against the records to recompute
+        // a display amount. An ordinary name is byte-identical, so that match is
+        // unaffected; a name that reads like an instruction loses its amount,
+        // which is the right way round.
+        clientId: safeEntity(clientId),
+        projectId: safeEntity(projectId),
+        workflowKey: safeWorkflowLabel(workflowKey),
+        agentId: safeUntrustedLabel(agentId, WITHHELD_AGENT_LABEL),
         amountUsd,
         shareOfSpend,
         recordCount: groupRecords.length,
@@ -422,11 +438,9 @@ function workflowDiagnosticFor(
  * report layer deliberately never blanks. So it is neutralized here, at the
  * interpolation point, exactly as the cut-list builders do.
  *
- * The ENTRY's own `workflowKey`/`clientId`/`projectId` fields stay raw on
- * purpose: `workflowWatchAmount` matches them back against the raw records to
- * recompute an amount, so rewriting them would silently zero the money. Those
- * fields are bare identifiers with no product prose around them, so the
- * renderers guard them with the blanking identifier check instead.
+ * The ENTRY's own identity fields are neutralized too: they travel inside the
+ * SpendSummary that the MCP tools return, so a raw field sitting beside
+ * neutralized prose hands an agent exactly what the human was protected from.
  */
 function safeWorkflowLabel(workflowKey: string): string {
   return safeUntrustedLabel(workflowKey, WITHHELD_OPERATION_LABEL);

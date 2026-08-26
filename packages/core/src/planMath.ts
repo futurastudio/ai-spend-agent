@@ -173,7 +173,16 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       suggestedPlan: detectedKnown ?? suggested,
       monthlySavingsVsApiUsd: effectiveSavings,
       valueMultiple,
-      detectedPlan: detected,
+      // The STRUCTURED sibling of the headline. Neutralizing the sentence and
+      // shipping the raw label beside it in the same object is the inversion
+      // that let a hostile name reach an agent while the human saw a redaction.
+      detectedPlan: detected === undefined ? undefined : {
+        ...detected,
+        planLabel: safePlanLabel(detected.planLabel),
+        ...(detected.limitSignal === undefined
+          ? {}
+          : { limitSignal: safeLimitSignal(detected.limitSignal) })
+      },
       upgradeHint,
       headline
     });

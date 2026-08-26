@@ -551,8 +551,11 @@ function buildContextChurn(
       latest.key === `${signal.agent}:${signal.sessionId}`
     ))
     : undefined;
+  // Neutralized at the source in toolInvocations.ts; re-applied here because a
+  // signal can also arrive from a cache written by an earlier version, and
+  // because this array is handed to an agent verbatim by the MCP tool.
   const repeatedFiles = (currentSignal?.repeatedFileReads ?? [])
-    .map((file) => ({ file: file.name, readCount: file.count }));
+    .map((file) => ({ file: safeUntrustedLabel(file.name, WITHHELD_FILE_LABEL), readCount: file.count }));
   return {
     currentSessionEvidence: !latest
       ? "no_current_session"
