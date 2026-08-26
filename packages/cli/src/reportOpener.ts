@@ -67,6 +67,25 @@ export type ReportOpenDecision =
         | "no-opener";
     };
 
+/**
+ * The command a USER would type to open a file on this platform (0.9.6).
+ *
+ * The printed "open this report" pointers hardcoded macOS `open`, so every
+ * Linux and Windows user was told to run a command they do not have — while
+ * {@link decideReportAutoOpen} right below already branched per platform to
+ * decide what to spawn. One platform decision, used by both.
+ *
+ * This is the TYPED form, which is not always the spawned form: auto-open uses
+ * `rundll32 url.dll,FileProtocolHandler` on Windows precisely to keep cmd.exe
+ * out of the chain, but nobody types that — `start` is the builtin a Windows
+ * user actually uses, and by then they are typing into a shell anyway.
+ */
+export function platformOpenCommand(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") return "open";
+  if (platform === "win32") return "start";
+  return "xdg-open";
+}
+
 export function decideReportAutoOpen(input: {
   htmlPath: string;
   noOpenFlag: boolean;

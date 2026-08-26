@@ -95,14 +95,19 @@ export function generateReportCardSvg(input: ReportCardInput): string {
        ink/muted/faint (font sizes, positions, and letter-spacing untouched;
        the estimated-money amber stays receipt-scoped by mandate). */
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .label { fill: rgba(255,255,255,0.42); font-size: 13px; letter-spacing: 2px; }
+    /* 0.47, not 0.42: this tier renders the evidence-basis label — "CONNECTED
+       API-EQUIVALENT VALUE (ESTIMATED)" — the one line that keeps the headline
+       number honest. At 0.42 over #0C0D09 it computed to 4.07:1 (below AA
+       4.5:1) and video compression eats this tier first; 0.47 clears AA at
+       ~4.8:1 and still sits well under the #EDEDED primary tier. */
+    .label { fill: rgba(255,255,255,0.47); font-size: 13px; letter-spacing: 2px; }
     .big { fill: #EDEDED; font-size: 52px; font-weight: 700; }
     .modeled { fill: #fbbf24; font-size: 30px; font-weight: 700; }
     .unavailable { fill: rgba(255,255,255,0.62); font-size: 30px; font-weight: 700; }
     .meta { fill: rgba(255,255,255,0.62); font-size: 14px; }
     .cut { fill: rgba(255,255,255,0.62); font-size: 14px; }
     .cutImpact { fill: #fbbf24; font-weight: 700; }
-    .brand { fill: rgba(255,255,255,0.42); font-size: 12px; letter-spacing: 1px; }
+    .brand { fill: rgba(255,255,255,0.47); font-size: 12px; letter-spacing: 1px; }
   </style>
   <rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="18" fill="url(#bg)"/>
   <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="rgba(255,255,255,0.08)"/>
@@ -399,10 +404,18 @@ export function generateReceiptCompanionHtml(input: {
     .card svg { width: 100%; height: auto; display: block; border: 1px solid rgba(255,255,255,.08); }
     .caption {
       width: 100%; max-width: 640px; padding: 16px; background: #12140E;
-      border: 1px solid rgba(255,255,255,.08); white-space: pre-wrap; user-select: all;
+      border: 1px solid rgba(255,255,255,.08);
     }
-    .label { color: rgba(255,255,255,.42); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; margin-bottom: 8px; }
-    .foot { color: rgba(255,255,255,.42); font-size: 12px; text-align: center; max-width: 640px; }
+    /* This page exists so the caption can be pasted into a post. user-select:
+       all used to sit on .caption, which also wraps the "Caption to share" UI
+       label, under white-space: pre-wrap — so one click-and-copy yielded 208
+       characters for a ~190-character caption: the label, a newline, and the
+       template's own indentation, all pasted into the user's post. Both
+       properties now sit on an element holding the caption text and NOTHING
+       else, and the interpolation carries no leading whitespace. */
+    .caption-text { white-space: pre-wrap; -webkit-user-select: all; user-select: all; }
+    .label { color: rgba(255,255,255,.47); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; margin-bottom: 8px; }
+    .foot { color: rgba(255,255,255,.47); font-size: 12px; text-align: center; max-width: 640px; }
     .foot strong { color: #4CC98A; font-weight: 600; }
   </style>
 </head>
@@ -410,7 +423,7 @@ export function generateReceiptCompanionHtml(input: {
   <div class="card">${input.svg}</div>
   <div class="caption">
     <div class="label">Caption to share</div>
-    ${escapeXml(input.caption)}
+    <div class="caption-text">${escapeXml(input.caption)}</div>
   </div>
   <p class="foot">
     The shareable file is <strong>the .svg next to this page</strong> — post that.

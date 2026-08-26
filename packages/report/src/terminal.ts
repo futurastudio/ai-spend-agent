@@ -136,7 +136,7 @@ export type PlainEnglishSummaryOptions = {
    * Where this readout is being rendered from (0.9.5). From a broad root
    * ("machine-wide", e.g. the user's home directory) the full view's
    * project-scoped command pointers (apply, apply-artifact, watch, connect)
-   * render with the same `cd <project> && …` prefix the machine-wide report
+   * render with the same `cd /path/to/project && …` prefix the machine-wide report
    * summary uses, so a readout printed from home never advertises a command
    * that then friendly-refuses the broad root. Omitted or "project" renders
    * the bare commands exactly as before.
@@ -154,7 +154,44 @@ export type PlainEnglishSummaryOptions = {
    * deliberately select the compact default without changing library callers.
    */
   view?: "compact" | "full" | "breakdown";
+  /**
+   * How much of the session-transcript evidence was actually read (0.9.6).
+   *
+   * The written artifact has always disclosed this; the readout did not, so
+   * the terminal drew plan and candidate conclusions from partly-read
+   * evidence with NO caveat while the artifact next to it disclosed the gap.
+   * Two surfaces, one set of facts: whenever coverage is partial BOTH say so.
+   *
+   * This does not gate anything. Ranked candidates come from local financial
+   * records, not transcripts, so an unread transcript cannot make them wrong
+   * — it only means the transcript-derived analyses are not drafted yet.
+   */
+  qualitativeCoverage?: {
+    status: "complete" | "partial" | "unknown";
+    selectedFiles: number;
+    readCompletely: number;
+    skippedForBudget: number;
+  };
 };
+
+/**
+ * The readout's half of the shared coverage disclosure (0.9.6). Same counts,
+ * same voice, same command as the artifact's banner.
+ */
+export function terminalCoverageCaveat(
+  coverage: PlainEnglishSummaryOptions["qualitativeCoverage"]
+): string | undefined {
+  if (!coverage || coverage.status === "complete") return undefined;
+  if (coverage.selectedFiles === 0) {
+    return "No session transcripts were read for this window, so Context Health and configuration evidence are not drafted. " +
+      "Candidates above come from local financial records.";
+  }
+  const remaining = Math.max(0, coverage.selectedFiles - coverage.readCompletely);
+  return `${coverage.readCompletely} of ${coverage.selectedFiles} session transcripts read so far` +
+    `${remaining > 0 ? ` (${remaining} still queued)` : ""}` +
+    `${coverage.skippedForBudget > 0 ? `; ${coverage.skippedForBudget} ${coverage.skippedForBudget === 1 ? "file was" : "files were"} skipped by budget` : ""}. ` +
+    "Candidates above come from local financial records and are unaffected; Context Health and configuration evidence wait on the rest — run npx aibill index.";
+}
 
 /**
  * Evidence-first terminal receipt: mode/trust, headline, sources, plan context,
@@ -529,6 +566,14 @@ function renderPlainEnglishSummary(
       );
     }
   }
+  // 0.9.6: the artifact discloses partial transcript coverage and this readout
+  // did not — so the terminal drew conclusions from partly-read evidence with
+  // no caveat while the file next to it disclosed the gap. Both say it now.
+  const coverageCaveat = terminalCoverageCaveat(options.qualitativeCoverage);
+  if (coverageCaveat) {
+    lines.push("");
+    lines.push(`  ${c.dim(coverageCaveat)}`);
+  }
   lines.push("");
 
   // Context evidence follows the actionable cuts: it explains why a context
@@ -540,7 +585,7 @@ function renderPlainEnglishSummary(
   // and have NO `aibill` on PATH — a bare command is a guaranteed
   // "command not found" for exactly the person who just got motivated.
   // From a broad root the project-scoped commands additionally carry the
-  // machine-wide report's `cd <project> && …` prefix (0.9.5): apply,
+  // machine-wide report's `cd /path/to/project && …` prefix (0.9.5): apply,
   // apply-artifact, watch, and connect friendly-refuse a broad root, and a
   // --full readout printed from home must never advertise a command that
   // then refuses to run where it was printed.
@@ -2180,10 +2225,10 @@ function wrapProseLine(line: string, width: number): string[] {
       : leading.length >= 5
         ? leading
         : `${leading}  `;
-  // The optional `cd <project> && ` prefix (0.9.5 machine-wide pointers) is
+  // The optional `cd /path/to/project && ` prefix (0.9.5 machine-wide pointers) is
   // part of the copy-pasteable command and must never wrap away from it.
   const protectedText = text.replace(
-    /(?:cd <project> && )?npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
+    /(?:cd \/path\/to\/project && )?npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
     (command) => command.replace(/ /gu, "\uE000")
   );
   const words = protectedText.split(/\s+/u);
@@ -2271,14 +2316,20 @@ function tableChars(): Record<string, string> {
 
 /**
  * Bare project-scoped commands render as-is in project scope and with the
- * machine-wide report's `cd <project> && …` prefix from a broad root, where
- * they would otherwise friendly-refuse (0.9.5 rider on the 0.9.4 fix).
+ * machine-wide report's `cd /path/to/project && …` prefix from a broad root,
+ * where they would otherwise friendly-refuse (0.9.5 rider on the 0.9.4 fix).
+ *
+ * The placeholder is a PATH, not `<project>` (0.9.6). Angle brackets are shell
+ * redirection: pasting `cd <project> && npx aibill apply` verbatim is a syntax
+ * error, and the founder has already been burned once copying a printed
+ * pointer literally. `/path/to/project` pastes as a plain command and fails,
+ * if it fails at all, with a legible "no such file or directory".
  */
 function scopedCommandRenderer(
   commandScope: PlainEnglishSummaryOptions["commandScope"]
 ): (command: string) => string {
   return (command: string) => (
-    commandScope === "machine-wide" ? `cd <project> && ${command}` : command
+    commandScope === "machine-wide" ? `cd /path/to/project && ${command}` : command
   );
 }
 
@@ -2297,8 +2348,10 @@ function scopedCommandRenderer(
  *      shell-significant character) is QUOTED — `open "<abs>/r.html"` —
  *      so the quotes visually glue the command to its argument.
  *
- * Quoting is also correctness, not only optics: an unquoted path with a
- * space was already two arguments when pasted.
+ * The quoting is SAFETY, not only optics. An unquoted path with a space was
+ * already two arguments when pasted; worse, the double quotes this used to
+ * emit do not stop a POSIX shell expanding `$(...)`, backticks, or `$VAR`, so
+ * a path containing them executed on paste. Single quotes expand nothing.
  */
 export function shellPathPointer(tool: string, path: string, cwd?: string): string {
   const separator = path.lastIndexOf("/") === -1 ? path.lastIndexOf("\\") : path.lastIndexOf("/");
@@ -2306,11 +2359,16 @@ export function shellPathPointer(tool: string, path: string, cwd?: string): stri
   const base = separator === -1 ? path : path.slice(separator + 1);
   const relative = cwd !== undefined && directory === cwd && base.length > 0;
   const argument = relative ? base : path;
-  // A double quote inside the path would break the quoting itself; such a
-  // path is left bare rather than rendered as a command that mis-parses.
-  const needsQuotes = !argument.includes("\"") &&
-    (!relative || /[\s'"$`\\&;|<>()*?!#~]/u.test(argument));
-  return `${tool} ${needsQuotes ? `"${argument}"` : argument}`;
+  // SINGLE quotes. Inside double quotes a POSIX shell still expands $(...),
+  // backticks and $VAR, so a double-quoted path containing a command
+  // substitution ran it the moment it was pasted — the previous quoted form
+  // (and 0.9.5's unquoted form) were both code-execution-on-paste. Inside
+  // single quotes nothing expands. The only character that cannot appear
+  // literally is the single quote itself; the standard '\'' idiom closes the
+  // literal, emits an escaped quote, and reopens it, so every path is
+  // representable and none is left bare.
+  const needsQuotes = !relative || /[\s'"$`\\&;|<>()*?!#~]/u.test(argument);
+  return `${tool} ${needsQuotes ? `'${argument.replaceAll("'", "'\\''")}'` : argument}`;
 }
 
 export type CommandSummaryRow = {

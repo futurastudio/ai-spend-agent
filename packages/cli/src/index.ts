@@ -216,7 +216,7 @@ import {
   type ProjectAccountabilityStateV1
 } from "./projectAccountabilityState.js";
 import { fetchGitHubAcceptedOutcomeV0 } from "./githubAcceptedOutcome.js";
-import { decideReportAutoOpen, openReportInBrowser } from "./reportOpener.js";
+import { decideReportAutoOpen, openReportInBrowser, platformOpenCommand } from "./reportOpener.js";
 import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
@@ -672,6 +672,9 @@ async function quickstartCommand(
     records: receiptRecords,
     // The same array the machine-wide report renders into its ACT section.
     cutList: evidence.actionCandidates,
+    // …and the same coverage facts the artifact discloses in its banner, so
+    // the two surfaces state the same thing about what was actually read.
+    ...(actionEvidence ? { qualitativeCoverage: summarizeCliQualitativeCoverage(actionEvidence) } : {}),
     groupBy,
     color,
     mode,
@@ -685,7 +688,7 @@ async function quickstartCommand(
     detectedPlans,
     // 0.9.5: from a broad root the --full view's project-scoped pointers
     // (apply, apply-artifact, watch, connect) carry the machine-wide
-    // report's `cd <project> && …` prefix instead of advertising commands
+    // report's `cd /path/to/project && …` prefix instead of advertising commands
     // that friendly-refuse right where they were printed.
     commandScope: isBroadScanRoot(args.path) ? "machine-wide" : "project",
     // C-lane §1.4: the result card header states the evidence window.
@@ -1459,8 +1462,22 @@ async function indexEvidenceCommand(
   args: ParsedArgs,
   runtime: CliRuntimeOptions
 ): Promise<CliResult> {
-  const rootGuard = await guardExactProjectRoot("index", args.path);
-  if (rootGuard) return rootGuard;
+  // 0.9.6, same fix and same reason as `report` (0.9.4): the report prints
+  // `npx aibill index` as its prescribed next step 13 times, and from a broad
+  // root — the home folder the machine-wide report is normally written in —
+  // the exact-project guard made that pointer exit 1. The report's own next
+  // step refused from the directory that wrote the report.
+  //
+  // The guard was never load-bearing here. `index` reads the env-scoped GLOBAL
+  // transcript directories (AI_SPEND_CLAUDE_LOGS_DIR / AI_SPEND_CODEX_LOGS_DIR,
+  // defaulting to the agents' own home-level locations) and writes the
+  // home-level private cache under ~/.aibill. `args.path` scopes nothing it
+  // reads and nothing it writes, so a broad root scans no more than a project
+  // root does. Only a bogus --path still gets the friendly guard.
+  if (!isBroadScanRoot(args.path)) {
+    const rootGuard = await guardExactProjectRoot("index", args.path);
+    if (rootGuard) return rootGuard;
+  }
   const sinceDays = args.sinceDays ?? 30;
   if (!validSinceDays(sinceDays)) return invalidSinceDaysResult();
   const sinceIso = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1_000).toISOString();
@@ -1588,10 +1605,31 @@ function summarizeCliQualitativeCoverageByAgent(
   );
 }
 
+/**
+ * The report summary's coverage row, in the user-facing voice (0.9.6). It read
+ * "suppressed · qualitative index partial" — a status nobody outside this
+ * codebase can act on, and a word ("suppressed") that was not even accurate
+ * for the ranked candidates, which are financial-derived and never withheld.
+ *
+ * Names the ACTUAL gap: unread transcripts and budget-skipped files are
+ * different problems with different fixes, and a bare "4 of 4 read" hid the
+ * second one entirely.
+ */
+function reportQualitativeRowValue(
+  coverage: SpendReportInput["qualitativeCoverage"]
+): string {
+  const read = coverage?.readCompletely ?? 0;
+  const selected = coverage?.selectedFiles ?? 0;
+  const skipped = coverage?.skippedForBudget ?? 0;
+  return `not drafted · ${read} of ${selected} session transcripts read` +
+    (skipped > 0 ? ` · ${skipped} ${skipped === 1 ? "file" : "files"} skipped by budget` : "");
+}
+
 function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string {
-  return `QUALITATIVE INDEX  ${coverage.status.toUpperCase()} · ` +
-    `${coverage.readCompletely}/${coverage.selectedFiles} selected files read completely · ` +
-    `${coverage.skippedForBudget} eligible files skipped by budget`;
+  return `SESSION TRANSCRIPTS  ${coverage.readCompletely} of ${coverage.selectedFiles} read completely` +
+    (coverage.skippedForBudget > 0
+      ? ` · ${coverage.skippedForBudget} ${coverage.skippedForBudget === 1 ? "file was" : "files were"} skipped by budget`
+      : "");
 }
 
 /**
@@ -1828,7 +1866,19 @@ function noEvidenceResult(
           ...warnings.map((warning) => `! ${warning}`),
           "",
           "Next",
-          "  npx aibill doctor --sources       see the exact evidence gap and setup paths",
+          // 0.9.6: this screen used to offer exactly two next steps — a
+          // diagnostic and an email signup — to a visitor who had just been
+          // told there is nothing to show. The only occurrence of the word
+          // "sample" on it was "No sample data was substituted." `--sample`
+          // works, needs no evidence and no email, and is the one thing that
+          // shows a first-time visitor what the tool actually produces, so it
+          // goes FIRST.
+          "  npx aibill --sample               see a full worked example on bundled demo data",
+          // Honest label (0.9.6): this prints a per-source coverage matrix —
+          // which locations were checked and what each returned. It does not
+          // print install or setup instructions, and promising "setup paths"
+          // sent people looking for something that is not there.
+          "  npx aibill doctor --sources       see which source locations were checked, and what each returned",
           `  ${signupCopy.receiptPointer}`
         ].join("\n")
       : "",
@@ -4933,7 +4983,7 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
           ]
         : qualitativeActionsSuppressed
           ? [
-              { label: "Action artifacts", value: `suppressed · qualitative index ${reportInput.qualitativeCoverage?.status ?? "unknown"}` },
+              { label: "Action artifacts", value: reportQualitativeRowValue(reportInput.qualitativeCoverage) },
               { label: "Coverage artifact", value: artifactPaths!.codingPrompt },
               { label: "Coverage action plan", value: artifactPaths!.actionPlan },
               { label: "Coverage policy/config", value: artifactPaths!.policyConfigDraft },
@@ -4978,7 +5028,7 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       openedInBrowser
         ? { command: `opened ${basename(htmlPath)} in your browser · next time: --no-open to skip` }
         : {
-            command: shellPathPointer("open", htmlPath, process.cwd()),
+            command: shellPathPointer(platformOpenCommand(), htmlPath, process.cwd()),
             description: `view in your browser — or double-click ${basename(htmlPath)} in your file manager`
           },
       {
@@ -4990,12 +5040,12 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
         // report must never point at a command that then refuses (the exact
         // trap this mode removes).
         ? reportInput.dataMode === "sample"
-          ? { command: `cd <project> && ${actionRuntimeCommand("apply --sample")}`, description: "print the non-executable demo boundary from one exact project folder" }
-          : { command: `cd <project> && ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}`, description: "per-project action plan from one exact project folder" }
+          ? { command: `cd /path/to/project && ${actionRuntimeCommand("apply --sample")}`, description: "print the non-executable demo boundary from one exact project folder" }
+          : { command: `cd /path/to/project && ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}`, description: "per-project action plan from one exact project folder" }
         : reportableExperiment
         ? { command: improveRuntimeCommand, description: `review canonical token test ${reportableExperiment.id}` }
         : qualitativeActionsSuppressed
-          ? { command: actionRuntimeCommand(`context --json --since-days ${sinceDays}`), description: "complete bounded qualitative evidence before any action" }
+          ? { command: actionRuntimeCommand(`context --json --since-days ${sinceDays}`), description: "inspect the transcript evidence read so far" }
           : reportInput.dataMode === "sample"
             ? { command: actionRuntimeCommand("apply --sample"), description: "print the non-executable demo boundary" }
             : { command: actionRuntimeCommand(`apply --since-days ${sinceDays}`), description: "print the paste-ready coding-agent prompt from this exact evidence window" }
@@ -5136,7 +5186,7 @@ async function reportCardCommand(args: ParsedArgs, runtime: CliRuntimeOptions = 
         openedInBrowser
           ? { command: `opened ${basename(companionPath)} in your browser · next time: --no-open to skip` }
           : {
-              command: shellPathPointer("open", companionPath, process.cwd()),
+              command: shellPathPointer(platformOpenCommand(), companionPath, process.cwd()),
               description: `view the receipt — or double-click ${basename(companionPath)} in your file manager`
             },
         // NOT a command, so it must not LOOK like one: `post ai-receipt.svg`
@@ -7198,7 +7248,7 @@ async function tokenVerificationCommand(args: ParsedArgs): Promise<CliResult> {
     const observation = await loadTokenVerificationObservation(rootPath, experiment);
     if (!observation.qualitativeCoverageComplete) {
       return tokenVerificationUsageError(
-        "the bounded qualitative index is incomplete for this experiment's agent; no post-change sessions or reduction percentage were accepted"
+        "this experiment's agent still has unread session transcripts; no post-change sessions or reduction percentage were accepted. Run `npx aibill index` to finish reading them, then verify again"
       );
     }
     const unlabelled = refreshTokenReductionExperimentV0(experiment, {
@@ -8560,6 +8610,10 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports and open the HTML in your browser",
     "    [--no-open]           Skip the automatic browser open (also AI_SPEND_NO_OPEN=1; auto-open is TTY-only and never fires in CI or SSH sessions)",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
+    // C3: report-card writes TWO files. `--out index.svg` silently replaced an
+    // existing index.html next to it; the second artifact is now disclosed
+    // where the user chooses the name.
+    "    [--out f.svg]         Also writes the companion viewer f.html alongside it, overwriting any existing file of that name",
     "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",
     "    [--json]              Emit the same canonical Context Health object used by MCP and Glance",

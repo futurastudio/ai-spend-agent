@@ -1209,7 +1209,7 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
       nextSteps: [
         { command: `open ${home}/ai-spend-report.html`, description: "view the full report in your browser" },
         { command: `less ${home}/ai-spend-report.md`, description: "read it in the terminal" },
-        { command: "cd <project> && npx aibill apply --since-days 30", description: "per-project action plan from one exact project folder" }
+        { command: "cd /path/to/project && npx aibill apply --since-days 30", description: "per-project action plan from one exact project folder" }
       ],
       color: false,
       width
@@ -1235,7 +1235,7 @@ describe("generateCommandSummary (aligned report/report-card summaries)", () => 
     expect(nextIndex).toBeGreaterThan(0);
     const stepLines = lines.slice(nextIndex + 1).filter((line) => line.startsWith("  › "));
     expect(stepLines).toHaveLength(3);
-    const widest = "cd <project> && npx aibill apply --since-days 30".length;
+    const widest = "cd /path/to/project && npx aibill apply --since-days 30".length;
     for (const line of stepLines) {
       expect(line.slice(4 + widest, 4 + widest + 2)).toBe("  ");
       expect(line.charAt(4 + widest + 2)).not.toBe(" ");
@@ -1333,31 +1333,55 @@ describe("shellPathPointer — un-half-copyable artifact pointers (0.9.6)", () =
 
   it("quotes anything absolute, so the command and its argument read as one thing", () => {
     expect(shellPathPointer("open", "/Users/testuser/work/.ai-spend-agent/report.html", "/Users/testuser"))
-      .toBe("open \"/Users/testuser/work/.ai-spend-agent/report.html\"");
+      .toBe("open '/Users/testuser/work/.ai-spend-agent/report.html'");
     // No cwd known at all: still quoted, never bare.
     expect(shellPathPointer("open", "/Users/testuser/report.html"))
-      .toBe("open \"/Users/testuser/report.html\"");
+      .toBe("open '/Users/testuser/report.html'");
   });
 
   it("quotes a same-directory name that a shell would re-parse (spaces and metacharacters)", () => {
     expect(shellPathPointer("open", "/Users/testuser/my report.html", "/Users/testuser"))
-      .toBe("open \"my report.html\"");
+      .toBe("open 'my report.html'");
     expect(shellPathPointer("open", "/Users/testuser/re(port).html", "/Users/testuser"))
-      .toBe("open \"re(port).html\"");
+      .toBe("open 're(port).html'");
   });
 
-  it("never emits broken quoting for a path that already contains a double quote", () => {
-    // Quoting this would produce a command that mis-parses; leave it bare and
-    // let the (separately pinned) auto-open metacharacter refusal handle it.
-    const pointer = shellPathPointer("open", "/Users/testuser/we\"ird.html", "/Users/testuser");
-    expect(pointer).toBe("open we\"ird.html");
-    expect(pointer.split("\"").length - 1).toBe(1);
+  /**
+   * C1 (0.9.6): the pointer used DOUBLE quotes, which a POSIX shell still
+   * expands inside — so a path containing $(...) or backticks executed the
+   * moment it was pasted. 0.9.5 shipped it unquoted, which is worse. Single
+   * quotes expand nothing.
+   */
+  it("neutralizes command substitution instead of executing it on paste", () => {
+    expect(shellPathPointer("open", "/Users/testuser/$(id)/report.html"))
+      .toBe("open '/Users/testuser/$(id)/report.html'");
+    expect(shellPathPointer("open", "/Users/testuser/`id`/report.html"))
+      .toBe("open '/Users/testuser/`id`/report.html'");
+    // The whole argument sits inside ONE single-quoted literal: every
+    // expansion-triggering character is inert.
+    const pointer = shellPathPointer("open", "/tmp/$(rm -rf ~)/`whoami`/a b.html");
+    expect(pointer).toBe("open '/tmp/$(rm -rf ~)/`whoami`/a b.html'");
+    expect(pointer.slice("open ".length).startsWith("'")).toBe(true);
+    expect(pointer.endsWith("'")).toBe(true);
+    expect(pointer.slice("open '".length, -1)).not.toContain("'");
+  });
+
+  it("escapes an embedded single quote with the POSIX '\\'' idiom instead of leaving the path bare", () => {
+    expect(shellPathPointer("open", "/Users/testuser/it's here.html"))
+      .toBe("open '/Users/testuser/it'\\''s here.html'");
+  });
+
+  it("quotes a path containing a double quote rather than emitting it bare", () => {
+    // Previously left BARE (double-quoting would have mis-parsed), which put an
+    // unquoted metacharacter-bearing path on screen. Single quotes hold it.
+    expect(shellPathPointer("open", "/Users/testuser/we\"ird.html", "/Users/testuser"))
+      .toBe("open 'we\"ird.html'");
   });
 
   it("handles windows separators", () => {
     expect(shellPathPointer("open", "C:\\Users\\testuser\\ai-receipt.html", "C:\\Users\\testuser"))
       .toBe("open ai-receipt.html");
     expect(shellPathPointer("open", "C:\\Users\\testuser\\out\\ai-receipt.html", "C:\\Users\\testuser"))
-      .toBe("open \"C:\\Users\\testuser\\out\\ai-receipt.html\"");
+      .toBe("open 'C:\\Users\\testuser\\out\\ai-receipt.html'");
   });
 });

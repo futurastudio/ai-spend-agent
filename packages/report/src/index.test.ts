@@ -13,6 +13,32 @@ import {
   generateVerificationPlanMarkdown
 } from "./index.js";
 
+/**
+ * The internal-state vocabulary that must never reach a user, on any surface.
+ *
+ * Matched CASE-INSENSITIVELY on purpose (0.9.6). The assertions this replaces
+ * compared a lowercase needle ("qualitative indexing is") against mixed-case
+ * output ("Qualitative indexing is partial") with `not.toContain`, so they
+ * reported green on documents that shipped the offending string twice. Any
+ * sibling assertion added here must lowercase BOTH sides.
+ */
+const INTERNAL_JARGON = [
+  "qualitative index",
+  "qualitative indexing",
+  "bounded transcript index",
+  "bounded index",
+  "coverage.status",
+  "non-executable."
+] as const;
+
+function expectNoInternalJargon(document: string): void {
+  const haystack = document.toLowerCase();
+  for (const phrase of INTERNAL_JARGON) {
+    expect(haystack, `internal jargon "${phrase}" reached a user-visible surface`)
+      .not.toContain(phrase.toLowerCase());
+  }
+}
+
 const sourceRegistry: SourceRegistry = {
   version: 1,
   localOnly: true,
@@ -1711,16 +1737,17 @@ describe("board-style report generation", () => {
     const localHtml = generateHtmlReport(gapInput);
 
     for (const report of [localMarkdown, localHtml]) {
-      expect(report).toContain("QUALITATIVE INDEX PARTIAL");
-      expect(report).toContain("2/4 selected files read completely");
-      // 0.9.6 (founder-found): a suppressed section must state what the user
+      expect(report).toContain("SESSION TRANSCRIPTS NOT FULLY READ");
+      // 0.9.6 (founder-found): a degraded section must state what the user
       // should DO, in words they can act on — not describe internal state.
       // The old copy read "No action candidate is emitted because qualitative
       // indexing is unknown"; nobody outside this codebase can act on that.
       expect(report).toContain("2 of 4 session transcripts have been read so far");
       expect(report).toContain(aibillCommandV0("index"));
-      expect(report).not.toContain("qualitative indexing is");
-      expect(report).not.toContain("Complete the bounded transcript index");
+      // Case-INSENSITIVE. The previous form of this assertion compared a
+      // lowercase needle against mixed-case output, so it passed on documents
+      // that shipped "Qualitative indexing is partial" twice.
+      expectNoInternalJargon(report);
       expect(report).not.toContain(contextHealth.headline);
       expect(report).not.toContain("partial-only-config-item");
       expect(report).not.toContain("trimming context (below)");
@@ -1736,14 +1763,13 @@ describe("board-style report generation", () => {
     const connectedMarkdown = generateMarkdownReport(connectedGapInput);
     const connectedHtml = generateHtmlReport(connectedGapInput);
     for (const report of [connectedMarkdown, connectedHtml]) {
-      expect(report).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(report).toContain("SESSION TRANSCRIPTS NOT FULLY READ");
       // 0.9.6: the connected/board renderer degrades in the same actionable
-      // voice as the local one — no "qualitative indexing is <state>" copy
-      // survives on ANY report surface.
+      // voice as the local one — no internal-state copy survives on ANY
+      // report surface, in any casing.
       expect(report).toContain("2 of 4 session transcripts have been read so far");
       expect(report).toContain(aibillCommandV0("index"));
-      expect(report).not.toContain("qualitative indexing is");
-      expect(report).not.toContain("Complete the bounded transcript index");
+      expectNoInternalJargon(report);
       expect(report).not.toContain("Route workloads by cost sensitivity");
       expect(report).not.toContain("Approve a routing policy");
       expect(report).not.toContain("$0.00 (recommended plan");
@@ -1757,8 +1783,12 @@ describe("board-style report generation", () => {
       generateDemoPackageMarkdown(gapInput)
     ];
     for (const sidecar of sidecars) {
-      expect(sidecar).toContain("NON-EXECUTABLE");
-      expect(sidecar).toContain("Qualitative indexing is partial");
+      // demo-package.md is made for SHARING. Its degradation header used to
+      // read "> **NON-EXECUTABLE.** Qualitative indexing is partial." — an
+      // internal state description in a file the user hands to someone else.
+      expect(sidecar).toContain("NO CHANGE IS DRAFTED IN THIS FILE");
+      expect(sidecar).toContain("2 of 4 session transcripts read completely");
+      expectNoInternalJargon(sidecar);
       expect(sidecar).toContain(contextCommand);
       expect(sidecar).not.toContain(contextHealth.headline);
       expect(sidecar).not.toContain("partial-only-config-item");

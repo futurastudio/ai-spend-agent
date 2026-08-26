@@ -354,7 +354,7 @@ export function buildUsageGlance(
     "Claude Code transcripts do not report plan headroom. Missing limits remain unavailable instead of being inferred.",
     "Cursor and GitHub Copilot require their provider connections because their local chat stores are not treated as authoritative billing transcripts.",
     ...(qualitativeComplete ? [] : [
-      "Main focus, anomaly, and context-change handoff are unavailable because the bounded qualitative index is incomplete; no global driver was inferred from a selected subset."
+      "Main focus, anomaly, and context-change handoff are unavailable because some session transcripts have not been read yet; no global driver was inferred from a partly-read subset."
     ])
   ];
 
@@ -456,10 +456,10 @@ function buildCoverageLimitedPrimaryAction(input: {
     kind: "session_handoff",
     intent: "inspect_current_work",
     label: project ? `Refresh evidence · ${project}` : "Refresh evidence",
-    detail: `Main focus unavailable · qualitative index ${status}`,
+    detail: `Main focus unavailable · session transcripts ${status === "partial" ? "only partly read" : "not available"}`,
     ...(project ? { project } : {}),
     agentPrompt: [
-      "aibill's bounded qualitative evidence is incomplete.",
+      "Some coding-agent session transcripts have not been read yet.",
       "Do not infer a global main focus, waste cause, or context change from the selected subset.",
       `Run \`${aibillImproveCommandV0()}\` from the exact project root to refresh the private index, then review the new evidence before editing.`
     ].join("\n"),

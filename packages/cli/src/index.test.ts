@@ -95,10 +95,19 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).toContain("No sample data was substituted");
     expect(result.stdout).toContain("Looked for: Claude Code, Codex, and Gemini CLI");
     expect(result.stdout).toContain("doctor --sources");
-    // Exactly two commands: the doctor next step and the optional signup
-    // pointer (static, never a prompt — capture design moments map).
-    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(2);
+    // Exactly three commands: --sample, the doctor next step, and the
+    // optional signup pointer (static, never a prompt).
+    expect(result.stdout.match(/npx aibill/gu)).toHaveLength(3);
+    // 0.9.6: a visitor with no evidence used to get a diagnostic and an email
+    // ask, and nothing that SHOWED them anything. `--sample` needs neither
+    // evidence nor an address, so it leads.
+    expect(result.stdout).toContain("npx aibill --sample");
+    expect(result.stdout.indexOf("npx aibill --sample"))
+      .toBeLessThan(result.stdout.indexOf("npx aibill signup"));
     expect(result.stdout).toContain("npx aibill signup <email>");
+    // …and the doctor pointer no longer promises setup instructions it does
+    // not print.
+    expect(result.stdout).not.toContain("setup paths");
     expect(result.stdout).not.toContain("connect openai");
     expect(result.stdout).not.toContain("connect anthropic");
     expect(result.stdout).not.toContain("$87.00");
@@ -778,7 +787,12 @@ describe("zero-key evidence-first receipt", () => {
 
     const report = await runCli(["report", "--since-days", "7", "--path", dir]);
     expect(report.exitCode).toBe(0);
-    expect(flat(report.stdout)).toContain("Action artifacts suppressed · qualitative index partial");
+    // 0.9.6: this row said "suppressed · qualitative index partial". It now
+    // names the real gap — and this fixture's gap is a budget skip, which a
+    // bare "4 of 4 read" hid completely.
+    expect(flat(report.stdout)).toContain(
+      "Action artifacts not drafted · 4 of 4 session transcripts read · 1 file skipped by budget"
+    );
     expect(flat(report.stdout)).toContain("· cost/value evidence");
     expect(report.stdout).toContain(aibillCommandV0("context --json --since-days 7"));
     expect(report.stdout).not.toContain(aibillCommandV0("apply --since-days 7"));
@@ -788,7 +802,7 @@ describe("zero-key evidence-first receipt", () => {
     const reportFiles = ["report.md", "report.html"];
     for (const name of reportFiles) {
       const contents = await readFile(join(stateDir, name), "utf8");
-      expect(contents).toContain("QUALITATIVE INDEX PARTIAL");
+      expect(contents).toContain("SESSION TRANSCRIPTS NOT FULLY READ");
       expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
       expect(contents).not.toContain("trimming context (below)");
     }
@@ -801,8 +815,11 @@ describe("zero-key evidence-first receipt", () => {
     ];
     for (const name of sidecars) {
       const contents = await readFile(join(stateDir, name), "utf8");
-      expect(contents).toContain("NON-EXECUTABLE");
-      expect(contents).toContain("Qualitative indexing is partial");
+      // 0.9.6: demo-package.md is written to be SHARED. Its degradation header
+      // said "NON-EXECUTABLE. Qualitative indexing is partial." — internal
+      // state, in a file the user hands to someone else.
+      expect(contents).toContain("NO CHANGE IS DRAFTED IN THIS FILE");
+      expect(contents.toLowerCase()).not.toContain("qualitative index");
       expect(contents).toContain(aibillCommandV0("context --json --since-days 7"));
       expect(contents).not.toContain(aibillCommandV0("apply --since-days 7"));
       expect(contents).not.toContain("Candidate key:");
@@ -4230,12 +4247,14 @@ describe("minimal CLI vertical slice", () => {
     // 0.9.6: an artifact outside the invoking cwd is QUOTED, so the command
     // and its argument read (and paste) as one thing — the founder typed a
     // bare `open` off the old unquoted line and got macOS's usage dump.
+    // SINGLE quotes: double quotes still let a POSIX shell expand $(...) and
+    // backticks in the path, which made the pointer execute on paste.
     // Paths realpath through /private/var, so pin the stable pieces.
-    expect(flat(suppressed.stdout)).toContain("› open \"/");
+    expect(flat(suppressed.stdout)).toContain("› open '/");
     expect(flat(suppressed.stdout)).toContain(
-      `${join(".ai-spend-agent", "report.html")}" view in your browser — or double-click report.html in your file manager`
+      `${join(".ai-spend-agent", "report.html")}' view in your browser — or double-click report.html in your file manager`
     );
-    expect(flat(suppressed.stdout)).toContain("› less \"/");
+    expect(flat(suppressed.stdout)).toContain("› less '/");
     expect(suppressed.stdout).not.toContain("in your browser · next time");
 
     // --no-open reaches the decision, and a decision that failed to LAUNCH
@@ -4287,9 +4306,9 @@ describe("minimal CLI vertical slice", () => {
     // the plain pointer survives and nothing claims to have opened.
     const suppressed = await runCli(["report-card", "--sample", "--path", dir, "--no-color"]);
     expect(suppressed.exitCode).toBe(0);
-    expect(flat(suppressed.stdout)).toContain("› open \"/");
+    expect(flat(suppressed.stdout)).toContain("› open '/");
     expect(flat(suppressed.stdout)).toContain(
-      "ai-receipt.html\" view the receipt — or double-click ai-receipt.html in your file manager"
+      "ai-receipt.html' view the receipt — or double-click ai-receipt.html in your file manager"
     );
     expect(suppressed.stdout).not.toContain("in your browser · next time");
 
@@ -4362,17 +4381,17 @@ describe("minimal CLI vertical slice", () => {
     // their bare forms.
     const fromHome = await runCli(["--sample", "--full", "--path", homedir(), "--no-color"]);
     expect(fromHome.exitCode).toBe(0);
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply --sample");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply-artifact");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill watch");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect openai");
-    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect anthropic");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill apply --sample");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill apply-artifact");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill watch");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill connect openai");
+    expect(flat(fromHome.stdout)).toContain("cd /path/to/project && npx aibill connect anthropic");
 
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-full-project-scope-"));
     const fromProject = await runCli(["--sample", "--full", "--path", dir, "--no-color"]);
     expect(fromProject.exitCode).toBe(0);
     expect(fromProject.stdout).toContain("npx aibill apply --sample");
-    expect(fromProject.stdout).not.toContain("cd <project>");
+    expect(fromProject.stdout).not.toContain("cd /path/to/project");
   });
 
   it("adds and lists approved sources without scanning them immediately", async () => {
