@@ -13,7 +13,7 @@ instructions.
 - Ten MCP tools, including `get_usage_glance`, `get_context_health`, and the
   read-only `draft_improve_command` improve-plan drafting tool.
 
-The plugin launches `@agent-finops/mcp@0.9.5` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.9.6` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository
