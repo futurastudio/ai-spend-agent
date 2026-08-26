@@ -12,7 +12,7 @@ const commandGroups = [
   {
     title: "Inspect",
     commands: [
-      ["npx aibill", "Complete local readout; falls back to a clearly labeled demo only when supported evidence is absent."],
+      ["npx aibill", "Complete local readout. When no supported evidence is found it says so and substitutes nothing; pass --sample to see a labeled demo."],
       ["npx aibill --group-by project", "Project breakdown; replace project with source, model, client, agent, user, workspace, or apiKey for another dimension."],
       ["npx aibill context", "Canonical hook-aware Context Health decision."],
       ["npx aibill doctor --sources", "Reader validation, financial evidence, freshness, and source errors."],

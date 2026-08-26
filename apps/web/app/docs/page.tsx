@@ -57,7 +57,7 @@ export default function DocsOverviewPage() {
         <CodeBlock label="Terminal">{`npx aibill init
 npx aibill`}</CodeBlock>
         <p>
-          Init uses real local evidence only. It does not substitute sample dollars and it does not install the statusline unless you explicitly pass <code className="font-mono text-ink">--statusline</code>. If the default readout finds no supported evidence, its fallback demo is unmistakably labeled as sample data.
+          Init uses real local evidence only. It does not substitute sample dollars and it does not install the statusline unless you explicitly pass <code className="font-mono text-ink">--statusline</code>. If the default readout finds no supported evidence, it says so and substitutes nothing — &ldquo;No sample data was substituted.&rdquo; Pass <code className="font-mono text-ink">--sample</code> to see a labeled demo on purpose.
         </p>
         <DocsCallout title="Requirements" tone="published">
           Node 22 or newer. The default local run needs no account, provider key, or signup.
