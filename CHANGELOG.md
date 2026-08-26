@@ -5,6 +5,24 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- OpenAI pricing correction. `gpt-5.6-sol` carried GPT-5.5's rates
+  ($5.00/$0.50/$30.00) instead of its own published $4.00/$0.40/$20.00, so
+  every Codex record on the default OpenAI model was overstated by 25% on
+  input and 50% on output; the long-context leg moved $10/$45 → $8/$30.
+  `gpt-5.6-terra` and `gpt-5.6-luna` were already correct and are unchanged.
+  Added `gpt-5-nano` ($0.05/$0.005/$0.40), which had been falling through to
+  the `^gpt-5` fallback at 25x its real rate, and the published >272K
+  long-context tiers for `gpt-5.5` and `gpt-5.4`. Rates verified twice
+  against developers.openai.com/api/docs/pricing and each model's own doc
+  page (2026-08-25).
+- Rule ordering hardened, same doctrine as 0.9.4's Kimi fix: the GPT-5.6/5.5/
+  5.4 rules are end-anchored and the `^gpt-5` fallback no longer crosses a
+  dot-minor boundary, so an unverified or future sibling (`gpt-5.7-sol`,
+  `gpt-5.6-cyber`, `gpt-5.6-<newvariant>`) reports honest "missing" instead
+  of silently inheriting a neighbour's price.
+
 ## 0.9.5 — 2026-08-25
 
 Terminal polish from direct founder feedback ("really hard to read… I wonder

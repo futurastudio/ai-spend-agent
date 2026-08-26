@@ -89,6 +89,16 @@ export type LocalAgentCall = {
   /** Whether `usage` is one model turn or the session's cumulative financial total. */
   usageScope?: "turn" | "session_cumulative";
   /**
+   * Largest single-request prompt (effective input, cache reads included)
+   * observed within a `session_cumulative` `usage`. Tiered per-request pricing
+   * is selected per request, never from a cumulative sum: a cache-heavy session
+   * routinely clears a per-request tier threshold in aggregate while no single
+   * request did. This evidence lets pricing keep such a total on the base tier
+   * (exact) instead of failing closed to "missing". Absent for turn-scoped
+   * calls, which are already a single request.
+   */
+  maxRequestPromptTokens?: number;
+  /**
    * Whether the transcript exposed the input/output components required for
    * pricing. A total-only snapshot is still usage evidence, but pricing it as
    * zero would be false precision.
@@ -470,7 +480,15 @@ export type LocalAgentStreamCheckpointAdapter = {
   ) => Promise<void>;
 };
 
-export const localAgentFinancialParserVersion = 1;
+// Bumped to 2 when session-cumulative Codex calls gained `maxRequestPromptTokens`
+// (largest single request in the session). Financial caches written by v1 lack
+// this per-request tier evidence, so a >272K-cumulative Codex session would
+// stay voided to "missing" on reuse; a version mismatch re-parses instead.
+// Bumped to 3 when user forks (`forked_from_id`) started resetting their
+// inherited baseline: v2 entries priced a fork's replayed parent history as
+// the child's own usage, so those cached amounts are overstated and must not
+// be reused.
+export const localAgentFinancialParserVersion = 3;
 
 /**
  * Qualitative parser contract version. Bumped to 2 with the checkpointed
@@ -482,9 +500,15 @@ export const localAgentFinancialParserVersion = 1;
  * cross-file completion evidence (`subagentCompletions`, from both Task tool
  * results and background task-notifications): entries persisted by the
  * collapsing parser must re-parse rather than silently keep merging subagent
- * runs into their parent session.
+ * runs into their parent session. Bumped to 5 when Codex reducer checkpoints
+ * gained `maxTurnPromptTokens` (largest single request): a checkpoint written
+ * by v4 lacks the running per-request maximum, so restoring it could under-read
+ * the tier evidence for a cumulative session that crossed the boundary — a
+ * version mismatch discards it and re-parses from scratch instead. Bumped to 6
+ * with the user-fork inherited-baseline fix: v5 entries and checkpoints treated
+ * a fork's replayed parent history as the child's own usage and activity.
  */
-export const localAgentQualitativeParserVersion = 4;
+export const localAgentQualitativeParserVersion = 6;
 
 /**
  * Conservative launch defaults for action-capable qualitative evidence.
@@ -1031,6 +1055,44 @@ function parseCodexTurnUsage(value: Record<string, unknown>): {
   };
 }
 
+/**
+ * The tier-relevant prompt size of one Codex `last_token_usage` turn: its full
+ * request input (Codex `input_tokens` already includes cached input), which is
+ * exactly `effectivePromptTokens` of the parsed turn usage. Returned only when
+ * the field parses to a non-negative number, so an unreadable turn never lowers
+ * a running maximum. Used to prove whether any single request in a cumulative
+ * session crossed a per-request tier threshold.
+ */
+function codexTurnPromptTokens(turn: Record<string, unknown>): number | undefined {
+  const input = tokenComponentOf(turn.input_tokens);
+  return input === undefined ? undefined : input;
+}
+
+/**
+ * Whether a Codex rollout replays another session's history before its own
+ * work, so the cumulative counter at its first real task is an inherited
+ * baseline rather than this session's usage.
+ *
+ * TWO kinds of rollout do this, and only the first was recognized before:
+ *  - subagent rollouts (`thread_source: "subagent"`, or a `source.subagent`);
+ *  - USER FORKS (`forked_from_id`), which carry `thread_source: "user"` and
+ *    replay the parent transcript verbatim. Observed: a forked rollout whose
+ *    first 9,051 of 9,442 token_count events are byte-identical copies of the
+ *    parent's, all with earlier parent timestamps, carrying 1,204,265,192 of
+ *    its 1,256,637,395 final cumulative input tokens (95.9%) — parent usage
+ *    that was being billed again under the child, and again down each fork
+ *    chain.
+ *
+ * This is deliberately NOT folded into `isSubagent`: that flag also drives
+ * activity attribution and checkpoint identity, where a user fork is a normal
+ * user session and must not be relabelled a subagent.
+ */
+function codexHasInheritedHistory(payload: Record<string, unknown>): boolean {
+  return stringOf(payload.thread_source) === "subagent" ||
+    isRecord(payload.source) && "subagent" in payload.source ||
+    stringOf(payload.forked_from_id) !== undefined;
+}
+
 /** Parse one Claude Code transcript (JSONL). Exported for tests. */
 export function parseClaudeCodeTranscript(
   content: string,
@@ -1293,10 +1355,18 @@ type CodexRolloutParserState = {
   startedAt?: string;
   rootStartedAtMs?: number;
   rootTaskStarted: boolean;
+  /**
+   * Whether this rollout replays another session's history (subagent OR user
+   * fork), so its pre-boundary cumulative is an inherited baseline. Tracked
+   * separately from `isSubagent`, which also drives attribution.
+   */
+  hasInheritedHistory: boolean;
   inheritedUsageBaseline?: Record<string, unknown>;
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  /** Largest single-request prompt seen since the (post-fork) session root. */
+  maxTurnPromptTokens?: number;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
   prompts: string[];
   /** Sanitized prompt survivors dropped from a checkpoint beyond the last 12. */
@@ -1351,6 +1421,7 @@ function createCodexRolloutParserState(): CodexRolloutParserState {
     fileCounts: new Map<string, number>(),
     toolCallCount: 0,
     isSubagent: false,
+    hasInheritedHistory: false,
     malformedLines: 0
   };
 }
@@ -1385,6 +1456,7 @@ function consumeCodexRolloutLine(
     state.rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
     state.isSubagent = stringOf(payload.thread_source) === "subagent" ||
       isRecord(payload.source) && "subagent" in payload.source;
+    state.hasInheritedHistory = codexHasInheritedHistory(payload);
     state.parentSessionId = stringOf(payload.parent_thread_id);
   }
   if (entry.type === "turn_context" && payload) {
@@ -1397,7 +1469,7 @@ function consumeCodexRolloutLine(
     }
   }
   if (
-    state.isSubagent &&
+    state.hasInheritedHistory &&
     !state.rootTaskStarted &&
     payload?.type === "task_started" &&
     isRootSpecificTaskStart(payload.started_at, state.rootStartedAtMs)
@@ -1409,6 +1481,11 @@ function consumeCodexRolloutLine(
     // prompts/files cannot become the child's focus. Restored checkpoint
     // evidence predating the boundary is parent history too and resets with
     // it (the raw session cwd deliberately survives, exactly as rootCwd).
+    //
+    // Replayed task_started events keep the PARENT's original started_at, so
+    // `isRootSpecificTaskStart` rejects them and the first accepted task is
+    // this session's own — which is why the boundary lands exactly at the end
+    // of the replay.
     state.inheritedUsageBaseline = state.lastTotal;
     state.lastTotal = undefined;
     state.rootTaskStarted = true;
@@ -1420,10 +1497,11 @@ function consumeCodexRolloutLine(
     state.toolCallCount = 0;
     state.model = undefined;
     state.lastTurn = undefined;
+    state.maxTurnPromptTokens = undefined;
     state.lastRateLimits = undefined;
     state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
   }
-  if (payload?.type === "task_started" && (!state.isSubagent || state.rootTaskStarted)) {
+  if (payload?.type === "task_started" && (!state.hasInheritedHistory || state.rootTaskStarted)) {
     state.pendingTaskTurnId = stringOf(payload.turn_id);
     state.completedTask = undefined;
   }
@@ -1479,6 +1557,10 @@ function consumeCodexRolloutLine(
     if (turn) {
       state.lastTurn = turn;
       state.lastActivityAt = eventTimestamp;
+      const turnPrompt = codexTurnPromptTokens(turn);
+      if (turnPrompt !== undefined) {
+        state.maxTurnPromptTokens = Math.max(state.maxTurnPromptTokens ?? 0, turnPrompt);
+      }
     }
     const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
     if (rateLimits) {
@@ -1500,7 +1582,7 @@ function finishCodexRolloutParse(
   if (state.malformedLines > 0) {
     onDiagnostic?.({ code: "malformed_jsonl", count: state.malformedLines });
   }
-  if (!state.lastTotal || state.isSubagent && !state.rootTaskStarted) return [];
+  if (!state.lastTotal || state.hasInheritedHistory && !state.rootTaskStarted) return [];
   const parsedUsage = parseCodexCumulativeUsage(state.lastTotal, state.inheritedUsageBaseline);
   const parsedTurn = state.lastTurn
     ? parseCodexTurnUsage(state.lastTurn)
@@ -1558,6 +1640,9 @@ function finishCodexRolloutParse(
       : {}),
     usageScope: "session_cumulative",
     usageSupport,
+    ...(usageSupport === "complete" && state.maxTurnPromptTokens !== undefined
+      ? { maxRequestPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
       : {}),
@@ -2032,10 +2117,15 @@ type CodexFinancialStreamState = {
   rootStartedAtMs?: number;
   rootTaskStarted: boolean;
   isSubagent: boolean;
+  /** Replays another session's history (subagent OR user fork). See
+   * `codexHasInheritedHistory`. */
+  hasInheritedHistory: boolean;
   inheritedUsageBaseline?: Record<string, unknown>;
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  /** Largest single-request prompt seen since the (post-fork) session root. */
+  maxTurnPromptTokens?: number;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
 };
 
@@ -2882,6 +2972,7 @@ type PersistedCodexReducerState = {
   rootStartedAtMs?: number;
   rootTaskStarted: boolean;
   isSubagent: boolean;
+  hasInheritedHistory?: boolean;
   parentSessionId?: string;
   pendingTaskTurnId?: string;
   completedTask?: LocalAgentCompletionEvidence;
@@ -2889,6 +2980,7 @@ type PersistedCodexReducerState = {
   lastActivityAt?: string;
   lastTotal?: Record<string, unknown>;
   lastTurn?: Record<string, unknown>;
+  maxTurnPromptTokens?: number;
   inheritedUsageBaseline?: Record<string, unknown>;
   lastRateLimits?: LocalAgentRateLimitSnapshot;
   rootCwd: RestoredCodexRootCwd;
@@ -2967,6 +3059,7 @@ function serializeCodexReducerState(state: CodexRolloutParserState): PersistedCo
     ...(state.rootStartedAtMs !== undefined ? { rootStartedAtMs: state.rootStartedAtMs } : {}),
     rootTaskStarted: state.rootTaskStarted,
     isSubagent: state.isSubagent,
+    hasInheritedHistory: state.hasInheritedHistory,
     ...(state.parentSessionId !== undefined ? { parentSessionId: state.parentSessionId } : {}),
     ...(state.pendingTaskTurnId !== undefined ? { pendingTaskTurnId: state.pendingTaskTurnId } : {}),
     ...(state.completedTask !== undefined ? { completedTask: state.completedTask } : {}),
@@ -2974,6 +3067,9 @@ function serializeCodexReducerState(state: CodexRolloutParserState): PersistedCo
     ...(state.lastActivityAt !== undefined ? { lastActivityAt: state.lastActivityAt } : {}),
     ...(state.lastTotal !== undefined ? { lastTotal: state.lastTotal } : {}),
     ...(state.lastTurn !== undefined ? { lastTurn: state.lastTurn } : {}),
+    ...(state.maxTurnPromptTokens !== undefined
+      ? { maxTurnPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(state.inheritedUsageBaseline !== undefined
       ? { inheritedUsageBaseline: state.inheritedUsageBaseline }
       : {}),
@@ -3028,6 +3124,8 @@ function isPersistedCodexReducerState(value: unknown): value is PersistedCodexRe
   return typeof value.rootSessionMetaSeen === "boolean" &&
     typeof value.rootTaskStarted === "boolean" &&
     typeof value.isSubagent === "boolean" &&
+    (value.hasInheritedHistory === undefined ||
+      typeof value.hasInheritedHistory === "boolean") &&
     optionalString(value.model) &&
     optionalString(value.sessionId) &&
     optionalString(value.sourceVersion) &&
@@ -3040,6 +3138,7 @@ function isPersistedCodexReducerState(value: unknown): value is PersistedCodexRe
     optionalString(value.lastActivityAt) &&
     optionalRecord(value.lastTotal) &&
     optionalRecord(value.lastTurn) &&
+    optionalFinite(value.maxTurnPromptTokens) &&
     optionalRecord(value.inheritedUsageBaseline) &&
     validRateLimits &&
     validRootCwd &&
@@ -3065,6 +3164,10 @@ function restoreCodexReducerState(persisted: PersistedCodexReducerState): CodexR
   state.rootStartedAtMs = persisted.rootStartedAtMs;
   state.rootTaskStarted = persisted.rootTaskStarted;
   state.isSubagent = persisted.isSubagent;
+  // Pre-fork-fix checkpoints carry no flag; fall back to the subagent bit so a
+  // restored subagent keeps its boundary (a restored user fork re-parses, its
+  // parser version having changed).
+  state.hasInheritedHistory = persisted.hasInheritedHistory ?? persisted.isSubagent;
   state.parentSessionId = persisted.parentSessionId;
   state.pendingTaskTurnId = persisted.pendingTaskTurnId;
   state.completedTask = persisted.completedTask;
@@ -3072,6 +3175,7 @@ function restoreCodexReducerState(persisted: PersistedCodexReducerState): CodexR
   state.lastActivityAt = persisted.lastActivityAt;
   state.lastTotal = persisted.lastTotal;
   state.lastTurn = persisted.lastTurn;
+  state.maxTurnPromptTokens = persisted.maxTurnPromptTokens;
   state.inheritedUsageBaseline = persisted.inheritedUsageBaseline;
   state.lastRateLimits = persisted.lastRateLimits;
   state.restoredRootCwd = persisted.rootCwd;
@@ -3791,10 +3895,11 @@ async function readCodexFinancialFile(file: string): Promise<CodexFinancialFileR
     const rootPayload = rootEntry?.type === "session_meta" && isRecord(rootEntry.payload)
       ? rootEntry.payload
       : undefined;
-    const isSubagent = Boolean(rootPayload) && (
-      stringOf(rootPayload?.thread_source) === "subagent" ||
-      isRecord(rootPayload?.source) && "subagent" in rootPayload.source
-    );
+    // A rollout that replays another session's history must be read WHOLE:
+    // its inherited-baseline boundary sits mid-file, and a proof-complete tail
+    // would never reach it. User forks need this exactly as subagents do.
+    const hasInheritedHistory = rootPayload !== undefined &&
+      codexHasInheritedHistory(rootPayload);
     const entriesReverse: Record<string, unknown>[] = [];
     let malformedLines = 0;
     let prefilteredLines = 0;
@@ -3805,7 +3910,7 @@ async function readCodexFinancialFile(file: string): Promise<CodexFinancialFileR
     let suffixPartsReverse: Buffer[] = [];
     let stoppedEarly = false;
     let bytesSkipped = 0;
-    const proof = createCodexReverseProof(isSubagent, !rootPayload);
+    const proof = createCodexReverseProof(hasInheritedHistory, !rootPayload);
 
     while (position > 0 && !stoppedEarly) {
       const chunkStart = Math.max(0, position - FINANCIAL_REVERSE_CHUNK_BYTES);
@@ -4048,7 +4153,9 @@ function skipJsonWhitespace(input: string, start: number): number {
 }
 
 type CodexReverseProof = {
-  isSubagent: boolean;
+  /** Replays another session's history (subagent or user fork): never
+   * tail-scan, because the inherited-baseline boundary is mid-file. */
+  hasInheritedHistory: boolean;
   forceFullScan: boolean;
   totalSeen: boolean;
   turnSeen: boolean;
@@ -4057,11 +4164,11 @@ type CodexReverseProof = {
 };
 
 function createCodexReverseProof(
-  isSubagent: boolean,
+  hasInheritedHistory: boolean,
   forceFullScan: boolean
 ): CodexReverseProof {
   return {
-    isSubagent,
+    hasInheritedHistory,
     forceFullScan,
     totalSeen: false,
     turnSeen: false,
@@ -4074,7 +4181,7 @@ function observeCodexReverseProof(
   proof: CodexReverseProof,
   entry: Record<string, unknown>
 ): boolean {
-  if (proof.forceFullScan || proof.isSubagent) return false;
+  if (proof.forceFullScan || proof.hasInheritedHistory) return false;
   const payload = isRecord(entry.payload) ? entry.payload : undefined;
   const info = payload?.type === "token_count" && isRecord(payload.info)
     ? payload.info
@@ -4088,7 +4195,7 @@ function observeCodexReverseProof(
   if (entry.type === "turn_context" && stringOf(payload?.model)) {
     proof.modelSeen = true;
   }
-  return !proof.isSubagent &&
+  return !proof.hasInheritedHistory &&
     proof.totalSeen &&
     proof.turnSeen &&
     proof.rateLimitsSeen &&
@@ -4216,7 +4323,8 @@ function createCodexFinancialStreamState(): CodexFinancialStreamState {
   return {
     rootSessionMetaSeen: false,
     rootTaskStarted: false,
-    isSubagent: false
+    isSubagent: false,
+    hasInheritedHistory: false
   };
 }
 
@@ -4234,13 +4342,14 @@ function consumeCodexFinancialEntry(
     state.rootStartedAtMs = timestampMilliseconds(payload.timestamp ?? entry.timestamp);
     state.isSubagent = stringOf(payload.thread_source) === "subagent" ||
       isRecord(payload.source) && "subagent" in payload.source;
+    state.hasInheritedHistory = codexHasInheritedHistory(payload);
   }
   if (entry.type === "turn_context" && payload) {
     state.model = stringOf(payload.model) ?? state.model;
     state.rootCwd ??= stringOf(payload.cwd);
   }
   if (
-    state.isSubagent &&
+    state.hasInheritedHistory &&
     !state.rootTaskStarted &&
     payload?.type === "task_started" &&
     isRootSpecificTaskStart(payload.started_at, state.rootStartedAtMs)
@@ -4250,6 +4359,7 @@ function consumeCodexFinancialEntry(
     state.rootTaskStarted = true;
     state.model = undefined;
     state.lastTurn = undefined;
+    state.maxTurnPromptTokens = undefined;
     state.lastRateLimits = undefined;
     state.lastActivityAt = toIso(stringOf(entry.timestamp)) ?? state.startedAt;
   }
@@ -4271,6 +4381,10 @@ function consumeCodexFinancialEntry(
   if (turn) {
     state.lastTurn = turn;
     state.lastActivityAt = eventTimestamp;
+    const turnPrompt = codexTurnPromptTokens(turn);
+    if (turnPrompt !== undefined) {
+      state.maxTurnPromptTokens = Math.max(state.maxTurnPromptTokens ?? 0, turnPrompt);
+    }
   }
   const rateLimits = parseCodexRateLimits(payload.rate_limits, eventTimestamp);
   if (rateLimits) state.lastRateLimits = rateLimits;
@@ -4280,7 +4394,7 @@ function finishCodexFinancialStream(
   state: CodexFinancialStreamState,
   onDiagnostic?: TranscriptParseDiagnosticHandler
 ): LocalAgentCall | undefined {
-  if (!state.lastTotal || state.isSubagent && !state.rootTaskStarted) return undefined;
+  if (!state.lastTotal || state.hasInheritedHistory && !state.rootTaskStarted) return undefined;
   const parsedUsage = parseCodexCumulativeUsage(
     state.lastTotal,
     state.inheritedUsageBaseline
@@ -4310,6 +4424,9 @@ function finishCodexFinancialStream(
       : {}),
     usageScope: "session_cumulative",
     usageSupport,
+    ...(usageSupport === "complete" && state.maxTurnPromptTokens !== undefined
+      ? { maxRequestPromptTokens: state.maxTurnPromptTokens }
+      : {}),
     ...(parsedUsage.reportedTotalTokens !== undefined
       ? { reportedTotalTokens: parsedUsage.reportedTotalTokens }
       : {}),
@@ -4360,12 +4477,20 @@ export function aggregateCallsForFormats(
         canPriceTokenUsageAtScope(
           model,
           call.usage,
-          call.usageScope === "turn" ? "request" : "aggregate"
+          call.usageScope === "turn" ? "request" : "aggregate",
+          call.maxRequestPromptTokens
         ) && (agent !== "gemini-cli" || hasCompleteGeminiPromptEvidence(call))
       );
     const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
       ? usesPromptTieredPricing(model)
-        ? estimateTokenCostsUsd(model, groupCalls.map((call) => call.usage))
+        ? estimateTokenCostsUsd(
+            model,
+            groupCalls.map((call) => call.usage),
+            // Fix each cumulative slice's tier from its largest single request
+            // rather than its cache-inflated sum. Turn-scoped slices carry no
+            // such evidence and keep selecting their tier from their own prompt.
+            groupCalls.map((call) => call.maxRequestPromptTokens)
+          )
         : estimateTokenCostUsd(model, usage)
       : undefined;
     const priced = usageSupported && typeof amountUsd === "number";

@@ -54,21 +54,38 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
-  // OpenAI (newer and more specific families must precede the GPT-5 fallback)
+  // OpenAI (newer and more specific families must precede the GPT-5 fallback).
+  // Rates from developers.openai.com/api/docs/pricing cross-checked against each
+  // model's own doc page, both fetched 2026-08-25.
+  //
+  // GPT-5.6 ships exactly three API models — sol, terra, luna
+  // (developers.openai.com/api/docs/models, 2026-08-25). Each 5.6/5.5/5.4 rule
+  // below is END-ANCHORED on purpose: an undocumented or future sibling
+  // (gpt-5.6-cyber, gpt-5.5-pro, gpt-5.7-sol) must fall through to
+  // honest-unpriced rather than inherit a neighbour's rate. That is the 0.9.4
+  // `^kimi-k2` mistake one family up, and it is the expensive direction here —
+  // the pre-0.9.6 `^gpt-5.6(?:-sol)?$` rule carried GPT-5.5's numbers, so every
+  // gpt-5.6-sol record was overstated by 25% on input and 50% on output.
+  //
+  // Long context, published identically on all three 5.6 pages plus 5.5/5.4:
+  // "Prompts with >272K input tokens are priced at 2x input and 1.5x output for
+  // the full request." Cached input scales with the 2x input leg.
   {
-    match: /^gpt-5\.6(?:-sol)?$/i,
-    inputPerM: 5,
-    outputPerM: 30,
-    cacheReadPerM: 0.5,
+    // developers.openai.com/api/docs/models/gpt-5.6-sol, 2026-08-25
+    match: /^gpt-5\.6-sol$/i,
+    inputPerM: 4,
+    outputPerM: 20,
+    cacheReadPerM: 0.4,
     abovePromptTokens: {
       threshold: 272_000,
-      inputPerM: 10,
-      outputPerM: 45,
-      cacheReadPerM: 1
+      inputPerM: 8,
+      outputPerM: 30,
+      cacheReadPerM: 0.8
     }
   },
   {
-    match: /^gpt-5\.6-terra/i,
+    // developers.openai.com/api/docs/models/gpt-5.6-terra, 2026-08-25
+    match: /^gpt-5\.6-terra$/i,
     inputPerM: 2,
     outputPerM: 12,
     cacheReadPerM: 0.2,
@@ -80,7 +97,8 @@ const pricingRules: PricingRule[] = [
     }
   },
   {
-    match: /^gpt-5\.6-luna/i,
+    // developers.openai.com/api/docs/models/gpt-5.6-luna, 2026-08-25
+    match: /^gpt-5\.6-luna$/i,
     inputPerM: 0.2,
     outputPerM: 1.2,
     cacheReadPerM: 0.02,
@@ -91,15 +109,50 @@ const pricingRules: PricingRule[] = [
       cacheReadPerM: 0.04
     }
   },
-  { match: /^gpt-5\.5(?:-codex)?/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
+  {
+    // developers.openai.com/api/docs/models/gpt-5.5, 2026-08-25
+    match: /^gpt-5\.5$/i,
+    inputPerM: 5,
+    outputPerM: 30,
+    cacheReadPerM: 0.5,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 10,
+      outputPerM: 45,
+      cacheReadPerM: 1
+    }
+  },
+  // gpt-5.5-codex bills at the 5.5 base rate but is absent from the published
+  // long-context list, so it deliberately carries no >272K tier.
+  { match: /^gpt-5\.5-codex$/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
   { match: /^gpt-5\.4-mini/i, inputPerM: 0.75, outputPerM: 4.5, cacheReadPerM: 0.075 },
   { match: /^gpt-5\.4-nano/i, inputPerM: 0.2, outputPerM: 1.25, cacheReadPerM: 0.02 },
-  { match: /^gpt-5\.4/i, inputPerM: 2.5, outputPerM: 15, cacheReadPerM: 0.25 },
+  {
+    // developers.openai.com/api/docs/models/gpt-5.4, 2026-08-25
+    match: /^gpt-5\.4$/i,
+    inputPerM: 2.5,
+    outputPerM: 15,
+    cacheReadPerM: 0.25,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 5,
+      outputPerM: 22.5,
+      cacheReadPerM: 0.5
+    }
+  },
   { match: /^gpt-5\.3-codex/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
   { match: /^gpt-5\.2(?:-codex)?/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
   { match: /^gpt-5(?:\.1)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-5(?:\.1)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
-  { match: /^gpt-5/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+  // developers.openai.com/api/docs/models/gpt-5-nano, 2026-08-25. Before 0.9.6
+  // this fell through to the ^gpt-5 fallback and billed at $1.25/$10 — 25x the
+  // real rate in both directions. No published long-context tier.
+  { match: /^gpt-5-nano/i, inputPerM: 0.05, outputPerM: 0.4, cacheReadPerM: 0.005 },
+  // GPT-5 base and its dash-suffixed snapshots only. The `-|$` boundary stops
+  // this fallback from swallowing dot-minor families it knows nothing about:
+  // gpt-5.7-*, gpt-5.6-cyber and any future gpt-5.6-<variant> now return
+  // undefined -> "missing" instead of silently billing at GPT-5's $1.25/$10.
+  { match: /^gpt-5(?:-|$)/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4 },
   { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6 },
   { match: /^gpt-4\.1/i, inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
@@ -156,6 +209,23 @@ const pricingRules: PricingRule[] = [
   // - deepseek-v4-* (api-docs.deepseek.com/quick_start/pricing): published
   //   rates are time-of-day (off-peak = half price, up to 2x swing), so any
   //   flat number here would be dishonest; needs timestamp-aware pricing.
+  //
+  // Deliberate deferrals (2026-08-25 OpenAI review), same honest path:
+  // - gpt-5.6-cyber / gpt-5.5-cyber ($12.50/$1.25/$75 on the pricing page):
+  //   the two canonical sources disagree on whether the >272K tier applies —
+  //   the pricing page omits cyber from its long-context list while
+  //   developers.openai.com/api/docs/models/gpt-5.6-cyber states the 2x/1.5x
+  //   rule does apply. Access is gated behind the Daybreak program, so the
+  //   cost of leaving it unpriced is near zero and a coin-flip on the tier
+  //   would be a real number that is wrong on long requests.
+  // - gpt-5.5-pro / gpt-5.4-pro: listed as long-context-capable but no
+  //   per-model rate is published on either canonical source.
+  // - bare gpt-5.1 / gpt-5.3: the pricing page quotes the 5/5.1/5.2 group as a
+  //   RANGE ($1.25-$1.75) and neither has a resolved per-model figure. Their
+  //   -codex and -mini variants keep their own verified rules above.
+  // - gpt-5.6-codex / gpt-5.5-mini: NOT OpenAI model ids (both 404 on the model
+  //   docs and are absent from developers.openai.com/api/docs/models). They
+  //   appear only in this repo's fixtures and sample CSVs.
 ];
 
 export function findPricingRule(model: string): PricingRule | undefined {
@@ -176,14 +246,24 @@ export function estimateTokenCostUsd(model: string, usage: TokenUsage): number |
  * models whose entire request moves to a higher rate above a prompt-size
  * threshold; pricing a daily token sum would incorrectly treat many small
  * requests as one large request.
+ *
+ * `tierPromptTokens[i]`, when provided, fixes the tier of `usages[i]` from
+ * request-level evidence instead of the slice's own prompt total. A
+ * session-cumulative slice is a sum of many requests whose prompt total
+ * routinely clears a per-request threshold on cache reads alone, even though no
+ * single request did; supplying the largest single request's prompt keeps such
+ * a slice on the base tier (and pricing it there is exact, since the base rate
+ * distributes over the sum). Omitting the array preserves single-request
+ * behaviour: each slice's own prompt selects its tier.
  */
 export function estimateTokenCostsUsd(
   model: string,
-  usages: readonly TokenUsage[]
+  usages: readonly TokenUsage[],
+  tierPromptTokens?: readonly (number | undefined)[]
 ): number | undefined {
   let total = 0;
-  for (const usage of usages) {
-    const usd = rawTokenCostUsd(model, usage);
+  for (let index = 0; index < usages.length; index += 1) {
+    const usd = rawTokenCostUsd(model, usages[index], tierPromptTokens?.[index]);
     if (usd === undefined) return undefined;
     total += usd;
   }
@@ -204,25 +284,42 @@ export function promptTierThreshold(model: string): number | undefined {
  * Tiered prices are selected per request, never from a multi-request sum.
  * An aggregate is still unambiguous when its entire non-negative prompt-side
  * total is at or below the threshold; then no constituent request can have
- * crossed it. Larger aggregates fail closed until request-level evidence is
- * available.
+ * crossed it. It is also unambiguous when request-level evidence
+ * (`maxRequestPromptTokens`, the largest single request the aggregate contains)
+ * proves that no constituent request crossed the threshold: every request was
+ * base-tier, so the whole sum is base-tier and prices exactly at the base rate.
+ * Larger aggregates without such evidence fail closed to keep an unpriceable
+ * total honestly "missing" rather than guessing a tier.
  */
 export function canPriceTokenUsageAtScope(
   model: string,
   usage: TokenUsage,
-  scope: "request" | "aggregate"
+  scope: "request" | "aggregate",
+  maxRequestPromptTokens?: number
 ): boolean {
   const threshold = promptTierThreshold(model);
   if (threshold === undefined || scope === "request") return true;
-  return effectivePromptTokens(usage) <= threshold;
+  if (effectivePromptTokens(usage) <= threshold) return true;
+  return maxRequestPromptTokens !== undefined && maxRequestPromptTokens <= threshold;
 }
 
-function rawTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
+/**
+ * @param tierPromptTokens Prompt size used ONLY to select the request tier,
+ *   when it differs from the priced slice's own prompt total (e.g. a
+ *   session-cumulative slice whose tier is fixed by its largest single
+ *   request). Component pricing always uses `usage`; defaults to the slice's
+ *   own effective prompt so single-request callers are unchanged.
+ */
+function rawTokenCostUsd(
+  model: string,
+  usage: TokenUsage,
+  tierPromptTokens?: number
+): number | undefined {
   const rule = findPricingRule(model);
   if (!rule) {
     return undefined;
   }
-  const promptTokens = effectivePromptTokens(usage);
+  const promptTokens = tierPromptTokens ?? effectivePromptTokens(usage);
   const rates = rule.abovePromptTokens &&
       promptTokens > rule.abovePromptTokens.threshold
     ? rule.abovePromptTokens
