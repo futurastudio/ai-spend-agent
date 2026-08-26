@@ -1,0 +1,113 @@
+name: Launch canary
+
+# Synthetic launch-week canary: proves the PUBLISHED package installs and the
+# public endpoints answer, from a machine we do not control. Telemetry only
+# reports from machines where the CLI actually runs — a broken publish, a dead
+# endpoint, or a downed site produces silence, not signal. This closes that
+# gap with zero new infrastructure: a scheduled failure here emails repo
+# watchers via GitHub's native workflow-failure notifications.
+#
+# Every probe is read-only or intentionally invalid — nothing is stored by any
+# request this workflow makes, and telemetry is hard-disabled three ways
+# (DO_NOT_TRACK, AI_SPEND_NO_TELEMETRY, and the CI env GitHub always sets —
+# packages/cli/src/telemetry.ts treats each as a kill-switch).
+
+on:
+  schedule:
+    # Every 30 minutes during launch week. Relax to hourly or a few times a
+    # day once launch week is over — edit this cron, nothing else.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  canary:
+    name: Publish + endpoints canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      # Belt and suspenders: CI detection alone already disables telemetry,
+      # but the canary must NEVER pollute launch analytics even if that
+      # detection changes.
+      DO_NOT_TRACK: "1"
+      AI_SPEND_NO_TELEMETRY: "1"
+    steps:
+      # The CLI requires Node >= 22 (packages/cli engines) and exits 1 with
+      # an upgrade hint on older majors — pin so a runner-image default
+      # change can never masquerade as a broken publish.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: npx install + version
+        run: |
+          v="$(npx -y aibill@latest --version </dev/null)"
+          echo "aibill@latest --version -> [$v]"
+          echo "$v" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'
+
+      - name: cold receipt (fresh home, non-TTY)
+        run: |
+          # Contract (packages/cli/src/index.ts, noEvidenceResult): the bare
+          # receipt on a machine with NO agent evidence exits 0 by design —
+          # the honest empty receipt is a success, not an error. Non-TTY
+          # stdin+stdout means no interactive ask and no spinner.
+          H="$(mktemp -d "$RUNNER_TEMP/canary-home.XXXXXX")"
+          cd "$H"
+          rc=0
+          HOME="$H" npx -y aibill@latest </dev/null >out.txt 2>err.txt || rc=$?
+          echo "exit=$rc"
+          echo "--- stdout ---"; cat out.txt
+          echo "--- stderr ---"; cat err.txt
+          test "$rc" -eq 0
+          grep -q "aibill" out.txt
+
+      - name: report from home (machine-wide)
+        run: |
+          # Contract (packages/cli/src/index.ts, noEvidenceResult "report"
+          # surface): report from $HOME runs machine-wide; with no evidence
+          # it exits 1 and says so honestly on stderr. Anything else — the
+          # old "Refusing to scan" guard or the crash wrapper's "unexpected
+          # error" voice — is a regression the failure email should name.
+          H="$(mktemp -d "$RUNNER_TEMP/canary-home.XXXXXX")"
+          cd "$H"
+          rc=0
+          HOME="$H" npx -y aibill@latest report </dev/null >out.txt 2>err.txt || rc=$?
+          echo "exit=$rc"
+          echo "--- stdout ---"; cat out.txt
+          echo "--- stderr ---"; cat err.txt
+          test "$rc" -eq 1
+          grep -q "No report was written because there is no supported financial evidence" err.txt
+          if grep -qi "Refusing" out.txt err.txt; then
+            echo "FAIL: refusal voice leaked into the no-evidence report path"; exit 1
+          fi
+          if grep -qi "unexpected error" out.txt err.txt; then
+            echo "FAIL: crash-wrapper voice leaked into the no-evidence report path"; exit 1
+          fi
+
+      - name: telemetry endpoint alive
+        run: |
+          # An intentionally INVALID body: {} fails the exactly-one-"events"-
+          # key envelope check (apps/web/app/api/telemetry/route.ts) and is
+          # rejected with 422 before anything could be stored. 422 = endpoint
+          # alive and enforcing its schema; 5xx or a timeout = down.
+          code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
+            -X POST -H 'content-type: application/json' -d '{}' \
+            https://asktilden.com/api/telemetry)"
+          echo "POST {} /api/telemetry -> $code (expected 422)"
+          test "$code" = "422"
+
+      - name: waitlist endpoint alive
+        run: |
+          # {} is valid JSON with no usable email, so the route rejects it
+          # with 422 (apps/web/app/api/waitlist/route.ts; 400 is reserved for
+          # malformed JSON). Nothing is stored, and no real-looking email is
+          # ever sent. One POST per run stays far under the 5/min rate limit.
+          code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
+            -X POST -H 'content-type: application/json' -d '{}' \
+            https://asktilden.com/api/waitlist)"
+          echo "POST {} /api/waitlist -> $code (expected 422)"
+          test "$code" = "422"
+
+      - name: site up
+        run: |
+          curl -sfS -o /dev/null -m 15 https://asktilden.com
+          curl -s -m 15 https://asktilden.com | grep -qi "Tilden"
