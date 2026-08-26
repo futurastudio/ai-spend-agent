@@ -1269,13 +1269,30 @@ describe("board-style report generation", () => {
     expect(html).toContain('class="hero-big estimated-value"');
     expect(html).toContain('class="stat estimated-card"');
     expect(html).not.toContain('class="cut-v"');
-    expect(html).toContain(".estimated-value { color: #fbbf24; }");
-    expect(html).toContain(".stat.estimated-card strong { color: #fbbf24; }");
-    expect(html).toContain(".row .v.estimated-value { color: #fbbf24; }");
-    expect(html).toContain(".cut-v strong.estimated-value { color: #fbbf24;");
-    expect(html).toContain("linear-gradient(90deg, #22d3ee, #fbbf24)");
+    // 0.9.5 brand retint: landing token family — estimated money wears the
+    // receipt-scoped amber #C9A24B, commands wear green #4CC98A, bars are
+    // neutral white-alpha fills (no decorative gradients), the ground is the
+    // warm green-black ladder, chrome is hairline-and-flat (no shadows, no
+    // macOS traffic dots), and numeric columns set tabular-nums.
+    expect(html).toContain(".estimated-value { color: #C9A24B; }");
+    expect(html).toContain(".stat.estimated-card strong { color: #C9A24B; }");
+    expect(html).toContain(".row .v.estimated-value { color: #C9A24B; }");
+    expect(html).toContain(".cut-v strong.estimated-value { color: #C9A24B;");
+    expect(html).toContain(".row .bar i { display: block; height: 100%; background: rgba(255,255,255,0.75); }");
+    expect(html).toContain("background: #0C0D09");
+    expect(html).toContain(".g-accent { color: #4CC98A; }");
+    expect(html).toContain('"Geist Mono", ui-monospace');
+    expect(html).toContain("font-variant-numeric: tabular-nums");
+    expect(html).toContain('<div class="term-bar"><span class="term-title">npx aibill — AI Receipt</span></div>');
+    expect(html).not.toContain("linear-gradient");
+    expect(html).not.toContain("box-shadow");
+    expect(html).not.toContain("#22d3ee");
+    expect(html).not.toContain("#fbbf24");
+    expect(html).not.toContain("#05080c");
+    expect(html).not.toContain('class="dot');
     expect(html).not.toContain(".stat.primary strong { color: #4ade80; }");
     expect(html).not.toContain(".cut-v strong { color: #4ade80;");
+    expect(html).not.toContain("#4ade80");
     expect(html).toContain(">ACT<");
     expect(html).toContain("inspection plan, approval + rollback");
     expect(html).toContain("a cash claim requires a later matched provider-reported cost source");

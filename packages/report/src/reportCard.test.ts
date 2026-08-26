@@ -23,9 +23,28 @@ describe("generateReportCardSvg", () => {
     expect(svg).toContain("ILLUSTRATIVE EVIDENCE · DEMO SAMPLE");
     expect(svg).toContain("modeled API-rate opportunity");
     expect(svg).toMatch(/~\$[\d,]+\.\d{2}\/mo/);
+    // Estimated-money amber stays receipt-scoped #fbbf24 by mandate.
     expect(svg).toContain('.modeled { fill: #fbbf24;');
     expect(svg).toContain('.cutImpact { fill: #fbbf24;');
     expect(svg).not.toContain("#4ade80");
+    // 0.9.5 brand retint: warm green-black ground ladder + white-alpha
+    // hairline stroke, and the neutral text inks recolored off the
+    // blue-tinted periwinkle to the warm white-alpha ink/muted/faint ladder.
+    expect(svg).toContain('stop-color="#0C0D09"');
+    expect(svg).toContain('stop-color="#12140E"');
+    expect(svg).toContain('stroke="rgba(255,255,255,0.08)"');
+    expect(svg).toContain('.big { fill: #EDEDED;');
+    expect(svg).toContain('.meta { fill: rgba(255,255,255,0.62);');
+    expect(svg).toContain('.label { fill: rgba(255,255,255,0.42);');
+    expect(svg).not.toContain("#0b1020");
+    expect(svg).not.toContain("#121a33");
+    expect(svg).not.toContain("#26304f");
+    // Periwinkle text inks are gone.
+    expect(svg).not.toContain("#e8edff");
+    expect(svg).not.toContain("#9aa6d6");
+    expect(svg).not.toContain("#7c89b3");
+    expect(svg).not.toContain("#cdd6f7");
+    expect(svg).not.toContain("#5b6790");
     expect(svg).not.toContain('class="save"');
     expect(svg).not.toContain('class="cutSave"');
     expect(svg).toContain("aibill · local-first · npx aibill");
@@ -119,20 +138,114 @@ describe("generateReportCardSvg", () => {
     }];
     const summary = analyzeSpend(records);
 
+    // 0.9.5: exposure here EQUALS the headline value, so the card collapses
+    // the second $20.00 into words instead of printing the same number twice.
     const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
     expect(svg).toContain("$20.00");
-    expect(svg).toContain("API-equivalent exposure · savings unavailable");
+    expect(svg).toContain('<tspan class="modeled">All</tspan>');
+    expect(svg).toContain("of the value above is exposure · savings unavailable");
+    expect(svg).not.toContain('<tspan class="modeled">$20.00</tspan>');
     expect(svg).toContain("$20.00 observed exposure");
-    expect(svg).toContain('<tspan class="modeled">$20.00</tspan>');
     expect(svg).toContain("1 daily aggregate");
     expect(svg).not.toContain("1 call");
     expect(svg).not.toContain("$0.00/mo modeled");
 
     const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
-    expect(caption).toContain("$20.00 in observed API-equivalent exposure");
+    expect(caption).toContain("$20.00 in observed API-equivalent value");
+    expect(caption).toContain("effectively all of it exposure to investigate");
     expect(caption).toContain("savings unavailable without a matched counterfactual");
+    // ONE dollar figure: the near-identical exposure repeat is gone.
+    expect(caption.match(/\$/gu)).toHaveLength(1);
     expect(caption).not.toContain("/mo");
     expect(caption).not.toContain("modeled opportunities");
+  });
+
+  // 0.9.5 equal-case collapse: value vs exposure within $0.05 is rounding
+  // noise (the founder's live card read $2,281.89 vs $2,281.87) and prints
+  // ONE number; a genuinely different pair keeps both. Both sides of the
+  // documented threshold are pinned here.
+  describe("observed value/exposure caption dedup threshold ($0.05)", () => {
+    const localRecord = (id: string, amountUsd: number, inputTokens: number): UsageRecord => ({
+      id,
+      timestamp: "2026-08-03T12:00:00.000Z",
+      source: {
+        id: "local-agent-logs",
+        name: "Local agent session logs",
+        provider: "openai",
+        confidence: "estimated",
+        observedFrom: "Codex transcript JSONL (this machine)"
+      },
+      model: "gpt-5.6",
+      inputTokens,
+      outputTokens: 1_000,
+      amountUsd,
+      costConfidence: "estimated",
+      providerCostType: "local_agent_logs",
+      agentId: "codex",
+      projectId: "test-project",
+      operation: "codex sessions"
+    });
+
+    it("collapses to one number when the figures differ by rounding noise (≤ $0.05)", () => {
+      // Heavy record drives the $20.00 exposure; the 4¢ record stays under
+      // the 100k-token context threshold, so total = $20.04 vs exposure
+      // $20.00 — the founder's sub-cent-rounding case.
+      const records = [
+        localRecord("heavy", 20, 200_000),
+        localRecord("tiny-rounding-drift", 0.04, 1_000)
+      ];
+      const summary = analyzeSpend(records);
+
+      const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
+      expect(caption).toContain("$20.04 in observed API-equivalent value");
+      expect(caption).toContain("effectively all of it exposure to investigate");
+      expect(caption).toContain("savings unavailable without a matched counterfactual");
+      expect(caption).not.toContain("$20.00");
+      expect(caption.match(/\$/gu)).toHaveLength(1);
+
+      const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
+      expect(svg).toContain('<tspan class="modeled">All</tspan>');
+      expect(svg).toContain("of the value above is exposure · savings unavailable");
+      expect(svg).not.toContain('<tspan class="modeled">$20.00</tspan>');
+    });
+
+    it("the exact-5¢ boundary collapses deterministically at every magnitude (integer cents, no float jitter)", () => {
+      // Float subtraction made this boundary magnitude-dependent:
+      // 20.05−20.00 = 0.05000000000000071 (kept both) while 100.05−100.00 =
+      // 0.04999999999999716 (collapsed). Integer-cent comparison pins both
+      // shapes to the SAME verdict: exactly 5¢ apart merges.
+      for (const heavyAmount of [20, 100]) {
+        const records = [
+          localRecord("heavy", heavyAmount, 200_000),
+          localRecord("five-cent-drift", 0.05, 1_000)
+        ];
+        const summary = analyzeSpend(records);
+        const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
+        expect(caption, `heavy=$${heavyAmount}`).toContain("effectively all of it exposure to investigate");
+        expect(caption.match(/\$/gu), `heavy=$${heavyAmount}`).toHaveLength(1);
+        const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
+        expect(svg, `heavy=$${heavyAmount}`).toContain('<tspan class="modeled">All</tspan>');
+      }
+    });
+
+    it("keeps both numbers when they genuinely differ (> $0.05)", () => {
+      const records = [
+        localRecord("heavy", 20, 200_000),
+        localRecord("real-remainder", 0.06, 1_000)
+      ];
+      const summary = analyzeSpend(records);
+
+      const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
+      expect(caption).toContain("$20.06 in observed API-equivalent value");
+      expect(caption).toContain("with $20.00 in observed API-equivalent exposure to investigate");
+      expect(caption).toContain("savings unavailable without a matched counterfactual");
+      expect(caption).not.toContain("effectively all of it");
+
+      const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
+      expect(svg).toContain('<tspan class="modeled">$20.00</tspan>');
+      expect(svg).toContain("API-equivalent exposure · savings unavailable");
+      expect(svg).not.toContain('<tspan class="modeled">All</tspan>');
+    });
   });
 
   it("produces a shareable caption with an explicitly modeled opportunity", async () => {

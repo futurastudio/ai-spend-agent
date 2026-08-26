@@ -525,7 +525,9 @@ describe("receipt-line truth (both states pinned)", () => {
 
     const reportOff = await runCli(["report", "--path", dir]);
     expect(reportOff.exitCode).toBe(0);
-    expect(reportOff.stdout).toContain("privacy: report rendered locally with no aibill telemetry");
+    // 0.9.5: the summary renders a "Privacy" label row that wraps at terminal
+    // width, so the claim is pinned whitespace-normalized.
+    expect(reportOff.stdout.replace(/\s+/gu, " ")).toContain("Privacy report rendered locally with no aibill telemetry");
     const markdownOff = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const htmlOff = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     expect(markdownOff).toContain("Report rendered locally with no aibill telemetry.");
@@ -534,7 +536,7 @@ describe("receipt-line truth (both states pinned)", () => {
 
     const reportOn = await runCli(["report", "--path", dir], { telemetryDisclosure: true });
     expect(reportOn.exitCode).toBe(0);
-    expect(reportOn.stdout).toContain("privacy: report rendered locally · anonymous command counts shared · npx aibill telemetry off");
+    expect(reportOn.stdout.replace(/\s+/gu, " ")).toContain("Privacy report rendered locally · anonymous command counts shared · npx aibill telemetry off");
     expect(reportOn.stdout).not.toContain("no aibill telemetry");
     const markdownOn = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const htmlOn = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");

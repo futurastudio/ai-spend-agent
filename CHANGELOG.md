@@ -5,6 +5,71 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.5 — 2026-08-25
+
+Terminal polish from direct founder feedback ("really hard to read… I wonder
+if we can have the text aligned"). Display-only: no change to data, math,
+scanning, or file contents.
+
+- Aligned `report` and `report-card` terminal summaries: both now render in
+  the receipt's visual language — a proper header, one shared label column
+  (Scope/Path · Markdown · HTML · Total · Privacy; Receipt · Data ·
+  Privacy), dot separators, and a Next block whose commands pad to one
+  shared description column instead of drifting per row. Long paths never
+  wrap mid-path (descriptions drop gracefully below), and narrow terminals
+  (<58 columns) stack label over value like the receipt does.
+- De-duplicated the receipt caption: when observed value and observed
+  exposure agree within rounding noise (≤ $0.05 — sub-cent per-action
+  rounding put $2,281.89 next to $2,281.87 on a live card), the caption and
+  the SVG card print ONE number with combined phrasing ("effectively all of
+  it exposure to investigate"). Genuinely different figures keep both
+  numbers, and "savings unavailable without a matched counterfactual"
+  survives verbatim.
+- Broad-root pointers, same doctrine as 0.9.4: a `--full` readout printed
+  from a broad root now cd-prefixes its project-scoped pointers
+  (`cd <project> && npx aibill apply …`, apply-artifact, watch, connect)
+  instead of advertising bare commands that friendly-refuse right where
+  they were printed. Project folders keep the bare forms.
+- Explicit `--path /` or `--path /etc` on report/report-card now gets the
+  friendly guard voice up front ("…writes its report files into the folder
+  it points at") instead of dying at write time with a wrapped raw error
+  (`EROFS`, "Refusing to use /etc…"). Home keeps running machine-wide; an
+  explicit absolute `--out` elsewhere still works.
+- `npx aibill report` now opens the HTML report in your browser
+  automatically (darwin `open`, linux `xdg-open` when present, win32
+  `cmd /c start`), fired detached so a missing or slow opener can never
+  crash, hang, or delay exit. Escape hatches: `--no-open`,
+  `AI_SPEND_NO_OPEN=1`, and automatic suppression when stdout is not a
+  TTY, in CI, or inside an SSH session — the summary then keeps the plain
+  `open <path>` pointer, and only a genuinely fired opener prints "opened
+  … in your browser". report-card is unchanged (SVG openers are
+  inconsistent across platforms).
+- Brand-aligned artifact palette: report.html and the receipt SVG now wear
+  the landing's warm green-black token family (ground `#0C0D09`, green
+  `#4CC98A` for command affordances, receipt amber `#C9A24B` for estimated
+  money, white-alpha hairlines, neutral bar fills, tabular-nums, no
+  shadows, no macOS traffic dots) instead of the off-brand cool blue-black
+  + cyan and indigo grounds. Display-only: every number, label, and
+  section is unchanged.
+- Caption equal-case threshold hardened to integer cents so the exact-5¢
+  boundary is deterministic at every magnitude (a float diff let
+  $20.05/$20.00 keep both figures while $100.05/$100.00 collapsed).
+- Security (report auto-open, Windows): closed a command-injection hole in
+  the browser opener. The earlier win32 opener (`cmd /c start "" <path>`)
+  passed the report path through cmd.exe, which re-parses `& ^ % ( ) < > |`
+  even with `shell:false`, so a space-free path like `C:\code\proj&calc`
+  (all legal filename characters, reachable via the cwd-derived
+  machine-wide path or an absolute `--out`) could execute an arbitrary
+  program and `%VAR%` could expand. Two independent defenses: auto-open now
+  refuses any path containing a cmd metacharacter or quote on every
+  platform (falling back to the plain `open <path>` pointer), and the win32
+  opener no longer uses a shell at all — it opens via
+  `rundll32 url.dll,FileProtocolHandler` with a discrete argv. darwin and
+  linux were unaffected and stay unchanged.
+- Brand retint follow-up: the receipt SVG's neutral text inks (previously
+  blue-tinted periwinkle) now match the warm white-alpha ink/muted/faint
+  ladder; a color-only swap with sizes and positions untouched.
+
 ## 0.9.4 — 2026-08-25
 
 Pricing correctness for Kimi (official list rates as of 2026-08-25), and

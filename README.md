@@ -360,7 +360,7 @@ path and never stores, prints, or proxies provider credentials.
 | `verify cancel <experiment-id>` | **Advanced:** invalidate an un-applied baseline while retaining its local audit evidence |
 | `verify [<experiment-id>] --quality held\|regressed\|missing` | **Advanced, result (default action):** refresh and calculate the canonical completed-session-snapshot result; missing quality blocks a result, and a complete result is frozen; it never labels a measured percentage as savings, an accepted outcome, or ROI |
 | `watch [--interval N] [--cycles N]` | Re-run on an interval, report deltas + anomalies (cron-friendly) |
-| `report [--sample] [--path <dir>] [--out <name>] [--since-days N]` | Generate local Markdown + HTML reports and action sidecars under an explicitly narrow project path; for a new demo folder use `mkdir -p ./demo-workspace && npx aibill report --sample --path ./demo-workspace` (a broad home/root path is intentionally refused) |
+| `report [--sample] [--path <dir>] [--out <name>] [--since-days N] [--no-open]` | Generate local Markdown + HTML reports (project folders keep `.ai-spend-agent/report.*`; from your home directory it runs machine-wide and writes `./ai-spend-report.*`) and open the HTML in your browser — auto-open is TTY-only, never fires in CI or SSH sessions, and `--no-open` or `AI_SPEND_NO_OPEN=1` (same convention as `AI_SPEND_NO_TELEMETRY`) turns it off |
 | `report-card [--sample]` | Your AI Receipt — redacted shareable SVG + caption |
 | `scan [--path <dir>]` | Scan a local workspace for AI usage signals |
 | `doctor [--sources]` | Check local runtime and safety posture; `--sources` separates connector validation, financial evidence, freshness, and errors |

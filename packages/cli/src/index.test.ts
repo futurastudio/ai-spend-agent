@@ -30,6 +30,14 @@ async function trustConnectedSpendFixture(root: string): Promise<void> {
 }
 
 const sharedTestTrustDirectory = join(tmpdir(), `aibill-vitest-state-trust-${process.pid}`);
+
+/**
+ * 0.9.5: report/report-card summaries render aligned label columns and wrap
+ * long values at the terminal width, so content pins normalize whitespace
+ * instead of assuming one flat line. Layout geometry itself is pinned in
+ * packages/report/src/terminal.test.ts (generateCommandSummary).
+ */
+const flat = (text: string): string => text.replace(/\s+/gu, " ");
 process.env.AI_SPEND_STATE_TRUST_DIR = sharedTestTrustDirectory;
 beforeEach(async () => {
   // Every test root has a unique canonical-path receipt key. One stable
@@ -175,11 +183,19 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["report", "--sample", "--path", dir]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DEMO SAMPLE · illustrative cost/value evidence total: $87.00 · not user data");
+    expect(flat(result.stdout)).toContain("$87.00 · DEMO SAMPLE · illustrative cost/value evidence · not user data");
     expect(result.stdout).toContain(aibillCommandV0("apply --sample"));
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
+    const html = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     const prompt = await readFile(join(dir, ".ai-spend-agent", "ai-spend-coding-agent-prompt.md"), "utf8");
     expect(markdown).toContain("DEMO / SAMPLE DATA");
+    // File-shape truth (adversary finding): the .html must actually be the
+    // HTML document and the .md actual markdown — a swapped writer used to
+    // pass every path pin.
+    expect(html.startsWith("<!doctype html")).toBe(true);
+    expect(html).toContain("<html");
+    expect(markdown.startsWith("# ")).toBe(true);
+    expect(markdown).not.toContain("<!doctype html");
     expect(prompt).toContain("NON-EXECUTABLE DEMO");
   });
 
@@ -213,7 +229,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.4$/);
+    expect(result.stdout).toMatch(/^0\.9\.5$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -353,7 +369,7 @@ describe("zero-key evidence-first receipt", () => {
 
     const second = await runCli(["report", "--path", dir]);
     // $7.50 (old fixture) + $15.00 (new one) — the fresh read must include both.
-    expect(second.stdout).toContain("cost/value evidence total: $22.50");
+    expect(flat(second.stdout)).toContain("$22.50 · cost/value evidence");
   });
 
   it("uses one explicit 30-day evidence window across quickstart, report, and apply", async () => {
@@ -376,7 +392,7 @@ describe("zero-key evidence-first receipt", () => {
 
     expect(quick.stdout).toContain("$7.50");
     expect(quick.stdout).not.toContain("$22.50");
-    expect(report.stdout).toContain("cost/value evidence total: $7.50");
+    expect(flat(report.stdout)).toContain("$7.50 · cost/value evidence");
     expect(apply.exitCode).toBe(0);
     expect(apply.stdout).toContain("30 days");
   });
@@ -761,8 +777,8 @@ describe("zero-key evidence-first receipt", () => {
 
     const report = await runCli(["report", "--since-days", "7", "--path", dir]);
     expect(report.exitCode).toBe(0);
-    expect(report.stdout).toContain("action artifacts: suppressed · qualitative index partial");
-    expect(report.stdout).toContain("cost/value evidence total:");
+    expect(flat(report.stdout)).toContain("Action artifacts suppressed · qualitative index partial");
+    expect(flat(report.stdout)).toContain("· cost/value evidence");
     expect(report.stdout).toContain(aibillCommandV0("context --json --since-days 7"));
     expect(report.stdout).not.toContain(aibillCommandV0("apply --since-days 7"));
     await expect(readFile(staleFindingPath, "utf8"))
@@ -897,11 +913,11 @@ describe("zero-key evidence-first receipt", () => {
 
     const reportDuringActiveTest = await runCli(["report", "--path", dir]);
     expect(reportDuringActiveTest.exitCode).toBe(0);
-    expect(reportDuringActiveTest.stdout).toContain(
-      `action artifacts: preserved · canonical token test ${experimentId} (baseline_ready)`
+    expect(flat(reportDuringActiveTest.stdout)).toContain(
+      `Action artifacts preserved · canonical token test ${experimentId} (baseline_ready)`
     );
-    expect(reportDuringActiveTest.stdout).toContain(
-      "token result: status=not_evaluated; reductionPercent=unavailable; metricEvidence=missing; quality=held; qualityEvidence=user_declared; matchingEvidence=missing"
+    expect(flat(reportDuringActiveTest.stdout)).toContain(
+      "Token result status=not_evaluated; reductionPercent=unavailable; metricEvidence=missing; quality=held; qualityEvidence=user_declared; matchingEvidence=missing"
     );
     expect(reportDuringActiveTest.stdout).toContain(
       "npx aibill improve"
@@ -1030,10 +1046,10 @@ describe("zero-key evidence-first receipt", () => {
     );
     const exactCohortReport = await runCli(["report", "--path", dir]);
     expect(exactCohortReport.exitCode).toBe(0);
-    expect(exactCohortReport.stdout).toContain(
-      `action artifacts: preserved · canonical token test ${experimentId} (collecting)`
+    expect(flat(exactCohortReport.stdout)).toContain(
+      `Action artifacts preserved · canonical token test ${experimentId} (collecting)`
     );
-    expect(exactCohortReport.stdout).toContain(
+    expect(flat(exactCohortReport.stdout)).toContain(
       "status=inconclusive; reductionPercent=unavailable; metricEvidence=missing; quality=insufficient; qualityEvidence=missing; matchingEvidence=observed"
     );
     expect(exactCohortReport.stdout).not.toContain("apply --since-days");
@@ -1078,13 +1094,13 @@ describe("zero-key evidence-first receipt", () => {
 
     const completedReport = await runCli(["report", "--path", dir]);
     expect(completedReport.exitCode).toBe(0);
-    expect(completedReport.stdout).toContain(
-      `action artifacts: preserved · canonical token test ${experimentId} (complete)`
+    expect(flat(completedReport.stdout)).toContain(
+      `Action artifacts preserved · canonical token test ${experimentId} (complete)`
     );
-    expect(completedReport.stdout).toContain(
-      `token result: status=measured_token_reduction; reductionPercent=${parsed.projection.reductionPercent}; metricEvidence=calculated; quality=held; qualityEvidence=user_declared; matchingEvidence=${parsed.experiment.evaluation.matchingEvidence}`
+    expect(flat(completedReport.stdout)).toContain(
+      `Token result status=measured_token_reduction; reductionPercent=${parsed.projection.reductionPercent}; metricEvidence=calculated; quality=held; qualityEvidence=user_declared; matchingEvidence=${parsed.experiment.evaluation.matchingEvidence}`
     );
-    expect(completedReport.stdout).toContain("cost/value evidence total:");
+    expect(flat(completedReport.stdout)).toContain("· cost/value evidence");
     expect(completedReport.stdout).not.toContain("apply --since-days");
     const completedMarkdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const completedHtml = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
@@ -2038,13 +2054,13 @@ describe("zero-key evidence-first receipt", () => {
     await writeFile(preservedArtifactPath, "frozen rolled-back artifact\n", "utf8");
     const rolledBackReport = await runCli(["report", "--path", dir]);
     expect(rolledBackReport.exitCode).toBe(0);
-    expect(rolledBackReport.stdout).toContain(
-      `action artifacts: preserved · canonical token test ${experimentId} (rolled_back)`
+    expect(flat(rolledBackReport.stdout)).toContain(
+      `Action artifacts preserved · canonical token test ${experimentId} (rolled_back)`
     );
-    expect(rolledBackReport.stdout).toContain(
-      `token result: status=inconclusive; reductionPercent=unavailable; metricEvidence=${rolledBack.evaluation.metricEvidence}; quality=${rolledBack.evaluation.qualityStatus}; qualityEvidence=${rolledBack.evaluation.qualityEvidence}; matchingEvidence=${rolledBack.evaluation.matchingEvidence}`
+    expect(flat(rolledBackReport.stdout)).toContain(
+      `Token result status=inconclusive; reductionPercent=unavailable; metricEvidence=${rolledBack.evaluation.metricEvidence}; quality=${rolledBack.evaluation.qualityStatus}; qualityEvidence=${rolledBack.evaluation.qualityEvidence}; matchingEvidence=${rolledBack.evaluation.matchingEvidence}`
     );
-    expect(rolledBackReport.stdout).toContain("cost/value evidence total:");
+    expect(flat(rolledBackReport.stdout)).toContain("· cost/value evidence");
     expect(rolledBackReport.stdout).not.toContain("apply --since-days");
     expect(await readFile(preservedArtifactPath, "utf8"))
       .toBe("frozen rolled-back artifact\n");
@@ -2374,7 +2390,7 @@ describe("zero-key evidence-first receipt", () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-card-ext-"));
     const result = await runCli(["report-card", "--sample", "--out", join(dir, "card"), "--no-color"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(`receipt: ${join(dir, "card.svg")}`);
+    expect(flat(result.stdout)).toContain(`Receipt ${join(dir, "card.svg")}`);
     const svg = await readFile(join(dir, "card.svg"), "utf8");
     expect(svg.startsWith("<svg")).toBe(true);
   });
@@ -2384,7 +2400,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["report-card", "--sample", "--out", dir, "--no-color"]);
     expect(result.exitCode).toBe(0);
     const expected = join(dir, "ai-spend-receipt.svg");
-    expect(result.stdout).toContain(`receipt: ${expected}`);
+    expect(flat(result.stdout)).toContain(`Receipt ${expected}`);
     const svg = await readFile(expected, "utf8");
     expect(svg.startsWith("<svg")).toBe(true);
   });
@@ -4148,6 +4164,115 @@ describe("minimal CLI vertical slice", () => {
     }
   });
 
+  it("report/report-card at a broad root that can't hold artifacts get the friendly write-location guard (0.9.5)", async () => {
+    // 0.9.4 ran these machine-wide and died at write time with a wrapped raw
+    // error ("Couldn't build a report: EROFS…" / "Refusing to use /etc…").
+    // The guard now answers BEFORE anything is scanned or written; home
+    // itself keeps working machine-wide (pinned in the spawned e2e).
+    const surfaces: Array<{ argv: string[]; commandName: string }> = [
+      { argv: ["report", "--path", "/"], commandName: "report" },
+      { argv: ["report", "--path", "/etc"], commandName: "report" },
+      { argv: ["report", "--sample", "--path", "/"], commandName: "report" },
+      { argv: ["report-card", "--path", "/etc"], commandName: "report-card" },
+      { argv: ["report-card", "--sample", "--path", "/"], commandName: "report-card" }
+    ];
+    for (const surface of surfaces) {
+      const result = await runCli(surface.argv);
+      const label = surface.argv.join(" ");
+      expect(result.exitCode, label).toBe(1);
+      expect(result.stderr.split("\n")[0], label).toBe(
+        `aibill ${surface.commandName} writes ${surface.commandName === "report" ? "its report files" : "the receipt"} into the folder it points at.`
+      );
+      expect(result.stderr, label).toContain("Run it from your home directory for a machine-wide view, or from one exact project folder");
+      expect(result.stderr, label).toContain("Nothing was read, created, or changed.");
+      expect(result.stderr, label).not.toContain("Couldn't");
+      expect(result.stderr, label).not.toContain("EROFS");
+      expect(result.stderr, label).not.toContain("Refusing to use");
+      expect(result.stdout, label).toBe("");
+    }
+
+    // An explicit absolute --out lands the receipt elsewhere — that 0.9.4
+    // behavior survives the new guard.
+    const outPath = join(await mkdtemp(join(tmpdir(), "ai-spend-guard-out-")), "receipt.svg");
+    const explicitOut = await runCli(["report-card", "--sample", "--path", "/etc", "--out", outPath, "--no-color"]);
+    expect(explicitOut.exitCode).toBe(0);
+    expect(explicitOut.stdout).toContain(outPath);
+  });
+
+  it("report auto-open summary truth: an actually fired opener claims it; every other path keeps the pointer (0.9.5)", async () => {
+    // Opened: the Next block's first line states the fact + the escape hatch,
+    // and the copy-pasteable `open <path>` pointer is replaced.
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-report-autoopen-"));
+    const decisions: string[] = [];
+    const opened = await runCli(["report", "--sample", "--path", dir], {
+      reportOpenDecide: (input) => {
+        decisions.push(input.htmlPath);
+        expect(input.noOpenFlag).toBe(false);
+        return { open: true, command: "open", args: [input.htmlPath] };
+      },
+      reportOpenLaunch: (decision) => decision.open
+    });
+    expect(opened.exitCode).toBe(0);
+    // The state dir resolves through realpath (/var -> /private/var on
+    // macOS), so pin the decision's target by its stable tail.
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toContain(join(".ai-spend-agent", "report.html"));
+    expect(flat(opened.stdout)).toContain(
+      "opened report.html in your browser · next time: --no-open to skip"
+    );
+    expect(opened.stdout).not.toContain("view the full report in your browser");
+
+    // Suppressed (vitest stdout is not a TTY -> the real decide refuses):
+    // the pointer line survives exactly and nothing claims to have opened.
+    const suppressed = await runCli(["report", "--sample", "--path", dir]);
+    expect(suppressed.exitCode).toBe(0);
+    // The pointer verb + absolute path + description survive as one step
+    // (paths realpath through /private/var, so pin the stable pieces).
+    expect(flat(suppressed.stdout)).toContain("› open /");
+    expect(flat(suppressed.stdout)).toContain(
+      `${join(".ai-spend-agent", "report.html")} view the full report in your browser`
+    );
+    expect(suppressed.stdout).not.toContain("in your browser · next time");
+
+    // --no-open reaches the decision, and a decision that failed to LAUNCH
+    // (spawn refused) also keeps the honest pointer.
+    const flagged = await runCli(["report", "--sample", "--path", dir, "--no-open"], {
+      reportOpenDecide: (input) => {
+        expect(input.noOpenFlag).toBe(true);
+        return { open: false, reason: "no-open-flag" };
+      }
+    });
+    expect(flagged.exitCode).toBe(0);
+    expect(flagged.stdout).not.toContain("in your browser · next time");
+    const launchFailed = await runCli(["report", "--sample", "--path", dir], {
+      reportOpenDecide: (input) => ({ open: true, command: "open", args: [input.htmlPath] }),
+      reportOpenLaunch: () => false
+    });
+    expect(launchFailed.exitCode).toBe(0);
+    expect(launchFailed.stdout).not.toContain("in your browser · next time");
+    expect(flat(launchFailed.stdout)).toContain("view the full report in your browser");
+  });
+
+  it("--full from a broad root cd-prefixes project-scoped pointers; project mode keeps them bare (0.9.5)", async () => {
+    // Sample keeps this deterministic and reads nothing; the broad root only
+    // selects the pointer scope. apply/apply-artifact/watch/connect all
+    // friendly-refuse broad roots, so a home --full must never advertise
+    // their bare forms.
+    const fromHome = await runCli(["--sample", "--full", "--path", homedir(), "--no-color"]);
+    expect(fromHome.exitCode).toBe(0);
+    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply --sample");
+    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill apply-artifact");
+    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill watch");
+    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect openai");
+    expect(flat(fromHome.stdout)).toContain("cd <project> && npx aibill connect anthropic");
+
+    const dir = await mkdtemp(join(tmpdir(), "ai-spend-full-project-scope-"));
+    const fromProject = await runCli(["--sample", "--full", "--path", dir, "--no-color"]);
+    expect(fromProject.exitCode).toBe(0);
+    expect(fromProject.stdout).toContain("npx aibill apply --sample");
+    expect(fromProject.stdout).not.toContain("cd <project>");
+  });
+
   it("adds and lists approved sources without scanning them immediately", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-sources-"));
     const exportPath = join(dir, "openai-usage.csv");
@@ -5111,8 +5236,8 @@ describe("minimal CLI vertical slice", () => {
     expect(doctor.stdout).toMatch(/OpenAI Costs and Usage API \(openai\)\n  validation coverage: failed\n  provider contract: current\n  financial evidence: verified/);
     expect(doctor.stdout).toMatch(/last error: .*Stopped after 1 page|last error: .*page cursor expired/);
     expect(receipt.exitCode).toBe(0);
-    expect(receipt.stdout).toMatch(/provider coverage was partial/i);
-    expect(receipt.stdout).toContain("available rows retain their evidence labels");
+    expect(flat(receipt.stdout)).toMatch(/provider coverage was partial/i);
+    expect(flat(receipt.stdout)).toContain("available rows retain their evidence labels");
     const receiptSvg = await readFile(receiptPath, "utf8");
     expect(receiptSvg).toContain("partial coverage · verified rows");
   });
@@ -5433,7 +5558,7 @@ describe("minimal CLI vertical slice", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("aibill report");
-    expect(result.stdout).toContain("DEMO SAMPLE · illustrative cost/value evidence total: $87.00 · not user data");
+    expect(flat(result.stdout)).toContain("$87.00 · DEMO SAMPLE · illustrative cost/value evidence · not user data");
 
     const markdown = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const html = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
@@ -5551,8 +5676,8 @@ describe("minimal CLI vertical slice", () => {
 
     const report = await runCli(["report", "--path", dir]);
     expect(report.exitCode).toBe(0);
-    expect(report.stdout).toContain("cost/value evidence total: <$0.01");
-    expect(report.stdout).not.toContain("cost/value evidence total: $0.00");
+    expect(flat(report.stdout)).toContain("<$0.01 · cost/value evidence");
+    expect(flat(report.stdout)).not.toContain("$0.00 · cost/value evidence");
     const markdown = await readFile(join(stateDir, "report.md"), "utf8");
     const html = await readFile(join(stateDir, "report.html"), "utf8");
     const verifyPlan = await readFile(join(stateDir, "ai-spend-verify-plan.md"), "utf8");
@@ -5690,8 +5815,8 @@ describe("minimal CLI vertical slice", () => {
 
     const report = await runCli(["report", "--path", dir]);
     expect(report.exitCode).toBe(0);
-    expect(report.stdout).toContain("cost/value evidence total: Unavailable");
-    expect(report.stdout).not.toContain("cost/value evidence total: $0.00");
+    expect(flat(report.stdout)).toContain("Unavailable · cost/value evidence");
+    expect(flat(report.stdout)).not.toContain("$0.00 · cost/value evidence");
     expect(await readFile(join(stateDir, "ai-spend-verify-plan.md"), "utf8"))
       .toContain("Available cost/value evidence: Unavailable");
     expect(await readFile(join(stateDir, "ai-spend-policy-config-draft.md"), "utf8"))

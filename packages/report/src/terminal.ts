@@ -121,6 +121,16 @@ export type PlainEnglishSummaryOptions = {
     result?: { headline: string; detail: string };
   };
   /**
+   * Where this readout is being rendered from (0.9.5). From a broad root
+   * ("machine-wide", e.g. the user's home directory) the full view's
+   * project-scoped command pointers (apply, apply-artifact, watch, connect)
+   * render with the same `cd <project> && …` prefix the machine-wide report
+   * summary uses, so a readout printed from home never advertises a command
+   * that then friendly-refuses the broad root. Omitted or "project" renders
+   * the bare commands exactly as before.
+   */
+  commandScope?: "project" | "machine-wide";
+  /**
    * "compact" renders one decision receipt: trust, headline, primary driver,
    * coverage, one evidence-linked next step, and one details command.
    * "full" renders the complete diagnose→recommend→apply→verify readout.
@@ -514,6 +524,15 @@ function renderPlainEnglishSummary(
   lines.push(...renderContextEvidence(options.deadContext, c));
 
   const hasActionCandidate = hasEvidenceActionCandidate(cutList, options.deadContext);
+  // Every command is npx-prefixed: most users run via `npx aibill`
+  // and have NO `aibill` on PATH — a bare command is a guaranteed
+  // "command not found" for exactly the person who just got motivated.
+  // From a broad root the project-scoped commands additionally carry the
+  // machine-wide report's `cd <project> && …` prefix (0.9.5): apply,
+  // apply-artifact, watch, and connect friendly-refuse a broad root, and a
+  // --full readout printed from home must never advertise a command that
+  // then refuses to run where it was printed.
+  const scoped = scopedCommandRenderer(options.commandScope);
   if (hasActionCandidate) {
   // ══ 3 · APPLY ═══════════════════════════════════════════════════════════
   lines.push(sectionHeader(
@@ -525,22 +544,19 @@ function renderPlainEnglishSummary(
     c
   ));
   lines.push("");
-  // Every command is npx-prefixed: most users run via `npx aibill`
-  // and have NO `aibill` on PATH — a bare command is a guaranteed
-  // "command not found" for exactly the person who just got motivated.
   if (options.mode === "demo") {
     lines.push(
-      `  ${c.cyan("›")} ${c.bold("npx aibill apply --sample")}   ${c.dim("prints a NON-EXECUTABLE DEMO boundary; it does not authorize or propose a user change")}`
+      `  ${c.cyan("›")} ${c.bold(scoped("npx aibill apply --sample"))}   ${c.dim("prints a NON-EXECUTABLE DEMO boundary; it does not authorize or propose a user change")}`
     );
     lines.push(
-      `  ${c.dim("    run npx aibill without --sample, or connect a provider, before generating an evidence-scoped Apply plan (long form: npx aibill apply-artifact)")}`
+      `  ${c.dim(`    run npx aibill without --sample, or connect a provider, before generating an evidence-scoped Apply plan (long form: ${scoped("npx aibill apply-artifact")})`)}`
     );
   } else {
     lines.push(
-      `  ${c.cyan("›")} ${c.bold("npx aibill apply")}   ${c.dim("prints a paste-ready evidence, approval, rollback, and verification plan")}`
+      `  ${c.cyan("›")} ${c.bold(scoped("npx aibill apply"))}   ${c.dim("prints a paste-ready evidence, approval, rollback, and verification plan")}`
     );
     lines.push(
-      `  ${c.dim("    paste it into Claude Code / Codex — it carries the candidates above without authorizing a change (long form: npx aibill apply-artifact)")}`
+      `  ${c.dim(`    paste it into Claude Code / Codex — it carries the candidates above without authorizing a change (long form: ${scoped("npx aibill apply-artifact")})`)}`
     );
   }
   lines.push("");
@@ -558,7 +574,7 @@ function renderPlainEnglishSummary(
   ));
   lines.push("");
   lines.push(
-    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx aibill")} ${c.dim("after a few days and compare — or")} ${c.bold("npx aibill watch")} ${c.dim("to track deltas per cycle")}`
+    `  ${c.cyan("›")} ${c.dim("re-run")} ${c.bold("npx aibill")} ${c.dim("after a few days and compare — or")} ${c.bold(scoped("npx aibill watch"))} ${c.dim("to track deltas per cycle")}`
   );
   if (options.mode === "local-logs") {
     lines.push(hasHeadlineAmount
@@ -566,14 +582,14 @@ function renderPlainEnglishSummary(
       : `  ${c.cyan("›")} ${c.dim("local activity was detected, but financial evidence is unavailable — no account was connected or authorized")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("pay for API usage too? set up an admin connector, then run its printed sync command:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")}`
+      `  ${c.cyan("›")} ${c.dim("pay for API usage too? set up an admin connector, then run its printed sync command:")} ${c.bold(scoped("npx aibill connect openai"))} ${c.dim("or")} ${c.bold(scoped("npx aibill connect anthropic"))}`
     );
   } else if (options.mode === "demo") {
     lines.push(
       `  ${c.cyan("›")} ${c.dim("these are illustrative SAMPLE API-equivalent estimates — no local logs or account data were used")}`
     );
     lines.push(
-      `  ${c.cyan("›")} ${c.dim("want your own evidence? run without --sample, or set up an admin connector and sync it:")} ${c.bold("npx aibill connect openai")} ${c.dim("or")} ${c.bold("npx aibill connect anthropic")}`
+      `  ${c.cyan("›")} ${c.dim("want your own evidence? run without --sample, or set up an admin connector and sync it:")} ${c.bold(scoped("npx aibill connect openai"))} ${c.dim("or")} ${c.bold(scoped("npx aibill connect anthropic"))}`
     );
   } else {
     lines.push(
@@ -2061,8 +2077,10 @@ function wrapProseLine(line: string, width: number): string[] {
       : leading.length >= 5
         ? leading
         : `${leading}  `;
+  // The optional `cd <project> && ` prefix (0.9.5 machine-wide pointers) is
+  // part of the copy-pasteable command and must never wrap away from it.
   const protectedText = text.replace(
-    /npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
+    /(?:cd <project> && )?npx (?:aibill|ai-spend-agent)(?: (?:--sample --full|--full|doctor --sources|init|apply-artifact|apply(?: --sample)?|watch|connect(?: (?:openai|anthropic))?|sync-provider|report-card(?: --sample)?|report|--group-by(?: [a-zA-Z]+)?))?/gu,
     (command) => command.replace(/ /gu, "\uE000")
   );
   const words = protectedText.split(/\s+/u);
@@ -2144,6 +2162,162 @@ function tableChars(): Record<string, string> {
     "right-mid": "┤",
     middle: "│"
   };
+}
+
+// --- aligned command summary (0.9.5) --------------------------------------
+
+/**
+ * Bare project-scoped commands render as-is in project scope and with the
+ * machine-wide report's `cd <project> && …` prefix from a broad root, where
+ * they would otherwise friendly-refuse (0.9.5 rider on the 0.9.4 fix).
+ */
+function scopedCommandRenderer(
+  commandScope: PlainEnglishSummaryOptions["commandScope"]
+): (command: string) => string {
+  return (command: string) => (
+    commandScope === "machine-wide" ? `cd <project> && ${command}` : command
+  );
+}
+
+export type CommandSummaryRow = {
+  /** Left-column label, e.g. "Scope". Rendered dim, padded to one shared column. */
+  label: string;
+  /** Right-column value. Long values continue at the value column, never mid-word. */
+  value: string;
+};
+
+export type CommandSummaryNextStep = {
+  /** The literal command to run (rendered bold after the receipt's "›"). */
+  command: string;
+  /** What the command does (rendered dim, on one shared column across steps). */
+  description?: string;
+};
+
+export type CommandSummaryOptions = {
+  /** Bold header title, e.g. "aibill report". */
+  title: string;
+  /** Optional bold segment after the title's dim "·", e.g. "Your AI Receipt". */
+  badge?: string;
+  /** Dim note line directly under the header (receipt convention). */
+  note?: string;
+  /** Aligned label/value rows. */
+  rows: CommandSummaryRow[];
+  /** Set-off blocks between the rows and Next, e.g. "Caption to share". */
+  sections?: { heading: string; body: string[] }[];
+  /** "Next" block; commands share one description column when every row fits. */
+  nextSteps?: CommandSummaryNextStep[];
+  /** Force-enable or force-disable color. Defaults to TTY auto-detection. */
+  color?: boolean;
+  /** Terminal width. Defaults to 72; floors at 40 like the CLI. */
+  width?: number;
+};
+
+/**
+ * Terminal summary for artifact-writing commands (report, report-card) in the
+ * receipt's visual language: two-space indent, a dim label column shared by
+ * every row, dot separators, and a "Next" block whose commands pad to ONE
+ * shared description column (0.9.5 founder feedback: the old flat
+ * `key: value` lines drifted per row and were "really hard to read").
+ *
+ * Alignment degrades deliberately and never wraps mid-word — paths stay
+ * whole. A value that cannot sit beside its label continues on following
+ * lines at the value column. The Next block is all-or-nothing: if any
+ * description cannot fit beside the widest command, every description moves
+ * to a dim continuation line under its command (the receipt's "›"
+ * continuation indent) so the block never renders half-aligned. Below 58
+ * columns the label column collapses to stacked label/value lines, matching
+ * the receipt's own narrow-terminal behavior.
+ */
+export function generateCommandSummary(options: CommandSummaryOptions): string {
+  const sanitized = sanitizeTerminalMetadata(options);
+  const useColor = sanitized.color ?? isColorTty();
+  const c = makeColors(useColor);
+  const width = Math.max(40, sanitized.width ?? 72);
+  const narrow = width < 58;
+  const lines: string[] = [""];
+
+  lines.push(
+    `  ${c.bold(sanitized.title)}${sanitized.badge ? ` ${c.dim("·")} ${c.bold(sanitized.badge)}` : ""}`
+  );
+  if (sanitized.note) lines.push(`  ${c.dim(sanitized.note)}`);
+  lines.push("");
+
+  // Shared label column: the receipt's 14-char floor, widened to the longest
+  // label so every value in THIS summary starts on the same column.
+  const labelWidth = Math.max(14, ...sanitized.rows.map((row) => row.label.length));
+  for (const row of sanitized.rows) {
+    if (narrow) {
+      lines.push(`  ${c.dim(row.label.toUpperCase())}`);
+      for (const chunk of wrapPlainWords(row.value, width - 2)) lines.push(`  ${chunk}`);
+      continue;
+    }
+    const [first, ...rest] = wrapPlainWords(row.value, Math.max(16, width - labelWidth - 3));
+    lines.push(`  ${c.dim(row.label.padEnd(labelWidth))} ${first ?? ""}`);
+    for (const chunk of rest) lines.push(`  ${" ".repeat(labelWidth)} ${chunk}`);
+  }
+
+  for (const section of sanitized.sections ?? []) {
+    lines.push("");
+    lines.push(`  ${c.bold(section.heading)}`);
+    for (const bodyLine of section.body) {
+      // Same trick as the receipt's command protector: "npx aibill" is one
+      // copy-pasteable token and must never split across a narrow wrap.
+      const protectedLine = bodyLine.replace(/npx (?:aibill|ai-spend-agent)\b/gu, (command) => command.replace(/ /gu, ""));
+      for (const chunk of wrapPlainWords(protectedLine, width - 2)) lines.push(`  ${chunk.replace(//gu, " ")}`);
+    }
+  }
+
+  const nextSteps = sanitized.nextSteps ?? [];
+  if (nextSteps.length > 0) {
+    lines.push("");
+    lines.push(`  ${c.bold("Next")}`);
+    // Description-less steps (e.g. the "opened … in your browser" status
+    // line) render as-is and never inflate the shared command column.
+    const describedSteps = nextSteps.filter((step) => step.description !== undefined);
+    const commandWidth = Math.max(0, ...describedSteps.map((step) => step.command.length));
+    const aligned = !narrow && describedSteps.every((step) => (
+      4 + commandWidth + 2 + step.description!.length <= width
+    ));
+    for (const step of nextSteps) {
+      if (step.description !== undefined && aligned) {
+        lines.push(
+          `  ${c.cyan("›")} ${c.bold(step.command.padEnd(commandWidth))}  ${c.dim(step.description)}`
+        );
+        continue;
+      }
+      // The command itself NEVER wraps (paths stay whole); its description
+      // follows on the receipt's "›" continuation indent instead.
+      lines.push(`  ${c.cyan("›")} ${c.bold(step.command)}`);
+      if (step.description !== undefined) {
+        for (const chunk of wrapPlainWords(step.description, width - 4)) {
+          lines.push(`    ${c.dim(chunk)}`);
+        }
+      }
+    }
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
+/** Word-level wrap that never splits a word — oversize paths overflow whole. */
+function wrapPlainWords(text: string, maxWidth: number): string[] {
+  const words = text.split(/\s+/u).filter((word) => word.length > 0);
+  if (words.length === 0) return [""];
+  const chunks: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) {
+      current = word;
+    } else if (current.length + 1 + word.length <= maxWidth) {
+      current += ` ${word}`;
+    } else {
+      chunks.push(current);
+      current = word;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 // --- color plumbing -------------------------------------------------------

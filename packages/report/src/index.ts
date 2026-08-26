@@ -27,8 +27,12 @@ import type {
 } from "@agent-finops/core";
 
 export {
+  generateCommandSummary,
   generatePlainEnglishSummary,
   groupByDimensions,
+  type CommandSummaryNextStep,
+  type CommandSummaryOptions,
+  type CommandSummaryRow,
   type GroupByDimension,
   type PlainEnglishSummaryOptions
 } from "./terminal.js";
@@ -3194,7 +3198,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 <body>
   <main class="wrap">
     <div class="term">
-      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">npx aibill — AI Receipt</span></div>
+      <div class="term-bar"><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
         <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
         ${qualitativeNotice ? `<p class="dim note-line"><strong>${escapeHtml(qualitativeNotice)}</strong></p>` : ""}
@@ -3256,65 +3260,79 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 `;
 }
 
-/** Terminal-native design system for the shareable local report. */
+/**
+ * Terminal-native design system for the shareable local report, in the
+ * landing's Tilden token family (0.9.5 brand retint — display-only):
+ *
+ *   ground #0C0D09 · panel #12140E · well #0A0B07 (warm green-black ladder)
+ *   hairline rgba(255,255,255,.08) / bright .14 · radius 2px · NEVER shadows
+ *   ink #EDEDED · muted white-62% · faint white-42%
+ *   green #4CC98A — provider-proven money and command affordances ONLY
+ *   amber #C9A24B — estimated money
+ *   bars: neutral white-alpha fill on a white-12% track (no decorative
+ *   gradients — the color system IS the evidence-label system)
+ *   Geist Mono-led stack · tabular-nums on every numeric column
+ *
+ * The window bar is a flat, text-labeled hairline strip (no macOS traffic
+ * dots). This stays a committed dark document: color-scheme dark + an
+ * explicit body background; there are no light-mode or print branches.
+ */
 function terminalReportCss(): string {
   return `
     :root { color-scheme: dark; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #05080c; color: #d7e0ea; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 24px 12px 48px; }
+    body { background: #0C0D09; color: #EDEDED; font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 24px 12px 48px; }
     .wrap { max-width: 860px; margin: 0 auto; }
-    .term { background: #0b1017; border: 1px solid #1c2733; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 80px rgba(0,0,0,0.55); }
-    .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; background: #0e1520; border-bottom: 1px solid #1c2733; }
-    .dot { width: 11px; height: 11px; border-radius: 50%; }
-    .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
-    .term-title { margin-left: 8px; font-size: 12px; color: #8494a6; }
+    .term { background: #12140E; border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+    .term-bar { display: flex; align-items: center; padding: 10px 14px; background: #0A0B07; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .term-title { font-size: 12px; color: rgba(255,255,255,0.62); }
     .term-body { padding: 26px 28px 22px; }
-    .dim { color: #66788c; }
-    .warn { color: #fbbf24; }
-    .g-accent { color: #4ade80; }
-    .estimated-value { color: #fbbf24; }
+    .dim { color: rgba(255,255,255,0.42); }
+    .warn { color: #C9A24B; }
+    .g-accent { color: #4CC98A; }
+    .estimated-value { color: #C9A24B; }
     .prompt { font-size: 13px; margin-bottom: 22px; }
     .hero { text-align: center; margin: 6px 0 26px; }
-    .hero-big { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; }
-    .hero-sub { margin-top: 10px; font-size: 13px; color: #aab8c7; }
+    .hero-big { font-size: 64px; font-weight: 700; letter-spacing: -2px; line-height: 1; font-variant-numeric: tabular-nums; }
+    .hero-sub { margin-top: 10px; font-size: 13px; color: rgba(255,255,255,0.62); }
     .sec { display: flex; align-items: center; gap: 10px; margin: 26px 0 14px; font-size: 12px; }
-    .sec .rule { height: 1px; width: 26px; background: #24303d; }
-    .sec .name { color: #22d3ee; font-weight: 700; letter-spacing: 2px; }
-    .sec .blurb { color: #66788c; }
+    .sec .rule { height: 1px; width: 26px; background: rgba(255,255,255,0.08); }
+    .sec .name { color: rgba(255,255,255,0.62); font-weight: 700; letter-spacing: 2px; }
+    .sec .blurb { color: rgba(255,255,255,0.42); }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
-    .stat { border: 1px solid #1c2733; border-radius: 10px; padding: 14px; background: #0e141c; display: flex; flex-direction: column; gap: 5px; }
-    .stat.estimated-card { border-color: rgba(251,191,36,0.4); }
-    .stat.warn-card { border-color: rgba(251,191,36,0.4); }
-    .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: #66788c; }
-    .stat strong { font-size: 24px; color: #e8eff6; }
-    .stat.estimated-card strong { color: #fbbf24; }
-    .stat.warn-card strong { color: #fbbf24; }
-    .stat .note { font-size: 11px; color: #8494a6; }
+    .stat { border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; padding: 14px; background: #0A0B07; display: flex; flex-direction: column; gap: 5px; }
+    .stat.estimated-card { border-color: rgba(201,162,75,0.4); }
+    .stat.warn-card { border-color: rgba(201,162,75,0.4); }
+    .stat .label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.42); }
+    .stat strong { font-size: 24px; color: #EDEDED; font-variant-numeric: tabular-nums; }
+    .stat.estimated-card strong { color: #C9A24B; }
+    .stat.warn-card strong { color: #C9A24B; }
+    .stat .note { font-size: 11px; color: rgba(255,255,255,0.62); }
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
     @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } .hero-big { font-size: 46px; } }
-    .col h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #66788c; margin-bottom: 9px; }
+    .col h3 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.42); margin-bottom: 9px; }
     .row { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 12px; }
-    .row .k { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab8c7; }
-    .row .bar { flex: 1; height: 9px; background: #131c26; border-radius: 4px; overflow: hidden; }
-    .row .bar i { display: block; height: 100%; background: linear-gradient(90deg, #22d3ee, #fbbf24); }
-    .row .v { flex: 0 0 96px; text-align: right; color: #e8eff6; }
-    .row .v.estimated-value { color: #fbbf24; }
-    .row .v em { font-style: normal; color: #66788c; margin-left: 5px; }
-    .deadbox { margin-top: 14px; border: 1px dashed rgba(251,191,36,0.35); border-radius: 10px; padding: 11px 13px; font-size: 12px; }
-    .deadbox .label { color: #fbbf24; margin-right: 6px; }
-    .chip { display: inline-block; border: 1px solid #24303d; border-radius: 999px; padding: 2px 9px; margin: 3px 3px 0 0; font-size: 11px; color: #aab8c7; }
-    .cut { display: flex; justify-content: space-between; gap: 16px; border: 1px solid #1c2733; border-radius: 10px; padding: 13px 15px; background: #0e141c; margin-bottom: 9px; }
-    .cut strong { font-size: 13px; color: #e8eff6; }
-    .cut p { font-size: 11.5px; color: #8494a6; margin-top: 5px; line-height: 1.5; max-width: 60ch; }
+    .row .k { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(255,255,255,0.62); }
+    .row .bar { flex: 1; height: 9px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+    .row .bar i { display: block; height: 100%; background: rgba(255,255,255,0.75); }
+    .row .v { flex: 0 0 96px; text-align: right; color: #EDEDED; font-variant-numeric: tabular-nums; }
+    .row .v.estimated-value { color: #C9A24B; }
+    .row .v em { font-style: normal; color: rgba(255,255,255,0.42); margin-left: 5px; }
+    .deadbox { margin-top: 14px; border: 1px dashed rgba(201,162,75,0.35); border-radius: 2px; padding: 11px 13px; font-size: 12px; }
+    .deadbox .label { color: #C9A24B; margin-right: 6px; }
+    .chip { display: inline-block; border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; padding: 2px 9px; margin: 3px 3px 0 0; font-size: 11px; color: rgba(255,255,255,0.62); }
+    .cut { display: flex; justify-content: space-between; gap: 16px; border: 1px solid rgba(255,255,255,0.08); border-radius: 2px; padding: 13px 15px; background: #0A0B07; margin-bottom: 9px; }
+    .cut strong { font-size: 13px; color: #EDEDED; }
+    .cut p { font-size: 11.5px; color: rgba(255,255,255,0.62); margin-top: 5px; line-height: 1.5; max-width: 60ch; }
     .cut-v { text-align: right; flex-shrink: 0; }
-    .cut-v strong.estimated-value { color: #fbbf24; font-size: 15px; }
-    .cut-v span { display: block; font-size: 10.5px; color: #66788c; margin-top: 4px; }
-    .plan-row { border-left: 2px solid #24303d; padding: 2px 0 2px 12px; margin-bottom: 11px; font-size: 12px; }
-    .plan-row strong { color: #e8eff6; }
-    .plan-row p { color: #8494a6; margin-top: 4px; line-height: 1.55; }
-    .plan-row .warn { color: #fbbf24; }
+    .cut-v strong.estimated-value { color: #C9A24B; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .cut-v span { display: block; font-size: 10.5px; color: rgba(255,255,255,0.42); margin-top: 4px; }
+    .plan-row { border-left: 2px solid rgba(255,255,255,0.14); padding: 2px 0 2px 12px; margin-bottom: 11px; font-size: 12px; }
+    .plan-row strong { color: #EDEDED; }
+    .plan-row p { color: rgba(255,255,255,0.62); margin-top: 4px; line-height: 1.55; }
+    .plan-row .warn { color: #C9A24B; }
     .note-line { font-size: 11.5px; margin-top: 10px; line-height: 1.55; }
-    .footer { display: flex; flex-wrap: wrap; gap: 8px 22px; border-top: 1px solid #1c2733; margin-top: 24px; padding-top: 15px; font-size: 12px; }
+    .footer { display: flex; flex-wrap: wrap; gap: 8px 22px; border-top: 1px solid rgba(255,255,255,0.08); margin-top: 24px; padding-top: 15px; font-size: 12px; }
   `;
 }
 

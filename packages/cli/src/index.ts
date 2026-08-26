@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   askGuidedQuestion,
@@ -213,9 +213,11 @@ import {
   type ProjectAccountabilityStateV1
 } from "./projectAccountabilityState.js";
 import { fetchGitHubAcceptedOutcomeV0 } from "./githubAcceptedOutcome.js";
+import { decideReportAutoOpen, openReportInBrowser } from "./reportOpener.js";
 import {
   generateActionPlanMarkdown,
   generateApplyArtifactMarkdown,
+  generateCommandSummary,
   generateDemoPackageMarkdown,
   generateHtmlReport,
   generateMarkdownReport,
@@ -225,6 +227,8 @@ import {
   generateReportCardSvg,
   generateVerificationPlanMarkdown,
   groupByDimensions,
+  type CommandSummaryNextStep,
+  type CommandSummaryRow,
   type GroupByDimension,
   type SpendReportInput
 } from "@agent-finops/report";
@@ -281,6 +285,8 @@ type ParsedArgs = {
   interval?: number;
   cycles?: number;
   noColor?: boolean;
+  /** report only: skip the automatic browser open of the HTML artifact. */
+  noOpen?: boolean;
   ignoreState?: boolean;
   plan?: string;
   sinceDays?: number;
@@ -359,6 +365,15 @@ export type CliRuntimeOptions = {
    * Embedded/MCP callers never set it (and never emit telemetry).
    */
   telemetryDisclosure?: boolean;
+  /**
+   * Test seams for `report`'s HTML auto-open (0.9.5): decide computes the
+   * truthful open/suppress verdict (platform, TTY, CI/SSH, --no-open,
+   * AI_SPEND_NO_OPEN); open fires the detached platform opener. Production
+   * uses the real implementations; tests inject stubs to pin the opener
+   * argv per platform, every suppression path, and summary-line truth.
+   */
+  reportOpenDecide?: typeof decideReportAutoOpen;
+  reportOpenLaunch?: typeof openReportInBrowser;
 };
 
 export async function runCli(
@@ -676,6 +691,11 @@ async function quickstartCommand(
     nextSteps,
     deadContext,
     detectedPlans,
+    // 0.9.5: from a broad root the --full view's project-scoped pointers
+    // (apply, apply-artifact, watch, connect) carry the machine-wide
+    // report's `cd <project> && …` prefix instead of advertising commands
+    // that friendly-refuse right where they were printed.
+    commandScope: isBroadScanRoot(args.path) ? "machine-wide" : "project",
     // C-lane §1.4: the result card header states the evidence window.
     windowDays: sinceDays,
     width: outputWidth,
@@ -4703,9 +4723,14 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
   // exact-project requirement was incoherent here: the receipt's own Next
   // pointer led from home straight into a refusal. Only a bogus --path
   // still gets the friendly guard; project folders behave exactly as
-  // before.
+  // before. 0.9.5: broad roots that cannot HOLD the artifacts (/, /etc,
+  // /Users, …) get the friendly guard voice up front instead of dying at
+  // write time with a wrapped raw error.
   const machineWide = isBroadScanRoot(args.path);
-  if (!machineWide) {
+  if (machineWide) {
+    const broadGuard = guardUnwritableBroadRoot("report", args);
+    if (broadGuard) return broadGuard;
+  } else {
     const rootGuard = await guardExactProjectRoot("report", args.path);
     if (rootGuard) return rootGuard;
   }
@@ -4798,67 +4823,99 @@ async function reportCommand(args: ParsedArgs, runtime: CliRuntimeOptions = {}):
       ? undefined
       : await writeApplyArtifacts(stateDir!, reportInput);
 
-    return ok([
-      "aibill report",
+    // 0.9.5 "agent feel": the HTML report opens itself in the browser via
+    // the platform opener — decided truthfully BEFORE the summary renders,
+    // suppressed for non-TTY/CI/SSH/--no-open/AI_SPEND_NO_OPEN, and fired
+    // detached so a missing or slow opener can never crash, hang, or delay
+    // exit (the telemetry detached-child pattern).
+    const openDecision = (runtime.reportOpenDecide ?? decideReportAutoOpen)({
+      htmlPath,
+      noOpenFlag: args.noOpen === true
+    });
+    const openedInBrowser = (runtime.reportOpenLaunch ?? openReportInBrowser)(openDecision);
+
+    // 0.9.5 founder polish ("really hard to read… I wonder if we can have
+    // the text aligned"): the same facts, rendered in the receipt's visual
+    // language — header, one shared label column, dot separators, and a Next
+    // block whose commands pad to one description column. Display-only.
+    const rows: CommandSummaryRow[] = [
       machineWide
-        ? `scope: machine-wide · all supported local agent evidence on this machine (last ${sinceDays} days) · artifacts in ${rootPath}`
-        : `path: ${rootPath}`,
-      `markdown: ${markdownPath}`,
-      `html: ${htmlPath}`,
+        ? { label: "Scope", value: `machine-wide · all supported local agent evidence on this machine (last ${sinceDays} days) · artifacts in ${rootPath}` }
+        : { label: "Path", value: rootPath },
+      { label: "Markdown", value: markdownPath },
+      { label: "HTML", value: htmlPath },
       ...(machineWide
         ? []
         : reportableExperiment
         ? [
-            `action artifacts: preserved · canonical token test ${reportableExperiment.id} (${reportableExperiment.lifecycle})`,
-            `token result: status=${reportableExperiment.evaluation.status}; reductionPercent=${reportExperimentProjection!.reductionPercent ?? "unavailable"}; metricEvidence=${reportExperimentProjection!.evidenceLabel}; quality=${reportExperimentProjection!.qualityLabel}; qualityEvidence=${reportExperimentProjection!.qualityEvidence}; matchingEvidence=${reportableExperiment.evaluation.matchingEvidence}`,
-            `token test: ${improveRuntimeCommand}`
+            { label: "Action artifacts", value: `preserved · canonical token test ${reportableExperiment.id} (${reportableExperiment.lifecycle})` },
+            { label: "Token result", value: `status=${reportableExperiment.evaluation.status}; reductionPercent=${reportExperimentProjection!.reductionPercent ?? "unavailable"}; metricEvidence=${reportExperimentProjection!.evidenceLabel}; quality=${reportExperimentProjection!.qualityLabel}; qualityEvidence=${reportExperimentProjection!.qualityEvidence}; matchingEvidence=${reportableExperiment.evaluation.matchingEvidence}` },
+            { label: "Token test", value: improveRuntimeCommand }
           ]
         : qualitativeActionsSuppressed
           ? [
-              `action artifacts: suppressed · qualitative index ${reportInput.qualitativeCoverage?.status ?? "unknown"}`,
-              `coverage artifact: ${artifactPaths!.codingPrompt}`,
-              `coverage action plan: ${artifactPaths!.actionPlan}`,
-              `coverage policy/config: ${artifactPaths!.policyConfigDraft}`,
-              `coverage verification: ${artifactPaths!.verificationPlan}`,
-              `coverage package: ${artifactPaths!.demoPackage}`
+              { label: "Action artifacts", value: `suppressed · qualitative index ${reportInput.qualitativeCoverage?.status ?? "unknown"}` },
+              { label: "Coverage artifact", value: artifactPaths!.codingPrompt },
+              { label: "Coverage action plan", value: artifactPaths!.actionPlan },
+              { label: "Coverage policy/config", value: artifactPaths!.policyConfigDraft },
+              { label: "Coverage verification", value: artifactPaths!.verificationPlan },
+              { label: "Coverage package", value: artifactPaths!.demoPackage }
             ]
         : artifactPaths
         ? [
-            `apply artifact: ${artifactPaths.codingPrompt}`,
-            `action plan: ${artifactPaths.actionPlan}`,
-            `policy/config draft: ${artifactPaths.policyConfigDraft}`,
-            `verification plan: ${artifactPaths.verificationPlan}`,
-            `demo package: ${artifactPaths.demoPackage}`
+            { label: "Apply artifact", value: artifactPaths.codingPrompt },
+            { label: "Action plan", value: artifactPaths.actionPlan },
+            { label: "Policy/config draft", value: artifactPaths.policyConfigDraft },
+            { label: "Verification plan", value: artifactPaths.verificationPlan },
+            { label: "Demo package", value: artifactPaths.demoPackage }
           ]
         : []),
-      reportInput.dataMode === "sample"
-        ? `DEMO SAMPLE · illustrative cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)} · not user data`
-        : reportInput.dataMode === "connected_provider" &&
-            !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
-          ? "cost/value evidence total: Unavailable · no priced financial evidence; missing/null is not zero"
-          : `cost/value evidence total: ${formatOptionalUsd(reportInput.summary.totalUsd)}`,
-      runtime.telemetryDisclosure === true
-        ? `privacy: report rendered locally · ${telemetryDisclosureLine}; only explicit sync-provider contacts the selected provider`
-        : "privacy: report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider",
-      "",
-      "next:",
-      `  open ${htmlPath}       view the full report in your browser`,
-      `  less ${markdownPath}       read it in the terminal`,
+      {
+        label: "Total",
+        value: reportInput.dataMode === "sample"
+          ? `${formatOptionalUsd(reportInput.summary.totalUsd)} · DEMO SAMPLE · illustrative cost/value evidence · not user data`
+          : reportInput.dataMode === "connected_provider" &&
+              !(reportInput.allRecords ?? reportInput.providerRecords ?? []).some((record) => typeof record.amountUsd === "number")
+            ? "Unavailable · cost/value evidence · no priced financial evidence; missing/null is not zero"
+            : `${formatOptionalUsd(reportInput.summary.totalUsd)} · cost/value evidence`
+      },
+      {
+        label: "Privacy",
+        value: runtime.telemetryDisclosure === true
+          ? `report rendered locally · ${telemetryDisclosureLine}; only explicit sync-provider contacts the selected provider`
+          : "report rendered locally with no aibill telemetry; only explicit sync-provider contacts the selected provider"
+      }
+    ];
+    const nextSteps: CommandSummaryNextStep[] = [
+      // Summary-line truth: only a fired opener may claim it opened; every
+      // suppression path keeps the plain copy-pasteable pointer.
+      openedInBrowser
+        ? { command: `opened ${basename(htmlPath)} in your browser · next time: --no-open to skip` }
+        : { command: `open ${htmlPath}`, description: "view the full report in your browser" },
+      { command: `less ${markdownPath}`, description: "read it in the terminal" },
       machineWide
         // apply/improve need one exact project folder — a machine-wide
         // report must never point at a command that then refuses (the exact
         // trap this mode removes).
         ? reportInput.dataMode === "sample"
-          ? `  cd <project> && ${actionRuntimeCommand("apply --sample")}  print the non-executable demo boundary from one exact project folder`
-          : `  cd <project> && ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}  per-project action plan from one exact project folder`
+          ? { command: `cd <project> && ${actionRuntimeCommand("apply --sample")}`, description: "print the non-executable demo boundary from one exact project folder" }
+          : { command: `cd <project> && ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}`, description: "per-project action plan from one exact project folder" }
         : reportableExperiment
-        ? `  ${improveRuntimeCommand}  review canonical token test ${reportableExperiment.id}`
+        ? { command: improveRuntimeCommand, description: `review canonical token test ${reportableExperiment.id}` }
         : qualitativeActionsSuppressed
-          ? `  ${actionRuntimeCommand(`context --json --since-days ${sinceDays}`)}  complete bounded qualitative evidence before any action`
+          ? { command: actionRuntimeCommand(`context --json --since-days ${sinceDays}`), description: "complete bounded qualitative evidence before any action" }
           : reportInput.dataMode === "sample"
-            ? `  ${actionRuntimeCommand("apply --sample")}  print the non-executable demo boundary`
-            : `  ${actionRuntimeCommand(`apply --since-days ${sinceDays}`)}  print the paste-ready coding-agent prompt from this exact evidence window`
-    ].join("\n"));
+            ? { command: actionRuntimeCommand("apply --sample"), description: "print the non-executable demo boundary" }
+            : { command: actionRuntimeCommand(`apply --since-days ${sinceDays}`), description: "print the paste-ready coding-agent prompt from this exact evidence window" }
+    ];
+    return ok(generateCommandSummary({
+      title: "aibill report",
+      note: "a shareable Markdown + HTML report, written locally",
+      rows,
+      nextSteps,
+      color: args.noColor ? false : undefined,
+      width: terminalOutputWidth()
+    }));
   } catch (error) {
     return {
       exitCode: 1,
@@ -4886,9 +4943,14 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
   // scanning to the bare receipt (loadInstantReadData below), SVG written to
   // the current directory. The card renders machine-wide content anyway, so
   // an exact-project requirement was incoherent here; only a bogus --path
-  // still gets the friendly guard.
+  // still gets the friendly guard. 0.9.5: broad roots that cannot HOLD the
+  // receipt (/, /etc, /Users, …) get the friendly guard voice up front
+  // instead of dying at write time with a wrapped raw error.
   const machineWide = isBroadScanRoot(args.path);
-  if (!args.sample && !machineWide) {
+  if (machineWide) {
+    const broadGuard = guardUnwritableBroadRoot("report-card", args);
+    if (broadGuard) return broadGuard;
+  } else if (!args.sample) {
     const rootGuard = await guardExactProjectRoot("report-card", args.path);
     if (rootGuard) return rootGuard;
   }
@@ -4922,29 +4984,37 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
       })
     );
 
-    const dataLine = mode === "demo"
+    const dataRow = mode === "demo"
       ? args.sample
-        ? "data: DEMO sample data — explicit illustrative mode; no local transcripts or persisted spend state were read."
-        : "data: DEMO sample data — no supported local Claude Code/Codex evidence was found; use --sample to reproduce this demo explicitly."
+        ? "DEMO sample data — explicit illustrative mode; no local transcripts or persisted spend state were read"
+        : "DEMO sample data — no supported local Claude Code/Codex evidence was found; use --sample to reproduce this demo explicitly"
       : mode === "local-logs"
-        ? "data: local Claude Code/Codex logs priced at API-equivalent rates."
-        : "data: connected local spend state with provider-reported cost kept separate from API-equivalent estimates.";
+        ? "local Claude Code/Codex logs priced at API-equivalent rates"
+        : "connected local spend state with provider-reported cost kept separate from API-equivalent estimates";
 
-    return ok([
-      "Your AI Receipt — a shareable, redacted spend card (no client/project/user names).",
-      `receipt: ${outPath}`,
-      dataLine,
-      "",
-      "Caption to share:",
-      generateReportCardCaption({
-        summary,
-        records: headlineRecords,
-        mode,
-        ...(providerCoverage ? { providerCoverage } : {})
-      }),
-      "",
-      "privacy: rendered locally; only totals, generic candidate categories, and evidence labels are included."
-    ].join("\n"));
+    // 0.9.5 founder polish: same facts, receipt-language layout — header,
+    // one label column, and the caption set off as its own block.
+    return ok(generateCommandSummary({
+      title: "aibill report-card",
+      badge: "Your AI Receipt",
+      note: "a shareable, redacted spend card (no client/project/user names)",
+      rows: [
+        { label: "Receipt", value: outPath },
+        { label: "Data", value: dataRow },
+        { label: "Privacy", value: "rendered locally; only totals, generic candidate categories, and evidence labels are included" }
+      ],
+      sections: [{
+        heading: "Caption to share",
+        body: [generateReportCardCaption({
+          summary,
+          records: headlineRecords,
+          mode,
+          ...(providerCoverage ? { providerCoverage } : {})
+        })]
+      }],
+      color: args.noColor ? false : undefined,
+      width: terminalOutputWidth()
+    }));
   } catch (error) {
     return {
       exitCode: 1,
@@ -4971,12 +5041,64 @@ async function reportCardCommand(args: ParsedArgs): Promise<CliResult> {
  * (improve, apply, verify, watch, connect, reset, …) keep the guard.
  */
 function isBroadScanRoot(requestedPath: string): boolean {
+  return broadScanRootKind(requestedPath) !== undefined;
+}
+
+type BroadScanRootKind = "home" | "filesystem-root" | "contains-home" | "system-directory";
+
+/** Classifies WHICH broad-root category a machine-wide path falls in. */
+function broadScanRootKind(requestedPath: string): BroadScanRootKind | undefined {
   const rootPath = resolve(requestedPath);
   const home = homedir();
   const guardHome = home && home.trim().length > 0
     ? home
     : join(rootPath, "aibill-impossible-home-sentinel");
-  return unsafeScanRootReason(rootPath, guardHome) !== undefined;
+  const reason = unsafeScanRootReason(rootPath, guardHome);
+  if (reason === undefined) return undefined;
+  if (reason.includes("filesystem root")) return "filesystem-root";
+  if (reason.includes("home directory is too broad")) return "home";
+  if (reason.includes("contains your home directory")) return "contains-home";
+  return "system-directory";
+}
+
+/**
+ * 0.9.5: machine-wide report/report-card write their artifacts INTO the
+ * requested root. That works from the home directory, but /, /etc, or a
+ * folder that contains home cannot hold them — the run used to die at write
+ * time with a wrapped raw error ("Couldn't build a report: EROFS…",
+ * "Refusing to use /etc…"). Those roots get the friendly guard voice BEFORE
+ * anything is scanned or written. Returns undefined when the root is home
+ * itself (machine-wide proceeds) or when an explicit absolute --out points
+ * the artifacts somewhere else entirely.
+ */
+function guardUnwritableBroadRoot(
+  commandName: "report" | "report-card",
+  args: Pick<ParsedArgs, "path" | "out">
+): CliResult | undefined {
+  const kind = broadScanRootKind(args.path);
+  if (kind === undefined || kind === "home") return undefined;
+  // An absolute --out lands outside the broad root; only rootPath-relative
+  // artifacts make this location a write problem.
+  if (args.out !== undefined && isAbsolute(args.out)) return undefined;
+  const artifactNoun = commandName === "report" ? "its report files" : "the receipt";
+  const explanation = kind === "filesystem-root"
+    ? `You pointed it at the filesystem root, which can't hold ${artifactNoun}.`
+    : kind === "contains-home"
+      ? `You pointed it at a folder that contains your home directory, which can't hold ${artifactNoun}.`
+      : `You pointed it at a system directory, which can't hold ${artifactNoun}.`;
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: [
+      `aibill ${commandName} writes ${artifactNoun} into the folder it points at.`,
+      explanation,
+      "",
+      "Run it from your home directory for a machine-wide view, or from one exact project folder",
+      `  e.g. cd ~ && ${actionRuntimeCommand(commandName)}`,
+      "",
+      "Nothing was read, created, or changed."
+    ].join("\n")
+  };
 }
 
 async function guardExactProjectRoot(
@@ -7659,6 +7781,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.noColor = true;
       continue;
     }
+    if (arg === "--no-open") {
+      parsed.noOpen = true;
+      continue;
+    }
     if (arg === "--json") {
       parsed.json = true;
       continue;
@@ -8284,7 +8410,8 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  quickstart [--sample] [--since-days N] Plain-English local readout (default 30 days)",
     "    [--full]            Render the complete audit; default is the compact receipt",
     "    [--group-by source|model|client|project|agent|user|workspace|apiKey]  Default: project for local logs; model otherwise",
-    "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports from the same window",
+    "  report [--sample] [--out <name>] [--since-days N] Generate local Markdown and HTML reports and open the HTML in your browser",
+    "    [--no-open]           Skip the automatic browser open (also AI_SPEND_NO_OPEN=1; auto-open is TTY-only and never fires in CI or SSH sessions)",
     "  report-card [--out f.svg] Write your AI Receipt — a redacted, shareable SVG + caption",
     "  glance [--project <name>] [--plan <id>] [--since-days N] Emit the local, machine-readable Glance snapshot JSON",
     "  context [--project <name>] [--since-days N] Show hook-aware Context Health in the terminal",

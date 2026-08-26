@@ -33,6 +33,9 @@ const CARD_HEIGHT = 400;
  * sharing the card can't leak who a spend belongs to.
  */
 export function generateReportCardSvg(input: ReportCardInput): string {
+  // 0.9.5 brand retint: the card ground joined the landing's warm
+  // green-black ladder (#0C0D09 -> #12140E gradient, white-alpha hairline
+  // stroke) replacing the off-brand indigo. Text and layout untouched.
   const { summary } = input;
   const cardTitle = input.mode === "demo" ? "AI RECEIPT · DEMO SAMPLE" : "AI RECEIPT";
   const ariaLabel = input.mode === "demo" ? "AI receipt demo sample" : "AI receipt";
@@ -68,32 +71,41 @@ export function generateReportCardSvg(input: ReportCardInput): string {
 
   // Parity nit: ONE thousands style per artifact — the headline uses the
   // comma form, so every other dollar on the card (and its caption) does too.
+  // 0.9.5 dedup: when the observed exposure IS the headline value (within
+  // rounding noise), the card says so in words instead of printing the same
+  // number twice two lines apart.
   const opportunityLine = opportunity.modeledMonthlySavingsUsd > 0
     ? `<tspan class="modeled">~${escapeXml(formatBigUsd(opportunity.modeledMonthlySavingsUsd))}/mo</tspan><tspan class="meta" dx="10">modeled API-rate opportunity · verify</tspan>`
-    : opportunity.observedExposureUsd > 0
-      ? `<tspan class="modeled">${escapeXml(formatBigUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
-      : `<tspan class="unavailable">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
+    : observedExposureMatchesHeadline(summary.totalUsd, opportunity)
+      ? `<tspan class="modeled">All</tspan><tspan class="meta" dx="10">of the value above is exposure · savings unavailable</tspan>`
+      : opportunity.observedExposureUsd > 0
+        ? `<tspan class="modeled">${escapeXml(formatBigUsd(opportunity.observedExposureUsd))}</tspan><tspan class="meta" dx="10">API-equivalent exposure · savings unavailable</tspan>`
+        : `<tspan class="unavailable">Savings unavailable</tspan><tspan class="meta" dx="10">no supported counterfactual</tspan>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-label="${ariaLabel}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0b1020"/>
-      <stop offset="100%" stop-color="#121a33"/>
+      <stop offset="0%" stop-color="#0C0D09"/>
+      <stop offset="100%" stop-color="#12140E"/>
     </linearGradient>
   </defs>
   <style>
+    /* 0.9.5 brand retint: the neutral text inks were blue-tinted periwinkle,
+       off the landing's warm ladder. Color-only swap to white-alpha
+       ink/muted/faint (font sizes, positions, and letter-spacing untouched;
+       the estimated-money amber stays receipt-scoped by mandate). */
     text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .label { fill: #7c89b3; font-size: 13px; letter-spacing: 2px; }
-    .big { fill: #e8edff; font-size: 52px; font-weight: 700; }
+    .label { fill: rgba(255,255,255,0.42); font-size: 13px; letter-spacing: 2px; }
+    .big { fill: #EDEDED; font-size: 52px; font-weight: 700; }
     .modeled { fill: #fbbf24; font-size: 30px; font-weight: 700; }
-    .unavailable { fill: #9aa6d6; font-size: 30px; font-weight: 700; }
-    .meta { fill: #9aa6d6; font-size: 14px; }
-    .cut { fill: #cdd6f7; font-size: 14px; }
+    .unavailable { fill: rgba(255,255,255,0.62); font-size: 30px; font-weight: 700; }
+    .meta { fill: rgba(255,255,255,0.62); font-size: 14px; }
+    .cut { fill: rgba(255,255,255,0.62); font-size: 14px; }
     .cutImpact { fill: #fbbf24; font-weight: 700; }
-    .brand { fill: #5b6790; font-size: 12px; letter-spacing: 1px; }
+    .brand { fill: rgba(255,255,255,0.42); font-size: 12px; letter-spacing: 1px; }
   </style>
   <rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" rx="18" fill="url(#bg)"/>
-  <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="#26304f"/>
+  <rect x="0.5" y="0.5" width="${CARD_WIDTH - 1}" height="${CARD_HEIGHT - 1}" rx="18" fill="none" stroke="rgba(255,255,255,0.08)"/>
 
   <text x="40" y="58" class="label">${cardTitle}</text>
 
@@ -125,11 +137,20 @@ export function generateReportCardCaption(input: ReportCardInput): string {
   // "; $X is observed API-equivalent exposure…" appendix quoted a figure the
   // card and the receipt never display (launch-sweep finding: a sample
   // caption said $41.00 that reconciled to nothing a reader could see).
+  // 0.9.5 dedup (founder-visible): when exposure and headline value agree
+  // within rounding noise the caption keeps ONE number and says the value IS
+  // the exposure, instead of quoting two near-identical dollars ("$2,281.89
+  // value … $2,281.87 exposure"). The truth contract survives verbatim:
+  // "savings unavailable without a matched counterfactual".
   const opportunityText = opportunity.modeledMonthlySavingsUsd > 0
     ? `with ~${formatBigUsd(opportunity.modeledMonthlySavingsUsd)}/mo in modeled opportunities to test—not verified savings`
-    : opportunity.observedExposureUsd > 0
-      ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
-      : "with no supported savings model in this window";
+    : observedExposureMatchesHeadline(input.summary.totalUsd, opportunity)
+      // The headline just named the basis; repeating "observed
+      // API-equivalent" here would reintroduce the noise this collapses.
+      ? "effectively all of it exposure to investigate; savings unavailable without a matched counterfactual"
+      : opportunity.observedExposureUsd > 0
+        ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
+        : "with no supported savings model in this window";
   const headline = presentationBasis === "connected_missing"
     ? "amounts unavailable (no priced financial evidence)"
     : `${formatBigUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
@@ -168,6 +189,42 @@ function summarizeOpportunity(records: UsageRecord[], cutList: CutAction[]): {
     ) * 100
   ) / 100;
   return { modeledMonthlySavingsUsd, observedExposureUsd };
+}
+
+/**
+ * 0.9.5 equal-case collapse threshold, in INTEGER CENTS. Observed value
+ * (headline) and observed exposure are two sums over near-identical record
+ * subsets; sub-cent per-action rounding lets them drift a few cents apart
+ * while describing the same evidence (the founder's live card read
+ * "$2,281.89 value" vs "$2,281.87 exposure" — 2¢ of pure rounding noise).
+ * At or under 5¢ the card and caption print ONE number with combined
+ * phrasing; above it the two figures are treated as genuinely different and
+ * both print. A nickel sits comfortably above the observed noise floor and
+ * far below any real subset difference worth disclosing separately.
+ *
+ * Cents, not dollars, on purpose: a float comparison made the exact-5¢
+ * boundary magnitude-dependent (20.05−20.00 → 0.05000000000000071 kept both
+ * figures while 100.05−100.00 → 0.04999999999999716 collapsed). Both sides
+ * round to displayed cents first, then diff as integers, so the boundary is
+ * deterministic at every magnitude.
+ */
+const OBSERVED_EXPOSURE_MATCH_TOLERANCE_CENTS = 5;
+
+/**
+ * True when the card/caption would otherwise print the observed exposure as
+ * a second number that reads identical to the headline observed value.
+ * Display-level only: the underlying sums are untouched.
+ */
+function observedExposureMatchesHeadline(
+  totalUsd: number,
+  opportunity: { modeledMonthlySavingsUsd: number; observedExposureUsd: number }
+): boolean {
+  if (opportunity.modeledMonthlySavingsUsd > 0 || opportunity.observedExposureUsd <= 0) {
+    return false;
+  }
+  const totalCents = Math.round(roundUsdCents(totalUsd) * 100);
+  const exposureCents = Math.round(roundUsdCents(opportunity.observedExposureUsd) * 100);
+  return Math.abs(totalCents - exposureCents) <= OBSERVED_EXPOSURE_MATCH_TOLERANCE_CENTS;
 }
 
 type FinancialPresentationBasis =
