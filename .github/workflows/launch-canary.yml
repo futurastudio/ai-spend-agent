@@ -43,6 +43,13 @@ jobs:
           v="$(npx -y aibill@latest --version </dev/null)"
           echo "aibill@latest --version -> [$v]"
           echo "$v" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'
+          # A bare semver match stays green through a rollback. Pin the floor:
+          # bump EXPECTED_MIN_VERSION with each release.
+          EXPECTED_MIN_VERSION="0.9.6"
+          if [ "$(printf '%s\n' "$EXPECTED_MIN_VERSION" "$v" | sort -V | head -1)" != "$EXPECTED_MIN_VERSION" ]; then
+            echo "FAIL: npm latest is $v, older than the expected floor $EXPECTED_MIN_VERSION — possible rollback or unpublish"
+            exit 1
+          fi
 
       - name: cold receipt (fresh home, non-TTY)
         run: |
@@ -163,6 +170,7 @@ jobs:
           fi
 
       - name: telemetry endpoint alive
+        if: always()  # production monitoring must never be switched off by an upstream fixture failure
         run: |
           # An intentionally INVALID body: {} fails the exactly-one-"events"-
           # key envelope check (apps/web/app/api/telemetry/route.ts) and is
@@ -175,11 +183,22 @@ jobs:
           test "$code" = "422"
 
       - name: waitlist endpoint alive
+        if: always()  # production monitoring must never be switched off by an upstream fixture failure
         run: |
           # {} is valid JSON with no usable email, so the route rejects it
           # with 422 (apps/web/app/api/waitlist/route.ts; 400 is reserved for
           # malformed JSON). Nothing is stored, and no real-looking email is
           # ever sent. One POST per run stays far under the 5/min rate limit.
+          #
+          # SCOPE — READ THIS BEFORE TRUSTING IT: 422 is returned at email
+          # validation, BEFORE storeInSupabase() is called. This step proves
+          # the route is alive and enforcing its schema. It proves NOTHING
+          # about whether a signup can actually be stored — a rotated
+          # service-role key would 503 every real signup while this stayed
+          # green. The storage path is proven by the `waitlist-storage` job
+          # in .github/workflows/launch-alerts.yml, which does a real
+          # insert+delete round trip. Do not delete that job believing this
+          # one covers it.
           code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
             -X POST -H 'content-type: application/json' -d '{}' \
             https://asktilden.com/api/waitlist)"
@@ -187,6 +206,7 @@ jobs:
           test "$code" = "422"
 
       - name: site up
+        if: always()  # production monitoring must never be switched off by an upstream fixture failure
         run: |
           curl -sfS -o /dev/null -m 15 https://asktilden.com
           curl -s -m 15 https://asktilden.com | grep -qi "Tilden"

@@ -275,7 +275,7 @@ export default function Home() {
                   Knows the plan you already pay for
                 </h3>
                 <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
-                  Detects Claude Max, ChatGPT Pro, and GitHub Copilot plans from
+                  Detects Claude Pro/Max and ChatGPT Plus/Pro plans from
                   your agents&apos; local config — read-only, nothing connected.
                   Shows limit runway and how API-equivalent usage compares with
                   the plan&apos;s listed price: a value difference to
