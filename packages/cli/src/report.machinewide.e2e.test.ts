@@ -181,15 +181,40 @@ function reportCandidateTitles(markdown: string): string[] {
  * dollars to the WRONG project passed all 1,637 tests.
  */
 function projectAttribution(text: string): string[] {
-  return text.split("\n").flatMap((line) => {
-    // The readout writes "across 3 projects — a ~$2 · b ~$1"; the Markdown
-    // artifact writes "Across 3 projects: a ~$2 · b ~$1."; the HTML wraps the
-    // readout form in a <p>. Same facts, three renderings — normalize to the
-    // payload so the comparison is about ATTRIBUTION, not punctuation.
-    const match = /[Aa]cross \d+ projects(?:: | — )(.+?)(?:<\/p>|$)/u.exec(line);
-    if (!match) return [];
-    return [match[1]!.trim().replace(/\s+/gu, " ").replace(/\.$/u, "")];
-  });
+  // The readout writes "across 3 projects — a ~$2 (1.1M/day) · b ~$1 (…)";
+  // the Markdown artifact writes "Across 3 projects: a ~$2 (…) · b ~$1 (…).";
+  // the HTML wraps the readout form in a <p>. Same facts, three renderings.
+  //
+  // 0.9.7: the readout's across-line now carries each member's median day of
+  // input+cache tokens and WRAPS at the terminal width, so a line-scoped
+  // parser silently compared the terminal's first physical line against the
+  // artifact's whole line. Flatten first, then read ITEMS — the parser is now
+  // independent of where any surface happens to wrap, which is what this guard
+  // was always supposed to be about.
+  const flat = text.replace(/<\/p>/gu, " ").replace(/\s+/gu, " ");
+  const blocks = [...flat.matchAll(
+    /[Aa]cross \d+ projects(?:: | — )(.*?)(?=[Aa]cross \d+ projects|$)/gu
+  )];
+  return blocks.map((block) => {
+    const items: string[] = [];
+    for (const segment of block[1]!.split(" · ")) {
+      // Each member renders as "<label> ~$<amount>[ (<median day>)]"; the
+      // trailing "+ N more" closes the list. Anything else is the next
+      // rendered element and ends the attribution payload.
+      const member = /^(.*?~\$[\d,]+(?: \([^)]*\))?)/u.exec(segment)?.[1];
+      const more = /^(\+ \d+ more)/u.exec(segment)?.[1];
+      if (member) {
+        items.push(member.trim());
+        continue;
+      }
+      if (more) {
+        items.push(more);
+        break;
+      }
+      break;
+    }
+    return items.join(" · ");
+  }).filter((entry) => entry.length > 0);
 }
 
 /**
@@ -524,6 +549,122 @@ describe("report machine-wide mode (0.9.4)", () => {
       expect(existsSync(join(home, ".ai-spend-agent"))).toBe(false);
     }
   );
+
+  /**
+   * B1 (0.9.7): the shareable receipt printed $0.00 for money that is
+   * UNKNOWN. Reproduced on the real bin exactly like this — a home whose only
+   * evidence uses a model id absent from the pricing table, then `aibill` and
+   * `report-card` two commands apart in the same directory:
+   *
+   *   npx aibill      -> "Unavailable · local activity found · financial
+   *                       evidence missing · 3 records missing cost"
+   *   npx aibill report-card -> "My AI receipt: $0.00 in observed
+   *                       API-equivalent value" over an SVG headline of $0.00
+   *
+   * and `npx aibill report` -> "Total $0.00 · cost/value evidence" beside a
+   * report.md it had just written saying "Unavailable … Missing/null is not
+   * zero". The pins below run the real bin and compare the surfaces to each
+   * other, because every one of them looked right in isolation.
+   */
+  describe("B1 — an unknown total never renders as $0.00 on any shareable surface", () => {
+    /** A home whose evidence prices to nothing, or only partly. */
+    async function seedUnpricedHome(kind: "all-unknown" | "mixed"): Promise<string> {
+      const home = await realpath(await mkdtemp(join(tmpdir(), `machinewide-b1-${kind}-`)));
+      const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString();
+      const dir = join(home, ".claude", "projects", "-Users-testuser-demo-proj");
+      await mkdir(dir, { recursive: true });
+      // `gpt-6-preview` is deliberately absent from the pricing table: the
+      // engine prices it to null, which is the whole point.
+      const models = kind === "all-unknown"
+        ? ["gpt-6-preview", "gpt-6-preview", "gpt-6-preview"]
+        : ["claude-opus-4-8", "claude-opus-4-8", "gpt-6-preview"];
+      const lines = models.map((model, index) => JSON.stringify({
+        type: "assistant",
+        timestamp: day(2 + index),
+        cwd: "/Users/testuser/demo-proj",
+        sessionId: `sess-${model}`,
+        requestId: `req-${model}-${index}`,
+        message: {
+          id: `msg-${model}-${index}`,
+          model,
+          usage: {
+            input_tokens: 40_000,
+            output_tokens: 4_000,
+            cache_read_input_tokens: 100_000,
+            cache_creation_input_tokens: 10_000
+          }
+        }
+      }));
+      await writeFile(join(dir, "sess.jsonl"), `${lines.join("\n")}\n`, "utf8");
+      return home;
+    }
+
+    it(
+      "all-unknown: no $0.00 on the caption, the SVG, the companion page or the report summary",
+      { timeout: 180_000 },
+      async () => {
+        const home = await seedUnpricedHome("all-unknown");
+
+        const card = await runFromHome(home, ["report-card"]);
+        expect(card.exitCode, card.stderr || card.stdout).toBe(0);
+        const svg = await readFile(join(home, "ai-receipt.svg"), "utf8");
+        const companion = await readFile(join(home, "ai-receipt.html"), "utf8");
+
+        for (const [name, surface] of Object.entries({
+          "the caption printed to the terminal": card.stdout,
+          "ai-receipt.svg": svg,
+          "ai-receipt.html": companion
+        })) {
+          expect(surface, `${name} prints a zero total for unknown money`).not.toContain("$0.00");
+          expect(surface, `${name} lost the unknown-total word`).toContain("Unavailable");
+          expect(surface, `${name} hides the missing-cost count`).toContain("records missing cost");
+        }
+        expect(svg).toContain('class="big">Unavailable</text>');
+
+        const report = await runFromHome(home, ["report"]);
+        expect(report.exitCode, report.stderr || report.stdout).toBe(0);
+        const flat = report.stdout.replace(/\s+/gu, " ");
+        expect(flat).toContain("Total Unavailable · cost/value evidence");
+        expect(flat).not.toContain("Total $0.00");
+        // …and the artifact that same command wrote agrees with it.
+        const markdown = await readFile(join(home, "ai-spend-report.md"), "utf8");
+        expect(markdown).toContain("Observed API-equivalent value: Unavailable");
+      }
+    );
+
+    it(
+      "mixed: a real total is kept AND the unpriced record is disclosed everywhere",
+      { timeout: 180_000 },
+      async () => {
+        const home = await seedUnpricedHome("mixed");
+
+        const card = await runFromHome(home, ["report-card"]);
+        expect(card.exitCode, card.stderr || card.stdout).toBe(0);
+        const svg = await readFile(join(home, "ai-receipt.svg"), "utf8");
+        const companion = await readFile(join(home, "ai-receipt.html"), "utf8");
+
+        // Real money is still the headline — this is not the missing case.
+        expect(svg).toMatch(/class="big">\$\d/u);
+        for (const [name, surface] of Object.entries({
+          "the caption printed to the terminal": card.stdout,
+          "ai-receipt.svg": svg,
+          "ai-receipt.html": companion
+        })) {
+          expect(surface, `${name} silently dropped the mixed-case caveat`)
+            .toContain("1 record missing cost");
+          expect(surface, `${name} dropped the truth clause`).toContain("missing/null is not zero");
+        }
+
+        const report = await runFromHome(home, ["report"]);
+        expect(report.exitCode, report.stderr || report.stdout).toBe(0);
+        const flat = report.stdout.replace(/\s+/gu, " ");
+        expect(flat).toMatch(/Total \$\d/u);
+        expect(flat).toContain("1 record missing cost");
+        const markdown = await readFile(join(home, "ai-spend-report.md"), "utf8");
+        expect(markdown).toContain("1 missing");
+      }
+    );
+  });
 
   it(
     "a project folder keeps the exact pre-0.9.4 behavior (.ai-spend-agent/report.*)",

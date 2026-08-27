@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
+import { safeUntrustedLabel, WITHHELD_FILE_LABEL } from "./untrustedLabel.js";
 
 /**
  * Read-only ingestion of which tools were actually INVOKED in Claude Code
@@ -794,8 +795,15 @@ function buildSessionContextSignal(input: {
   parentSessionId?: string;
   nestedSessions?: NestedSessionMetadata[];
 }): SessionContextSignal {
+  // File names come off transcript tool-call metadata, so they are untrusted,
+  // and they travel as DATA rather than prose: {name, count} objects that the
+  // MCP tools hand to an agent verbatim. Neutralizing the sentence built from
+  // this array while the array itself stayed raw gave the human the redaction
+  // and the agent the payload — backwards, on the one surface where injected
+  // text can actually steer a coding agent. Neutralize at the source, so every
+  // consumer (Glance, MCP, CLI, the action planner) gets the same safe name.
   const fileReads = [...input.fileReads.entries()]
-    .map(([name, count]) => ({ name, count }))
+    .map(([name, count]) => ({ name: safeUntrustedLabel(name, WITHHELD_FILE_LABEL), count }))
     .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
   return {
     agent: input.agent,

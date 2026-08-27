@@ -1,3 +1,4 @@
+import { safeUntrustedLabel, WITHHELD_FILE_LABEL, WITHHELD_PROJECT_LABEL } from "./untrustedLabel.js";
 import {
   loadAgentInventory,
   type AgentInventoryOptions,
@@ -216,7 +217,9 @@ export function buildContextHealth(
   if ((contextChurn.repeatedReadEvents ?? 0) > 0) {
     const files = contextChurn.repeatedFiles
       .slice(0, 3)
-      .map((file) => `${file.file} ×${file.readCount}`)
+      // Basenames, but a basename is still a name the user did not author,
+      // and this sentence is returned verbatim by the MCP context-health tool.
+      .map((file) => `${safeUntrustedLabel(file.file, WITHHELD_FILE_LABEL)} ×${file.readCount}`)
       .join(", ");
     evidence.push({
       kind: "context_churn",
@@ -402,6 +405,10 @@ const MIN_EXACT_COMPARISONS = 2;
 const MIN_SESSION_TYPE_COMPARISONS = 2;
 const MAX_DISPLAY_RATIO = 20;
 
+function safeOptionalProject(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : safeUntrustedLabel(value, WITHHELD_PROJECT_LABEL);
+}
+
 function buildCurrentSession(
   sessions: ContextSessionGroup[],
   now: Date,
@@ -455,7 +462,9 @@ function buildCurrentSession(
   return {
     status: ageMs <= activeWithinMinutes * 60_000 ? "active" : "recent",
     agent: latest.agent,
-    project: latest.project,
+    project: latest.project === undefined
+      ? undefined
+      : safeUntrustedLabel(latest.project, WITHHELD_PROJECT_LABEL),
     totalTokens: latest.totalTokens,
     contextTokens: latest.contextTokens,
     usageSource: latest.usageSource,
@@ -491,7 +500,7 @@ function contextSessions(calls: LocalAgentCall[]): ContextSessionGroup[] {
     return {
       key,
       agent: latest.agent,
-      project: latest.project ?? ordered[0]?.project,
+      project: safeOptionalProject(latest.project ?? ordered[0]?.project),
       lastActivityAt: latest.timestamp,
       totalTokens: turnUsage?.totalTokens ?? 0,
       contextTokens: turnUsage?.contextTokens ?? 0,
@@ -542,8 +551,11 @@ function buildContextChurn(
       latest.key === `${signal.agent}:${signal.sessionId}`
     ))
     : undefined;
+  // Neutralized at the source in toolInvocations.ts; re-applied here because a
+  // signal can also arrive from a cache written by an earlier version, and
+  // because this array is handed to an agent verbatim by the MCP tool.
   const repeatedFiles = (currentSignal?.repeatedFileReads ?? [])
-    .map((file) => ({ file: file.name, readCount: file.count }));
+    .map((file) => ({ file: safeUntrustedLabel(file.name, WITHHELD_FILE_LABEL), readCount: file.count }));
   return {
     currentSessionEvidence: !latest
       ? "no_current_session"

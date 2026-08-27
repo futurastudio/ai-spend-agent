@@ -1,5 +1,23 @@
 import type { DetectedPlan } from "./planDetection.js";
 import type { UsageRecord } from "./schema.js";
+import {
+  safeUntrustedLabel,
+  WITHHELD_ENTITY_LABEL,
+  WITHHELD_PLAN_LABEL
+} from "./untrustedLabel.js";
+
+/**
+ * The plan label and the limit signal are read out of the agent's own local
+ * config files, so both are untrusted text that lands mid-sentence in a
+ * headline the readout, the report and `doctor` all print verbatim.
+ */
+function safePlanLabel(value: string): string {
+  return safeUntrustedLabel(value, WITHHELD_PLAN_LABEL);
+}
+
+function safeLimitSignal(value: string): string {
+  return safeUntrustedLabel(value, WITHHELD_ENTITY_LABEL);
+}
 
 /**
  * Plan-price math: compares API-equivalent usage (from local agent logs)
@@ -120,19 +138,19 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
         );
         // A local limit signal upgrades "might hit limits" to hard evidence.
         const evidence = detected?.limitSignal
-          ? `local metadata reports ${detected.limitSignal}`
+          ? `local metadata reports ${safeLimitSignal(detected.limitSignal)}`
           : `if the provider reports active rate limits`;
         upgradeHint = nextTier
           ? `API-equivalent projection exceeds the rough ${detectedKnown.name} comparison threshold (~$${detectedKnown.coversUpToUsd}/mo); ${evidence}. ${nextTier.name} ($${nextTier.monthlyUsd}/mo) is the next listed tier, but verify account limits before changing plans; trimming context (below) may buy headroom.`
           : `API-equivalent projection exceeds the rough ${detectedKnown.name} comparison threshold (~$${detectedKnown.coversUpToUsd}/mo); verify account limits before changing plans. Trimming context (below) may buy headroom.`;
       } else if (detected?.limitSignal) {
-        upgradeHint = `local metadata reports ${detected.limitSignal}; verify the live provider window. Trimming context (below) may buy headroom.`;
+        upgradeHint = `local metadata reports ${safeLimitSignal(detected.limitSignal)}; verify the live provider window. Trimming context (below) may buy headroom.`;
       }
     } else if (detected) {
       // Detected a plan we can't price (e.g. an unrecognized tier): state the
       // fact, then fall back to suggestion math without pretending certainty.
       headline =
-        `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — compared with ${detected.planLabel} ` +
+        `${agent}: ~${formatUsd(monthly)}/mo at API rates (${basis}) — compared with ${safePlanLabel(detected.planLabel)} ` +
         `(label detected locally; price not in our table)` +
         (suggested ? `; reference listed plan: ${suggested.name} ($${suggested.monthlyUsd}/mo).` : `.`);
     } else {
@@ -155,7 +173,16 @@ export function computePlanChecks(records: UsageRecord[], detectedPlans: Detecte
       suggestedPlan: detectedKnown ?? suggested,
       monthlySavingsVsApiUsd: effectiveSavings,
       valueMultiple,
-      detectedPlan: detected,
+      // The STRUCTURED sibling of the headline. Neutralizing the sentence and
+      // shipping the raw label beside it in the same object is the inversion
+      // that let a hostile name reach an agent while the human saw a redaction.
+      detectedPlan: detected === undefined ? undefined : {
+        ...detected,
+        planLabel: safePlanLabel(detected.planLabel),
+        ...(detected.limitSignal === undefined
+          ? {}
+          : { limitSignal: safeLimitSignal(detected.limitSignal) })
+      },
       upgradeHint,
       headline
     });

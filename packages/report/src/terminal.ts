@@ -10,6 +10,7 @@ import {
   formatApproxUsd,
   formatBilledUsdExact,
   formatCommittedPerMonth,
+  formatTokenCount,
   generateCutList,
   buildRecommendedPlan,
   largestRemainderPercents,
@@ -1550,6 +1551,46 @@ function cutProjectLabel(action: CutAction): string {
   return separator === -1 ? "this project" : action.title.slice(separator + 3);
 }
 
+/**
+ * One member on the grouped across-line: "agent-finops ~$1,505 (67.5M/day)".
+ *
+ * The rounded dollar alone made every member of a fan-out look like the same
+ * finding at a different price. The median day's input+cache tokens is the
+ * quantity that EXPLAINS that dollar, and it is observed, not modeled. It is
+ * omitted entirely when the candidate carries no day-level evidence — a
+ * missing figure degrades to the pre-0.9.7 line, never to a placeholder.
+ */
+export function cutMemberLabel(action: CutAction): string {
+  const { projectLabel, valueSuffix } = cutMemberLabelParts(action);
+  return `${projectLabel}${valueSuffix}`;
+}
+
+/**
+ * The same member line, split at the seam between the UNTRUSTED half (the
+ * project label, off the user's disk) and the PRODUCT half (the money and the
+ * median day).
+ *
+ * The split exists because a renderer that has to bound the line must bound the
+ * NAME and keep the figure. 0.9.7 truncated the joined string instead, so a
+ * long project name pushed the dollars past the cap and the Markdown artifact
+ * printed a member with no money in it while the terminal printed the money.
+ * Anything that shortens or sanitizes a member label works on `projectLabel`
+ * and re-appends `valueSuffix` afterwards.
+ */
+export function cutMemberLabelParts(action: CutAction): {
+  projectLabel: string;
+  valueSuffix: string;
+} {
+  const dollars = ` ~$${Math.round(action.affectedSpendUsd).toLocaleString("en-US")}`;
+  const median = action.medianDailyInputTokens;
+  return {
+    projectLabel: cutProjectLabel(action),
+    valueSuffix: median !== undefined && median > 0
+      ? `${dollars} (${formatTokenCount(median)}/day)`
+      : dollars
+  };
+}
+
 const confidenceRank: Record<string, number> = { detected_unverified: 0, estimated: 1, verified: 2 };
 
 /**
@@ -1579,8 +1620,26 @@ export type RankedCutCandidate = {
   members: readonly CutAction[];
   /** Per-project labels, largest observed value first (grouped entries only). */
   projectLabels: readonly string[];
-  /** Per-project observed value, index-aligned with {@link projectLabels}. */
+  /**
+   * Per-project observed value, index-aligned with {@link projectLabels}. The
+   * raw number behind {@link projectMemberLabels}: renderers paint the label,
+   * consumers that need the figure itself read this.
+   */
   projectAffectedSpendUsd: readonly number[];
+  /**
+   * Ready-to-paint across-line members — "agent-finops ~$1,505 (67.5M/day)" —
+   * index-aligned with {@link projectLabels}. Built once here so the terminal,
+   * the Markdown artifact, and the HTML report cannot drift in how they
+   * differentiate the members of one fan-out.
+   */
+  projectMemberLabels: readonly string[];
+  /**
+   * The PRODUCT half of each member label — " ~$1,505 (67.5M/day)" —
+   * index-aligned with {@link projectLabels}, so a renderer that must bound or
+   * sanitize the untrusted project name can re-append the money afterwards
+   * instead of truncating it away. See {@link cutMemberLabelParts}.
+   */
+  projectMemberValueSuffixes: readonly string[];
   recordCount: number;
   recordUnit: CutAction["recordUnit"];
   affectedSpendUsd: number;
@@ -1613,7 +1672,13 @@ export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandi
   const candidates = collapseRepeatedCutActions(shown).slice(0, 5).map((entry, index) => {
     const members = entry.members;
     const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
-    const guidanceSource = members[0]!.action;
+    // The guidance names ONE project, and every other line on this candidate
+    // — the across-line's first member, the report's "start with X" pointer —
+    // names `ranked[0]`. Quote `ranked[0]` too. They coincide today only
+    // because context candidates all carry zero estimated savings and arrive
+    // in spend order; nothing enforces that, and the day it stops holding the
+    // readout quotes one project's median under another project's name.
+    const guidanceSource = ranked[0]!.action;
     const guidanceStart = guidanceSource.indexOf(". ");
     const weakest = [...members].sort((a, b) =>
       (confidenceRank[a.confidence] ?? 0) - (confidenceRank[b.confidence] ?? 0))[0]!;
@@ -1630,6 +1695,10 @@ export function rankCutCandidates(cutList: readonly CutAction[]): RankedCutCandi
       projectAffectedSpendUsd: members.length === 1
         ? []
         : ranked.map((action) => action.affectedSpendUsd),
+      projectMemberLabels: members.length === 1 ? [] : ranked.map(cutMemberLabel),
+      projectMemberValueSuffixes: members.length === 1
+        ? []
+        : ranked.map((action) => cutMemberLabelParts(action).valueSuffix),
       recordCount: members.reduce((total, action) => total + action.recordCount, 0),
       recordUnit: members[0]!.recordUnit,
       affectedSpendUsd: members.reduce((total, action) => total + action.affectedSpendUsd, 0),
@@ -1661,13 +1730,13 @@ function groupedCutActionLines(
   // Per-project detail, largest window value first; ~rounded dollars keep the
   // line honest about precision without repeating five near-identical blocks.
   const ranked = [...members].sort((a, b) => b.affectedSpendUsd - a.affectedSpendUsd);
-  const across = ranked.slice(0, 4).map((action) =>
-    `${cutProjectLabel(action)} ~$${Math.round(action.affectedSpendUsd).toLocaleString("en-US")}`);
+  const across = ranked.slice(0, 4).map(cutMemberLabel);
   if (ranked.length > 4) across.push(`+ ${ranked.length - 4} more`);
   const acrossLine = `     ${c.dim(`across ${members.length} projects — ${across.join(" · ")}`)}`;
   // The shared instruction: the action copy minus its leading per-project
-  // count sentence (every member carries the same guidance tail).
-  const guidanceSource = members[0]!.action;
+  // count sentence. The guidance NAMES its project, so it must come from the
+  // same member the across-line puts first — `ranked[0]`, not insertion order.
+  const guidanceSource = ranked[0]!.action;
   const guidanceStart = guidanceSource.indexOf(". ");
   const guidance = guidanceStart === -1 ? guidanceSource : guidanceSource.slice(guidanceStart + 2);
   const detail = `     ${c.dim(guidance)}`;
@@ -1754,6 +1823,23 @@ function renderContextEvidence(dc: DeadContextResult | undefined, c: Colors): st
         c.dim(`from ${dc.measuredDeadCount} skill${plural}/agent${plural} · modeled context cost ~${formatUsd(dc.monthlyUsd)}/mo · estimated`)
     );
   }
+  // Name the heaviest measured candidates. The Markdown artifact has printed
+  // these names (with absolute paths) since 0.9.x; the terminal held the same
+  // evidence and printed only a count, which made it the least informative
+  // surface about the inventory it had already read. Names only here — a path
+  // is a screenshot-safety problem the artifact can afford and a readout
+  // cannot. Deliberately its own section: "no matching invocation" is not
+  // evidence that an item caused a session's context size, and folding it into
+  // the context_trim sentence would manufacture that causation.
+  const named = namedDeadContextItems(dc);
+  if (named.length > 0) {
+    lines.push(`  ${c.dim(`heaviest measured of the ${dc.measuredDeadCount} (name · kind · scope · modeled weight)`)}`);
+    for (const item of named) {
+      lines.push(
+        `    ${c.dim(`${item.name} · ${item.kind.replaceAll("_", " ")} · ${item.scope} · ~${formatTokens(item.alwaysLoadedTokens)}/turn · ${item.weightConfidence.replaceAll("_", " ")}`)}`
+      );
+    }
+  }
   if (dc.unmeasuredDeadCount > 0) {
     const plural = dc.unmeasuredDeadCount === 1 ? "" : "s";
     lines.push(
@@ -1765,6 +1851,20 @@ function renderContextEvidence(dc: DeadContextResult | undefined, c: Colors): st
   }
   lines.push("");
   return lines;
+}
+
+/**
+ * Up to three dead-context items whose token weight was actually MEASURED,
+ * heaviest first. Unmeasured items (MCP servers, no schemas) are excluded on
+ * purpose: they are already summarised by their own line, and printing a name
+ * next to no weight invites the reader to treat "unmeasured" as "small".
+ */
+function namedDeadContextItems(dc: DeadContextResult): DeadContextResult["deadItems"] {
+  return [...dc.deadItems]
+    .filter((item) => item.alwaysLoadedTokens > 0)
+    .sort((left, right) =>
+      right.alwaysLoadedTokens - left.alwaysLoadedTokens || left.name.localeCompare(right.name))
+    .slice(0, 3);
 }
 
 /** §1.2 marker rule: `~` rides EVERY figure of the API-equivalent basis. */
@@ -2345,11 +2445,13 @@ function formatPercent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
-/** Compact token count: 2,140,000 -> "2.1M", 8,300 -> "8.3K". */
+/**
+ * Compact token count: 2,140,000 -> "2.1M", 8,300 -> "8.3K". Delegates to core
+ * so a candidate's token magnitude reads identically in the guidance sentence
+ * (built in @agent-finops/core) and in every line rendered here.
+ */
 function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
-  return String(Math.round(tokens));
+  return formatTokenCount(tokens);
 }
 
 function tableChars(): Record<string, string> {

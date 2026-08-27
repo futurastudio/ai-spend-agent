@@ -239,7 +239,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.6$/);
+    expect(result.stdout).toMatch(/^0\.9\.7$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
   });
@@ -826,7 +826,11 @@ describe("zero-key evidence-first receipt", () => {
     }
   });
 
-  it("runs one local baseline, approval, canary, and measured token-test lifecycle", async () => {
+  // Real mkdtemp filesystem work across a full lifecycle: ~4.4s alone, which
+  // sits under the 5s default only until the suite runs it in parallel with
+  // its siblings. Per-test rather than a global bump, so a genuinely hung test
+  // still fails fast everywhere else.
+  it("runs one local baseline, approval, canary, and measured token-test lifecycle", { timeout: 120_000 }, async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-token-test-"));
     const projectRoot = await realpath(dir);
     const baselineTimes = [

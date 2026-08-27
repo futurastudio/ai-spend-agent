@@ -19,6 +19,7 @@ import {
   type WasteFindingV0,
   type WasteFindingV0DraftInput
 } from "./actionVerification.js";
+import { safeUntrustedLabel, WITHHELD_FILE_LABEL } from "./untrustedLabel.js";
 
 const MINIMUM_SESSIONS = 3;
 const CONTEXT_RATIO_THRESHOLD = 1.5;
@@ -379,7 +380,9 @@ export function resolveWasteFindingTargetV0(input: {
           status: "resolved",
           kind: "repeated_read_file",
           ref: finding.target.ref,
-          file: match.file,
+          // Already neutralized upstream; re-applied because a resolved target
+          // is written into the Apply artifact an agent reads.
+          file: safeUntrustedLabel(match.file, WITHHELD_FILE_LABEL),
           readCount: match.readCount,
           localOnly: true
         }

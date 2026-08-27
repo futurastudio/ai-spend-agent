@@ -516,3 +516,157 @@ describe("cross-surface parity (SVG receipt card)", () => {
     expect(svg).toContain("aibill · local-first · npx aibill · asktilden.com");
   });
 });
+
+/**
+ * B1 (0.9.7): the shareable receipt printed $0.00 for money that is UNKNOWN.
+ *
+ * Reproduced end to end: any model id absent from the pricing table (e.g.
+ * `gpt-6-preview`) with ordinary sessions produced, in one directory two
+ * commands apart, `npx aibill` → "Unavailable · local activity found ·
+ * financial evidence missing · 3 records missing cost" and `npx aibill
+ * report-card` → a caption reading "$0.00 in observed API-equivalent value"
+ * over an SVG reading "OBSERVED API-EQUIVALENT VALUE / $0.00 / 3 daily
+ * aggregates". "3 aggregates, $0.00" reads as "these cost me nothing"; the
+ * truth is "cost unknown" — on the one artifact the product tells people to
+ * post publicly.
+ *
+ * Three cases are pinned, plus the agreement between them: all-unknown (no
+ * $0.00 anywhere), mixed (a real total that STILL discloses the count it
+ * could not price), and fully priced (unchanged, no spurious caveat).
+ */
+describe("B1 — an unknown total is never rendered as $0.00", () => {
+  const localRecord = (
+    id: string,
+    model: string,
+    amountUsd: number | null
+  ): UsageRecord => ({
+    id,
+    timestamp: "2026-08-03T12:00:00.000Z",
+    source: {
+      id: "local-agent-logs",
+      name: "Local agent session logs",
+      provider: "anthropic",
+      confidence: amountUsd === null ? "missing" : "estimated",
+      observedFrom: "Claude Code transcript JSONL (this machine)"
+    },
+    model,
+    inputTokens: 120_000,
+    outputTokens: 3_000,
+    amountUsd,
+    costConfidence: amountUsd === null ? "missing" : "estimated",
+    providerCostType: "local_agent_logs",
+    agentId: "claude-code",
+    projectId: "demo-proj",
+    operation: "claude-code sessions"
+  });
+
+  const unpriced = [
+    localRecord("unknown-1", "gpt-6-preview", null),
+    localRecord("unknown-2", "gpt-6-preview", null),
+    localRecord("unknown-3", "gpt-6-preview", null)
+  ];
+  const mixed = [
+    localRecord("priced-1", "claude-opus-4-8", 1.2),
+    localRecord("priced-2", "claude-opus-4-8", 0.61),
+    localRecord("unknown-1", "gpt-6-preview", null)
+  ];
+  const priced = [
+    localRecord("priced-1", "claude-opus-4-8", 1.2),
+    localRecord("priced-2", "claude-opus-4-8", 0.61)
+  ];
+
+  const surfaces = (records: UsageRecord[]) => {
+    const summary = analyzeSpend(records);
+    const svg = generateReportCardSvg({ summary, records, mode: "local-logs" });
+    const caption = generateReportCardCaption({ summary, records, mode: "local-logs" });
+    return { svg, caption, html: generateReceiptCompanionHtml({ svg, caption }) };
+  };
+
+  describe("all-unknown: nothing in the window could be priced", () => {
+    it("prints Unavailable — and no $0.00 — on the card, the caption and the companion page", () => {
+      const { svg, caption, html } = surfaces(unpriced);
+
+      for (const [name, surface] of Object.entries({ svg, caption, html })) {
+        expect(surface, `${name} still prints a zero total`).not.toContain("$0.00");
+        expect(surface, `${name} lost the unknown-total word`).toContain("Unavailable");
+      }
+      // The headline itself, not merely the word somewhere on the card.
+      expect(svg).toContain('class="big">Unavailable</text>');
+      expect(svg).toContain("OBSERVED EVIDENCE · NO PRICED AMOUNT");
+      expect(svg).not.toContain("OBSERVED API-EQUIVALENT VALUE<");
+      expect(caption).toContain("observed API-equivalent value Unavailable (no priced cost evidence)");
+      expect(caption).not.toContain("$0.00 in observed API-equivalent value");
+    });
+
+    it("carries the missing-cost count the terminal already prints", () => {
+      const { svg, caption, html } = surfaces(unpriced);
+      for (const [name, surface] of Object.entries({ svg, caption, html })) {
+        expect(surface, `${name} hides how many records are missing cost`)
+          .toContain("3 records missing cost");
+        expect(surface, `${name} drops the truth clause`).toContain("missing/null is not zero");
+      }
+    });
+
+    it("says 'record' in the singular for a one-record window", () => {
+      const { svg, caption } = surfaces([localRecord("only", "gpt-6-preview", null)]);
+      expect(svg).toContain("1 record missing cost");
+      expect(caption).toContain("1 record missing cost");
+      expect(svg).not.toContain("1 records missing cost");
+    });
+  });
+
+  describe("mixed: a real total that still owes the reader a count", () => {
+    it("keeps the dollars AND discloses the unpriced records on every surface", () => {
+      const { svg, caption, html } = surfaces(mixed);
+
+      // The money that IS known still leads — this is not the missing case.
+      expect(svg).toContain('class="big">$1.81</text>');
+      expect(caption).toContain("$1.81 in observed API-equivalent value");
+      // …and the caveat the terminal shows for the same records travels with
+      // the card. This is exactly what the shipped receipt dropped: "$1.81 ·
+      // 6 daily aggregates" while only 5 of 6 were priced.
+      for (const [name, surface] of Object.entries({ svg, caption, html })) {
+        expect(surface, `${name} silently dropped the mixed-case caveat`)
+          .toContain("1 record missing cost");
+        expect(surface, `${name} drops the truth clause`).toContain("missing/null is not zero");
+      }
+    });
+  });
+
+  describe("fully priced: unchanged, and no caveat invented", () => {
+    it("adds no missing-cost line to a window where everything was priced", () => {
+      const { svg, caption, html } = surfaces(priced);
+
+      expect(svg).toContain('class="big">$1.81</text>');
+      expect(caption).toContain("$1.81 in observed API-equivalent value");
+      for (const [name, surface] of Object.entries({ svg, caption, html })) {
+        expect(surface, `${name} invented a missing-cost caveat`).not.toContain("missing cost");
+        expect(surface, `${name} invented a truth clause`).not.toContain("missing/null is not zero");
+        expect(surface, `${name} lost its real total`).toContain("$1.81");
+      }
+      expect(svg).toContain("OBSERVED API-EQUIVALENT VALUE");
+      expect(svg).not.toContain("NO PRICED AMOUNT");
+    });
+  });
+
+  it("cross-surface: the card and its caption never disagree about whether the total is known", () => {
+    for (const [name, records] of Object.entries({ unpriced, mixed, priced })) {
+      const { svg, caption, html } = surfaces(records);
+      const cardUnknown = svg.includes('class="big">Unavailable</text>');
+      const captionUnknown = caption.includes("value Unavailable");
+      expect(captionUnknown, `${name}: card and caption disagree on the headline`).toBe(cardUnknown);
+      // The companion page embeds both verbatim, so it inherits the verdict.
+      expect(html.includes("value Unavailable"), `${name}: companion page disagrees`).toBe(cardUnknown);
+    }
+  });
+
+  it("the caveat line never runs off the 640px card", () => {
+    const { svg } = surfaces(unpriced);
+    const metaLines = [...svg.matchAll(/class="meta">([^<]*)<\/text>/gu)].map((match) => match[1]!);
+    expect(metaLines.length).toBeGreaterThan(1);
+    for (const line of metaLines) {
+      // 14px monospace advances ~0.6em; x=40 leaves ~600px, i.e. ~71 chars.
+      expect(line.length, `overflows the card: ${line}`).toBeLessThanOrEqual(71);
+    }
+  });
+});

@@ -1,4 +1,10 @@
-import { roundUsdCents } from "./money.js";
+import {
+  costCoverage,
+  missingCostPhrase,
+  roundUsdCents,
+  MISSING_NOT_ZERO,
+  UNAVAILABLE_TOTAL
+} from "./money.js";
 import {
   generateCutList,
   buildRecommendedPlan,
@@ -41,6 +47,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   const ariaLabel = input.mode === "demo" ? "AI receipt demo sample" : "AI receipt";
   const presentationBasis = financialPresentationBasis(input.mode, input.records);
   const rawTotalUsd = input.records.reduce((total, record) => total + (record.amountUsd ?? 0), 0);
+  const coverage = costCoverage(input.records);
   const headlineAmount = reportCardHeadlineAmount(
     presentationBasis,
     summary.totalUsd,
@@ -56,18 +63,35 @@ export function generateReportCardSvg(input: ReportCardInput): string {
       ? `${summary.recordCount} illustrative record${summary.recordCount === 1 ? "" : "s"}`
       : `${summary.recordCount} provider record${summary.recordCount === 1 ? "" : "s"}`;
 
+  // B1: the missing-cost count gets its OWN line rather than a fourth clause
+  // on the coverage line. The coverage line already runs to ~68 characters in
+  // the connected partial-coverage case, and 640px of 14px monospace holds
+  // about 70 — appending "· 12 records missing cost" would have pushed the
+  // one caveat that keeps the headline honest off the right edge of the
+  // artifact people screenshot. Its own line also lets it carry the full
+  // "missing/null is not zero" clause the detail renderers print.
+  const missingCostLine = coverage.missingCount > 0
+    ? `  <text x="40" y="268" class="meta">${escapeXml(
+        `${missingCostPhrase(coverage.missingCount)} · ${MISSING_NOT_ZERO}`
+      )}</text>`
+    : "";
+  // The cut list starts lower and packs tighter when the caveat line is
+  // present, so three candidates plus the brand still fit the 400px card.
+  const cutTop = missingCostLine ? 300 : 274;
+  const cutStep = missingCostLine ? 26 : 30;
+
   const cutLines = topCuts.length > 0
     ? topCuts.map((cut, index) => {
         const impact = cut.impactBasis === "observed_value_no_counterfactual"
           ? `${formatBigUsd(cut.affectedSpendUsd)} observed exposure`
           : `~${formatBigUsd(cut.estimatedMonthlySavingsUsd)}/mo modeled`;
         return (
-          `      <text x="40" y="${274 + index * 30}" class="cut">` +
+          `      <text x="40" y="${cutTop + index * cutStep}" class="cut">` +
           `${escapeXml(`${index + 1}. ${genericCutTitle(cut)}`)}` +
           `<tspan class="cutImpact"> ${escapeXml(impact)}</tspan></text>`
         );
       }).join("\n")
-    : `      <text x="40" y="274" class="cut">No high-confidence cut in this window yet.</text>`;
+    : `      <text x="40" y="${cutTop}" class="cut">No high-confidence cut in this window yet.</text>`;
 
   // Parity nit: ONE thousands style per artifact — the headline uses the
   // comma form, so every other dollar on the card (and its caption) does too.
@@ -122,6 +146,7 @@ export function generateReportCardSvg(input: ReportCardInput): string {
   <text x="40" y="244" class="meta">${escapeXml(
     `${providerCount} provider${providerCount === 1 ? "" : "s"} · ${recordCountLabel} · ${receiptConfidenceLabel(summary.confidence, input.providerCoverage)}`
   )}</text>
+${missingCostLine}
 
 ${cutLines}
 
@@ -156,12 +181,28 @@ export function generateReportCardCaption(input: ReportCardInput): string {
       : opportunity.observedExposureUsd > 0
         ? `with ${formatBigUsd(opportunity.observedExposureUsd)} in observed API-equivalent exposure to investigate; savings unavailable without a matched counterfactual`
         : "with no supported savings model in this window";
+  // B1: the caption is the half of the artifact people actually paste, so it
+  // takes the SAME unknown-total verdict as the card it captions. "$0.00 in
+  // observed API-equivalent value" was the worst sentence the product could
+  // publish — a claim of "these cost me nothing" made from records the very
+  // same run reported as "financial evidence missing".
+  const coverage = costCoverage(input.records);
   const headline = presentationBasis === "connected_missing"
     ? "amounts unavailable (no priced financial evidence)"
-    : `${formatBigUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
+    : presentationBasis === "local_missing"
+      ? `observed API-equivalent value ${UNAVAILABLE_TOTAL} (no priced cost evidence)`
+      : `${formatBigUsd(input.summary.totalUsd, rawTotalUsd)} in ${captionBasis(presentationBasis)}`;
+  // Carried in EVERY case with an unpriced record, not only the all-unknown
+  // one: a real dollar total computed over part of the window still owes the
+  // reader the count it could not price, and the terminal already discloses
+  // it for the same records.
+  const missingDisclosure = coverage.missingCount > 0
+    ? `${missingCostPhrase(coverage.missingCount)}; ${MISSING_NOT_ZERO}. `
+    : "";
   return (
     `${input.mode === "demo" ? "DEMO SAMPLE — " : ""}My AI receipt: ${headline}, ` +
     `${opportunityText}. ` +
+    missingDisclosure +
     (input.providerCoverage === "partial"
       ? "Provider coverage was partial; available rows retain their evidence labels. "
       : "") +
@@ -235,6 +276,7 @@ function observedExposureMatchesHeadline(
 type FinancialPresentationBasis =
   | "demo"
   | "local_estimate"
+  | "local_missing"
   | "provider_reported"
   | "connected_estimated"
   | "connected_unverified"
@@ -245,7 +287,17 @@ function financialPresentationBasis(
   mode: ReportCardInput["mode"],
   records: readonly UsageRecord[]
 ): FinancialPresentationBasis {
-  if (mode === "local-logs") return "local_estimate";
+  // B1: local-logs mode used to assume its own records were priced, so a
+  // window of models absent from the pricing table fell through to
+  // "local_estimate" and printed a $0.00 headline for an unknown total. The
+  // terminal card's classifier already split these two cases; this is the
+  // same split, so the card and the terminal reach the same verdict from the
+  // same records.
+  if (mode === "local-logs") {
+    return records.some((record) => typeof record.amountUsd === "number")
+      ? "local_estimate"
+      : "local_missing";
+  }
   if (mode !== "connected") return "demo";
 
   const priced = records.filter((record) => typeof record.amountUsd === "number");
@@ -272,6 +324,7 @@ function headlineLabel(basis: FinancialPresentationBasis): string {
     case "connected_unverified": return "CONNECTED DETECTED EVIDENCE (UNVERIFIED)";
     case "connected_mixed": return "MIXED CONNECTED EVIDENCE BASES";
     case "connected_missing": return "CONNECTED EVIDENCE · NO PRICED AMOUNT";
+    case "local_missing": return "OBSERVED EVIDENCE · NO PRICED AMOUNT";
     case "local_estimate": return "OBSERVED API-EQUIVALENT VALUE";
     default: return "ILLUSTRATIVE EVIDENCE · DEMO SAMPLE";
   }
@@ -284,17 +337,26 @@ function captionBasis(basis: FinancialPresentationBasis): string {
     case "connected_unverified": return "connected detected evidence (unverified)";
     case "connected_mixed": return "mixed connected evidence bases";
     case "connected_missing": return "connected evidence with no priced amount";
+    case "local_missing": return "observed evidence with no priced amount";
     case "local_estimate": return "observed API-equivalent value";
     default: return "illustrative evidence";
   }
 }
 
+/**
+ * B1: an unknown total renders as the word, never as a dollar figure. Both
+ * missing bases route here — `analyzeSpend` hands both of them a `0`, and a
+ * `0` that means "nothing could be priced" is the one number this card must
+ * never print.
+ */
 function reportCardHeadlineAmount(
   basis: FinancialPresentationBasis,
   amount: number,
   rawAmount: number
 ): string {
-  return basis === "connected_missing" ? "Unavailable" : formatBigUsd(amount, rawAmount);
+  return basis === "connected_missing" || basis === "local_missing"
+    ? UNAVAILABLE_TOTAL
+    : formatBigUsd(amount, rawAmount);
 }
 
 /** Fixed, non-identifying labels for the public receipt. */

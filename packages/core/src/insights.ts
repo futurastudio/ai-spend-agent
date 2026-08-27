@@ -10,6 +10,12 @@ import {
   type UsageRecord,
   spendInsightSchema
 } from "./schema.js";
+import {
+  safeUntrustedLabel,
+  safeUntrustedLabels,
+  WITHHELD_ENTITY_LABEL,
+  WITHHELD_OPERATION_LABEL
+} from "./untrustedLabel.js";
 
 const confidenceRank: Record<CostConfidence, number> = {
   verified: 0,
@@ -52,7 +58,10 @@ function spikeInsights(records: UsageRecord[], summary: SpendSummary): SpendInsi
     const topProject = topBreakdown(currentRecords, (record) => record.projectId);
     const topModels = breakdown(currentRecords, (record) => record.model).slice(0, 2).map((entry) => entry.key);
     const deltaUsd = roundMoney(anomaly.currentAmountUsd - anomaly.previousAmountUsd);
-    const likelyOwner = topAgent?.key ?? topProject?.key ?? topClient?.key ?? "an unassigned owner";
+    // Ownership lead is an agent/project/client id off the records — it lands
+  // mid-sentence in `summary`, so it is neutralized at the interpolation
+  // point like every other untrusted fragment.
+  const likelyOwner = safeEntity(topAgent?.key ?? topProject?.key ?? topClient?.key ?? "an unassigned owner");
     const cohortSuffix = stableSuffix(anomaly.comparisonKey ?? "legacy");
     const isProviderBilledCost = currentRecords.length > 0 && currentRecords.every((record) =>
       record.usageGranularity === "billing_bucket" &&
@@ -75,14 +84,14 @@ function spikeInsights(records: UsageRecord[], summary: SpendSummary): SpendInsi
         { label: `Previous cohort ${isProviderBilledCost ? "spend" : "value"}`, value: formatUsd(anomaly.previousAmountUsd) },
         { label: `Current cohort ${isProviderBilledCost ? "spend" : "value"}`, value: formatUsd(anomaly.currentAmountUsd) },
         { label: `${evidenceLabel} increase`, value: formatUsd(deltaUsd), detail: `${formatMultiplier(anomaly.multiplier)} day-over-day multiplier` },
-        topAgent ? { label: "Ownership lead", value: topAgent.key, detail: `${formatUsd(topAgent.amountUsd)} across ${topAgent.recordCount} cohort records` } : undefined,
-        topClient ? { label: "Client concentration", value: topClient.key, detail: `${formatUsd(topClient.amountUsd)} on spike day` } : undefined,
-        topModels.length > 0 ? { label: "Dominant models", value: topModels.join(", ") } : undefined
+        topAgent ? { label: "Ownership lead", value: safeEntity(topAgent.key), detail: `${formatUsd(topAgent.amountUsd)} across ${topAgent.recordCount} cohort records` } : undefined,
+        topClient ? { label: "Client concentration", value: safeEntity(topClient.key), detail: `${formatUsd(topClient.amountUsd)} on spike day` } : undefined,
+        topModels.length > 0 ? { label: "Dominant models", value: safeUntrustedLabels(topModels).join(", ") } : undefined
       ]),
-      affectedClients: keysFrom(currentRecords, (record) => record.clientId),
-      affectedProjects: keysFrom(currentRecords, (record) => record.projectId),
-      affectedAgents: keysFrom(currentRecords, (record) => record.agentId),
-      affectedModels: keysFrom(currentRecords, (record) => record.model),
+      affectedClients: safeUntrustedLabels(keysFrom(currentRecords, (record) => record.clientId)),
+      affectedProjects: safeUntrustedLabels(keysFrom(currentRecords, (record) => record.projectId)),
+      affectedAgents: safeUntrustedLabels(keysFrom(currentRecords, (record) => record.agentId)),
+      affectedModels: safeUntrustedLabels(keysFrom(currentRecords, (record) => record.model)),
       estimatedImpactUsd: deltaUsd,
       confidence: anomaly.confidence,
       recommendedAction: `Review and reconcile the provider-cohort records from ${anomaly.key}, confirm the accountable owner, and obtain run-level evidence before diagnosing behavior or changing a policy.`,
@@ -110,24 +119,27 @@ function agentCostDriverInsights(records: UsageRecord[], summary: SpendSummary):
   const hasRunLevelEvidence = agentRecords.length > 0 && agentRecords.every(hasCallLevelProvenance);
 
   return [{
-    id: `agent-spend-concentration-${topAgent.key}`,
+    // The id is a STRUCTURED field beside the neutralized title, and it is
+    // rendered (`Canonical candidate ID: ...`). Slug the neutralized form, not
+    // the raw key.
+    id: `agent-spend-concentration-${slug(safeEntity(topAgent.key))}`,
     kind: "optimization_opportunity",
     severity: "medium",
-    title: `${topAgent.key} spend concentration needs owner and budget review`,
-    summary: `${topAgent.key} is attached to ${formatPercent(share)} of tracked spend. Concentration alone does not prove abnormal behavior or an avoidable dollar amount${hasRunLevelEvidence ? "." : "; the evidence is aggregate rather than run-level."}`,
+    title: `${safeEntity(topAgent.key)} spend concentration needs owner and budget review`,
+    summary: `${safeEntity(topAgent.key)} is attached to ${formatPercent(share)} of tracked spend. Concentration alone does not prove abnormal behavior or an avoidable dollar amount${hasRunLevelEvidence ? "." : "; the evidence is aggregate rather than run-level."}`,
     evidence: compactEvidence([
       { label: "Attributed spend", value: formatUsd(topAgent.amountUsd), detail: `${topAgent.recordCount} ${hasRunLevelEvidence ? "call-level" : "aggregate"} record${topAgent.recordCount === 1 ? "" : "s"}` },
       { label: "Share of tracked spend", value: formatPercent(share) },
-      topModel ? { label: "Dominant model or billing label", value: topModel.key, detail: `${formatUsd(topModel.amountUsd)} in this concentration` } : undefined,
-      topOperation ? { label: "Operation label", value: topOperation.key, detail: hasRunLevelEvidence ? "Call-level attribution" : "Not verified as one call or run" } : undefined
+      topModel ? { label: "Dominant model or billing label", value: safeEntity(topModel.key), detail: `${formatUsd(topModel.amountUsd)} in this concentration` } : undefined,
+      topOperation ? { label: "Operation label", value: safeEntity(topOperation.key), detail: hasRunLevelEvidence ? "Call-level attribution" : "Not verified as one call or run" } : undefined
     ]),
-    affectedClients: keysFrom(agentRecords, (record) => record.clientId),
-    affectedProjects: keysFrom(agentRecords, (record) => record.projectId),
-    affectedAgents: [topAgent.key],
-    affectedModels: keysFrom(agentRecords, (record) => record.model),
+    affectedClients: safeUntrustedLabels(keysFrom(agentRecords, (record) => record.clientId)),
+    affectedProjects: safeUntrustedLabels(keysFrom(agentRecords, (record) => record.projectId)),
+    affectedAgents: [safeEntity(topAgent.key)],
+    affectedModels: safeUntrustedLabels(keysFrom(agentRecords, (record) => record.model)),
     estimatedImpactUsd: 0,
     confidence: topAgent.confidence,
-    recommendedAction: `Confirm who owns ${topAgent.key}, reconcile the spend to its approved budget, and collect behavioral evidence before setting a cap or savings target.`,
+    recommendedAction: `Confirm who owns ${safeEntity(topAgent.key)}, reconcile the spend to its approved budget, and collect behavioral evidence before setting a cap or savings target.`,
     verificationNeeded: "Confirm the budget owner and expected range; concentration alone is not behavioral evidence."
   }];
 }
@@ -146,7 +158,7 @@ function contextBloatInsights(records: UsageRecord[]): SpendInsight[] {
   const scopedRecords = topOperation
     ? highInputRecords.filter((record) => record.operation === topOperation.key)
     : highInputRecords;
-  const operationLabel = topOperation?.key ?? "large-context calls";
+  const operationLabel = safeUntrustedLabel(topOperation?.key ?? "large-context calls", WITHHELD_OPERATION_LABEL);
   const totalInputTokens = scopedRecords.reduce((total, record) => total + record.inputTokens, 0);
   const scopedSpend = roundMoney(sumRecords(scopedRecords));
 
@@ -166,15 +178,27 @@ function contextBloatInsights(records: UsageRecord[]): SpendInsight[] {
       { label: "Spend attached to large context", value: formatUsd(scopedSpend) },
       { label: "Dominant operation", value: operationLabel }
     ],
-    affectedClients: keysFrom(scopedRecords, (record) => record.clientId),
-    affectedProjects: keysFrom(scopedRecords, (record) => record.projectId),
-    affectedAgents: keysFrom(scopedRecords, (record) => record.agentId),
-    affectedModels: keysFrom(scopedRecords, (record) => record.model),
+    affectedClients: safeUntrustedLabels(keysFrom(scopedRecords, (record) => record.clientId)),
+    affectedProjects: safeUntrustedLabels(keysFrom(scopedRecords, (record) => record.projectId)),
+    affectedAgents: safeUntrustedLabels(keysFrom(scopedRecords, (record) => record.agentId)),
+    affectedModels: safeUntrustedLabels(keysFrom(scopedRecords, (record) => record.model)),
     estimatedImpactUsd: 0,
     confidence: combinedConfidence(scopedRecords.map((record) => record.costConfidence)),
     recommendedAction: `Inspect representative ${operationLabel} prompts locally and run a matched before/after with the same acceptance criteria before proposing one reversible context change.`,
     verificationNeeded: "Measure token and quality deltas on matched calls; no savings counterfactual is present yet."
   }];
+}
+
+/**
+ * A breakdown key rendered for a HUMAN. The same slot holds a client, a
+ * project, an agent, a model or an operation depending on which grouping won,
+ * so it takes the dimension-neutral marker.
+ *
+ * Display only. The raw key is still what `records.filter(...)` matches on —
+ * rewriting a matching key would silently empty the cohort behind the finding.
+ */
+function safeEntity(value: string): string {
+  return safeUntrustedLabel(value, WITHHELD_ENTITY_LABEL);
 }
 
 function topBreakdown(records: UsageRecord[], select: (record: UsageRecord) => string | undefined): SpendBreakdownEntry | undefined {

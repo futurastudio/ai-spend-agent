@@ -1,6 +1,6 @@
 {
   "name": "@agent-finops/core",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "funding": "https://asktilden.com",
   "type": "module",
   "main": "./dist/index.js",

@@ -24,4 +24,12 @@ Connector validation (`live_verified`, `fixture_verified`, `untested`, or
 `detected_unverified`, or `missing`) are separate status axes. Run `npx aibill
 doctor --sources` to see both. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 
+**Telemetry: anonymous command counts, disclosed at first run.** Your
+transcripts, prompts, file names, and dollar amounts stay on your machine. The
+CLI separately counts *which* commands run — anonymous, never your arguments,
+paths, content, or your email — and only after a one-time notice has been
+printed on an interactive run. One command turns it off: `aibill telemetry off`
+(or `DO_NOT_TRACK`, `CI`, or `AI_SPEND_NO_TELEMETRY`). Full scope:
+[`docs/TELEMETRY.md`](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/TELEMETRY.md).
+
 MIT licensed.

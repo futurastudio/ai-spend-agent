@@ -6,6 +6,13 @@ import {
   type UsageRecord
 } from "./schema.js";
 import { localAgentFormatSupports } from "./localAgentFormats/registry.js";
+import {
+  safeUntrustedLabel,
+  WITHHELD_AGENT_LABEL,
+  WITHHELD_MODEL_LABEL,
+  WITHHELD_OPERATION_LABEL,
+  WITHHELD_PROJECT_LABEL
+} from "./untrustedLabel.js";
 
 /**
  * Actionable, dollar-specific "cut" suggestions.
@@ -48,7 +55,46 @@ export type CutAction = {
    * by two actions (see {@link buildRecommendedPlan}).
    */
   recordIds: string[];
+  /**
+   * Median DAY's summed input+cache tokens for this candidate, computed over
+   * calendar days (not over records — a project running two models emits two
+   * records per day, and calling that "per day" would halve the number).
+   *
+   * Exists so a grouped render can tell two members apart by the quantity that
+   * explains their dollars instead of by the rounded dollar alone. Optional and
+   * absent on candidates with no day-level evidence; every renderer MUST drop
+   * the figure rather than print a placeholder.
+   */
+  medianDailyInputTokens?: number;
 };
+
+/**
+ * Compact token count for prose: 2,140,000 -> "2.1M", 8,300 -> "8.3K".
+ * Lives in core because the cut-list guidance strings are built here, and is
+ * re-used by the renderers so one candidate's token magnitude reads the same
+ * on every surface.
+ *
+ * The ladder runs to T. It used to stop at B, so a fleet-scale window printed
+ * "4212.7B" — a number the reader has to count digits on to place, from a
+ * product whose whole claim is arithmetic you can read at a glance. Past T the
+ * mantissa gets thousands separators rather than a fourteenth silent digit.
+ */
+export function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens)) return "0";
+  const value = Math.max(0, tokens);
+  if (value >= 1_000_000_000_000) return `${formatMantissa(value / 1_000_000_000_000)}T`;
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+/** Top of the ladder: keep one decimal until the integer part needs commas. */
+function formatMantissa(value: number): string {
+  return value >= 1_000
+    ? Math.round(value).toLocaleString("en-US")
+    : value.toFixed(1);
+}
 
 /**
  * A non-overlapping "recommended plan" plus the leftover overlapping
@@ -229,10 +275,18 @@ function modelDowngradeActions(records: UsageRecord[]): CutAction[] {
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
     const windowSavings = affectedSpendUsd * (1 - rule.costRetained);
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
+    // Both untrusted. The model gate is anchored but open-ended
+    // (`^claude-opus-4(?:[.-].*)?$` accepts anything after the dash), and
+    // `downgradeSafeOperation` is a SUBSTRING allowlist — "summary" anywhere
+    // in the label passes the whole label through. Neutralize before either
+    // reaches a title or an instruction. IDs keep the raw values: an id is
+    // identity, not display, and it is rendered through a blanking guard.
+    const modelLabel = safeUntrustedLabel(model, WITHHELD_MODEL_LABEL);
+    const operationLabel = safeUntrustedLabel(operation, WITHHELD_OPERATION_LABEL);
     actions.push({
       id: `downgrade-${slug(model)}-${slug(operation)}`,
-      title: `Move ${model} ${operation} calls to ${target}`,
-      action: `Route ${groupRecords.length} ${operation} call${groupRecords.length === 1 ? "" : "s"} from ${model} to ${target} (keep ${model} only when output is rejected).`,
+      title: `Move ${modelLabel} ${operationLabel} calls to ${target}`,
+      action: `Route ${groupRecords.length} ${operationLabel} call${groupRecords.length === 1 ? "" : "s"} from ${modelLabel} to ${target} (keep ${modelLabel} only when output is rejected).`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
@@ -260,6 +314,30 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
     byOperation.set(key, [...(byOperation.get(key) ?? []), record]);
   }
 
+  // ONE denominator, and it is the set the sentence is already talking about:
+  // this agent's OWN flagged projects. It is both the share's denominator and
+  // the rank clause's population, so the percentage, the rank, and the entry's
+  // own dollars two lines below all reconcile, and the members of one fan-out
+  // sum to 100%.
+  //
+  // 0.9.7 shipped three denominators in one sentence — a machine-wide local
+  // total for the share, this agent's flagged projects for the rank, and the
+  // entry's own total underneath. Every figure was individually true, which is
+  // exactly why the sentence read as an arithmetic error. Never reintroduce a
+  // denominator the sentence does not name.
+  const flaggedSpendByAgent = new Map<string, number[]>();
+  for (const [key, groupRecords] of byOperation) {
+    const [scope, agentId] = key.split("::");
+    if (scope !== "local" || !agentId) continue;
+    // roundMoney, matching `affectedSpendUsd` exactly: comparing a rounded
+    // group against unrounded peers made a candidate outrank ITSELF and
+    // report "rank 2 of 8" for the largest project on the list.
+    flaggedSpendByAgent.set(agentId, [
+      ...(flaggedSpendByAgent.get(agentId) ?? []),
+      roundMoney(sumRecords(groupRecords))
+    ]);
+  }
+
   const actions: CutAction[] = [];
   for (const [key, groupRecords] of byOperation) {
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
@@ -269,7 +347,26 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
       : key.replace(/^connected::/, "");
     const count = groupRecords.length;
     const agent = groupRecords[0]?.agentId ?? "coding-agent";
+    // `agent` stays raw as the map key and the id slug; only the DISPLAY
+    // form is neutralized. Bounded to the adapter enum for local rows in
+    // practice, but nothing in the type system enforces that.
+    const agentLabel = safeUntrustedLabel(agent, WITHHELD_AGENT_LABEL);
     const project = groupRecords[0]?.projectId;
+    const evidence = sessionAggregates ? dailyContextEvidence(groupRecords) : null;
+    const flaggedSpend = flaggedSpendByAgent.get(agent) ?? [];
+    // The project label is UNTRUSTED — it is a directory name off the user's
+    // disk. Neutralize it ONCE, here, so the title, the guidance, and every
+    // surface that re-derives a label from the title all carry the same
+    // already-safe text and cannot disagree about it.
+    const projectLabel = project
+      ? safeUntrustedLabel(project, WITHHELD_PROJECT_LABEL)
+      : "Unattributed";
+    // The connected path's operation label is a raw provider/adapter string
+    // with NO allowlist in front of it, and it lands in both the title and the
+    // instruction. It has to be neutralized here for the same reason the
+    // project label is: the report layer's prose sanitizer never blanks, and
+    // it is only safe to never blank because core neutralized first.
+    const operationLabel = safeUntrustedLabel(operation, WITHHELD_OPERATION_LABEL);
     // Large token volume proves exposure, not that context is removable or
     // what quality/cost delta a change would produce. Context remains an
     // inspect-only action until matched before/after evidence exists.
@@ -279,11 +376,18 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
         ? `inspect-context-${slug(agent)}-${slug(project ?? "unattributed")}`
         : `inspect-context-${slug(operation)}`,
       title: sessionAggregates
-        ? `Investigate cumulative context in ${agent}${project ? ` · ${project}` : " · Unattributed"}`
-        : `Inspect oversized context on ${operation}`,
+        ? `Investigate cumulative context in ${agentLabel} · ${projectLabel}`
+        : `Inspect oversized context on ${operationLabel}`,
       action: sessionAggregates
-        ? `${count} day + agent + model + project aggregate${count === 1 ? "" : "s"} contained at least 100k summed input/cache tokens. Inspect per-session context, compactions, repeated reads, and measured instruction-file size before proposing one reversible change.`
-        : `${count} call-level ${operation} record${count === 1 ? "" : "s"} exceeded 100k input tokens. Inspect retrieved chunks and prompt history, then run a matched before/after before claiming savings.`,
+        ? localContextTrimGuidance({
+            count,
+            agent: agentLabel,
+            projectLabel,
+            evidence,
+            groupSpendUsd: affectedSpendUsd,
+            flaggedSpend
+          })
+        : `${count} call-level ${operationLabel} record${count === 1 ? "" : "s"} exceeded 100k input tokens. Inspect retrieved chunks and prompt history, then run a matched before/after before claiming savings.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: count,
@@ -291,10 +395,225 @@ function contextTrimActions(records: UsageRecord[]): CutAction[] {
       impactBasis: "observed_value_no_counterfactual",
       recordIds: groupRecords.map((record) => record.id),
       confidence: combinedConfidence(groupRecords.map((record) => record.costConfidence)),
-      kind: "context_trim"
+      kind: "context_trim",
+      ...(evidence ? { medianDailyInputTokens: evidence.medianDailyInputTokens } : {})
     });
   }
   return actions;
+}
+
+/**
+ * Day-level shape of ONE context candidate. Everything here is a reduction over
+ * records the candidate already owns: no new I/O, no new estimate, no
+ * counterfactual. Days — not records — are the unit, because a project running
+ * two models emits two records for the same calendar day.
+ */
+type DailyContextEvidence = {
+  activeDays: number;
+  /** The median-by-input observed day's summed input+cache tokens. */
+  medianDailyInputTokens: number;
+  /** THAT SAME day's summed output tokens — never a separately-taken median. */
+  medianDailyOutputTokens: number;
+  /** Date (UTC, session last-activity dating) of the heaviest observed day. */
+  peakDay: string;
+  peakDayInputTokens: number;
+  /** Heaviest day ÷ median day; 0 when the median is 0. */
+  peakOverMedian: number;
+  /**
+   * The MEDIAN DAY's input:output ratio — not the window total's. The sentence
+   * prints the two median figures side by side, so the reader can divide them;
+   * a window-total ratio would sit next to numbers that do not produce it and
+   * read as an arithmetic error. Null when the median day recorded no output.
+   */
+  inputPerOutput: number | null;
+  /** Distinct models in this candidate, heaviest observed value first. */
+  models: string[];
+};
+
+function dailyContextEvidence(records: readonly UsageRecord[]): DailyContextEvidence | null {
+  if (records.length === 0) return null;
+  const byDay = new Map<string, { input: number; output: number }>();
+  for (const record of records) {
+    const day = record.timestamp.slice(0, 10);
+    const current = byDay.get(day) ?? { input: 0, output: 0 };
+    current.input += record.inputTokens;
+    current.output += record.outputTokens;
+    byDay.set(day, current);
+  }
+  const days = [...byDay.entries()].sort((left, right) => left[0].localeCompare(right[0]));
+  const first = days[0];
+  if (!first) return null;
+  // ONE REAL DAY, not two independent medians. The sentence says "median day
+  // carried X input+cache tokens against Y output"; if X and Y came from
+  // different calendar days that sentence would describe a day that never
+  // happened. So: order the days by input+cache, take the middle OBSERVED day
+  // (the lower of the two middles on an even sample, never their average), and
+  // read every median figure off that one day.
+  const byInput = [...days].sort(
+    (left, right) => left[1].input - right[1].input || left[0].localeCompare(right[0])
+  );
+  const medianDay = byInput[Math.floor((byInput.length - 1) / 2)]!;
+  const medianDailyInputTokens = medianDay[1].input;
+  const medianDailyOutputTokens = medianDay[1].output;
+  const peak = days.reduce((best, entry) => (entry[1].input > best[1].input ? entry : best), first);
+  const spendByModel = new Map<string, number>();
+  for (const record of records) {
+    spendByModel.set(record.model, (spendByModel.get(record.model) ?? 0) + (record.amountUsd ?? 0));
+  }
+  return {
+    activeDays: days.length,
+    medianDailyInputTokens,
+    medianDailyOutputTokens,
+    peakDay: peak[0],
+    peakDayInputTokens: peak[1].input,
+    peakOverMedian: medianDailyInputTokens > 0 ? peak[1].input / medianDailyInputTokens : 0,
+    inputPerOutput: medianDailyOutputTokens > 0
+      ? medianDailyInputTokens / medianDailyOutputTokens
+      : null,
+    models: [...spendByModel.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .map(([model]) => model)
+  };
+}
+
+/**
+ * The guidance a local context candidate carries.
+ *
+ * Two hard constraints shape it:
+ *
+ *  1. TRUTH. Every clause states something OBSERVED — a median, a date, a
+ *     ratio, a share of a single-basis total. Nothing predicts a reduction,
+ *     nothing prices a change, and no clause is emitted when the evidence
+ *     behind it is absent. Sharper means more specific about what was seen,
+ *     never more confident about what would happen.
+ *
+ *  2. GEOMETRY. The grouped terminal/report render quotes this string from its
+ *     LARGEST member and drops everything before the first ". " (see
+ *     `groupedCutActionLines` / `rankCutCandidates` in @agent-finops/report).
+ *     So sentence 1 carries only per-member counts, and sentence 2 onward
+ *     NAMES the project it describes — otherwise one project's median would be
+ *     read as the whole group's. For the same reason sentence 1 interpolates
+ *     no free text: a label containing ". " would truncate the string at the
+ *     wrong point.
+ */
+function localContextTrimGuidance(input: {
+  count: number;
+  agent: string;
+  projectLabel: string;
+  evidence: DailyContextEvidence | null;
+  groupSpendUsd: number;
+  flaggedSpend: readonly number[];
+}): string {
+  const { count, evidence } = input;
+  // Idempotent: `contextTrimActions` already neutralized the label for the
+  // title, and re-running the check on an already-neutral label is a no-op.
+  // Repeating it here keeps the guarantee attached to the function that does
+  // the interpolating, not to one of its callers.
+  const projectLabel = safeUntrustedLabel(input.projectLabel, WITHHELD_PROJECT_LABEL);
+  const plural = count === 1 ? "" : "s";
+  if (!evidence) {
+    // No day-level evidence to quote. Stay honest and short rather than
+    // reciting a checklist the product cannot perform.
+    return `${count} day + agent + model + project aggregate${plural} each carried at least 100k summed input/cache tokens. ` +
+      `Inspect the heaviest sessions in ${projectLabel} before proposing one reversible change.`;
+  }
+
+  const dayPlural = evidence.activeDays === 1 ? "" : "s";
+  const sentences: string[] = [
+    `${count} day + agent + model + project aggregate${plural} over ${evidence.activeDays} active day${dayPlural}.`
+  ];
+
+  const ratio = evidence.inputPerOutput === null ? null : formatRatio(evidence.inputPerOutput);
+  sentences.push(
+    evidence.medianDailyOutputTokens > 0
+      ? `${projectLabel} — median day carried ${formatTokenCount(evidence.medianDailyInputTokens)} input+cache tokens ` +
+        `against ${formatTokenCount(evidence.medianDailyOutputTokens)} output${ratio ? ` (${ratio}:1)` : ""}.`
+      : `${projectLabel} — median day carried ${formatTokenCount(evidence.medianDailyInputTokens)} input+cache tokens ` +
+        "with no output tokens recorded that day."
+  );
+
+  // Only when there is a real lead. A uniform project gets no false one.
+  if (evidence.peakOverMedian >= 2) {
+    sentences.push(
+      `Heaviest day ${evidence.peakDay} carried ${formatTokenCount(evidence.peakDayInputTokens)}, ` +
+      `${formatRatio(evidence.peakOverMedian)}× the median day; dates are each session's last activity.`
+    );
+  }
+
+  const share = concentrationClause(input);
+  if (share) sentences.push(share);
+
+  if (evidence.models.length > 1) {
+    // Model ids come off the same untrusted logs the project name does.
+    const shown = evidence.models
+      .slice(0, 3)
+      .map((model) => safeUntrustedLabel(model, WITHHELD_MODEL_LABEL));
+    const rest = evidence.models.length - shown.length;
+    sentences.push(
+      `${evidence.models.length} models ran there: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`
+    );
+  }
+
+  sentences.push(
+    evidence.peakOverMedian >= 2
+      ? `Inspect the sessions behind ${evidence.peakDay} before proposing one reversible change.`
+      : `Inspect the heaviest sessions in ${projectLabel} before proposing one reversible change.`
+  );
+  return sentences.join(" ");
+}
+
+/**
+ * "…holds 76% of the flagged claude-code value observed in this window (rank 1
+ * of 8 flagged projects)." An accounting fact about ONE denominator — not a
+ * savings claim, not a projection.
+ *
+ * The denominator is this agent's own flagged total, which is also the rank
+ * clause's population and the sum of the per-project dollars the same readout
+ * prints two lines below. So the percentage, the rank, and the entry's own
+ * total reconcile, and the members of one fan-out sum to 100%.
+ *
+ * 0.9.7 divided by a machine-wide local total instead: `--full` printed a
+ * by-project table saying 83%, this sentence said 46%, and the entry's own
+ * dollars implied 76% — three true numbers that read as an arithmetic error.
+ * No clamp is needed now and none belongs here: the numerator is one member of
+ * the set in the denominator, so a ratio above 1 would be a real bug worth
+ * seeing rather than a cosmetic one worth hiding.
+ */
+function concentrationClause(input: {
+  agent: string;
+  groupSpendUsd: number;
+  flaggedSpend: readonly number[];
+}): string | null {
+  const { agent, groupSpendUsd, flaggedSpend } = input;
+  const flaggedTotalUsd = flaggedSpend.reduce((total, spend) => total + spend, 0);
+  if (!(flaggedTotalUsd > 0) || !(groupSpendUsd > 0)) return null;
+  const ratio = groupSpendUsd / flaggedTotalUsd;
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  const percent = Math.round(ratio * 100);
+  const rank = flaggedSpend.filter((spend) => spend > groupSpendUsd).length + 1;
+  const total = flaggedSpend.length;
+  // A ceiling, mirroring the "under 1%" floor. The ordinary solo-dev shape is
+  // one main repo and two small side projects: at 99.5%–99.9% the rounded
+  // figure prints "100%" on the same screen as an across-line that lists two
+  // more flagged projects WITH DOLLARS — which reads as exactly the
+  // arithmetic error this sentence's denominator was fixed to kill. "over 99%"
+  // is the same fact without the contradiction. A lone flagged project keeps
+  // the literal 100%, because there is nothing beside it to contradict.
+  const share = percent < 1
+    ? "under 1%"
+    : percent >= 100 && total > 1 ? "over 99%" : `${percent}%`;
+  const rankClause = total > 1 ? ` (rank ${rank} of ${total} flagged projects)` : "";
+  return `That project holds ${share} of the flagged ${agent} value observed in this window${rankClause}.`;
+}
+
+/**
+ * "519", "4.4" — integers once the ratio is big enough that a decimal is noise.
+ * Shared by the input:output ratio and the "N× the median day" multiple so the
+ * two never disagree about precision. Separated above 999, because a bare
+ * "1904762:1" is a digit-counting exercise, not a figure.
+ */
+function formatRatio(value: number): string {
+  return value >= 10 ? Math.round(value).toLocaleString("en-US") : value.toFixed(1);
 }
 
 function cacheActions(records: UsageRecord[]): CutAction[] {
@@ -335,10 +654,13 @@ function cacheActions(records: UsageRecord[]): CutAction[] {
     const affectedSpendUsd = roundMoney(sumRecords(groupRecords));
     const windowSavings = sumRecords(avoidableRecords);
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
+    // No allowlist stands in front of this one at all — any operation label
+    // with a stable fingerprint reaches the title and the instruction.
+    const operationLabel = safeUntrustedLabel(operation, WITHHELD_OPERATION_LABEL);
     actions.push({
       id: `cache-${slug(operation)}-${stableSuffix(key)}`,
-      title: `Cache repeated ${operation} calls`,
-      action: `Keep the earliest ${operation} call as the canonical miss and cache the ${avoidableRecords.length} subsequent call${avoidableRecords.length === 1 ? "" : "s"} with the same adapter-provided input fingerprint.`,
+      title: `Cache repeated ${operationLabel} calls`,
+      action: `Keep the earliest ${operationLabel} call as the canonical miss and cache the ${avoidableRecords.length} subsequent call${avoidableRecords.length === 1 ? "" : "s"} with the same adapter-provided input fingerprint.`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,
@@ -387,10 +709,13 @@ function batchActions(records: UsageRecord[]): CutAction[] {
     const retainedCost = batchCostRetainedByProvider[groupRecords[0]!.source.provider]!;
     const windowSavings = affectedSpendUsd * (1 - retainedCost);
     const monthlySavings = roundMoney(toMonthly(windowSavings, window));
+    // `batchSafeOperation` is a SUBSTRING allowlist: "summar" anywhere in the
+    // label admits the whole label, injected prose included.
+    const operationLabel = safeUntrustedLabel(operation, WITHHELD_OPERATION_LABEL);
     actions.push({
       id: `batch-${slug(operation)}-${stableSuffix(key)}`,
-      title: `Move ${operation} calls to the Batch API`,
-      action: `Submit ${groupRecords.length} ${operation} call${groupRecords.length === 1 ? "" : "s"} through the provider's Batch API (flat 50% off; results within 24h, fine for offline work).`,
+      title: `Move ${operationLabel} calls to the Batch API`,
+      action: `Submit ${groupRecords.length} ${operationLabel} call${groupRecords.length === 1 ? "" : "s"} through the provider's Batch API (flat 50% off; results within 24h, fine for offline work).`,
       estimatedMonthlySavingsUsd: monthlySavings,
       affectedSpendUsd,
       recordCount: groupRecords.length,

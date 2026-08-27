@@ -41,9 +41,9 @@ keep provenance and confidence labels truthful: reserve `verified` for
 official provider-reported financial evidence, keep modeled/local value
 `estimated` or `missing`, and leave unvalidated adapters `untested`.
 
-This is the open foundation for aibill's financial-accountability mission. The
-published v0.9.1 package includes contracts for locally confirmed ownership,
-local self-attested approvals, and opt-in accepted GitHub outcomes. Those are
+This is the open foundation for aibill's financial-accountability mission. This
+package includes contracts for locally confirmed ownership, local
+self-attested approvals, and opt-in accepted GitHub outcomes. Those are
 not company-wide identity, RBAC, approval routing, invoice reconciliation, or
 verified business ROI.
 

@@ -1,8 +1,16 @@
-import { roundUsdCents } from "./money.js";
+import {
+  costCoverage,
+  missingCostPhrase,
+  roundUsdCents,
+  MISSING_NOT_ZERO,
+  UNAVAILABLE_TOTAL,
+  type CostCoverage
+} from "./money.js";
 import {
   aibillCommandV0,
   analyzeSpend,
   computePlanChecks,
+  formatTokenCount,
   generateCutList,
   localAgentFormatSupports,
   sanitizeLocalActivityText
@@ -375,6 +383,9 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
     ? []
     : rankCutCandidates(input.actionCandidates ?? []).candidates;
   const machineWide = input.analysisScope === "machine-wide";
+  // The largest member of the top-ranked candidate, when the ranking produced
+  // one. Never a guess — only the label the ranking itself emitted.
+  const startHereProject = rankedCandidates[0]?.projectLabels[0] ?? null;
   const candidateCount = canonicalFinding ? 1 : rankedCandidates.length;
   const lines = [
     "# aibill Local Evidence Report",
@@ -507,7 +518,7 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
         ? [`- The matched before/after cohort is not formed yet. ${transcriptGapShortPointer(input)}`]
         : [
             ...(machineWide && rankedCandidates.length > 0
-              ? [`- Cohort for candidate ACT-001 (${safePromptMetadata(rankedCandidates[0]!.title, 180)}): the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with ${safePromptMetadata(rankedCandidates[0]!.projectLabels[0]!, 80)} — its largest observed share of this window` : ""}.`]
+              ? [`- Cohort for candidate ACT-001 (${safePromptIdentifier(rankedCandidates[0]!.title, 180)}): the same agent, project, work type, source version, and quality bar${rankedCandidates[0]!.projectLabels.length > 0 ? `, starting with ${safePromptIdentifier(rankedCandidates[0]!.projectLabels[0]!, 80)} — its largest observed share of this window` : ""}.`]
               : []),
             "- Save at least 3 comparable pre-change sessions for the same agent, project, work type, source version, and quality bar. If they do not exist, collect them before approval.",
             "- After one approved change and a passing canary, collect at least 3 new matched sessions. Do not reuse historical aggregates as post-change evidence.",
@@ -532,7 +543,15 @@ function generateLocalLogMarkdownReport(input: SpendReportInput): string {
       : !qualitativeComplete
         ? [`- Run \`${aibillCommandV0("index")}\` to finish reading the queued session transcripts, then re-run this report for Context Health, configuration evidence, and an Apply plan.`]
         : machineWide
-          ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.`]
+          // Name WHICH project to start in when the evidence says one. A
+          // machine-wide report knows its top candidate's largest member; the
+          // pre-0.9.7 line sent the reader to an unnamed "/path/to/project"
+          // while the same artifact had already ranked them.
+          ? [`- Run \`cd /path/to/project && ${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with that project's candidate IDs, approval gate, rollback, and verification contract.${
+              startHereProject
+                ? ` Start with ${safePromptIdentifier(startHereProject, 80)}: the largest observed share of candidate ACT-001.`
+                : ""
+            }`]
           : [`- Run \`${aibillCommandV0(`apply --since-days ${windowDays}`)}\` for the compact, copy-ready inspection prompt with the same evidence window, candidate IDs, approval gate, rollback, and verification contract.`]),
     ""
   ];
@@ -560,14 +579,22 @@ function localRankedCandidateMarkdownLines(candidate: RankedCutCandidate): strin
     ? `${formatUsd(candidate.affectedSpendUsd)} API-equivalent value observed in window`
     : `${formatUsd(candidate.affectedSpendUsd)} in window`;
   return [
-    `- **${id}** ${safePromptMetadata(candidate.title, 180)} — ${opportunity}`,
+    `- **${id}** ${safePromptIdentifier(candidate.title, 180)} — ${opportunity}`,
     `  - Evidence: ${candidate.recordCount} ${unit} · ${value} · ${candidate.confidence.replaceAll("_", " ")}.`,
+    // The NAME is bounded and sanitized; the money is appended afterwards.
+    // Bounding the joined string instead pushed the dollars past the cap for a
+    // long project name, so Markdown printed a member with no figure in it
+    // while the terminal printed the figure.
     ...(candidate.projectLabels.length > 0
       ? [`  - Across ${candidate.members.length} projects: ${candidate.projectLabels.slice(0, 4).map((label, index) => (
-          `${safePromptMetadata(label, 80)} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
+          `${safePromptIdentifier(label, 80)}${candidate.projectMemberValueSuffixes[index] ?? ""}`
         )).join(" · ")}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}.`]
       : []),
-    `  - Read-only next step: ${safePromptMetadata(candidate.guidance, 420)}`
+    // 700, not the pre-0.9.7 420: the guidance now carries the candidate's
+    // observed median day, peak day, concentration, and model mix. 420 was
+    // sized for a one-sentence checklist and would truncate a real finding
+    // mid-clause.
+    `  - Read-only next step: ${safePromptProse(candidate.guidance, 700)}`
   ];
 }
 
@@ -606,6 +633,45 @@ function localFinancialHeadline(coverage: LocalFinancialCoverage, unit: string):
   return `Observed API-equivalent value: ${formatUsd(coverage.amountUsd)} across ${count} ${suffix}.`;
 }
 
+/**
+ * The `report` command's terminal "Total" row — rendered HERE, from the SAME
+ * {@link SpendReportInput} (and, for local logs, the SAME evidence window)
+ * that report.md and report.html are built from.
+ *
+ * B1 (0.9.7): the CLI used to format this row itself, straight off
+ * `summary.totalUsd`, and `analyzeSpend` returns `0` for a window in which
+ * nothing could be priced. One `npx aibill report` therefore printed
+ * "Total $0.00 · cost/value evidence" to the terminal while the report.md and
+ * report.html it wrote in that same second said "Unavailable … Missing/null
+ * is not zero" about those same records. Two surfaces, one command, opposite
+ * claims about whether the money is zero or unknown.
+ *
+ * Deriving the row from the report input — not from a separately summed total
+ * — is what makes the disagreement unrepresentable: the terminal and the
+ * artifacts now read the same coverage off the same records.
+ */
+export function spendReportTotalLine(input: SpendReportInput): string {
+  // Local reports headline their own evidence WINDOW, which can be narrower
+  // than the persisted record set the summary was computed over. Reading the
+  // same window here is the difference between agreeing with report.md and
+  // merely agreeing most of the time.
+  const records = input.dataMode === "local_logs"
+    ? localFinancialEvidenceWindow(input).windowRecords
+    : input.allRecords ?? input.providerRecords ?? [];
+  const coverage = costCoverage(records);
+  const amount = formatUsd(input.summary.totalUsd);
+  if (input.dataMode === "sample") {
+    return `${amount} · DEMO SAMPLE · illustrative cost/value evidence · not user data`;
+  }
+  if (coverage.totalUnknown) {
+    return `${UNAVAILABLE_TOTAL} · cost/value evidence · no priced financial evidence; ${MISSING_NOT_ZERO}`;
+  }
+  if (coverage.partial) {
+    return `${amount} · cost/value evidence · ${missingCostPhrase(coverage.missingCount)}; ${MISSING_NOT_ZERO}`;
+  }
+  return `${amount} · cost/value evidence`;
+}
+
 function localBreakdownRecords(
   records: UsageRecord[],
   dimension: LocalBreakdownDimension,
@@ -627,7 +693,11 @@ function localValueBreakdownLines(
   }
   return entries.map((entry) => {
     const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
-    const label = safePromptMetadata(entry.key, 140);
+    // A project or model name on its own, with the money outside the call —
+    // so the identifier-aware check applies: `ignore-list` is a directory, and
+    // blanking it here while the readout's own by-project table prints it is
+    // the same two-surfaces-disagree failure the guidance had.
+    const label = safePromptIdentifier(entry.key, 140);
     if (groupCoverage.pricedRecords.length === 0) {
       return `- ${label}: Unavailable across ${entry.recordCount} daily aggregate${entry.recordCount === 1 ? "" : "s"} (${entry.confidence}); missing/null is not zero.`;
     }
@@ -1430,9 +1500,16 @@ function generateLocalAgentApplyArtifact(input: SpendReportInput): string {
     promptLines.push(
       "",
       `${id} — investigate high cumulative context before proposing a cut`,
-      `EVIDENCE ${id}: ${safePromptMetadata(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window; confidence=${cut.confidence}.`,
+      `EVIDENCE ${id}: ${safePromptIdentifier(cut.title, 160)}; ${cut.recordCount} ${cut.recordUnit}; ${formatUsd(cut.affectedSpendUsd)} observed API-equivalent value in this window${
+        cut.medianDailyInputTokens ? `; median day ${formatTokenCount(cut.medianDailyInputTokens)} input+cache tokens` : ""
+      }; confidence=${cut.confidence}.`,
       `Interpretation: observed exposure only; modeled savings unavailable because there is no matched counterfactual.`,
-      `READ-ONLY NEXT STEP ${id}: ${safePromptMetadata(cut.action, 300)} Identify the exact sessions and measured source before drafting one reversible change.`
+      // 700, not the pre-0.9.7 300: the guidance now names the median day, the
+      // heaviest date, the concentration, and the model mix. Truncating it at
+      // 300 would hand the coding agent half a clause. The follow-on sentence
+      // asks it to VERIFY those specifics rather than restating "inspect the
+      // sessions", which the guidance itself now says with a date attached.
+      `READ-ONLY NEXT STEP ${id}: ${safePromptProse(cut.action, 700)} Verify those dates and token figures against that project's own session transcripts before drafting one reversible change.`
     );
   }
   if (allContextCandidates.length > contextCandidates.length) {
@@ -1677,8 +1754,82 @@ function activationCaveat(activation: DeadContextResult["deadItems"][number]["ac
   return "Only the item's discoverable/catalog metadata is measured; future usefulness is unknown.";
 }
 
+/**
+ * PRODUCT-AUTHORED prose that interpolates untrusted fragments: the ranked
+ * candidate's guidance, the Apply artifact's read-only next step. Redact and
+ * truncate — never blank.
+ *
+ * {@link safePromptMetadata} blanks its whole input on a directive hit, which
+ * is right for a value that is untrusted end to end and catastrophic for a
+ * sentence we wrote. Our sentence says "input+cache tokens"; the guard pairs
+ * any of `delete|remove|overwrite|edit|write` within 60 characters of
+ * "tokens", and a project named `write-ahead-log` sits exactly that far in
+ * front of our own noun. 8 of 11 ordinary repo basenames deleted the entire
+ * recommendation that way — three of them taking the dollar figure with it —
+ * while the terminal, which does not sanitize, printed the finding intact. A
+ * guard that makes two surfaces disagree about a number is not a guard.
+ *
+ * The directive check belongs on the untrusted FRAGMENT, and that is where it
+ * now runs: `safeUntrustedLabel` in @agent-finops/core neutralizes the project
+ * label and the model ids before they are ever interpolated, so every surface
+ * — terminal, Markdown, HTML — carries the same already-safe sentence. What is
+ * left for this function is the part that is safe to do to our own prose:
+ * strip credentials and home paths, flatten structure characters, and cut to
+ * length.
+ */
+function safePromptProse(value: string, maxLength: number): string {
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+/**
+ * A short LABEL whose untrusted parts are identifiers: a project basename, a
+ * model id, a candidate title built around one of those. Blanking on a
+ * directive hit is still right — the label is short, so losing it costs a name
+ * rather than a finding — but the check is identifier-aware.
+ *
+ * A hyphen JOINS an identifier, it does not separate words. `ignore-list` is a
+ * directory and `ignore all previous instructions` is an instruction; `\b`
+ * already treats `_` that way, so normalizing `-` to `_` only makes
+ * `ignore-list` behave like `ignore_list`. Injected prose keeps its spaces and
+ * is still caught.
+ *
+ * Callers must keep any money OUTSIDE this call — a blanked label must never
+ * take a dollar figure with it. See {@link cutMemberLabelParts}.
+ */
+function safePromptIdentifier(value: string, maxLength: number): string {
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  if (looksLikePromptDirective(sanitized.replace(/-/g, "_"))) return "[unsafe metadata omitted]";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+/**
+ * Bound a string by CODE POINTS, not UTF-16 code units.
+ *
+ * `String.prototype.slice` cuts between the halves of a surrogate pair, so a
+ * project name carrying any astral character — an emoji, a mathematical
+ * alphanumeric, most of CJK Ext. B — landed on the 80-character bound as a
+ * lone surrogate and rendered as U+FFFD in report.md and the Apply artifact.
+ * The reader sees a replacement glyph where a name was, in a document whose
+ * job is to be trusted character for character.
+ */
+function truncateForPrompt(sanitized: string, maxLength: number): string {
+  const points = [...sanitized];
+  if (points.length <= maxLength) return sanitized;
+  return `${points.slice(0, Math.max(1, maxLength - 1)).join("").trimEnd()}…`;
+}
+
 function safePromptMetadata(value: string, maxLength: number): string {
-  const sanitized = sanitizeLocalActivityText(value)
+  const sanitized = redactPromptMetadata(value);
+  if (!sanitized) return "not available";
+  if (looksLikePromptDirective(sanitized)) return "[unsafe metadata omitted]";
+  return truncateForPrompt(sanitized, maxLength);
+}
+
+function redactPromptMetadata(value: string): string {
+  return sanitizeLocalActivityText(value)
     .replace(/\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|secret|password|credential)\s*[:=]\s*[^\s,;]+/gi, "[redacted]")
     .replace(/\b(?:sk|pk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9._-]{8,}/gi, "[redacted]")
     .replace(/^\/Users\/[^/]+/, "~")
@@ -1686,11 +1837,6 @@ function safePromptMetadata(value: string, maxLength: number): string {
     .replace(/[`<>\[\]{}|]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!sanitized) return "not available";
-  if (looksLikePromptDirective(sanitized)) return "[unsafe metadata omitted]";
-  return sanitized.length <= maxLength
-    ? sanitized
-    : `${sanitized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 }
 
 function looksLikePromptDirective(value: string): boolean {
@@ -1952,8 +2098,12 @@ export function generatePolicyConfigDraftMarkdown(input: SpendReportInput): stri
     `    sourceSummary: ${yamlString(connectedSourceSummary(records))}`,
     `    candidateStatus: ${yamlString(candidate ? "canonical_modeled_candidate_requires_approval" : "no_scoped_change_candidate")}`,
     `    financialClaim: ${yamlString(candidate ? "modeled_unverified" : "none")}`,
-    `    canonicalCandidateId: ${yamlString(candidate?.id ?? "none")}`,
-    `    recordIds: ${yamlString(candidate?.recordIds.join(",") ?? "none")}`,
+    // The cut id is slugged from `record.model` + `record.operation`, and the
+    // record ids come straight off a provider response. `yamlString` keeps the
+    // YAML well-formed but checks nothing — and this is a file the user is told
+    // to install. Three sibling sites already guard the identical values.
+    `    canonicalCandidateId: ${yamlString(candidate ? safePromptIdentifier(candidate.id, 120) : "none")}`,
+    `    recordIds: ${yamlString(candidate ? candidate.recordIds.map((id) => safePromptIdentifier(id, 100)).join(",") : "none")}`,
     `  targetOwnership: ${yamlString(candidate ? connectedOwnerSummary(candidateRecords) : "unmapped")}`,
     `  currentCostValueEvidenceUsd: ${financialAmountAvailable ? formatMachineUsd(candidate?.affectedSpendUsd ?? input.summary.totalUsd) : "null"}`,
     `  modeledOpportunityUsd: ${candidate ? formatMachineUsd(candidate.estimatedMonthlySavingsUsd) : "null"}`,
@@ -2998,7 +3148,9 @@ function breakdownLines(
     const amount = dimension
       ? reportBreakdownAmount(entry, records, dimension)
       : formatUsd(entry.amountUsd);
-    return `- ${entry.key}: ${amount} across ${entry.recordCount} records (${entry.confidence})`;
+    // The connected branch of report.md rendered breakdown keys raw while the
+    // local branch guarded the identical value. Same file, one standard.
+    return `- ${safePromptIdentifier(entry.key, 140)}: ${amount} across ${entry.recordCount} records (${entry.confidence})`;
   });
 }
 
@@ -3047,6 +3199,22 @@ function entityBreakdownHtml(
   </div>`).join("\n");
 }
 
+/**
+ * "client / project / workflow" — three BARE identifiers off provider metadata,
+ * with no product prose around them. Blanking is the right answer for each, and
+ * each is guarded separately so one hostile field cannot take the other two
+ * down with it.
+ *
+ * The entry's fields stay raw in core (`workflowWatchAmount` matches them back
+ * against the records to recompute the amount), so this is where they are made
+ * safe for the page.
+ */
+function workflowIdentity(entry: SpendSummary["workflowWatch"][number]): string {
+  return [entry.clientId, entry.projectId, entry.workflowKey]
+    .map((value) => safePromptIdentifier(value, 100))
+    .join(" / ");
+}
+
 function workflowWatchMarkdownLines(
   entries: SpendSummary["workflowWatch"],
   isSample = false,
@@ -3058,21 +3226,21 @@ function workflowWatchMarkdownLines(
 
   if (isSample) {
     return entries.flatMap((entry) => [
-      `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence}; fictional sample entities)`,
+      `- **${workflowIdentity(entry)}** (${entry.confidence}; fictional sample entities)`,
       `  - Illustrative cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
       "  - Financial inference: attribution concentration only; no margin or savings amount is inferred.",
-      `  - Example hypothesis (do not execute): ${entry.suggestedOptimization}`,
+      `  - Example hypothesis (do not execute): ${safePromptProse(entry.suggestedOptimization, 700)}`,
       "  - Apply status: disabled until real evidence is collected",
       "  - Verification status: rerunning sample cannot verify a result"
     ]);
   }
 
   return entries.flatMap((entry) => [
-    `- **${entry.clientId} / ${entry.projectId} / ${entry.workflowKey}** (${entry.confidence})`,
+    `- **${workflowIdentity(entry)}** (${entry.confidence})`,
     `  - Observed cost/value evidence: ${workflowWatchAmount(entry, records)} across ${entry.recordCount} records`,
     `  - Evidence share: ${formatPercent(entry.shareOfSpend)}`,
     "  - Interpretation: ownership/concentration diagnostic only; no margin, savings, or safe change is inferred.",
-    `  - Read-only next step: ${entry.suggestedOptimization}`,
+    `  - Read-only next step: ${safePromptProse(entry.suggestedOptimization, 700)}`,
     "  - Apply status: not a change candidate; require explicit call/invocation workload evidence and a canonical modeled action first.",
     "  - Verification: reconcile the source records and confirm owner/outcome mapping before using this entry operationally."
   ]);
@@ -3094,15 +3262,17 @@ function workflowWatchCard(
   const actionLabel = isSample ? "Apply disabled:" : "Read-only next step:";
   const actionText = isSample
     ? "collect real evidence before requesting a change"
-    : entry.suggestedOptimization;
+    // The HTML twin of the Markdown line: same entry, same treatment, so the
+    // two surfaces cannot say different things about the same workflow.
+    : safePromptProse(entry.suggestedOptimization, 700);
   const verificationText = isSample
     ? "rerunning sample cannot verify a result"
     : "ownership/concentration is not savings or change evidence; reconcile records and confirm the owner/outcome mapping";
   return `<article class="workflow-card">
     <div class="workflow-card-main">
       <div>
-        <h3>${escapeHtml(entry.clientId)} / ${escapeHtml(entry.projectId)} / ${escapeHtml(entry.workflowKey)}</h3>
-        <p>${escapeHtml(entry.agentId)} · ${escapeHtml(entry.confidence)}</p>
+        <h3>${escapeHtml(workflowIdentity(entry))}</h3>
+        <p>${escapeHtml(safePromptIdentifier(entry.agentId, 100))} · ${escapeHtml(entry.confidence)}</p>
       </div>
       <strong>${escapeHtml(workflowWatchAmount(entry, records))}</strong>
     </div>
@@ -3260,14 +3430,28 @@ function breakdownOverflowRow(
   /** Sum of the VISIBLE rows' displayed values (their own coverage basis). */
   shownDisplayedUsd: number,
   /** The displayed hero total the column must reconcile to. */
-  heroTotalUsd: number
+  heroTotalUsd: number,
+  /** Coverage over the records behind the HIDDEN rows. */
+  hiddenCoverage: CostCoverage
 ): string {
   if (entries.length <= cap) return "";
   const hidden = entries.slice(cap);
   // Reconciles by construction: remainder = displayed hero − displayed rows
   // (an independently rounded raw remainder could land a penny off).
   const hiddenTotal = Math.max(0, roundUsdCents(roundUsdCents(heroTotalUsd) - roundUsdCents(shownDisplayedUsd)));
-  return `<div class="row"><span class="k">+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>full list in report.md</em></span></div>`;
+  const label = `+${hidden.length} more ${noun}${hidden.length === 1 ? "" : "s"}`;
+  // B1: the remainder is arithmetic, not evidence. When every hidden row is
+  // unpriced, that remainder is pure display rounding — and this row printed
+  // it as their value, so report.html's by-model column showed
+  // "+1 more model … $0.01" for a model report.md called Unavailable in the
+  // same file. An unknown remainder gets the word, like every sibling row.
+  if (hiddenCoverage.totalUnknown) {
+    return `<div class="row"><span class="k">${label}</span><span class="bar"></span><span class="v estimated-value">${UNAVAILABLE_TOTAL}<em>${missingCostPhrase(hiddenCoverage.missingCount)} · ${MISSING_NOT_ZERO}</em></span></div>`;
+  }
+  const note = hiddenCoverage.partial
+    ? `${missingCostPhrase(hiddenCoverage.missingCount)} · full list in report.md`
+    : "full list in report.md";
+  return `<div class="row"><span class="k">${label}</span><span class="bar"></span><span class="v estimated-value">${formatUsd(hiddenTotal)}<em>${note}</em></span></div>`;
 }
 
 function formatMachineUsd(amount: number): string {
@@ -3342,6 +3526,14 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     const groupCoverage = localFinancialCoverage(localBreakdownRecords(records, dimension, entry.key));
     return groupCoverage.pricedRecords.length === 0 ? 0 : roundUsdCents(groupCoverage.amountUsd);
   };
+  /** Coverage over the records behind the rows a column had to hide. */
+  const hiddenRowCoverage = (
+    entries: SpendSummary["bySource"],
+    cap: number,
+    dimension: LocalBreakdownDimension
+  ): CostCoverage => costCoverage(
+    entries.slice(cap).flatMap((entry) => localBreakdownRecords(records, dimension, entry.key))
+  );
   const barRow = (
     entry: SpendSummary["bySource"][number],
     dimension: LocalBreakdownDimension
@@ -3363,8 +3555,11 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     return `<div class="row"><span class="k">${key}</span><span class="bar"><i class="estimated-bar" style="width:${pct}%"></i></span><span class="v estimated-value">${formatUsd(groupCoverage.amountUsd)}${groupCoverage.missingRecords.length > 0 ? " partial" : ""}<em>${coverageNote}</em></span></div>`;
   };
 
+  // Escapes like its siblings `metricCard` and `loopCard`. It was the one card
+  // helper that interpolated raw, and two of its call sites pass a
+  // `tokenExperiment.id` that arrives as an unnarrowed string.
   const statCard = (label: string, value: string, note: string, tone = ""): string =>
-    `<div class="stat ${tone}"><span class="label">${label}</span><strong>${value}</strong><span class="note">${note}</span></div>`;
+    `<div class="stat ${escapeHtml(tone)}"><span class="label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span class="note">${escapeHtml(note)}</span></div>`;
 
   const sectionHead = (name: string, blurb: string): string =>
     `<div class="sec"><span class="rule"></span><span class="name">${name}</span><span class="rule"></span><span class="blurb">${blurb}</span></div>`;
@@ -3387,10 +3582,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
           : candidate.recordUnit === "tools"
             ? `tool${candidate.recordCount === 1 ? "" : "s"}`
             : `call${candidate.recordCount === 1 ? "" : "s"}`;
-        const across = candidate.projectLabels.length > 0
-          ? `<p class="dim">across ${candidate.members.length} projects — ${escapeHtml(candidate.projectLabels.slice(0, 4).map((label, index) => (
-              `${label} ~$${Math.round(candidate.projectAffectedSpendUsd[index] ?? 0).toLocaleString("en-US")}`
-            )).join(" · "))}${candidate.projectLabels.length > 4 ? ` · + ${candidate.projectLabels.length - 4} more` : ""}</p>`
+        const across = candidate.projectMemberLabels.length > 0
+          ? `<p class="dim">across ${candidate.members.length} projects — ${escapeHtml(candidate.projectMemberLabels.slice(0, 4).join(" · "))}${candidate.projectMemberLabels.length > 4 ? ` · + ${candidate.projectMemberLabels.length - 4} more` : ""}</p>`
           : "";
         return `<div class="cut"><div><strong>${candidate.rank}. ${escapeHtml(candidate.title)}</strong>${across}<p>${escapeHtml(candidate.guidance)}</p></div><div class="cut-v"><strong class="estimated-value">${escapeHtml(candidate.observed ? "reduction unproven" : `~${formatUsd(candidate.estimatedMonthlySavingsUsd)}/mo modeled`)}</strong><span>${candidate.recordCount} ${unit} · ${escapeHtml(formatUsd(candidate.affectedSpendUsd))} observed in window · ${escapeHtml(candidate.confidence.replaceAll("_", " "))}</span></div></div>`;
       }).join("");
@@ -3445,8 +3638,8 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
 
         ${sectionHead("WHY", "where it goes")}
         <div class="cols">
-          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project", summary.byProject.slice(0, 6).reduce((sum, entry) => sum + displayedRowUsd(entry, "project"), 0), financialCoverage.amountUsd)}</div>
-          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model", summary.byModel.slice(0, 5).reduce((sum, entry) => sum + displayedRowUsd(entry, "model"), 0), financialCoverage.amountUsd)}</div>
+          <div class="col"><h3>by project</h3>${summary.byProject.slice(0, 6).map((entry) => barRow(entry, "project")).join("")}${breakdownOverflowRow(summary.byProject, 6, "project", summary.byProject.slice(0, 6).reduce((sum, entry) => sum + displayedRowUsd(entry, "project"), 0), financialCoverage.amountUsd, hiddenRowCoverage(summary.byProject, 6, "project"))}</div>
+          <div class="col"><h3>by model</h3>${summary.byModel.slice(0, 5).map((entry) => barRow(entry, "model")).join("")}${breakdownOverflowRow(summary.byModel, 5, "model", summary.byModel.slice(0, 5).reduce((sum, entry) => sum + displayedRowUsd(entry, "model"), 0), financialCoverage.amountUsd, hiddenRowCoverage(summary.byModel, 5, "model"))}</div>
         </div>
         ${dead && dead.deadCount > 0 ? `<div class="deadbox"><span class="label">Configured/catalogued with no matching invocation (loading and future need may be unmeasured):</span> ${deadChips}</div>` : ""}
 

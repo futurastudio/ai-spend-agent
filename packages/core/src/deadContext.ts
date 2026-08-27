@@ -4,6 +4,7 @@ import {
   type InventoryHost,
   type InventoryItem
 } from "./agentInventory.js";
+import { safeUntrustedLabel, WITHHELD_ENTITY_LABEL, WITHHELD_FILE_LABEL } from "./untrustedLabel.js";
 import { findPricingRule } from "./modelPricing.js";
 import {
   loadToolInvocations,
@@ -174,15 +175,21 @@ export function computeDeadContext(
     }
     dead.push({
       kind: item.kind,
-      name: item.name,
+      // Skill, subagent, slash-command, hook and MCP SERVER names, read off
+      // disk. They are printed by name on the readout and in the artifact.
+      name: safeUntrustedLabel(item.name, WITHHELD_ENTITY_LABEL),
       scope: item.scope,
       activation: item.activation,
+      // The STRUCTURED siblings travel with the name to every surface the name
+      // does, including the Apply artifact. Neutralizing the name and leaving
+      // the path beside it raw is the same inversion Blocker A was.
+      // `host` is the InventoryHost enum, not free text — bounded by the type.
       host: item.host,
       invocationTracking: item.invocationTracking,
       alwaysLoadedTokens: item.alwaysLoadedTokens,
       weightConfidence: item.weightConfidence,
-      path: item.path,
-      ownerDirs: item.ownerDirs
+      path: item.path === undefined ? undefined : safeUntrustedLabel(item.path, WITHHELD_FILE_LABEL),
+      ownerDirs: item.ownerDirs?.map((dir) => safeUntrustedLabel(dir, WITHHELD_FILE_LABEL))
     });
   }
   dead.sort((a, b) => b.alwaysLoadedTokens - a.alwaysLoadedTokens);

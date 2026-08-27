@@ -29,8 +29,20 @@ provider evidence. Remove it with `npx aibill statusline uninstall`.
 It reads supported local Claude Code, Codex, and Gemini CLI financial metadata,
 labels API-equivalent estimates, and can optionally add official OpenAI or
 Anthropic provider-reported cost
-through an environment-variable reference. No product telemetry is sent.
+through an environment-variable reference.
 aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
+
+**Telemetry: anonymous command counts, disclosed at first run.** Terminal
+analysis stays on your machine — transcripts, prompts, file names, and dollar
+amounts are never uploaded. Separately, the CLI counts *which* commands run:
+anonymous, never your arguments, paths, content, dollars, or your email.
+Nothing is sent before a one-time notice has been printed on an interactive
+run, so a machine that has never seen that notice (CI, scripts, pipes) never
+sends anything. One command turns it off — `aibill telemetry off` (or
+`DO_NOT_TRACK`, `CI`, or `AI_SPEND_NO_TELEMETRY`) — `aibill telemetry` prints
+the exact last payload verbatim, and while it is on every receipt says so in
+place of "nothing uploaded". Full scope and the never-list:
+[`docs/TELEMETRY.md`](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/TELEMETRY.md).
 
 Connector validation (`live_verified`, `fixture_verified`, `untested`, or
 `failed`) and each number's financial evidence (`verified`, `estimated`,

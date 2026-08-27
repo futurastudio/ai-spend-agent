@@ -1,5 +1,12 @@
 import { generateSpendInsights } from "./insights.js";
 import {
+  safeUntrustedLabel,
+  safeUntrustedLabels,
+  WITHHELD_AGENT_LABEL,
+  WITHHELD_ENTITY_LABEL,
+  WITHHELD_OPERATION_LABEL
+} from "./untrustedLabel.js";
+import {
   costConfidenceValues,
   hasModeledWorkloadEvidence,
   hasPricedEvidence,
@@ -184,11 +191,27 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
       const suggestedOptimization = workflowDiagnosticFor(workflowKey, agentId, hasRunLevelEvidence);
 
       return {
-        id: slugify(["workflow", clientId, projectId, workflowKey].join("-")),
-        clientId,
-        projectId,
-        workflowKey,
-        agentId,
+        // The id is a STRUCTURED field beside the neutralized prose and it is
+        // rendered. Slug the neutralized forms, not the raw grouping keys.
+        id: slugify([
+          "workflow",
+          safeEntity(clientId),
+          safeEntity(projectId),
+          safeWorkflowLabel(workflowKey)
+        ].join("-")),
+        // Neutralized, not raw. These fields ship inside the SpendSummary that
+        // the MCP tools hand to an agent, so leaving them raw beside neutralized
+        // prose is the same inversion as the repeated-read array: the human sees
+        // the redaction and the agent gets the payload.
+        //
+        // workflowWatchAmount re-matches these against the records to recompute
+        // a display amount. An ordinary name is byte-identical, so that match is
+        // unaffected; a name that reads like an instruction loses its amount,
+        // which is the right way round.
+        clientId: safeEntity(clientId),
+        projectId: safeEntity(projectId),
+        workflowKey: safeWorkflowLabel(workflowKey),
+        agentId: safeUntrustedLabel(agentId, WITHHELD_AGENT_LABEL),
         amountUsd,
         shareOfSpend,
         recordCount: groupRecords.length,
@@ -198,8 +221,8 @@ export function generateWorkflowWatch(records: UsageRecord[]): WorkflowWatchEntr
         suggestedOptimization,
         applyArtifact: `Before changing this workload: ${suggestedOptimization}`,
         verificationPlan: hasRunLevelEvidence
-          ? `Reconcile ${workflowKey} to its owner and budget, then define one reversible candidate and compare matched future accepted outcomes plus provider-reported cost.`
-          : `Reconcile ${workflowKey} to its owner and budget, then collect call-level workload evidence before modeling or applying a cost change.`
+          ? `Reconcile ${safeWorkflowLabel(workflowKey)} to its owner and budget, then define one reversible candidate and compare matched future accepted outcomes plus provider-reported cost.`
+          : `Reconcile ${safeWorkflowLabel(workflowKey)} to its owner and budget, then collect call-level workload evidence before modeling or applying a cost change.`
       } satisfies WorkflowWatchEntry;
     })
     .filter((entry) => entry.amountUsd > 0)
@@ -219,16 +242,16 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
     recommendations.push({
       id: "model-downgrade",
       title: "Review expensive model workloads for downgrade candidates",
-      rationale: `${topModel.key} is the largest cost driver in the current local sample.`,
+      rationale: `${safeEntity(topModel.key)} is the largest cost driver in the current local sample.`,
       whyItMatters: "Premium model usage tends to become invisible once agents are running in the background. Spend owners need a clear rule for which jobs deserve the expensive model.",
-      nextAction: `Audit the top ${topModel.key} operations and move low-risk summarization, extraction, and draft work to a cheaper model tier first.`,
+      nextAction: `Audit the top ${safeEntity(topModel.key)} operations and move low-risk summarization, extraction, and draft work to a cheaper model tier first.`,
       priority: "high",
       // The high-level recommendation does not know which model-specific rule
       // will pass quality verification. Dollar math lives in the exact cut
       // candidate; concentration alone earns no flat percentage.
       estimatedImpactUsd: 0,
       confidence: topModel.confidence,
-      relatedKeys: [topModel.key]
+      relatedKeys: [safeEntity(topModel.key)]
     });
   }
 
@@ -243,7 +266,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       priority: "high",
       estimatedImpactUsd: 0,
       confidence: combinedConfidence(highInputTokenRecords.map((record) => record.costConfidence)),
-      relatedKeys: unique(highInputTokenRecords.map((record) => record.model))
+      relatedKeys: safeUntrustedLabels(unique(highInputTokenRecords.map((record) => record.model)))
     });
   }
 
@@ -264,7 +287,7 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
       priority: "medium",
       estimatedImpactUsd: roundMoney(sumRecords(cacheableRecords)),
       confidence: combinedConfidence(cacheableRecords.map((record) => record.costConfidence)),
-      relatedKeys: repeatedOperations
+      relatedKeys: safeUntrustedLabels(repeatedOperations, WITHHELD_OPERATION_LABEL)
     });
   }
 
@@ -274,13 +297,13 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
     recommendations.push({
       id: "agent-caps",
       title: "Confirm the owner and budget for the highest-cost agent",
-      rationale: `${topAgent.key} accounts for a material share of sampled usage.`,
+      rationale: `${safeEntity(topAgent.key)} accounts for a material share of sampled usage.`,
       whyItMatters: "Concentration is an accountability signal, but it does not by itself prove abnormal behavior or an avoidable dollar amount.",
-      nextAction: `Confirm ${topAgent.key}'s owner and approved range, then collect run-level evidence before proposing a warning threshold or hard cap.`,
+      nextAction: `Confirm ${safeEntity(topAgent.key)}'s owner and approved range, then collect run-level evidence before proposing a warning threshold or hard cap.`,
       priority: "high",
       estimatedImpactUsd: 0,
       confidence: topAgent.confidence,
-      relatedKeys: [topAgent.key]
+      relatedKeys: [safeEntity(topAgent.key)]
     });
   }
 
@@ -302,7 +325,10 @@ export function generateRecommendations(records: UsageRecord[]): Recommendation[
         return total + (record.amountUsd ?? 0) * (1 - retained);
       }, 0)),
       confidence: combinedConfidence(batchableRecords.map((record) => record.costConfidence)),
-      relatedKeys: unique(batchableRecords.map((record) => record.operation).filter(isPresent))
+      relatedKeys: safeUntrustedLabels(
+        unique(batchableRecords.map((record) => record.operation).filter(isPresent)),
+        WITHHELD_OPERATION_LABEL
+      )
     });
   }
 
@@ -398,9 +424,35 @@ function workflowDiagnosticFor(
   agentId: string,
   hasRunLevelEvidence: boolean
 ): string {
+  const workflow = safeWorkflowLabel(workflowKey);
+  const agent = safeUntrustedLabel(agentId, WITHHELD_AGENT_LABEL);
   return hasRunLevelEvidence
-    ? `Confirm the owner and approved budget for ${workflowKey} (${agentId}), reconcile the observed spend, and define one reversible candidate with an accepted-outcome quality bar before approval.`
-    : `Confirm the owner and approved budget for ${workflowKey} (${agentId}), reconcile the observed spend, and collect call-level provenance before proposing a reversible optimization.`;
+    ? `Confirm the owner and approved budget for ${workflow} (${agent}), reconcile the observed spend, and define one reversible candidate with an accepted-outcome quality bar before approval.`
+    : `Confirm the owner and approved budget for ${workflow} (${agent}), reconcile the observed spend, and collect call-level provenance before proposing a reversible optimization.`;
+}
+
+/**
+ * The workflow key IS `record.operation` — a provider/adapter string, untrusted
+ * end to end. It reaches `suggestedOptimization`, `applyArtifact` and
+ * `verificationPlan`, and those three are rendered as product prose that the
+ * report layer deliberately never blanks. So it is neutralized here, at the
+ * interpolation point, exactly as the cut-list builders do.
+ *
+ * The ENTRY's own identity fields are neutralized too: they travel inside the
+ * SpendSummary that the MCP tools return, so a raw field sitting beside
+ * neutralized prose hands an agent exactly what the human was protected from.
+ */
+function safeWorkflowLabel(workflowKey: string): string {
+  return safeUntrustedLabel(workflowKey, WITHHELD_OPERATION_LABEL);
+}
+
+/**
+ * A breakdown key rendered for a HUMAN — a model id, an agent id, an
+ * operation label. Display only: the raw key is still what the record filters
+ * match on, and rewriting a matching key would empty the cohort.
+ */
+function safeEntity(value: string): string {
+  return safeUntrustedLabel(value, WITHHELD_ENTITY_LABEL);
 }
 
 function slugify(value: string): string {
