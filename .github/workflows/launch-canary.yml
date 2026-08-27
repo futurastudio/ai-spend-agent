@@ -45,7 +45,7 @@ jobs:
           echo "$v" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'
           # A bare semver match stays green through a rollback. Pin the floor:
           # bump EXPECTED_MIN_VERSION with each release.
-          EXPECTED_MIN_VERSION="0.9.6"
+          EXPECTED_MIN_VERSION="0.9.7"
           if [ "$(printf '%s\n' "$EXPECTED_MIN_VERSION" "$v" | sort -V | head -1)" != "$EXPECTED_MIN_VERSION" ]; then
             echo "FAIL: npm latest is $v, older than the expected floor $EXPECTED_MIN_VERSION — possible rollback or unpublish"
             exit 1
