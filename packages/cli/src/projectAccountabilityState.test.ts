@@ -11,8 +11,10 @@ import {
   utimes,
   writeFile
 } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ACCEPTED_OUTCOME_V0_KIND,
@@ -69,6 +71,34 @@ async function fixtureRoot(): Promise<string> {
   ));
   temporaryRoots.push(root);
   return root;
+}
+
+const execFile = promisify(execFileCallback);
+
+function privateBaseIn(home: string): string {
+  return join(home, ".aibill", "private-state", "project-accountability");
+}
+
+/**
+ * Runs `body` with `os.homedir()` pointed at `home`, with the private-state
+ * override cleared so the default home-anchored location is exercised.
+ */
+async function withHome(home: string, body: () => Promise<void>): Promise<void> {
+  const priorHome = process.env.HOME;
+  const priorOverride = process.env[PROJECT_ACCOUNTABILITY_PRIVATE_STATE_DIRECTORY_ENV];
+  process.env.HOME = home;
+  delete process.env[PROJECT_ACCOUNTABILITY_PRIVATE_STATE_DIRECTORY_ENV];
+  try {
+    await body();
+  } finally {
+    if (priorHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorHome;
+    if (priorOverride === undefined) {
+      delete process.env[PROJECT_ACCOUNTABILITY_PRIVATE_STATE_DIRECTORY_ENV];
+    } else {
+      process.env[PROJECT_ACCOUNTABILITY_PRIVATE_STATE_DIRECTORY_ENV] = priorOverride;
+    }
+  }
 }
 
 function ownership(
@@ -251,6 +281,66 @@ describe("project accountability state", () => {
       } else {
         process.env[PROJECT_ACCOUNTABILITY_PRIVATE_STATE_DIRECTORY_ENV] = prior;
       }
+    }
+  });
+
+  it("still stores state when the home directory holds a .git Git itself rejects", async () => {
+    const root = await fixtureRoot();
+    const home = await fixtureRoot();
+    // An interrupted `git init` leaves a `.git` entry with no `objects/`:
+    // `lstat` sees it, but Git refuses to open it as a repository.
+    await execFile("git", ["-C", home, "init", "--quiet"]);
+    await rm(join(home, ".git", "objects"), { recursive: true, force: true });
+    await expect(execFile("git", ["-C", home, "ls-files"])).rejects.toThrow(
+      /not a git repository/i
+    );
+
+    await withHome(home, async () => {
+      await upsertConfirmedProjectOwnership(root, ownership(root));
+      const state = await loadProjectAccountabilityState(root);
+      expect(state.ownership?.displayLabels.humanOwner).toBe("Jose Artigas");
+      // The privacy marker is still written, so the state stays ignored if a
+      // real repository is ever initialised over this directory.
+      expect(await readFile(join(privateBaseIn(home), ".gitignore"), "utf8"))
+        .toBe("*\n");
+    });
+  });
+
+  it("still refuses when a real repository already tracks the private state", async () => {
+    const root = await fixtureRoot();
+    const home = await fixtureRoot();
+    await execFile("git", ["-C", home, "init", "--quiet"]);
+    const privateBase = privateBaseIn(home);
+    await mkdir(privateBase, { recursive: true, mode: 0o700 });
+    await chmod(privateBase, 0o700);
+    await writeFile(join(privateBase, ".gitignore"), "*\n", { mode: 0o600 });
+    await writeFile(join(privateBase, "leaked.json"), "{}\n", { mode: 0o600 });
+    await execFile("git", [
+      "-C", home, "add", "-f", "--", relative(home, privateBase)
+    ]);
+
+    await withHome(home, async () => {
+      await expect(upsertConfirmedProjectOwnership(root, ownership(root)))
+        .rejects.toMatchObject({ code: "malformed_state" });
+    });
+  });
+
+  it("still refuses when Git exists but cannot be run to prove the boundary", async () => {
+    const root = await fixtureRoot();
+    const home = await fixtureRoot();
+    await execFile("git", ["-C", home, "init", "--quiet"]);
+    const priorPath = process.env.PATH;
+    // Git cannot be spawned at all, so tracking is genuinely unverifiable and
+    // must refuse rather than be mistaken for "this is not a repository".
+    process.env.PATH = join(home, "no-such-bin");
+    try {
+      await withHome(home, async () => {
+        await expect(upsertConfirmedProjectOwnership(root, ownership(root)))
+          .rejects.toMatchObject({ code: "malformed_state" });
+      });
+    } finally {
+      if (priorPath === undefined) delete process.env.PATH;
+      else process.env.PATH = priorPath;
     }
   });
 

@@ -858,12 +858,21 @@ async function ensureIgnoredPrivateBoundary(
   const tracked = await execFile("git", ["-C", gitRoot, "ls-files", "--", relativeBase], {
     encoding: "utf8",
     maxBuffer: 64 * 1024
-  }).then(({ stdout }) => stdout.trim()).catch(() => {
+  }).then(({ stdout }) => stdout.trim()).catch((error: unknown) => {
+    // A `.git` entry that Git itself rejects is not a repository: an
+    // interrupted `git init`, or a copied `.git` with no `objects/`, leaves
+    // an entry `lstat` sees but Git refuses to open. Nothing under such a
+    // directory can be staged or committed, so there is no tracking to
+    // verify and no boundary to prove -- the `*` marker written above still
+    // protects the state if a real repository is ever initialised here.
+    // Every other failure stays genuinely unverifiable and must refuse.
+    if (isNonRepositoryGitFailure(error)) return undefined;
     throw new ProjectAccountabilityStateError(
       "malformed_state",
       "Private project accountability tracking status could not be verified."
     );
   });
+  if (tracked === undefined) return;
   if (tracked) {
     throw new ProjectAccountabilityStateError(
       "malformed_state",
@@ -1161,6 +1170,19 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
   const sorted = expected.slice().sort();
   return keys.length === sorted.length &&
     keys.every((key, index) => key === sorted[index]);
+}
+
+/**
+ * True only when Git itself ran and reported that the directory is not a
+ * repository. A spawn failure (Git missing) carries a string `code` and a
+ * non-zero exit carries a numeric one, so an environment where Git cannot be
+ * consulted at all keeps the conservative "unverifiable" refusal.
+ */
+function isNonRepositoryGitFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (typeof (error as NodeJS.ErrnoException).code !== "number") return false;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  return typeof stderr === "string" && /not a git repository/i.test(stderr);
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {

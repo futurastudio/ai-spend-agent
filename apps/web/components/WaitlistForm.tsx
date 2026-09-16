@@ -88,8 +88,9 @@ export function WaitlistForm() {
           ) : (
             <>
               Thanks—we&apos;ll follow up at{" "}
-              <span className="font-medium text-green">{email}</span>{" "}
-              about fit and onboarding for the two-week design-partner beta.
+              <span className="font-medium text-green">{email}</span>. Reply
+              with your CLI receipt total, or your monthly AI spend and
+              providers, to move up the list.
             </>
           )}
         </span>
@@ -129,7 +130,7 @@ export function WaitlistForm() {
             ? "Submitting..."
             : isGlanceStudy
               ? "Volunteer for Glance study"
-              : "Request beta access"}
+              : "Join the waitlist"}
         </button>
       </div>
       {status === "error" && (
@@ -140,8 +141,19 @@ export function WaitlistForm() {
       <p className="mt-3 text-xs text-faint">
         {isGlanceStudy
           ? "We’ll schedule one short study session and a day-seven check-in."
-          : "Includes onboarding, two weeks of real use, and one short follow-up."}
+          : "We onboard a few teams at a time. Reply to our email with your CLI receipt, or your monthly AI spend and providers, and we’ll prioritize you."}
       </p>
+      {isGlanceStudy ? null : (
+        <div className="mt-5 border-t border-hairline pt-4" data-cli-free-tier="">
+          <p className="text-sm text-ink">
+            Want a number today? Run the free CLI on your machine:{" "}
+            <code className="rounded-sm bg-well px-1.5 py-0.5 font-mono text-[13px]">npx aibill</code>
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-faint">
+            The CLI prices the agent logs on your machine. The Workspace reads what your providers billed. Same rules, different sources, so the two numbers differ and each says why.
+          </p>
+        </div>
+      )}
     </form>
   );
 }

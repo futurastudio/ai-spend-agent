@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { WORKSPACE_STATUS_LINE } from "@/lib/workspace-entry";
 import Link from "next/link";
 import { CopyCommand } from "@/components/CopyCommand";
 
 export const metadata: Metadata = {
   title: "Thanks — Tilden",
   description:
-    "Request received. We'll follow up about the design-partner beta.",
+    "Request received. We'll follow up by email about the waitlist.",
   robots: { index: false, follow: true },
 };
 
@@ -32,15 +33,15 @@ export default async function Thanks({
           Request received
         </p>
         <h1 className="mt-3 max-w-[640px] text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
-          {isGlanceStudy ? "You're in the Glance study queue." : "You're on the design-partner list."}
+          {isGlanceStudy ? "You're in the Glance study queue." : "You're on the waitlist."}
         </h1>
         <p className="mt-4 max-w-[560px] text-base leading-relaxed text-muted">
           {isGlanceStudy
             ? "We'll email you with study timing and the exact preview build and setup. Expect one short session and a day-seven check-in."
-            : "We'll follow up about fit and onboarding for the two-week design-partner beta. Includes onboarding, two weeks of real use, and one short follow-up."}
+            : "We'll follow up by email. Reply with your CLI receipt total, or your monthly AI spend and which providers you use, and we'll prioritize your onboarding. Want a number today? Run the free CLI on your machine: npx aibill"}
         </p>
         <p className="mt-3 max-w-[560px] text-sm leading-relaxed text-faint">
-          Workspace is not launched. Local mode stays free and private.
+          {WORKSPACE_STATUS_LINE}
         </p>
         <p className="mt-8 max-w-[560px] text-[15px] leading-relaxed text-muted">
           While you wait — the local receipt works today:
