@@ -6,7 +6,7 @@ import { CopyCommand } from "@/components/CopyCommand";
 export const metadata: Metadata = {
   title: "Thanks — Tilden",
   description:
-    "Request received. We'll follow up about the design-partner beta.",
+    "Request received. We'll follow up by email about the waitlist.",
   robots: { index: false, follow: true },
 };
 
@@ -38,7 +38,7 @@ export default async function Thanks({
         <p className="mt-4 max-w-[560px] text-base leading-relaxed text-muted">
           {isGlanceStudy
             ? "We'll email you with study timing and the exact preview build and setup. Expect one short session and a day-seven check-in."
-            : "We'll follow up by email. Reply with your CLI receipt total, or your monthly AI spend and which providers you use, and we'll prioritize your onboarding. Want a number today? Run the free CLI on your machine: npx ai-spend-agent"}
+            : "We'll follow up by email. Reply with your CLI receipt total, or your monthly AI spend and which providers you use, and we'll prioritize your onboarding. Want a number today? Run the free CLI on your machine: npx aibill"}
         </p>
         <p className="mt-3 max-w-[560px] text-sm leading-relaxed text-faint">
           {WORKSPACE_STATUS_LINE}
