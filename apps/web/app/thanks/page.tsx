@@ -33,7 +33,7 @@ export default async function Thanks({
           Request received
         </p>
         <h1 className="mt-3 max-w-[640px] text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
-          {isGlanceStudy ? "You're in the Glance study queue." : "You're on the design-partner list."}
+          {isGlanceStudy ? "You're in the Glance study queue." : "You're on the waitlist."}
         </h1>
         <p className="mt-4 max-w-[560px] text-base leading-relaxed text-muted">
           {isGlanceStudy
