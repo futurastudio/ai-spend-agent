@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
-const title = "Tilden — financial accountability for AI agents";
+const title = "Tilden: financial accountability for AI agents";
 const description =
-  "Know what your AI agents cost and see the work behind the bill. Tilden reads supported coding-agent activity and optional provider cost reports — local-first, every number labeled, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
+  "Know what your AI agents cost and see the work behind the bill. Tilden reads supported coding-agent activity and optional provider cost reports. Local-first, every number labeled, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
 
 export const metadata: Metadata = {
   title,
@@ -82,7 +82,7 @@ export default function RootLayout({
             license: "https://opensource.org/license/mit",
           }}
         />
-        {/* Scroll-reveal is progressive enhancement — without JS, content
+        {/* Scroll-reveal is progressive enhancement: without JS, content
             must simply be visible. */}
         <noscript>
           <style>{`.reveal { opacity: 1 !important; transform: none !important; }`}</style>

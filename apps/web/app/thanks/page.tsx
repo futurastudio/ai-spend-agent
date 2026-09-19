@@ -4,7 +4,7 @@ import Link from "next/link";
 import { CopyCommand } from "@/components/CopyCommand";
 
 export const metadata: Metadata = {
-  title: "Thanks — Tilden",
+  title: "Thanks · Tilden",
   description:
     "Request received. We'll follow up by email about the waitlist.",
   robots: { index: false, follow: true },
@@ -22,7 +22,7 @@ export default async function Thanks({
     <div className="frame flex min-h-screen flex-col">
       <header className="border-b border-hairline">
         <div className="flex h-14 items-center px-5 sm:px-8">
-          <Link href="/" className="wordmark" aria-label="Tilden — home">
+          <Link href="/" className="wordmark" aria-label="Tilden · home">
             Tilden
             <span className="wordmark-cursor" aria-hidden="true" />
           </Link>
@@ -44,7 +44,7 @@ export default async function Thanks({
           {WORKSPACE_STATUS_LINE}
         </p>
         <p className="mt-8 max-w-[560px] text-[15px] leading-relaxed text-muted">
-          While you wait — the local receipt works today:
+          While you wait, the local receipt works today:
         </p>
         <div className="mt-4 max-w-[380px]">
           <CopyCommand />

@@ -17,7 +17,7 @@ export function PageShell({
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
         <div className="flex h-14 items-center justify-between px-5 sm:px-8">
-          <Link href="/" className="wordmark min-h-11" aria-label="Tilden — home">
+          <Link href="/" className="wordmark min-h-11" aria-label="Tilden · home">
             Tilden
             <span className="wordmark-cursor" aria-hidden="true" />
           </Link>
@@ -68,8 +68,8 @@ export function PageShell({
             <span className="text-muted">ai-spend-agent</span>.
           </p>
           <p className="mt-6 max-w-[560px] text-sm leading-relaxed text-muted">
-            Need continuous monitoring, spend alerts, a shared team workspace,
-            or white-label client reports?{" "}
+            Need daily provider reads, monthly budgets you evaluate on
+            Controls, or a shared team workspace with roles?{" "}
             <Link
               href={`/?ref=${ctaRef}#beta`}
               className="text-ink underline-offset-4 hover:underline"
@@ -83,7 +83,7 @@ export function PageShell({
       <footer className="px-5 py-10 sm:px-8">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
           <p className="flex items-baseline gap-3">
-            <Link href="/" className="wordmark wordmark-sm" aria-label="Tilden — home">
+            <Link href="/" className="wordmark wordmark-sm" aria-label="Tilden · home">
               Tilden
               <span className="wordmark-cursor" aria-hidden="true" />
             </Link>
