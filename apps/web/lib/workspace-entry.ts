@@ -22,4 +22,4 @@ export const WORKSPACE_LAUNCHED = WORKSPACE_URL !== null;
 /* Copy in both states, side by side, so a reviewer sees exactly what changes at launch. */
 export const WORKSPACE_STATUS_LINE = WORKSPACE_LAUNCHED
   ? "Workspace sign-in is open. Local mode stays free and private."
-  : "Workspace is not launched. Local mode stays free and private.";
+  : "Workspace is not launched publicly. Local mode stays free and private.";

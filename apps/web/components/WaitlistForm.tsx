@@ -80,14 +80,14 @@ export function WaitlistForm() {
         <span>
           {isGlanceStudy ? (
             <>
-              Thanks—we&apos;ll email{" "}
+              Thanks. We&apos;ll email{" "}
               <span className="font-medium text-green">{email}</span>{" "}
               with study timing and the exact preview build/setup. Expect one
               short session and a day-seven check-in.
             </>
           ) : (
             <>
-              Thanks—we&apos;ll follow up at{" "}
+              Thanks. We&apos;ll follow up at{" "}
               <span className="font-medium text-green">{email}</span>. Reply
               with your CLI receipt total, or your monthly AI spend and
               providers, to move up the list.

@@ -5,6 +5,7 @@ import { Reveal } from "@/components/Reveal";
 import { Statusline } from "@/components/Statusline";
 import { TerminalReceipt } from "@/components/TerminalReceipt";
 import { WaitlistForm } from "@/components/WaitlistForm";
+import { WORKSPACE_STATUS_LINE } from "@/lib/workspace-entry";
 
 const REPO = "https://github.com/futurastudio/ai-spend-agent";
 
@@ -14,40 +15,40 @@ const sources = [
   {
     name: "OpenAI",
     role: "billing API",
-    chip: "LIVE · VERIFIED",
-    tone: "verified",
+    chip: "LIVE · PROVIDER-REPORTED",
+    tone: "reported",
   },
   {
     name: "Anthropic",
     role: "billing API",
-    chip: "LIVE · VERIFIED",
-    tone: "verified",
+    chip: "LIVE · PROVIDER-REPORTED",
+    tone: "reported",
   },
   {
     name: "Cursor",
     role: "billing connector",
-    chip: "BETA · FIXTURE-VERIFIED",
+    chip: "BETA · FIXTURE ONLY",
     tone: "beta",
   },
   {
     name: "GitHub Copilot",
     role: "billing connector",
-    chip: "BETA · FIXTURE-VERIFIED",
+    chip: "BETA · FIXTURE ONLY",
     tone: "beta",
   },
 ] as const;
 
-function chipClass(tone: "live" | "verified" | "beta") {
-  if (tone === "verified") return "border-green-line text-green";
+function chipClass(tone: "live" | "reported" | "beta") {
+  if (tone === "reported") return "border-green-line text-green";
   if (tone === "live") return "border-hairline-bright text-muted";
   return "border-hairline text-faint";
 }
 
 const workspaceItems = [
-  "continuous monitoring",
-  "spend alerts",
-  "shared team workspace",
-  "white-label client reports",
+  "daily provider reads",
+  "monthly budgets on Controls",
+  "shared team workspace with roles",
+  "a briefing on any range",
 ];
 
 const faqs = [
@@ -59,7 +60,7 @@ const faqs = [
   {
     question: "What leaves my computer?",
     answer:
-      "Your transcripts, prompts, file names, and dollar amounts never leave your machine, and no account is needed. Two disclosed exceptions: the CLI counts which commands run — anonymous, never your data or content — after a printed first-run notice, and aibill telemetry off or DO_NOT_TRACK ends it; the optional launch-email ask sends exactly the one payload the CLI prints, only after you type y. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.",
+      "Your transcripts, prompts, file names, and dollar amounts never leave your machine, and no account is needed. Two disclosed exceptions: the CLI counts which commands run (anonymous, never your data or content) after a printed first-run notice, and aibill telemetry off or DO_NOT_TRACK ends it; the optional launch-email ask sends exactly the one payload the CLI prints, only after you type y. Provider credentials are used only when you explicitly connect an official billing API, and MCP results go only to the AI client you invoke under that client’s data policy. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.",
   },
   {
     question: "What can I use today?",
@@ -69,12 +70,12 @@ const faqs = [
   {
     question: "Can it warn me before I hit a usage limit?",
     answer:
-      "Locally, yes. aibill reads the limit windows your agents already report and shows runway — how much of the window is left and when it resets — in the CLI, in Glance, and in the Claude Code statusline. Detection is read-only from local state; where a source doesn't expose a limit, the gap stays visible instead of being guessed.",
+      "Locally, yes. aibill reads the limit windows your agents already report and shows runway (how much of the window is left and when it resets) in the CLI, in Glance, and in the Claude Code statusline. Detection is read-only from local state; where a source doesn't expose a limit, the gap stays visible instead of being guessed.",
   },
   {
-    question: "Can finance use aibill to prove ROI?",
+    question: "Can finance use aibill to justify the spend?",
     answer:
-      "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage, and now records locally confirmed ownership and accepted GitHub outcomes. Defensible ROI requires reconciled cost, an accepted outcome, and independently evidenced business value; the company-accountability layer that reconciles those at team scale is next.",
+      "Not from spend evidence alone. The beta establishes cost, activity, attribution, and coverage, and now records locally confirmed ownership and accepted GitHub outcomes. A defensible business case needs reconciled cost, an accepted outcome, and independently evidenced business value; the company-accountability layer that reconciles those at team scale is next.",
   },
 ];
 
@@ -91,7 +92,7 @@ export default function Home() {
     <div className="frame">
       <header className="sticky top-0 z-40 border-b border-hairline bg-[rgba(12,13,9,0.97)]">
         <div className="flex h-14 items-center justify-between px-5 sm:px-8">
-          <a href="#top" className="wordmark min-h-11" aria-label="Tilden — home">
+          <a href="#top" className="wordmark min-h-11" aria-label="Tilden · home">
             Tilden
             <span className="wordmark-cursor" aria-hidden="true" />
           </a>
@@ -133,7 +134,7 @@ export default function Home() {
       </header>
 
       <main id="top" className="scroll-mt-24">
-        {/* Hero — renders at first paint, never inside a reveal. */}
+        {/* Hero: renders at first paint, never inside a reveal. */}
         <section className="border-b border-hairline px-5 pb-16 pt-16 sm:px-8 sm:pb-20 sm:pt-28">
           <h1 className="max-w-[840px] text-[34px] font-medium leading-[1.08] tracking-[-0.03em] text-ink sm:text-[56px]">
             Know what your AI agents cost.
@@ -206,9 +207,9 @@ export default function Home() {
                   Variance in our tested OpenAI Costs API reconciliation.
                 </p>
                 <p className="mt-3 max-w-[420px] text-[13px] leading-relaxed text-faint">
-                  Release QA — the Costs total reconciled to invoiced
-                  API credits, net of the provider-UI balance. Each user&apos;s
-                  final invoice remains separate.
+                  CLI release QA, not a Workspace result. The Costs total
+                  reconciled to invoiced API credits, net of the provider-UI
+                  balance. Each user&apos;s final invoice remains separate.
                 </p>
               </div>
             </div>
@@ -227,9 +228,10 @@ export default function Home() {
                   Every number carries its label
                 </h3>
                 <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
-                  Verified, estimated, detected, or missing — every dollar on
-                  the receipt states its evidence. Green is reserved for
-                  provider-reported numbers: proven, never modeled.
+                  Provider-reported, estimated, detected, or missing. Every
+                  dollar on the receipt states its basis. Green is reserved for
+                  provider-reported numbers: read from the provider, never
+                  modeled.
                 </p>
               </div>
               <div>
@@ -264,7 +266,7 @@ export default function Home() {
                   </div>
                 </div>
                 <p className="mt-3 font-mono text-[11px] text-faint">
-                  # the four labels, illustrated — only a provider-reported
+                  # the four labels, illustrated. only a provider-reported
                   dollar is ever green
                 </p>
               </div>
@@ -276,7 +278,7 @@ export default function Home() {
                 </h3>
                 <p className="mt-3 max-w-[480px] text-[15px] leading-relaxed text-muted">
                   Detects Claude Pro/Max and ChatGPT Plus/Pro plans from
-                  your agents&apos; local config — read-only, nothing connected.
+                  your agents&apos; local config, read-only, nothing connected.
                   Shows limit runway and how API-equivalent usage compares with
                   the plan&apos;s listed price: a value difference to
                   investigate, not proof of coverage.
@@ -287,13 +289,13 @@ export default function Home() {
                   <div className="tl-line">
                     <span className="tl-strong">DETECTED PLAN  </span>
                     <span className="tl-muted">
-                      Claude Max 5x — from local config (read-only)
+                      Claude Max 5x · from local config (read-only)
                     </span>
                   </div>
                   <div className="tl-line">
                     <span className="tl-strong">COMPARED WITH  </span>
                     <span className="tl-muted">
-                      Claude Max 5x ($100/mo) — API-equivalent
+                      Claude Max 5x ($100/mo) · API-equivalent
                     </span>
                   </div>
                   <div className="tl-line">
@@ -303,7 +305,7 @@ export default function Home() {
                   </div>
                 </div>
                 <p className="mt-3 font-mono text-[11px] text-faint">
-                  # illustration of plan detection — sample mode can&apos;t
+                  # illustration of plan detection. sample mode can&apos;t
                   detect a plan; run npx aibill to see yours
                 </p>
               </div>
@@ -321,8 +323,8 @@ export default function Home() {
               <div>
                 <Statusline />
                 <p className="mt-3 font-mono text-[11px] text-faint">
-                  # the real statusline template — the ~ marks API-equivalent
-                  estimates; billed dollars only ever appear verified
+                  # the real statusline template. the ~ marks API-equivalent
+                  estimates; billed dollars only ever appear provider-reported
                 </p>
               </div>
             </Reveal>
@@ -337,7 +339,7 @@ export default function Home() {
               One receipt. Three places to read it.
             </h2>
             <p className="mt-3 max-w-[640px] text-base leading-relaxed text-muted">
-              Menu bar, terminal, AI client — same local evidence, same
+              Menu bar, terminal, AI client: same local evidence, same
               labels, same numbers, nothing recomputed per surface.
             </p>
             <div className="mt-8">
@@ -365,7 +367,7 @@ export default function Home() {
               <div className="text-lg leading-relaxed text-muted">
                 <p>0 transcripts, prompts, or file names uploaded.</p>
                 <p>Your code and your dollars stay on your machine.</p>
-                <p>Analysis runs locally — no account, no signup.</p>
+                <p>Analysis runs locally. No account, no signup.</p>
               </div>
             </div>
             <p className="mt-10 max-w-[640px] border-t border-hairline pt-6 text-base font-medium text-ink">
@@ -412,8 +414,8 @@ export default function Home() {
               ))}
             </div>
             <p className="mt-3 font-mono text-[11px] text-faint">
-              # statuses are literal — beta means fixture-verified, not yet
-              verified against live billing
+              # statuses are literal. beta means checked against fixtures,
+              not against live billing
             </p>
           </Reveal>
         </section>
@@ -428,11 +430,14 @@ export default function Home() {
             <div className="mt-6 grid gap-12 md:grid-cols-[minmax(0,6fr)_minmax(0,5fr)]">
               <div>
                 <h2 className="text-2xl font-medium tracking-[-0.02em] text-ink sm:text-[32px]">
-                  For teams and agencies accountable for agent spend.
+                  For teams accountable for AI spend.
                 </h2>
                 <p className="mt-4 max-w-[520px] text-base leading-relaxed text-muted">
-                  The engine stays open source. Tilden Workspace adds the same
-                  evidence labels at team scale.
+                  The engine stays open source. Tilden Workspace reads what
+                  Anthropic and OpenAI billed your organization and shows it by
+                  project, model and API key, with every number labeled
+                  provider-reported or estimated. Unread days stay unread,
+                  never zero.
                 </p>
                 <ul className="mt-8 max-w-[520px]">
                   {workspaceItems.map((item) => (
@@ -454,15 +459,16 @@ export default function Home() {
                   Become a founding design partner
                 </h3>
                 <p className="mt-3 text-[15px] leading-relaxed text-muted">
-                  Founding design partners will help shape reconciliation,
-                  budgets, approvals, and reporting before the workspace
-                  launches broadly.
+                  Pilots are hand-onboarded on read-only admin keys, a few
+                  teams at a time. Founding design partners will help shape
+                  reconciliation, budgets, controls, and reporting before the
+                  workspace launches broadly.
                 </p>
                 <div className="mt-6">
                   <WaitlistForm />
                 </div>
                 <p className="mt-4 text-xs leading-relaxed text-faint">
-                  Workspace is not launched. Local mode stays free and private.
+                  {WORKSPACE_STATUS_LINE}
                 </p>
               </div>
             </div>
@@ -537,7 +543,7 @@ export default function Home() {
       <footer className="px-5 py-10 sm:px-8">
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
           <p className="flex items-baseline gap-3">
-            <a href="#top" className="wordmark wordmark-sm" aria-label="Tilden — top">
+            <a href="#top" className="wordmark wordmark-sm" aria-label="Tilden · top">
               Tilden
               <span className="wordmark-cursor" aria-hidden="true" />
             </a>

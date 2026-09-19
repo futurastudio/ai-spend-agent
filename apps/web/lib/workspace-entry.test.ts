@@ -29,7 +29,7 @@ describe("WORKSPACE_STATUS_LINE", () => {
 
   it("unset: the pre-launch line stands", async () => {
     vi.stubEnv("NEXT_PUBLIC_WORKSPACE_URL", "");
-    expect(await statusLine()).toBe("Workspace is not launched. Local mode stays free and private.");
+    expect(await statusLine()).toBe("Workspace is not launched publicly. Local mode stays free and private.");
   });
 
   it("set to the hosted origin: sign-in is open", async () => {
@@ -39,6 +39,6 @@ describe("WORKSPACE_STATUS_LINE", () => {
 
   it("set to something that is not an exact origin: treated as absent", async () => {
     vi.stubEnv("NEXT_PUBLIC_WORKSPACE_URL", `${ORIGIN}/sign-in`);
-    expect(await statusLine()).toBe("Workspace is not launched. Local mode stays free and private.");
+    expect(await statusLine()).toBe("Workspace is not launched publicly. Local mode stays free and private.");
   });
 });
