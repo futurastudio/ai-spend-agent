@@ -858,6 +858,20 @@ function parseClaudeFinancialUsage(
   const write1hField = cacheCreation
     ? optionalTokenComponent(cacheCreation, "ephemeral_1h_input_tokens")
     : { present: false };
+  const writeTotal = writeTotalField.value;
+  let write5m = write5mField.value;
+  let write1h = write1hField.value;
+  const writeSplitConsistent = writeTotal === undefined || (
+    (write5m === undefined || write5m <= writeTotal) &&
+    (write1h === undefined || write1h <= writeTotal) &&
+    (write5m === undefined || write1h === undefined || write5m + write1h === writeTotal)
+  );
+  // A total plus one disjoint duration determines the other duration. Never
+  // add the entire total to the supplied duration or invent a negative split.
+  if (writeTotal !== undefined && writeSplitConsistent) {
+    if (write5m === undefined && write1h !== undefined) write5m = writeTotal - write1h;
+    else if (write1h === undefined && write5m !== undefined) write1h = writeTotal - write5m;
+  }
   const componentsSupported = inputTokens !== undefined &&
     outputTokens !== undefined &&
     (!cacheReadField.present || cacheReadField.value !== undefined) &&
@@ -865,16 +879,18 @@ function parseClaudeFinancialUsage(
     (!reportedTotalField.present || reportedTotalField.value !== undefined) &&
     (!cacheCreationPresent || Boolean(cacheCreation)) &&
     (!write5mField.present || write5mField.value !== undefined) &&
-    (!write1hField.present || write1hField.value !== undefined);
+    (!write1hField.present || write1hField.value !== undefined) &&
+    writeSplitConsistent;
   const usage: TokenUsage = {
     // Retain every valid component for partial evidence, but never let a
     // missing/invalid required field become a priceable zero-dollar call.
     inputTokens: inputTokens ?? 0,
     outputTokens: outputTokens ?? 0,
     cacheReadTokens: cacheReadField.value ?? 0,
-    // Prefer the 5m/1h breakdown; fall back to the total as 5m (cheaper bound).
-    cacheWrite5mTokens: write5mField.value ?? writeTotalField.value ?? 0,
-    cacheWrite1hTokens: write1hField.value ?? 0
+    // With no duration split at all, keep the existing cheaper-bound estimate.
+    // Partial evidence without a total remains partial, never a complete sum.
+    cacheWrite5mTokens: write5m ?? (write1h === undefined ? writeTotal : undefined) ?? 0,
+    cacheWrite1hTokens: write1h ?? 0
   };
   if (componentsSupported) {
     const cacheWriteEvidence = writeTotalField.value !== undefined ||

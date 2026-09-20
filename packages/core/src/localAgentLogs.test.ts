@@ -95,6 +95,36 @@ describe("parseClaudeCodeTranscript", () => {
       calculatedTotalTokens: "calculated_complete",
       reportedTotalTokens: "not_reported"
     });
+    for (const split of [
+      { ephemeral_1h_input_tokens: 200 },
+      { ephemeral_5m_input_tokens: 300 },
+      { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 200 }
+    ]) {
+      const [call] = parseClaudeCodeTranscript(claudeLine({}, { cache_creation: split }));
+      expect(call?.usage).toMatchObject({ cacheWrite5mTokens: 300, cacheWrite1hTokens: 200 });
+      expect(call?.tokenComponentEvidence?.cacheWriteTokens).toBe("observed");
+      expect(call?.usageSupport).toBeUndefined();
+    }
+    for (const split of [
+      { ephemeral_1h_input_tokens: 501 },
+      { ephemeral_5m_input_tokens: 501 },
+      { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 201 }
+    ]) {
+      const diagnostics: Array<{ code: string; count: number }> = [];
+      const invalid = parseClaudeCodeTranscript(claudeLine({}, { cache_creation: split }), "", undefined,
+        diagnostic => diagnostics.push(diagnostic));
+      expect(invalid[0]?.usageSupport).toBe("unsupported_token_shape");
+      expect(invalid[0]?.tokenComponentEvidence).toBeUndefined();
+      expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
+      expect(aggregateCalls(invalid)[0]?.amountUsd).toBeNull();
+    }
+    for (const split of [{ ephemeral_1h_input_tokens: 200 }, { ephemeral_5m_input_tokens: 300 }]) {
+      const [partial] = parseClaudeCodeTranscript(claudeLine({}, {
+        cache_creation_input_tokens: undefined, cache_creation: split
+      }));
+      expect(partial?.tokenComponentEvidence?.cacheWriteTokens).toBe("partial");
+      expect(partial?.tokenComponentEvidence?.calculatedTotalTokens).toBe("calculated_partial");
+    }
   });
 
   it("distinguishes a provider total from a partial calculated Claude component total", () => {
