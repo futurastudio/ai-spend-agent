@@ -581,13 +581,25 @@ export async function finishWorkspaceEnrollment(options: { home?: string; bundle
 }
 
 /** Revocation is one native attempt. Unknown outcomes retain keys and block further writes. */
-export async function disconnectWorkspace(options: { home?: string; confirm: () => Promise<boolean>;
+export async function disconnectWorkspace(options: { home?: string; confirm: (action: "revoke" | "abandon_unexchanged") => Promise<boolean>;
   transport?: WorkspaceDisconnectTransport;
-}): Promise<{ state: "revoked" | "cancelled" | "unconfirmed" | "not_paired" }> {
+}): Promise<{ state: "revoked" | "abandoned" | "cancelled" | "unconfirmed" | "not_paired" }> {
   return withState(options.home ?? homedir(), async (state, save, path) => {
-    if (!state) return { state: "not_paired" };
+    if (!state) {
+      const enrollment = await readEnrollment(path);
+      if (!enrollment) return { state: "not_paired" };
+      // No exchange can have been dispatched while this state is prepared:
+      // finishWorkspaceEnrollment persists exchange_uncertain before transport.
+      // An unsigned pasted browser receipt never overrides uncertain custody.
+      if (enrollment.state !== "prepared") return { state: "unconfirmed" };
+      if (!await options.confirm("abandon_unexchanged")) return { state: "cancelled" };
+      await unlink(join(path, ENROLLMENT_FILE));
+      const directory = await open(path, constants.O_RDONLY | noFollow);
+      try { await directory.sync(); } finally { await directory.close(); }
+      return { state: "abandoned" };
+    }
     if (state.disconnect?.state === "uncertain") return { state: "unconfirmed" };
-    if (!await options.confirm()) return { state: "cancelled" };
+    if (!await options.confirm("revoke")) return { state: "cancelled" };
     if (!state.disconnect) {
       const proof = { purpose: "machine_disconnect_v1", grantId: state.device.grantId,
         grantRevision: state.device.grantRevision, connectionEpoch: state.device.connectionEpoch,

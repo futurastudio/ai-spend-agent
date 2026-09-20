@@ -327,6 +327,21 @@ describe("zero-key evidence-first receipt", () => {
     expect(validateWorkspaceEnrollmentResponse(prepared.request, response, runtime.workspaceNow)).toContain(receipt.requestHash);
     expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, localSourceInstanceRef: ref("t") } }, runtime.workspaceNow)).toThrow();
     expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, publicKey: Buffer.alloc(32, 4).toString("base64url") } }, runtime.workspaceNow)).toThrow();
+    const unusedTransport = vi.fn(async () => { throw Error("unused pairing must not call transport"); });
+    const abandoned = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: unusedTransport });
+    expect(abandoned.stdout).toContain("Unused native pairing key removed");
+    expect(unusedTransport).not.toHaveBeenCalled();
+    const enrollmentPath = join(privateDir, "workspace-enrollment.json");
+    await expect(readFile(enrollmentPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const replacement = await beginWorkspaceEnrollment(home);
+    expect(replacement.request.requestId).not.toBe(prepared.request.requestId);
+    const uncertainEnrollment = JSON.parse(await readFile(enrollmentPath, "utf8"));
+    await writeFile(enrollmentPath, JSON.stringify({ ...uncertainEnrollment, state: "exchange_uncertain" }), { mode: 0o600 });
+    const held = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: unusedTransport });
+    expect(held.stderr).toContain("outcome is unknown");
+    expect(JSON.parse(await readFile(enrollmentPath, "utf8")).state).toBe("exchange_uncertain");
+    expect(unusedTransport).not.toHaveBeenCalled();
+
 
   });
 
