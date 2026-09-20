@@ -2385,6 +2385,11 @@ describe("loadLocalAgentFinancialUsage", () => {
     expect(codexDaily.every(call => call.usageScope === "turn")).toBe(true);
     expect(JSON.stringify(dailyAfter)).not.toContain("Do not retain this prompt");
     expect(JSON.stringify(dailyAfter)).not.toContain("customer-ledger.md");
+    await writeFile(dailyPath, `${await readFile(dailyPath, "utf8")}${JSON.stringify({ type: "event_msg", timestamp: "2026-06-10T09:00:00.000Z",
+      payload: { type: "token_count", info: { last_token_usage: { input_tokens: 500, cached_input_tokens: 100, output_tokens: 50 } } } })}\n`);
+    const missingEndpoint = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true });
+    expect(missingEndpoint.diagnostics).toContainEqual(expect.objectContaining({ agent: "codex", code: "unsupported_token_shape" }));
+
 
   });
 

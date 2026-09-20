@@ -2556,7 +2556,12 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
         || state.hasInheritedHistory && !state.rootTaskStarted) return;
       const info = isRecord(payload.info) ? payload.info : undefined;
       const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
-      if (!total) return;
+      if (!total) {
+        // A usage-bearing event without its cumulative endpoint cannot be
+        // placed safely: a later counter may span this event's UTC day.
+        if (info && isRecord(info.last_token_usage)) report();
+        return;
+      }
       const timestamp = toIso(stringOf(entry.timestamp));
       if (!timestamp || !state.sessionId) { report(); return; }
       const parsed = parseCodexCumulativeUsage(total, previousTotal);
