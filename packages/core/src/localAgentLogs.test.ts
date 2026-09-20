@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtemp, mkdir, symlink, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   aggregateCalls,
@@ -2372,6 +2372,20 @@ describe("loadLocalAgentFinancialUsage", () => {
     expect(JSON.stringify(financial)).not.toContain("customer billing prompt");
     expect(JSON.stringify(financial)).not.toContain("customer-ledger.md");
     expect(JSON.stringify(financial.diagnostics)).not.toContain("sk-proj-value");
+    const dailyBefore = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true });
+    expect(dailyBefore.calls.filter(call => call.agent === "codex").map(call => call.usage.inputTokens)).toEqual([2000, 1000]);
+    const dailyPath = join(codexDir, "rollout-session.jsonl");
+    await writeFile(dailyPath, `${await readFile(dailyPath, "utf8")}\n${JSON.stringify({ type: "event_msg", timestamp: "2026-06-09T09:00:00.000Z",
+      payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10000, cached_input_tokens: 6000, output_tokens: 500 } } } })}\n`);
+    const dailyAfter = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true });
+    const codexDaily = dailyAfter.calls.filter(call => call.agent === "codex");
+    expect(codexDaily.map(call => [call.timestamp.slice(0, 10), call.usage.inputTokens, call.usage.outputTokens])).toEqual([
+      ["2026-06-08", 2000, 250], ["2026-06-08", 1000, 150], ["2026-06-09", 1000, 100]
+    ]);
+    expect(codexDaily.every(call => call.usageScope === "turn")).toBe(true);
+    expect(JSON.stringify(dailyAfter)).not.toContain("Do not retain this prompt");
+    expect(JSON.stringify(dailyAfter)).not.toContain("customer-ledger.md");
+
   });
 
   it("matches the full loader when Codex payload appears before the top-level event type", async () => {

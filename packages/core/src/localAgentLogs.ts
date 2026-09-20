@@ -534,7 +534,10 @@ export type LocalAgentFinancialLogOptions = Omit<
   | "qualitativeIndex"
   | "ownershipIndex"
   | "coverageProjectRef"
->;
+> & {
+  /** Explicit Workspace lane: Codex counter deltas at each UTC event, never lifetime totals on the last day. */
+  workspaceDailyFacts?: boolean;
+};
 
 export type LocalAgentLogDiagnosticCode =
   | "directory_missing"
@@ -2151,6 +2154,11 @@ export async function loadLocalAgentFinancialUsageWithFormats(
   options: LocalAgentFinancialLogOptions = {}
 ): Promise<LocalAgentLogResult> {
   validateLocalAgentFormatDescriptors(registry.map((entry) => entry.descriptor));
+  // Cumulative financial caches cannot supply event-day deltas. Keep their semantics unchanged.
+  if (options.workspaceDailyFacts) {
+    options = { ...options, financialIndex: undefined };
+    registry = registry.filter(runtime => runtime.descriptor.id === "claude-code" || runtime.descriptor.id === "codex");
+  }
   const home = homedir();
   const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
@@ -2229,12 +2237,12 @@ export async function loadLocalAgentFinancialUsageWithFormats(
       const diagnosticsBefore = diagnostics.length;
       const unreadableBefore = scan.unreadableFiles;
       const filesParsedBefore = scan.filesParsed;
-      const parsedCalls = await runtime.parseFinancialFile({
-        filePath: file,
-        sinceMs,
-        scan,
-        diagnostics
-      });
+      const context = { filePath: file, sinceMs, scan, diagnostics };
+      const parsedCalls = options.workspaceDailyFacts && descriptor.id === "codex"
+        ? await readCodexDailyFinancialFile(context)
+        : options.workspaceDailyFacts && descriptor.id === "claude-code"
+          ? await readClaudeCodeFinancialFileForRegistry(context, true)
+          : await runtime.parseFinancialFile(context);
       assertFormatCallOwnership(descriptor, parsedCalls);
       assertFinancialSourceOwnership(descriptor, scan, diagnostics);
       calls.push(...parsedCalls);
@@ -2439,7 +2447,7 @@ function codexHeaderAttribution(
 
 /** @internal Runtime hook owned by the Claude Code registry entry. */
 export async function readClaudeCodeFinancialFileForRegistry(
-  context: LocalAgentFormatFinancialFileContext
+  context: LocalAgentFormatFinancialFileContext, workspaceDailyFacts = false
 ): Promise<LocalAgentCall[]> {
   const { filePath, sinceMs, scan, diagnostics } = context;
   if (!await shouldStreamFile(filePath, sinceMs, "claude-code", scan, diagnostics)) {
@@ -2461,7 +2469,15 @@ export async function readClaudeCodeFinancialFileForRegistry(
         seen,
         (diagnostic) => fileDiagnostics.push(diagnostic)
       );
-      if (call) calls.push(call);
+      if (call) {
+        if (workspaceDailyFacts) {
+          const nativeAgent = stringOf(entry.agentId);
+          const pathAgent = filePath.split(sep).includes("subagents")
+            ? basename(filePath).match(/^agent-([A-Za-z0-9_-]+)\.jsonl$/)?.[1] : undefined;
+          if (nativeAgent || pathAgent) call.subagentId = nativeAgent ?? pathAgent;
+        }
+        calls.push(call);
+      }
     });
   } catch (error) {
     recordUnreadableFile("claude-code", scan, diagnostics, error);
@@ -2522,6 +2538,62 @@ export async function readCodexFinancialFileForRegistry(
     recordParseDiagnostic("codex", scan, diagnostics, diagnostic);
   });
   return call ? [call] : [];
+}
+
+/** Workspace-only event deltas. The existing snapshot reader remains cumulative. */
+async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFileContext): Promise<LocalAgentCall[]> {
+  const { filePath, sinceMs, scan, diagnostics } = context;
+  if (!await shouldStreamFile(filePath, sinceMs, "codex", scan, diagnostics)) return [];
+  const state = createCodexFinancialStreamState(), calls: LocalAgentCall[] = [];
+  const report = () => recordParseDiagnostic("codex", scan, diagnostics, { code: "unsupported_token_shape", count: 1 });
+  let priorEventAt: string | undefined;
+  try {
+    const streamed = await streamJsonlRecords(filePath, entry => {
+      const payload = isRecord(entry.payload) ? entry.payload : undefined;
+      const previousTotal = state.lastTotal ?? state.inheritedUsageBaseline;
+      consumeCodexFinancialEntry(state, entry);
+      if (entry.type !== "event_msg" || payload?.type !== "token_count"
+        || state.hasInheritedHistory && !state.rootTaskStarted) return;
+      const info = isRecord(payload.info) ? payload.info : undefined;
+      const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
+      if (!total) return;
+      const timestamp = toIso(stringOf(entry.timestamp));
+      if (!timestamp || !state.sessionId) { report(); return; }
+      const parsed = parseCodexCumulativeUsage(total, previousTotal);
+      // Missing initial history cannot be assigned to a later day. A changed or
+      // decreasing counter remains unknown at that event; the next exact pair
+      // can establish a delta without pretending the reset was a zero.
+      const firstDayKnown = !!previousTotal || !!state.startedAt && state.startedAt.slice(0, 10) === timestamp.slice(0, 10);
+      const chronological = !priorEventAt || timestamp >= priorEventAt;
+      const cachedShapeStable = !previousTotal ||
+        Object.hasOwn(total, "cached_input_tokens") === Object.hasOwn(previousTotal, "cached_input_tokens");
+      const supported = parsed.supported && firstDayKnown && chronological && cachedShapeStable;
+      priorEventAt = timestamp;
+      if (supported && previousTotal && parsed.usage.inputTokens === 0 && parsed.usage.outputTokens === 0
+        && (parsed.usage.cacheReadTokens ?? 0) === 0 && (parsed.reportedTotalTokens ?? 0) === 0) return;
+      if (!supported) report();
+      const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
+      // The cumulative endpoint fingerprint is stable across copies of a
+      // rollout. Different deltas for that same endpoint become a conflict in
+      // dedupeCumulativeSessionCalls rather than two financial contributions.
+      const callId = `callref_${createHash("sha256").update("codex-workspace-counter-event-v1\0")
+        .update(JSON.stringify([state.sessionId, timestamp, total.input_tokens ?? null,
+          total.output_tokens ?? null, total.cached_input_tokens ?? null, total.total_tokens ?? null])).digest("hex")}`;
+      calls.push({ agent: "codex", sessionId: state.sessionId, callId,
+        model: state.model ?? "codex", timestamp, startedAt: timestamp,
+        project: projectFromCwd(workingDirectory), workingDirectory,
+        usageScope: "turn", usageSupport: supported ? "complete" : "unsupported_token_shape",
+        usage: parsed.usage,
+        ...(supported && parsed.tokenComponentEvidence ? { tokenComponentEvidence: parsed.tokenComponentEvidence } : {}),
+        ...(parsed.reportedTotalTokens !== undefined ? { reportedTotalTokens: parsed.reportedTotalTokens } : {}) });
+    });
+    if (streamed.hadContent) scan.filesParsed++;
+    if (streamed.malformedLines) recordParseDiagnostic("codex", scan, diagnostics, { code: "malformed_jsonl", count: streamed.malformedLines });
+    return calls;
+  } catch (error) {
+    recordUnreadableFile("codex", scan, diagnostics, error);
+    return [];
+  }
 }
 
 /** @internal Runtime hook owned by the Gemini CLI registry entry. */
