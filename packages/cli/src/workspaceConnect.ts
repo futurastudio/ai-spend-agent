@@ -314,6 +314,8 @@ async function withState<T>(home: string, callback: (state: WorkspaceState | nul
 }
 
 export type WorkspaceStatus = { state: "not_connected" } | {
+  state: "enrollment_pending"; enrollment: "prepared" | "exchange_uncertain"; requestId: string;
+} | {
   state: "connected"; origin: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
   disconnect: "uncertain" | "revoked" | null;
   pending: null | { state: WorkspacePending["state"]; factCount: number; generatedAt: string; refusal: WorkspacePending["refusal"] };
@@ -323,10 +325,14 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
   let path: string;
   try { path = await privateDirectory(home, false); } catch (error) { if (missing(error)) return { state: "not_connected" }; throw error; }
   const state = await readState(path);
-  return state ? { state: "connected", origin: state.device.origin, lastAcceptedAt: state.lastAcceptedAt,
+  if (!state) {
+    const enrollment = await readEnrollment(path);
+    return enrollment ? { state: "enrollment_pending", enrollment: enrollment.state, requestId: enrollment.request.requestId }
+      : { state: "not_connected" };
+  }
+  return { state: "connected", origin: state.device.origin, lastAcceptedAt: state.lastAcceptedAt,
     acknowledgedFacts: Object.keys(state.facts).length, disconnect: state.disconnect?.state ?? null, pending: state.pending ? { state: state.pending.state,
-      factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null }
-    : { state: "not_connected" };
+      factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null };
 }
 
 export type WorkspaceTransportResult = { status: number; body: unknown };
@@ -499,19 +505,24 @@ async function readEnrollment(path: string): Promise<WorkspaceEnrollmentState | 
   } catch { throw Error("Workspace enrollment state is unreadable or invalid; it was not reset."); }
   finally { await handle.close(); }
 }
+export class WorkspaceEnrollmentRefusal extends Error {
+  constructor(readonly reason: "connected" | "exchange_uncertain") { super("Workspace enrollment unavailable"); }
+}
 /** Generates native custody before displaying public enrollment material. No network call. */
-export async function beginWorkspaceEnrollment(home = homedir()): Promise<{ request: WorkspaceEnrollmentRequest; bundle: string }> {
+export async function beginWorkspaceEnrollment(home = homedir(), options: { restart?: boolean } = {}): Promise<{
+  request: WorkspaceEnrollmentRequest; bundle: string; disposition: "created" | "reused" | "restarted";
+}> {
   return withState(home, async (device, _save, path) => {
-    if (device) throw Error("This machine is already connected. Disconnect it in the Workspace before pairing it again.");
+    if (device) throw new WorkspaceEnrollmentRefusal("connected");
     const retained = await readEnrollment(path);
-    if (retained?.state === "exchange_uncertain") throw Error("The earlier exchange outcome is unknown. Revoke that enrollment in the Workspace before starting again.");
-    if (retained) return { request: retained.request, bundle: encodeWorkspaceBundle(retained.request) };
+    if (retained?.state === "exchange_uncertain") throw new WorkspaceEnrollmentRefusal("exchange_uncertain");
+    if (retained && !options.restart) return { request: retained.request, bundle: encodeWorkspaceBundle(retained.request), disposition: "reused" };
     const pair = generateKeyPairSync("ed25519"), ref = () => `oref_${randomBytes(32).toString("base64url")}`;
     const request: WorkspaceEnrollmentRequest = { schemaVersion: "1", kind: "tilden_machine_enrollment_request", origin: WORKSPACE_ORIGIN,
       publicKey: pair.publicKey.export({ format: "jwk" }).x!, keyId: ref(), requestId: ref() };
     await atomicPrivateJson(path, ENROLLMENT_FILE, { version: 1, request,
       privateKeyPem: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), state: "prepared" });
-    return { request, bundle: encodeWorkspaceBundle(request) };
+    return { request, bundle: encodeWorkspaceBundle(request), disposition: retained ? "restarted" : "created" };
   });
 }
 export function validateWorkspaceEnrollmentResponse(request: WorkspaceEnrollmentRequest, response: WorkspaceEnrollmentResponse, now: string): string {

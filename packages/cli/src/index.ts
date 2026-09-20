@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {
   beginWorkspaceEnrollment, finishWorkspaceEnrollment, workspaceStatus, prepareWorkspacePush,
-  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson,
+  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson, WorkspaceEnrollmentRefusal,
   type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
 } from "./workspaceConnect.js";
 import { workspaceClock } from "./lib/clock.js";
@@ -267,6 +267,7 @@ type ParsedArgs = {
   command?: string;
   workspaceAction?: string;
   workspaceCode?: string;
+  workspaceRestart?: boolean;
   sample: boolean;
   path: string;
   pathExplicit?: boolean;
@@ -1686,6 +1687,13 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (action === "status") {
       const status = await workspaceStatus(runtime.homeDirectory);
       if (status.state === "not_connected") return ok("This machine has no completed local Workspace pairing. No logs or network were read.");
+      if (status.state === "enrollment_pending") return ok([
+        `Unfinished connection request: ${status.requestId.slice(-8)}`,
+        status.enrollment === "prepared"
+          ? "No native exchange was attempted. Run npx aibill@latest workspace connect to display this request again, or npx aibill@latest workspace connect --restart to replace an expired or cancelled request."
+          : `The exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`,
+        "No logs or network were read."
+      ].join("\n"));
       return ok([`Workspace: ${status.origin}`, `Last accepted push: ${status.lastAcceptedAt ?? "no push yet"}`,
         `Pairing state: local record present; disconnect ${status.disconnect ?? "not requested"}`,
         `Acknowledged fact keys: ${status.acknowledgedFacts}`, `Pending batch: ${status.pending?.state ?? "none"}`,
@@ -1693,9 +1701,13 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     }
     if (action === "connect") {
       if (!args.workspaceCode) {
-        if (!await consent("Create a private device key and display its public enrollment request? No session facts are sent. [y/N] ")) return ok("Not paired.");
-        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory);
-        return ok([`Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
+        if (!await consent(args.workspaceRestart
+          ? "Replace any unused connection request with a new private key and public request? The previous unused key will be removed; connected or uncertain exchanges cannot be restarted. No session facts are sent. [y/N] "
+          : "Create a private device key, or display an existing unused connection request? No session facts are sent. [y/N] ")) return fail("Connection request unchanged. No new request was created.");
+        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory, { restart: args.workspaceRestart });
+        return ok([`${prepared.disposition === "reused" ? "Reused" : "New"} connection request: ${prepared.request.requestId.slice(-8)}`,
+          ...(prepared.disposition === "reused" ? ["This is the same unfinished request. If it expired or was cancelled in the browser, run npx aibill@latest workspace connect --restart."] : []),
+          `Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
           "Then run: npx aibill workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
@@ -1714,7 +1726,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
       return result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
         : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill workspace connect to start a new request.")
-        : result.state === "cancelled" ? ok("Pairing kept.") : result.state === "not_paired" ? ok("No completed local pairing exists.")
+        : result.state === "cancelled" ? fail("Pairing kept. Disconnect was not confirmed; no request or key was removed.") : result.state === "not_paired" ? ok("No completed local pairing exists.")
           : fail(`Disconnect outcome is unknown. Local keys remain; no retry was sent. Reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
     }
     const status = await workspaceStatus(runtime.homeDirectory);
@@ -1740,8 +1752,11 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     return sent.state === "accepted" ? ok(`Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`)
       : sent.state === "refused" ? fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.")
         : fail("Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.");
-  } catch {
+  } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
+    if (error instanceof WorkspaceEnrollmentRefusal) return fail(error.reason === "connected"
+      ? "This machine is already connected. Disconnect it before starting another connection request."
+      : `The earlier exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
     return fail("Workspace operation stopped safely. Local state was not reset; inspect pairing status and permissions before continuing.");
   }
 }
@@ -8039,7 +8054,11 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (command === "workspace" && rest[0] && !rest[0].startsWith("--")) {
     parsed.workspaceAction = rest.shift();
     if (parsed.workspaceAction === "connect" && rest[0] && !rest[0].startsWith("--")) parsed.workspaceCode = rest.shift();
-    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], push, status, or disconnect");
+    if (parsed.workspaceAction === "connect" && !parsed.workspaceCode && rest.length === 1 && rest[0] === "--restart") {
+      parsed.workspaceRestart = true;
+      rest.shift();
+    }
+    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], connect --restart, push, status, or disconnect");
   }
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
@@ -8716,6 +8735,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "",
     "Optional Workspace machine attribution (explicit consent, no provider calls):",
     "  npx aibill workspace connect         Prepare this machine's public pairing request",
+    "  npx aibill workspace connect --restart Replace an unused request after browser expiry or cancellation",
     "  npx aibill workspace connect <code>  Finish the browser-confirmed pairing",
     "  npx aibill workspace push            Preview and send local session facts",
     "  npx aibill workspace status          Read local pairing/pending status only",

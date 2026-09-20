@@ -5,7 +5,16 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.8 (Unreleased)
+## 0.9.9 (Unreleased)
+
+Machine setup now distinguishes a new public request from a retained one and
+shows a short request ID to match against the Workspace review. Run
+`workspace connect --restart` to explicitly replace an unused request in one
+step. Connected machines and exchanges with uncertain outcomes cannot be
+reset this way. Status reports unfinished pairing, and declining disconnect
+returns a failure exit code so chained commands do not silently reuse a key.
+
+## 0.9.8 (2026-09-20)
 
 Adds opt-in Workspace machine commands: `workspace connect`, `workspace
 status`, `workspace push`, and `workspace disconnect`. The `aibill` alias

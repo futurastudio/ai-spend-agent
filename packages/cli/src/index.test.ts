@@ -242,7 +242,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.8$/);
+    expect(result.stdout).toMatch(/^0\.9\.9$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -300,6 +300,10 @@ describe("zero-key evidence-first receipt", () => {
     const acknowledged = JSON.parse(await readFile(statePath, "utf8"));
     expect(acknowledged.pending).toBeNull();
     expect(acknowledged.device.sequence).toBe("1");
+    const connectedRestart = await runCli(["workspace", "connect", "--restart"], runtime);
+    expect(connectedRestart.exitCode).toBe(1);
+    expect(connectedRestart.stderr).toContain("already connected");
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(acknowledged);
     const disconnected = await runCli(["workspace", "disconnect"], { ...runtime,
       workspaceDisconnectTransport: async body => {
         const { signature, publicKey, ...proof } = JSON.parse(body);
@@ -312,6 +316,21 @@ describe("zero-key evidence-first receipt", () => {
     const prepared = await beginWorkspaceEnrollment(home);
     expect(Object.keys(prepared.request).sort()).toEqual(["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"].sort());
     expect(prepared.bundle).not.toContain("localSourceInstanceRef");
+    expect(prepared.disposition).toBe("created");
+    const reused = await runCli(["workspace", "connect"], runtime);
+    expect(reused.stdout).toContain(`Reused connection request: ${prepared.request.requestId.slice(-8)}`);
+    expect(reused.stdout).toContain(prepared.bundle);
+    expect(reused.stdout).toContain("workspace connect --restart");
+    const pendingStatus = await runCli(["workspace", "status"], runtime);
+    expect(pendingStatus.stdout).toContain(`Unfinished connection request: ${prepared.request.requestId.slice(-8)}`);
+    expect(pendingStatus.stdout).toContain("No native exchange was attempted");
+    const declined = { ...runtime, consentRead: async () => "" };
+    expect((await runCli(["workspace", "disconnect"], declined)).exitCode).toBe(1);
+    expect((await runCli(["workspace", "connect", "--restart"], declined)).exitCode).toBe(1);
+    expect((await beginWorkspaceEnrollment(home)).request).toEqual(prepared.request);
+    for (const command of [["workspace", "connect", "code", "--restart"], ["workspace", "status", "--restart"], ["workspace", "connect", "--restart", "--restart"]]) {
+      expect((await runCli(command, runtime)).exitCode).toBe(1);
+    }
     const intent = { publicKey: prepared.request.publicKey, keyId: prepared.request.keyId, requestId: prepared.request.requestId,
       localSourceInstanceRef: ref("s"), policyRevision: ref("p"), readerRevision: ref("r"), projectAdmissionRevision: ref("j"),
       collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", grantExpiresAt: "2026-10-01T00:00:00.000Z" };
@@ -335,8 +354,22 @@ describe("zero-key evidence-first receipt", () => {
     await expect(readFile(enrollmentPath)).rejects.toMatchObject({ code: "ENOENT" });
     const replacement = await beginWorkspaceEnrollment(home);
     expect(replacement.request.requestId).not.toBe(prepared.request.requestId);
+    const restarted = await runCli(["workspace", "connect", "--restart"], { ...runtime,
+      workspaceExchangeTransport: unusedTransport, workspaceDisconnectTransport: unusedTransport });
+    expect(restarted.exitCode).toBe(0);
+    const newRequest = await beginWorkspaceEnrollment(home);
+    expect(newRequest.request.requestId).not.toBe(replacement.request.requestId);
+    expect(newRequest.request.publicKey).not.toBe(replacement.request.publicKey);
+    expect(restarted.stdout).toContain(`New connection request: ${newRequest.request.requestId.slice(-8)}`);
+    expect(restarted.stdout).toContain(newRequest.bundle);
+    expect(messages.at(-1)).toContain("Replace any unused connection request");
     const uncertainEnrollment = JSON.parse(await readFile(enrollmentPath, "utf8"));
     await writeFile(enrollmentPath, JSON.stringify({ ...uncertainEnrollment, state: "exchange_uncertain" }), { mode: 0o600 });
+    const uncertainRestart = await runCli(["workspace", "connect", "--restart"], { ...runtime, workspaceExchangeTransport: unusedTransport });
+    expect(uncertainRestart.exitCode).toBe(1);
+    expect(uncertainRestart.stderr).toContain("earlier exchange outcome is unknown");
+    expect(JSON.parse(await readFile(enrollmentPath, "utf8"))).toEqual({ ...uncertainEnrollment, state: "exchange_uncertain" });
+    expect((await runCli(["workspace", "status"], runtime)).stdout).toContain("exchange outcome is unknown");
     const held = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: unusedTransport });
     expect(held.stderr).toContain("outcome is unknown");
     expect(JSON.parse(await readFile(enrollmentPath, "utf8")).state).toBe("exchange_uncertain");
