@@ -435,7 +435,7 @@ export default function Home() {
                 <p className="mt-4 max-w-[520px] text-base leading-relaxed text-muted">
                   The engine stays open source. Tilden Workspace reads what
                   Anthropic and OpenAI billed your organization and shows it by
-                  project, model and API key, with every number labeled
+                  project and model, with every number labeled
                   provider-reported or estimated. Unread days stay unread,
                   never zero.
                 </p>
