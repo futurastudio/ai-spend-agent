@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import {
+  beginWorkspaceEnrollment, finishWorkspaceEnrollment, workspaceStatus, prepareWorkspacePush,
+  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson,
+  type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
+} from "./workspaceConnect.js";
+import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
@@ -259,6 +265,8 @@ export type CliResult = {
 
 type ParsedArgs = {
   command?: string;
+  workspaceAction?: string;
+  workspaceCode?: string;
   sample: boolean;
   path: string;
   pathExplicit?: boolean;
@@ -335,6 +343,12 @@ type ParsedArgs = {
 };
 
 export type CliRuntimeOptions = {
+  /** Workspace test seams; production uses native transport and explicit financial-only loading. */
+  workspaceNow?: string;
+  workspaceTransport?: WorkspaceTransport;
+  workspaceExchangeTransport?: WorkspaceExchangeTransport;
+  workspaceDisconnectTransport?: WorkspaceDisconnectTransport;
+  workspaceLoadCalls?: () => Promise<Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>>;
   /** Test/embedding override. Production always defaults to the OS home. */
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
@@ -521,6 +535,8 @@ export async function runCli(
   if (args.command === "list-sources") {
     return listSourcesCommand(args);
   }
+
+  if (args.command === "workspace") return workspaceCommand(args, runtime);
 
   if (args.command === "connect") {
     return connectCommand(args);
@@ -1653,6 +1669,83 @@ function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string 
  * persists the typed email on failure. `--forget` clears local signup state;
  * `--never` records never-ask without sending anything.
  */
+async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const fail = (message: string): CliResult => ({ exitCode: 1, stdout: "", stderr: message });
+  const action = args.workspaceAction;
+  if (!["connect", "push", "status", "disconnect"].includes(action ?? ""))
+    return fail("Use npx aibill workspace connect [response-bundle], push, status, or disconnect.");
+  if (action !== "status" && (runtime.interactive !== true || !runtime.consentRead && !runtime.prompt))
+    return fail("Workspace changes require an interactive terminal and explicit consent. Status remains available without a terminal.");
+  const consent = async (message: string): Promise<boolean> => {
+    try {
+      const answer = runtime.consentRead ? await runtime.consentRead(message, 120000) : await runtime.prompt?.(message);
+      return answer?.trim().toLowerCase() === "y" || answer?.trim().toLowerCase() === "yes";
+    } catch { return false; }
+  };
+  try {
+    if (action === "status") {
+      const status = await workspaceStatus(runtime.homeDirectory);
+      if (status.state === "not_connected") return ok("This machine has no completed local Workspace pairing. No logs or network were read.");
+      return ok([`Workspace: ${status.origin}`, `Last accepted push: ${status.lastAcceptedAt ?? "no push yet"}`,
+        `Pairing state: local record present; disconnect ${status.disconnect ?? "not requested"}`,
+        `Acknowledged fact keys: ${status.acknowledgedFacts}`, `Pending batch: ${status.pending?.state ?? "none"}`,
+        "Status reads local pairing state only; it does not confirm current server grant authority."].join("\n"));
+    }
+    if (action === "connect") {
+      if (!args.workspaceCode) {
+        if (!await consent("Create a private device key and display its public enrollment request? No session facts are sent. [y/N] ")) return ok("Not paired.");
+        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory);
+        return ok([`Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
+          "Then run: npx aibill workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
+      }
+      const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
+        now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,
+        confirm: details => consent([`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}?`,
+          `Selected tenant: ${details.tenantId}`, `Reviewed source: ${details.localSourceInstanceRef}`, `Project: ${details.projectId}`, `Source project: ${details.sourceProjectRef}`,
+          `Exact enrollment policy: ${workspaceCanonicalJson(details.policy)}`, "Sign this enrollment exchange? [y/N] "].join("\n")) });
+      return result.state === "connected" ? ok(`Paired. Finish all-repository consent at ${WORKSPACE_ORIGIN}/settings/machines before your first push. Then run npx aibill workspace push to preview local session facts.`)
+        : result.state === "cancelled" ? ok("Pairing exchange not sent.")
+          : fail("Pairing outcome is unknown. Do not replay this response bundle; inspect and revoke the enrollment in Settings before starting another.");
+    }
+    if (action === "disconnect") {
+      const result = await disconnectWorkspace({ home: runtime.homeDirectory, transport: runtime.workspaceDisconnectTransport,
+        confirm: action => consent(action === "abandon_unexchanged"
+          ? "This native request has never attempted exchange. Destroy its unused private pairing key so it can no longer complete enrollment? Cancel any browser challenge in Settings as well. [y/N] "
+          : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
+      return result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
+        : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill workspace connect to start a new request.")
+        : result.state === "cancelled" ? ok("Pairing kept.") : result.state === "not_paired" ? ok("No completed local pairing exists.")
+          : fail(`Disconnect outcome is unknown. Local keys remain; no retry was sent. Reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
+    }
+    const status = await workspaceStatus(runtime.homeDirectory);
+    if (status.state !== "connected") return fail("Connect this machine before pushing local facts.");
+    if (status.disconnect) return fail("Disconnect is pending or complete. No session facts were read or sent.");
+    if (status.pending?.state === "refused") return fail("A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.");
+    const now = runtime.workspaceNow ?? workspaceClock.now();
+    const loaded = status.pending ? undefined : runtime.workspaceLoadCalls ? await runtime.workspaceLoadCalls()
+      : await loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, sinceIso: workspaceClock.daysBefore(now, 30) });
+    if (loaded?.diagnostics.some(item => item.code !== "directory_missing"))
+      return fail("Local source reading is incomplete. No facts were replaced or sent; resolve the reported source coverage before pushing.");
+    const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
+      confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
+        `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
+        status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
+          : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n")) });
+    if (prepared.state === "unchanged") return ok(prepared.coverage?.excludedCalls
+      ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
+      : "No changed eligible local session facts to push.");
+    if (prepared.state === "cancelled") return ok("Not sent.");
+    if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
+    const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
+    return sent.state === "accepted" ? ok(`Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`)
+      : sent.state === "refused" ? fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.")
+        : fail("Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.");
+  } catch {
+    // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
+    return fail("Workspace operation stopped safely. Local state was not reset; inspect pairing status and permissions before continuing.");
+  }
+}
+
 async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
   const stateFile = signupStateFilePath(runtime.homeDirectory);
 
@@ -7943,6 +8036,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     path: process.cwd(),
     parseErrors: []
   };
+  if (command === "workspace" && rest[0] && !rest[0].startsWith("--")) {
+    parsed.workspaceAction = rest.shift();
+    if (parsed.workspaceAction === "connect" && rest[0] && !rest[0].startsWith("--")) parsed.workspaceCode = rest.shift();
+    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], push, status, or disconnect");
+  }
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
   }
@@ -8615,6 +8713,13 @@ function helpText(telemetryDisclosure?: boolean): string {
     `  ${actionRuntimeCommand("identify")}    Confirm the human owner, team, client/cost center, and approval role`,
     `  ${actionRuntimeCommand("outcome github")}    Attach one merged PR whose observed status checks passed`,
     `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
+    "",
+    "Optional Workspace machine attribution (explicit consent, no provider calls):",
+    "  npx aibill workspace connect         Prepare this machine's public pairing request",
+    "  npx aibill workspace connect <code>  Finish the browser-confirmed pairing",
+    "  npx aibill workspace push            Preview and send local session facts",
+    "  npx aibill workspace status          Read local pairing/pending status only",
+    "  npx aibill workspace disconnect      Revoke the grant or abandon an unused pairing key",
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",

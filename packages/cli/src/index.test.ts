@@ -1,3 +1,4 @@
+import { generateKeyPairSync, createHash, verify } from "node:crypto";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, realpath, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -16,6 +17,8 @@ import {
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
+import { aggregateWorkspaceFacts, beginWorkspaceEnrollment, validateWorkspaceEnrollmentResponse, workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey,
+  workspaceFactContentHash, WORKSPACE_ORIGIN, type WorkspaceState, type WorkspaceEnrollmentResponse } from "./workspaceConnect.js";
 import { decideReportAutoOpen, platformOpenCommand } from "./reportOpener.js";
 import {
   appendProjectApprovalEvent,
@@ -239,9 +242,107 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.7$/);
+    expect(result.stdout).toMatch(/^0\.9\.8$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
+
+    const home = await mkdtemp(join(tmpdir(), "aibill-workspace-state-"));
+    const load = vi.fn(async () => { throw Error("unexpected local read"); });
+    const status = await runCli(["workspace", "status"], { homeDirectory: home, workspaceLoadCalls: load });
+    expect(status.stdout).toContain("no completed local Workspace pairing");
+    expect(load).not.toHaveBeenCalled();
+    const key = generateKeyPairSync("ed25519"), ref = (char: string) => `oref_${char.repeat(43)}`;
+    const privateDir = join(home, ".aibill");
+    await mkdir(privateDir, { mode: 0o700 });
+    const state: WorkspaceState = { version: 1, device: { origin: WORKSPACE_ORIGIN, grantId: ref("a"), keyId: ref("b"),
+      grantRevision: "1", connectionEpoch: "1", sequence: "0", token: Buffer.alloc(32, 1).toString("base64url"),
+      privateKeyPem: key.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", expiresAt: "2026-10-01T00:00:00.000Z" },
+      facts: {}, pending: null, lastAcceptedAt: null, disconnect: null };
+    const statePath = join(privateDir, "workspace-device.json");
+    await writeFile(statePath, workspaceCanonicalJson(state as never), { mode: 0o600 });
+    const call = { agent: "codex" as const, provider: "openai" as const, sessionId: "private-session", callId: "call-one",
+      model: "gpt-5", timestamp: "2026-09-18T10:00:00.000Z", startedAt: "2026-09-18T10:00:00.000Z",
+      usageScope: "turn" as const, workingDirectory: "/private/repo", project: "repo", usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 3 },
+      tokenComponentEvidence: { inputTokens: "observed", outputTokens: "observed", cacheReadTokens: "observed",
+        cacheWriteTokens: "not_separately_reported", thoughtTokens: "not_separately_reported", toolTokens: "not_separately_reported",
+        calculatedTotalTokens: "calculated_partial", reportedTotalTokens: "not_reported" } as const };
+    const aggregate = aggregateWorkspaceFacts([call], {}, state.device.keyId);
+    expect(aggregate.facts[0]?.tokens.cacheWriteTokens).toBeNull();
+    expect(JSON.stringify(aggregate)).not.toContain("private-session");
+    expect(JSON.stringify(aggregate)).not.toContain("/private/repo");
+    expect(aggregateWorkspaceFacts([call], {}, ref("c")).facts[0]?.sessionRefs).not.toEqual(aggregate.facts[0]?.sessionRefs);
+    const fact = aggregate.facts[0]!;
+    const prior = { [workspaceFactKey(fact)]: { revision: "1", contentHash: workspaceFactContentHash(fact) } };
+    expect(aggregateWorkspaceFacts([call], prior, state.device.keyId).facts).toEqual([]);
+    expect(aggregateWorkspaceFacts([{ ...call, usage: { ...call.usage, outputTokens: 6 } }], prior, state.device.keyId).facts[0]?.factRevision).toBe("2");
+    expect(workspaceDomainHash("tilden:test:v1", { b: 2, a: 1 })).toBe(`sha256_${createHash("sha256").update('tilden:test:v1\0{"a":1,"b":2}').digest("hex")}`);
+    const messages: string[] = [], requests: string[] = [];
+    const runtime = { homeDirectory: home, interactive: true, workspaceNow: "2026-09-20T12:00:00.000Z",
+      consentRead: async (message: string) => { messages.push(message); return "y"; },
+      workspaceLoadCalls: vi.fn(async () => ({ calls: [call], records: [], diagnostics: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const] })),
+      workspaceTransport: async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); } };
+    const first = await runCli(["workspace", "push"], runtime);
+    expect(first.stderr).toContain("outcome is unknown");
+    expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");
+    const second = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: load,
+      workspaceTransport: async (_path, body) => {
+        requests.push(body); const envelope = JSON.parse(body), { signature, ...unsigned } = envelope;
+        expect(verify(null, Buffer.from(workspaceCanonicalJson(unsigned)), key.publicKey, Buffer.from(signature.value, "base64url"))).toBe(true);
+        return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
+          factCount: 1, introduced: 1, replaced: 0, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z" } };
+      } });
+    expect(second.exitCode).toBe(0);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+    expect(messages.at(-1)).toContain("identical retained signed batch");
+    expect(load).not.toHaveBeenCalled();
+    const acknowledged = JSON.parse(await readFile(statePath, "utf8"));
+    expect(acknowledged.pending).toBeNull();
+    expect(acknowledged.device.sequence).toBe("1");
+    const disconnected = await runCli(["workspace", "disconnect"], { ...runtime,
+      workspaceDisconnectTransport: async body => {
+        const { signature, publicKey, ...proof } = JSON.parse(body);
+        expect(publicKey).toBe(key.publicKey.export({ format: "jwk" }).x);
+        expect(verify(null, Buffer.from(workspaceCanonicalJson(proof)), key.publicKey, Buffer.from(signature, "base64url"))).toBe(true);
+        return { status: 200, body: { state: "revoked", grantId: state.device.grantId, connectionEpoch: "2", revokedAt: "2026-09-20T12:02:00.000Z" } };
+      } });
+    expect(disconnected.stdout).toContain("Workspace revoked");
+    await expect(readFile(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const prepared = await beginWorkspaceEnrollment(home);
+    expect(Object.keys(prepared.request).sort()).toEqual(["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"].sort());
+    expect(prepared.bundle).not.toContain("localSourceInstanceRef");
+    const intent = { publicKey: prepared.request.publicKey, keyId: prepared.request.keyId, requestId: prepared.request.requestId,
+      localSourceInstanceRef: ref("s"), policyRevision: ref("p"), readerRevision: ref("r"), projectAdmissionRevision: ref("j"),
+      collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", grantExpiresAt: "2026-10-01T00:00:00.000Z" };
+    const binding = { tenantId: "tenant_synthetic", policy: { active: true, consentRevisionRef: intent.policyRevision }, projectId: ref("k"), sourceProjectRef: ref("l") };
+    const nonce = Buffer.alloc(32, 2).toString("base64url"), pairingCode = Buffer.alloc(16, 3).toString("base64url");
+    const digest = (value: string) => `sha256_${createHash("sha256").update(value).digest("hex")}`;
+    const receipt = { state: "prepared" as const, challengeId: intent.requestId, grantId: ref("g"), deviceId: ref("d"), policy: binding.policy, projectId: binding.projectId, sourceProjectRef: binding.sourceProjectRef,
+      projectRevision: intent.projectAdmissionRevision, collectionNotBefore: intent.collectionNotBefore, authorityStartsAt: intent.authorityStartsAt,
+      grantExpiresAt: intent.grantExpiresAt, nonce, pairingCode, requestHash: workspaceDomainHash("tilden:device-enrollment-request:v1", {
+        ...intent, challengeId: intent.requestId, grantId: ref("g"), deviceId: ref("d"), nonceHash: digest(nonce), pairingCodeHash: digest(pairingCode) }) };
+    const response: WorkspaceEnrollmentResponse = { schemaVersion: "1" as const, kind: "tilden_machine_enrollment_response" as const, origin: WORKSPACE_ORIGIN,
+      intent, binding, receipt, confirmation: { state: "confirmed" as const, challengeId: intent.requestId } };
+    expect(validateWorkspaceEnrollmentResponse(prepared.request, response, runtime.workspaceNow)).toContain(receipt.requestHash);
+    expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, localSourceInstanceRef: ref("t") } }, runtime.workspaceNow)).toThrow();
+    expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, publicKey: Buffer.alloc(32, 4).toString("base64url") } }, runtime.workspaceNow)).toThrow();
+    const unusedTransport = vi.fn(async () => { throw Error("unused pairing must not call transport"); });
+    const abandoned = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: unusedTransport });
+    expect(abandoned.stdout).toContain("Unused native pairing key removed");
+    expect(unusedTransport).not.toHaveBeenCalled();
+    const enrollmentPath = join(privateDir, "workspace-enrollment.json");
+    await expect(readFile(enrollmentPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const replacement = await beginWorkspaceEnrollment(home);
+    expect(replacement.request.requestId).not.toBe(prepared.request.requestId);
+    const uncertainEnrollment = JSON.parse(await readFile(enrollmentPath, "utf8"));
+    await writeFile(enrollmentPath, JSON.stringify({ ...uncertainEnrollment, state: "exchange_uncertain" }), { mode: 0o600 });
+    const held = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: unusedTransport });
+    expect(held.stderr).toContain("outcome is unknown");
+    expect(JSON.parse(await readFile(enrollmentPath, "utf8")).state).toBe("exchange_uncertain");
+    expect(unusedTransport).not.toHaveBeenCalled();
+
+
   });
 
   it("rejects unknown flags and missing flag values before reading evidence", async () => {
