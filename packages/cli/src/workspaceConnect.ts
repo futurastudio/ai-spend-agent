@@ -445,7 +445,7 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
 
 export type WorkspaceEnrollmentRequest = {
   schemaVersion: "1"; kind: "tilden_machine_enrollment_request"; origin: typeof WORKSPACE_ORIGIN;
-  publicKey: string; keyId: string; requestId: string; localSourceInstanceRef: string;
+  publicKey: string; keyId: string; requestId: string;
 };
 export type WorkspaceEnrollmentIntent = {
   publicKey: string; keyId: string; requestId: string; localSourceInstanceRef: string;
@@ -455,7 +455,7 @@ export type WorkspaceEnrollmentIntent = {
 export type WorkspaceEnrollmentResponse = {
   schemaVersion: "1"; kind: "tilden_machine_enrollment_response"; origin: typeof WORKSPACE_ORIGIN;
   intent: WorkspaceEnrollmentIntent;
-  binding: { policy: Record<string, Json>; projectId: string; sourceProjectRef: string };
+  binding: { tenantId: string; policy: Record<string, Json>; projectId: string; sourceProjectRef: string };
   receipt: { state: "prepared"; challengeId: string; requestHash: string; grantId: string; deviceId: string;
     policy: Record<string, Json>; projectId: string; projectRevision: string; sourceProjectRef: string;
     collectionNotBefore: string; authorityStartsAt: string; grantExpiresAt: string; nonce: string; pairingCode: string };
@@ -488,11 +488,11 @@ async function readEnrollment(path: string): Promise<WorkspaceEnrollmentState | 
       throw Error("Workspace enrollment is not a private regular file.");
     const state = JSON.parse(await handle.readFile("utf8")) as WorkspaceEnrollmentState;
     exactKeys(state, ["version", "request", "privateKeyPem", "state"]);
-    exactKeys(state.request, ["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId", "localSourceInstanceRef"]);
+    exactKeys(state.request, ["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"]);
     if (state.version !== 1 || !["prepared", "exchange_uncertain"].includes(state.state)
       || state.request.schemaVersion !== "1" || state.request.kind !== "tilden_machine_enrollment_request"
       || state.request.origin !== WORKSPACE_ORIGIN || !bytes(state.request.publicKey, 32)
-      || ![state.request.keyId, state.request.requestId, state.request.localSourceInstanceRef].every(value => REF.test(value))
+      || ![state.request.keyId, state.request.requestId].every(value => REF.test(value))
       || createPublicKey(state.privateKeyPem).export({ format: "jwk" }).x !== state.request.publicKey)
       throw Error("Workspace enrollment state is invalid.");
     return state;
@@ -508,7 +508,7 @@ export async function beginWorkspaceEnrollment(home = homedir()): Promise<{ requ
     if (retained) return { request: retained.request, bundle: encodeWorkspaceBundle(retained.request) };
     const pair = generateKeyPairSync("ed25519"), ref = () => `oref_${randomBytes(32).toString("base64url")}`;
     const request: WorkspaceEnrollmentRequest = { schemaVersion: "1", kind: "tilden_machine_enrollment_request", origin: WORKSPACE_ORIGIN,
-      publicKey: pair.publicKey.export({ format: "jwk" }).x!, keyId: ref(), requestId: ref(), localSourceInstanceRef: ref() };
+      publicKey: pair.publicKey.export({ format: "jwk" }).x!, keyId: ref(), requestId: ref() };
     await atomicPrivateJson(path, ENROLLMENT_FILE, { version: 1, request,
       privateKeyPem: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), state: "prepared" });
     return { request, bundle: encodeWorkspaceBundle(request) };
@@ -518,10 +518,11 @@ export function validateWorkspaceEnrollmentResponse(request: WorkspaceEnrollment
   utcDay(now);
   const { intent, binding, receipt, confirmation } = response;
   exactKeys(intent, ["publicKey", "keyId", "requestId", "localSourceInstanceRef", "policyRevision", "readerRevision", "projectAdmissionRevision", "collectionNotBefore", "authorityStartsAt", "grantExpiresAt"]);
-  exactKeys(binding, ["policy", "projectId", "sourceProjectRef"]);
+  exactKeys(binding, ["tenantId", "policy", "projectId", "sourceProjectRef"]);
+  if (typeof binding.tenantId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/.test(binding.tenantId)) throw Error("The selected tenant reference is invalid.");
   exactKeys(receipt, ["state", "challengeId", "requestHash", "grantId", "deviceId", "policy", "projectId", "projectRevision", "sourceProjectRef", "collectionNotBefore", "authorityStartsAt", "grantExpiresAt", "nonce", "pairingCode"]);
   exactKeys(confirmation, ["state", "challengeId"]);
-  for (const key of ["publicKey", "keyId", "requestId", "localSourceInstanceRef"] as const)
+  for (const key of ["publicKey", "keyId", "requestId"] as const)
     if (intent[key] !== request[key]) throw Error("The response belongs to a different native enrollment request.");
   const refs = [intent.keyId, intent.requestId, intent.localSourceInstanceRef, intent.policyRevision, intent.readerRevision,
     intent.projectAdmissionRevision, receipt.grantId, receipt.deviceId, receipt.projectId, receipt.projectRevision, receipt.sourceProjectRef];
@@ -543,7 +544,8 @@ export function validateWorkspaceEnrollmentResponse(request: WorkspaceEnrollment
 }
 /** Exchange is marked uncertain durably before dispatch and is never retried implicitly. */
 export async function finishWorkspaceEnrollment(options: { home?: string; bundle: string; now: string;
-  confirm: (details: { origin: string; collectionNotBefore: string; grantExpiresAt: string }) => Promise<boolean>;
+  confirm: (details: { origin: string; collectionNotBefore: string; grantExpiresAt: string;
+    localSourceInstanceRef: string; tenantId: string; projectId: string; sourceProjectRef: string; policy: Record<string, Json> }) => Promise<boolean>;
   transport?: WorkspaceExchangeTransport;
 }): Promise<{ state: "connected" | "cancelled" | "unconfirmed" }> {
   return withState(options.home ?? homedir(), async (device, save, path) => {
@@ -553,7 +555,8 @@ export async function finishWorkspaceEnrollment(options: { home?: string; bundle
     const response = parseWorkspaceResponseBundle(options.bundle);
     const proof = validateWorkspaceEnrollmentResponse(retained.request, response, options.now);
     if (!await options.confirm({ origin: WORKSPACE_ORIGIN, collectionNotBefore: response.intent.collectionNotBefore,
-      grantExpiresAt: response.intent.grantExpiresAt })) return { state: "cancelled" };
+      grantExpiresAt: response.intent.grantExpiresAt, localSourceInstanceRef: response.intent.localSourceInstanceRef,
+      tenantId: response.binding.tenantId, projectId: response.binding.projectId, sourceProjectRef: response.binding.sourceProjectRef, policy: response.binding.policy })) return { state: "cancelled" };
     const body = workspaceCanonicalJson({ challengeId: response.receipt.challengeId, nonce: response.receipt.nonce,
       signature: sign(null, Buffer.from(proof), retained.privateKeyPem).toString("base64url") });
     await atomicPrivateJson(path, ENROLLMENT_FILE, { ...retained, state: "exchange_uncertain" });

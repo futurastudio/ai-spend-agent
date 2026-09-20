@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {
   beginWorkspaceEnrollment, finishWorkspaceEnrollment, workspaceStatus, prepareWorkspacePush,
-  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN,
+  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson,
   type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
 } from "./workspaceConnect.js";
 import { workspaceClock } from "./lib/clock.js";
@@ -1700,7 +1700,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
         now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,
-        confirm: details => consent(`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}? [y/N] `) });
+        confirm: details => consent([`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}?`,
+          `Selected tenant: ${details.tenantId}`, `Reviewed source: ${details.localSourceInstanceRef}`, `Project: ${details.projectId}`, `Source project: ${details.sourceProjectRef}`,
+          `Exact enrollment policy: ${workspaceCanonicalJson(details.policy)}`, "Sign this enrollment exchange? [y/N] "].join("\n")) });
       return result.state === "connected" ? ok(`Paired. Finish all-repository consent at ${WORKSPACE_ORIGIN}/settings/machines before your first push. Then run npx aibill workspace push to preview local session facts.`)
         : result.state === "cancelled" ? ok("Pairing exchange not sent.")
           : fail("Pairing outcome is unknown. Do not replay this response bundle; inspect and revoke the enrollment in Settings before starting another.");

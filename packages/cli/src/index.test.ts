@@ -17,8 +17,8 @@ import {
   writeConnectedSpendTrustReceipt
 } from "@agent-finops/core";
 import { runCli } from "./index.js";
-import { aggregateWorkspaceFacts, workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey,
-  workspaceFactContentHash, WORKSPACE_ORIGIN, type WorkspaceState } from "./workspaceConnect.js";
+import { aggregateWorkspaceFacts, beginWorkspaceEnrollment, validateWorkspaceEnrollmentResponse, workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey,
+  workspaceFactContentHash, WORKSPACE_ORIGIN, type WorkspaceState, type WorkspaceEnrollmentResponse } from "./workspaceConnect.js";
 import { decideReportAutoOpen, platformOpenCommand } from "./reportOpener.js";
 import {
   appendProjectApprovalEvent,
@@ -309,6 +309,25 @@ describe("zero-key evidence-first receipt", () => {
       } });
     expect(disconnected.stdout).toContain("Workspace revoked");
     await expect(readFile(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const prepared = await beginWorkspaceEnrollment(home);
+    expect(Object.keys(prepared.request).sort()).toEqual(["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"].sort());
+    expect(prepared.bundle).not.toContain("localSourceInstanceRef");
+    const intent = { publicKey: prepared.request.publicKey, keyId: prepared.request.keyId, requestId: prepared.request.requestId,
+      localSourceInstanceRef: ref("s"), policyRevision: ref("p"), readerRevision: ref("r"), projectAdmissionRevision: ref("j"),
+      collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", grantExpiresAt: "2026-10-01T00:00:00.000Z" };
+    const binding = { tenantId: "tenant_synthetic", policy: { active: true, consentRevisionRef: intent.policyRevision }, projectId: ref("k"), sourceProjectRef: ref("l") };
+    const nonce = Buffer.alloc(32, 2).toString("base64url"), pairingCode = Buffer.alloc(16, 3).toString("base64url");
+    const digest = (value: string) => `sha256_${createHash("sha256").update(value).digest("hex")}`;
+    const receipt = { state: "prepared" as const, challengeId: intent.requestId, grantId: ref("g"), deviceId: ref("d"), policy: binding.policy, projectId: binding.projectId, sourceProjectRef: binding.sourceProjectRef,
+      projectRevision: intent.projectAdmissionRevision, collectionNotBefore: intent.collectionNotBefore, authorityStartsAt: intent.authorityStartsAt,
+      grantExpiresAt: intent.grantExpiresAt, nonce, pairingCode, requestHash: workspaceDomainHash("tilden:device-enrollment-request:v1", {
+        ...intent, challengeId: intent.requestId, grantId: ref("g"), deviceId: ref("d"), nonceHash: digest(nonce), pairingCodeHash: digest(pairingCode) }) };
+    const response: WorkspaceEnrollmentResponse = { schemaVersion: "1" as const, kind: "tilden_machine_enrollment_response" as const, origin: WORKSPACE_ORIGIN,
+      intent, binding, receipt, confirmation: { state: "confirmed" as const, challengeId: intent.requestId } };
+    expect(validateWorkspaceEnrollmentResponse(prepared.request, response, runtime.workspaceNow)).toContain(receipt.requestHash);
+    expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, localSourceInstanceRef: ref("t") } }, runtime.workspaceNow)).toThrow();
+    expect(() => validateWorkspaceEnrollmentResponse(prepared.request, { ...response, intent: { ...intent, publicKey: Buffer.alloc(32, 4).toString("base64url") } }, runtime.workspaceNow)).toThrow();
+
   });
 
   it("rejects unknown flags and missing flag values before reading evidence", async () => {
