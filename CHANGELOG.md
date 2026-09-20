@@ -5,6 +5,32 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.8 (Unreleased)
+
+Adds opt-in Workspace machine commands: `workspace connect`, `workspace
+status`, `workspace push`, and `workspace disconnect`. The `aibill` alias
+and `ai-spend-agent` expose the same commands. Pairing exchanges a public
+request with the signed Workspace page; uploads require a separate browser
+scope confirmation and an explicit preview of the outgoing facts. Status
+reports retained local pairing state without claiming current server authority.
+
+Machine facts contain closed-day token components and hashed session and
+directory identities. Prompts, file contents, raw session IDs, paths and
+monetary amounts are excluded. Missing components stay unknown. These
+machine-reported counts remain separate from provider-reported usage and cost.
+An uncertain push retains its exact signed batch for explicit retry; it does
+not replace the nonce or create a second batch.
+
+Codex daily facts use cumulative-counter differences at each event rather
+than assigning a session's lifetime total to its final day. Incomplete source
+reads block a push; excluded calls and missing token components are disclosed
+before upload. Claude cache-write totals plus one duration
+split now determine the other duration without counting the total twice;
+inconsistent splits are refused and underdetermined components stay partial.
+
+The five public packages and their internal dependencies share this release
+version. Publication and Workspace machine enablement are separate steps.
+
 ## 0.9.7 — 2026-08-27
 
 Your recommendations now quote the evidence they were built from, and the
