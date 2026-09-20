@@ -44,6 +44,9 @@ type PricingRule = {
 
 const pricingRules: PricingRule[] = [
   // Anthropic
+  // Reviewed 2026-09-20: platform.claude.com/docs/en/about-claude/pricing.
+  // Fable/Mythos 5.1 keep base/write rates; cache reads are $0.25 per MTok.
+  { match: /^claude-(?:fable|mythos)-5-1$/i, inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25 },
   { match: /^claude-fable-5/i, inputPerM: 10, outputPerM: 50 },
   { match: /^claude-mythos-5/i, inputPerM: 10, outputPerM: 50 },
   { match: /^claude-opus-5/i, inputPerM: 5, outputPerM: 25 },
