@@ -2,7 +2,7 @@
 
 # Provider financial contracts
 
-Contract schema v1; reviewed 2026-09-16.
+Contract schema v1; reviewed 2026-09-20.
 
 These contracts are the reviewed financial rulebook for each provider source. They do not imply that every declared surface is implemented, that a user's account was connected, or that an invoice reconciled. Implemented connector coverage is listed separately. Provider-reported cost, API-equivalent value, plan context, credits and final invoices remain separate.
 
@@ -38,16 +38,16 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Prepaid credit application, tax, refunds, discounts and final cash settlement
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
-  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `d845e13329e9c12b8eedc894cb599f8506970e839f471ae3825c98850e47bf07`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `979fd032a76a18fbc359f3662b3ce0e4e081a23de65700da888cec25c7cc8ba6`; reviewed content `2340b524b4ad2ce925c67fee62e9b85ffda9a7346f1348e0e11c6caff443eda0`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `b06fe78ed72f4e9a00897c6a337bd615d476ea7b15d1f4d79b85eaaab3533877`; reviewed content `c03f80efb4db514570a746d110b0c3c919655e257e57f7a660b0bf710bcb3849`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `a5df1f15e13fc0b009166ae167f99d9498ddee74e77233326daa885a0d0e5b53`; reviewed content `daff2b574e5cb7ea45a71ea45d78e8e2cba7dea02e0ef1a89eb5ecb76b93a877`
+  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `f67300663e4736e1db8564073afae151b0990d3d6de5044c0c79049e276a155e`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `67cad21c380d3a7a11bfd841b0a6f38d901f09e5bfcccd621a64c072535c2b65`; reviewed content `cfe87309ae09a49156fcd873a111c3187974efe8e26059766044d071c672b436`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `2763e9956c011a2fa4243f98640bead6f3c34cebd51a9cacca2c36adf684f9bc`; reviewed content `adc1f17a4febf32465668ebcdce54eba45ed639f5f6cc08399dc19779401e995`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `0cc762119398ad86ccf25c7e655632a52f87037cf27bc2c9e33ec623df10e1dc`; reviewed content `507672df703af2058fef3a5ed5ab454beeb5a2e2abbaf0126a3d507e47958ce7`
 
 ## Anthropic Platform Usage and Cost Admin API
 
 - Contract ID: `anthropic-platform`
 - Owner: `aibill-provider-contracts`
-- Authentication: Claude Console organization Admin API key; unavailable to individual accounts and distinct from Enterprise Analytics keys
+- Authentication: The implemented connector uses a Claude Console organization Admin API key, distinct from Enterprise Analytics keys; the official Usage/Cost guide also permits org:admin OAuth and eligible unscoped personal or service-account keys
 - API/version: anthropic-version: 2023-06-01
 - Window: RFC3339 starting_at/ending_at with source-specific bucket widths; Claude Code analytics is daily
 - Pagination/completeness: Follow has_more and next_page without changing the original query
@@ -67,9 +67,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Claude Enterprise parent organizations and their Analytics-key-only data
   - Final invoice credits, tax, contract adjustments and payment status
   - Bedrock, Vertex and Foundry activity not returned by the named endpoints
+  - Claude Platform on AWS, which does not expose the named Usage and Cost APIs
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `d1c47363e9bbb9bcb57e2ed741962708f5f5807d827230f1a882979e34157fa1`; reviewed content `9f33f0aff45bfdd6cf8e111863e8c8032340d474972a179d34f5db99e2a4452d`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `8cebfc68863b106919c3074cb156c0ed5870699547863bd630b2826034c60b14`; reviewed content `ccc90699d5c589fcaf7b47e2d3b28cd84b9bfb6c9ec7ca97f3d02c131ed5d64c`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08`; reviewed content `e27785131d4f895eb02e56e26efb23633b714f1ff88a5e6b0f0be0cd5d9fc0d4`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `56cf1bd65245b7a9d681b51f62f48c19cbf8713e965896bedfbca4345dafab6c`; reviewed content `df9c3df0a0a093381fab679545b024f73a31995ffd586f4b7de7c7d72186e828`
 
 ## Claude Enterprise Analytics
 
@@ -81,7 +82,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Pagination/completeness: Cursors are bound to the original filters, grouping and period; changing scope requires restarting from page one
 - Units: Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only
 - Currency/basis: Post-discount, pre-credit USD fractional cents for reported usage credits; not the contracted Enterprise seat invoice
-- Freshness/revisions: Cost and usage may be revised for up to 30 days; recent tails after data_refreshed_at are incomplete
+- Freshness/revisions: Reports typically refresh every four hours and can take up to 24 hours; cost and usage may be revised for up to 30 days, and tails after data_refreshed_at are incomplete
 - Reconciliation: Organization cost report older than the revision window reconciled separately from the matching Enterprise seat invoice/contract
 - Endpoints/evidence surfaces:
   - `GET /v1/organizations/analytics/cost_report`
@@ -99,7 +100,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - RBAC-group rows can overlap and must not be summed
   - Claude Code through Amazon Bedrock
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `a0ea372a1c4444401b8463d209b36dbce82aca091dd5fbf12a74b8ee8f44deea`; reviewed content `032acd940f5064f2a0016a63b9396fee0e544632f27672a37efd847abe154b88`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `15c07eed7e338fc05844a1be6cfe9380973aa992f349bd99bcb4dfa3a7cfbcfe`; reviewed content `b6ed4a35d6d1b5a27387921b9c40401a4ec5f8ab449c4b0d77ae9d6a2140d944`
 
 ## Gemini CLI and Google billing evidence
 
@@ -126,9 +127,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Free, subscription and pay-as-you-go auth modes are not inferred
   - Local session value is not a Google invoice
 - Official sources:
-  - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `e9d02a6b6bfe8e9c75e9b6c9bc168acd8b4a9d763c435378034b533e869fe779`
-  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `924a273c0ac9c0dd1aeb8fe66c844941f695f7f18f47eda30531493b0145d19b`; reviewed content `33a139dd50b601c37eda3c7ade001f3ad665ec7d2651d94d3e5adf2bc2b87e60`
-  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `2cdb62fc26c68d0cbfa0a5a20881e2576c884e36b6afc2d10153deb3e25992b3`; reviewed content `de47b3e23423eba6d6444ec17c4a346b5477df9c82d68bb2f233698a9778bb87`
+  - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `17ccc4900c1571dc4ea437d7a98be93b76fd7ab8f5e182c8701410390676991c`
+  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `27d92d537ccf670fcb195749c2dba8cde61d80bbfbf75af57307b4d1b92e369b`; reviewed content `292edaa081435fd8f4dfa429e62f448af2fe5771fb1f11b2134970e2e47e8ca2`
+  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `a98d7d8656f3dafaecf93b5ada88c3a4548da0cf6f67febef9cbcedf09321b27`
 
 ## Cursor Admin API spending and usage events
 
@@ -154,8 +155,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - A fixture-only connector is not live or invoice reconciliation
   - Seat contracts, tax, credits and final invoice adjustments
 - Official sources:
-  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `d941a941d6433e0a93c4d6ba0412d6da9ffa246155bd89602ca1fa5815d746be`; reviewed content `dfbc5ccf3711357d12dee60c1a4eb6bbfd969d85c666dbf801a8a8dc81dc158c`
-  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `be63febe7d7935b434e4e9dca93e474cedf9c632e31d90b08fb3ea57c5041bc7`; reviewed content `83abb8526e35d50071e83f0b97158826540c9c74f67084d837c57f3b1c15237a`
+  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `750ee6ca2d400e7fbdd45621e15875ca8708ef94bf04c74f54a55b393ffd2fe9`
+  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `ab85ba5999e60ea1ebfd68d8e650b4818fc300bc34346294ec32ae79c383df31`; reviewed content `2961b876816b7f32489b006e6fa9aec93782ef70c40d767ba0323e21ac6a4ac4`
 
 ## GitHub Copilot AI-credit billing
 
@@ -182,8 +183,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Premium-request legacy units are not silently blended with AI credits
   - Tax, contract true-ups, credits and invoice payment settlement
 - Official sources:
-  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `c45c2995595d2013c9cb0d8d978320d3db31e7c2eee777a312011c97132babed`
-  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `b977adac0ddf5471ca91d6926dfc56a31fb31f2a32b2fd41d4cca7dad6d522bd`
+  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `ebe6a2a00a53131257e52cf85c504bd8239e8a2d4f0f92f3dd94faec6a0b9cf7`
+  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `39ae47ae443fac8c1458d2c70759655c3981da0c6368e870ac94a25d6a23abef`
 
 ## Drift behavior
 
