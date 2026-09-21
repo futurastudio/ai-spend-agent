@@ -242,7 +242,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.9$/);
+    expect(result.stdout).toMatch(/^0\.9\.10$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -282,7 +282,32 @@ describe("zero-key evidence-first receipt", () => {
       consentRead: async (message: string) => { messages.push(message); return "y"; },
       workspaceLoadCalls: vi.fn(async () => ({ calls: [call], records: [], diagnostics: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const] })),
       workspaceTransport: async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); } };
-    const first = await runCli(["workspace", "push"], runtime);
+    const blocked = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: async () => ({
+      calls: [call], records: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const],
+      diagnostics: [
+        { agent: "claude-code" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 2, message: "/private/log hidden transcript" },
+        { agent: "claude-code" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 2, message: "hidden transcript" },
+        { agent: "claude-code" as const, code: "malformed_jsonl" as const, severity: "warning" as const, count: 11, message: "hidden transcript" },
+        { agent: "codex" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 3, message: "hidden transcript" },
+        { agent: "codex" as const, code: "directory_missing" as const, severity: "info" as const, count: 1, message: "hidden transcript" }
+      ] }) });
+    expect(blocked.exitCode).toBe(1);
+    expect(blocked.stderr).toContain("Claude Code: unsupported_token_shape: 4");
+    expect(blocked.stderr).toContain("Claude Code: malformed_jsonl: 11");
+    expect(blocked.stderr).toContain("Codex: unsupported_token_shape: 3");
+    expect(blocked.stderr).not.toContain("directory_missing");
+    expect(blocked.stderr).not.toContain("hidden transcript");
+    expect(blocked.stderr).not.toContain("/private/log");
+    expect(requests).toEqual([]);
+    expect(messages).toEqual([]);
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(state);
+    const first = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: async () => ({
+      calls: [{ ...call, usageSupport: "unsupported_token_shape" as const }], records: [], sourceScans: [], filesParsed: 1,
+      agentsDetected: ["codex" as const], diagnostics: [{ agent: "codex" as const, code: "unsupported_token_shape" as const,
+        severity: "warning" as const, count: 1, message: "hidden transcript", workspaceFactCoverage: "unknown_tokens" as const }]
+    }) });
+    expect(messages[0]).toContain("1 incomplete local usage records are represented by unknown token values, never zero.");
+    expect(Object.values(JSON.parse(requests[0]!).facts[0].tokens)).toEqual([null, null, null, null]);
     expect(first.stderr).toContain("outcome is unknown");
     expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");
     const second = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: load,

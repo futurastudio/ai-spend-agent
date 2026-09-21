@@ -5,7 +5,21 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.9 (Unreleased)
+## 0.9.10 (Unreleased)
+
+Workspace pushes now report source-specific diagnostic counts without exposing
+paths or transcript contents. The Workspace reader can recover bounded JSON
+records containing literal control characters or split strings, and limits
+facts and dated diagnostics to the requested closed-day interval. Other local
+readers keep their existing behavior.
+
+Identifiable local records with incomplete token evidence now upload explicit
+unknown token components instead of blocking all known session activity.
+Unrecoverable records, missing identities or endpoints, and conflicting or
+nonchronological evidence still stop the upload. Machine activity remains
+separate from provider-reported tokens and billed costs.
+
+## 0.9.9 (2026-09-20)
 
 Machine setup now distinguishes a new public request from a retained one and
 shows a short request ID to match against the Workspace review. Run
