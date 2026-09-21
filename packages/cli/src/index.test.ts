@@ -301,7 +301,13 @@ describe("zero-key evidence-first receipt", () => {
     expect(requests).toEqual([]);
     expect(messages).toEqual([]);
     expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(state);
-    const first = await runCli(["workspace", "push"], runtime);
+    const first = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: async () => ({
+      calls: [{ ...call, usageSupport: "unsupported_token_shape" as const }], records: [], sourceScans: [], filesParsed: 1,
+      agentsDetected: ["codex" as const], diagnostics: [{ agent: "codex" as const, code: "unsupported_token_shape" as const,
+        severity: "warning" as const, count: 1, message: "hidden transcript", workspaceFactCoverage: "unknown_tokens" as const }]
+    }) });
+    expect(messages[0]).toContain("1 incomplete local usage records are represented by unknown token values, never zero.");
+    expect(Object.values(JSON.parse(requests[0]!).facts[0].tokens)).toEqual([null, null, null, null]);
     expect(first.stderr).toContain("outcome is unknown");
     expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");
     const second = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: load,

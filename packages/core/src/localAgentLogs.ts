@@ -537,6 +537,8 @@ export type LocalAgentFinancialLogOptions = Omit<
 > & {
   /** Explicit Workspace lane: Codex counter deltas at each UTC event, never lifetime totals on the last day. */
   workspaceDailyFacts?: boolean;
+  /** Workspace-only exclusive event-time bound, normally the start of the current UTC day. */
+  untilIso?: string;
 };
 
 export type LocalAgentLogDiagnosticCode =
@@ -549,10 +551,19 @@ export type LocalAgentLogDiagnosticCode =
   | "qualitative_scan_incomplete"
   | "qualitative_index_error";
 
+export type WorkspaceDiagnosticReason = "missing_endpoint" | "missing_identity" | "first_day_unknown"
+  | "nonchronological" | "cache_shape" | "unsupported_components" | "missing_or_invalid_components"
+  | "cache_exceeds_input" | "total_below_components" | "positive_total_without_components"
+  | "invalid_baseline" | "counter_decreased";
+
 export type LocalAgentLogDiagnostic = {
   agent: LocalAgentCall["agent"];
   code: LocalAgentLogDiagnosticCode;
   severity: "info" | "warning" | "error";
+  /** Optional workspace parser category; contains no source contents or identities. */
+  workspaceReason?: WorkspaceDiagnosticReason;
+  /** A retained call carries this uncertainty as null token components, not an omitted contribution. */
+  workspaceFactCoverage?: "unknown_tokens";
   /** Privacy-safe summary; absolute local paths and transcript text are omitted. */
   message: string;
   count: number;
@@ -693,6 +704,9 @@ export function hasExactSelectedQualitativeEvidence(
 type TranscriptParseDiagnostic = {
   code: "malformed_jsonl" | "malformed_session_file" | "unsupported_token_shape";
   count: number;
+  workspaceReason?: WorkspaceDiagnosticReason;
+  /** A retained call carries this uncertainty as null token components, not an omitted contribution. */
+  workspaceFactCoverage?: "unknown_tokens";
 };
 
 type TranscriptParseDiagnosticHandler = (diagnostic: TranscriptParseDiagnostic) => void;
@@ -2178,6 +2192,8 @@ export async function loadLocalAgentFinancialUsageWithFormats(
   const home = homedir();
   const since = options.sinceIso ? Date.parse(options.sinceIso) : undefined;
   const sinceMs = typeof since === "number" && Number.isFinite(since) ? since : undefined;
+  const until = options.workspaceDailyFacts && options.untilIso ? Date.parse(options.untilIso) : undefined;
+  const untilMs = typeof until === "number" && Number.isFinite(until) ? until : undefined;
   const scanned = await Promise.all(registry.map(async (runtime) => {
     const { descriptor } = runtime;
     const diagnostics: LocalAgentLogDiagnostic[] = [];
@@ -2253,7 +2269,7 @@ export async function loadLocalAgentFinancialUsageWithFormats(
       const diagnosticsBefore = diagnostics.length;
       const unreadableBefore = scan.unreadableFiles;
       const filesParsedBefore = scan.filesParsed;
-      const context = { filePath: file, sinceMs, scan, diagnostics };
+      const context = { filePath: file, sinceMs, untilMs, scan, diagnostics };
       const parsedCalls = options.workspaceDailyFacts && descriptor.id === "codex"
         ? await readCodexDailyFinancialFile(context)
         : options.workspaceDailyFacts && descriptor.id === "claude-code"
@@ -2288,8 +2304,12 @@ export async function loadLocalAgentFinancialUsageWithFormats(
 
   // Sources scan concurrently, but flatten in registry order to preserve the
   // long-standing Claude-then-Codex output and diagnostic contract.
+  const inWorkspaceWindow = (call: LocalAgentCall) => {
+    const timestamp = Date.parse(call.timestamp);
+    return (sinceMs === undefined || timestamp >= sinceMs) && (untilMs === undefined || timestamp < untilMs);
+  };
   const calls = scanned.flatMap((entry) => entry.calls);
-  const normalizedCalls = dedupeCumulativeSessionCalls(calls, (agent) => {
+  const normalizedCalls = dedupeCumulativeSessionCalls(options.workspaceDailyFacts ? calls.filter(inWorkspaceWindow) : calls, (agent) => {
     const source = scanned.find((entry) => entry.scan.agent === agent);
     if (source) {
       recordParseDiagnostic(agent, source.scan, source.diagnostics, {
@@ -2298,9 +2318,7 @@ export async function loadLocalAgentFinancialUsageWithFormats(
       });
     }
   });
-  const filtered = typeof sinceMs === "number"
-    ? normalizedCalls.filter((call) => Date.parse(call.timestamp) >= sinceMs)
-    : normalizedCalls;
+  const filtered = normalizedCalls.filter(inWorkspaceWindow);
 
   return {
     records: aggregateCallsForFormats(filtered, registry.map((entry) => entry.descriptor)),
@@ -2463,9 +2481,9 @@ function codexHeaderAttribution(
 
 /** @internal Runtime hook owned by the Claude Code registry entry. */
 export async function readClaudeCodeFinancialFileForRegistry(
-  context: LocalAgentFormatFinancialFileContext, workspaceDailyFacts = false
+  context: LocalAgentFormatFinancialFileContext & { untilMs?: number }, workspaceDailyFacts = false
 ): Promise<LocalAgentCall[]> {
-  const { filePath, sinceMs, scan, diagnostics } = context;
+  const { filePath, sinceMs, untilMs, scan, diagnostics } = context;
   if (!await shouldStreamFile(filePath, sinceMs, "claude-code", scan, diagnostics)) {
     return [];
   }
@@ -2475,15 +2493,24 @@ export async function readClaudeCodeFinancialFileForRegistry(
   let streamed: StreamedJsonlResult;
   try {
     streamed = await streamJsonlRecords(filePath, (entry) => {
+      if (workspaceDailyFacts && entry.type === "assistant" && isRecord(entry.message)
+          && isRecord(entry.message.usage) && stringOf(entry.message.model) !== "<synthetic>"
+          && !toIso(stringOf(entry.timestamp))) {
+        fileDiagnostics.push({ code: "unsupported_token_shape", count: 1, workspaceReason: "missing_identity" });
+        return;
+      }
+      const timestamp = toIso(stringOf(entry.timestamp));
+      if (workspaceDailyFacts && timestamp && untilMs !== undefined && Date.parse(timestamp) >= untilMs) return;
+      const entryDiagnostics: TranscriptParseDiagnostic[] = [];
       const call = parseClaudeFinancialEntry(
         entry,
         filePath,
-        // Window-blind on purpose: cached values must contain the complete
-        // file so a narrow-window run can never truncate a wider one. The
-        // loader's final timestamp filter performs all narrowing.
-        undefined,
+        // Workspace mode disables the cumulative cache, so dated historical
+        // events outside its window must not contribute diagnostics. Ordinary
+        // financial cache parses remain window-blind.
+        workspaceDailyFacts ? sinceMs : undefined,
         seen,
-        (diagnostic) => fileDiagnostics.push(diagnostic)
+        (diagnostic) => entryDiagnostics.push(diagnostic)
       );
       if (call) {
         if (workspaceDailyFacts) {
@@ -2494,7 +2521,12 @@ export async function readClaudeCodeFinancialFileForRegistry(
         }
         calls.push(call);
       }
-    });
+      for (const diagnostic of entryDiagnostics) {
+        fileDiagnostics.push(workspaceDailyFacts && call?.sessionId && timestamp
+            && call.usageSupport === "unsupported_token_shape" && diagnostic.code === "unsupported_token_shape"
+          ? { ...diagnostic, workspaceFactCoverage: "unknown_tokens" } : diagnostic);
+      }
+    }, workspaceDailyFacts);
   } catch (error) {
     recordUnreadableFile("claude-code", scan, diagnostics, error);
     return [];
@@ -2556,12 +2588,39 @@ export async function readCodexFinancialFileForRegistry(
   return call ? [call] : [];
 }
 
+/** Privacy-safe explanation only. This never changes whether a counter is supported. */
+function workspaceCounterFailureReason(
+  current: Record<string, unknown>, baseline?: Record<string, unknown>
+): WorkspaceDiagnosticReason {
+  const input = tokenComponentOf(current.input_tokens), output = tokenComponentOf(current.output_tokens);
+  const cached = optionalTokenComponent(current, "cached_input_tokens");
+  const total = optionalTokenComponent(current, "total_tokens");
+  if (input === undefined || output === undefined || cached.present && cached.value === undefined
+      || total.present && total.value === undefined) return "missing_or_invalid_components";
+  if ((cached.value ?? 0) > input) return "cache_exceeds_input";
+  if (total.value !== undefined && total.value < input + output) return "total_below_components";
+  if ((total.value ?? 0) > 0 && input === 0 && output === 0) return "positive_total_without_components";
+  if (baseline) {
+    if (!parseCodexCumulativeUsage(baseline).supported) return "invalid_baseline";
+    const priorInput = tokenComponentOf(baseline.input_tokens)!;
+    const priorOutput = tokenComponentOf(baseline.output_tokens)!;
+    const priorCached = optionalTokenComponent(baseline, "cached_input_tokens").value ?? 0;
+    const priorTotal = optionalTokenComponent(baseline, "total_tokens").value;
+    if (input < priorInput || output < priorOutput || (cached.value ?? 0) < priorCached
+        || input - (cached.value ?? 0) < priorInput - priorCached
+        || total.value !== undefined && priorTotal !== undefined && total.value < priorTotal) return "counter_decreased";
+  }
+  return "unsupported_components";
+}
+
 /** Workspace-only event deltas. The existing snapshot reader remains cumulative. */
-async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFileContext): Promise<LocalAgentCall[]> {
-  const { filePath, sinceMs, scan, diagnostics } = context;
+async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFileContext & { untilMs?: number }): Promise<LocalAgentCall[]> {
+  const { filePath, sinceMs, untilMs, scan, diagnostics } = context;
   if (!await shouldStreamFile(filePath, sinceMs, "codex", scan, diagnostics)) return [];
   const state = createCodexFinancialStreamState(), calls: LocalAgentCall[] = [];
-  const report = () => recordParseDiagnostic("codex", scan, diagnostics, { code: "unsupported_token_shape", count: 1 });
+  const report = (workspaceReason: WorkspaceDiagnosticReason, markerBacked = false) => recordParseDiagnostic("codex", scan, diagnostics,
+    { code: "unsupported_token_shape", count: 1, workspaceReason,
+      ...(markerBacked ? { workspaceFactCoverage: "unknown_tokens" as const } : {}) });
   let priorEventAt: string | undefined;
   try {
     const streamed = await streamJsonlRecords(filePath, entry => {
@@ -2570,16 +2629,18 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
       consumeCodexFinancialEntry(state, entry);
       if (entry.type !== "event_msg" || payload?.type !== "token_count"
         || state.hasInheritedHistory && !state.rootTaskStarted) return;
+      const timestamp = toIso(stringOf(entry.timestamp));
+      const inWindow = !timestamp || (sinceMs === undefined || Date.parse(timestamp) >= sinceMs)
+        && (untilMs === undefined || Date.parse(timestamp) < untilMs);
       const info = isRecord(payload.info) ? payload.info : undefined;
       const total = info && isRecord(info.total_token_usage) ? info.total_token_usage : undefined;
       if (!total) {
         // A usage-bearing event without its cumulative endpoint cannot be
         // placed safely: a later counter may span this event's UTC day.
-        if (info && isRecord(info.last_token_usage)) report();
+        if (inWindow && info && isRecord(info.last_token_usage)) report("missing_endpoint");
         return;
       }
-      const timestamp = toIso(stringOf(entry.timestamp));
-      if (!timestamp || !state.sessionId) { report(); return; }
+      if (!timestamp || !state.sessionId) { if (inWindow) report("missing_identity"); return; }
       const parsed = parseCodexCumulativeUsage(total, previousTotal);
       // Missing initial history cannot be assigned to a later day. A changed or
       // decreasing counter remains unknown at that event; the next exact pair
@@ -2592,7 +2653,6 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
       priorEventAt = timestamp;
       if (supported && previousTotal && parsed.usage.inputTokens === 0 && parsed.usage.outputTokens === 0
         && (parsed.usage.cacheReadTokens ?? 0) === 0 && (parsed.reportedTotalTokens ?? 0) === 0) return;
-      if (!supported) report();
       const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
       // The cumulative endpoint fingerprint is stable across copies of a
       // rollout. Different deltas for that same endpoint become a conflict in
@@ -2607,7 +2667,9 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
         usage: parsed.usage,
         ...(supported && parsed.tokenComponentEvidence ? { tokenComponentEvidence: parsed.tokenComponentEvidence } : {}),
         ...(parsed.reportedTotalTokens !== undefined ? { reportedTotalTokens: parsed.reportedTotalTokens } : {}) });
-    });
+      if (inWindow && !supported) report(!chronological ? "nonchronological" : !firstDayKnown ? "first_day_unknown"
+        : !cachedShapeStable ? "cache_shape" : workspaceCounterFailureReason(total, previousTotal), chronological);
+    }, true);
     if (streamed.hadContent) scan.filesParsed++;
     if (streamed.malformedLines) recordParseDiagnostic("codex", scan, diagnostics, { code: "malformed_jsonl", count: streamed.malformedLines });
     return calls;
@@ -3924,30 +3986,72 @@ function financialSourceScan(descriptor: LocalAgentFormatDescriptor): LocalAgent
   return scan;
 }
 
+/** Re-encode literal control characters inside JSON strings without changing their value.
+ * Ordinary readers stay strict; this compatibility path is reserved for Workspace facts. */
+function parseWorkspaceJsonRecord(text: string): { value: unknown } | undefined {
+  try { return { value: JSON.parse(text) }; } catch { /* Try a lossless string encoding repair. */ }
+  let quoted = false, escaped = false, normalized = "";
+  for (const character of text) {
+    if (quoted && character.charCodeAt(0) < 32) {
+      // An existing escape before a raw control character has no unambiguous
+      // JSON interpretation. Do not guess its intended value.
+      if (escaped) return undefined;
+      normalized += `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+      continue;
+    }
+    normalized += character;
+    if (escaped) { escaped = false; continue; }
+    if (quoted && character === "\\") { escaped = true; continue; }
+    if (character === '"') quoted = !quoted;
+  }
+  try { return { value: JSON.parse(normalized) }; } catch { return undefined; }
+}
+
 async function streamJsonlRecords(
   file: string,
-  onRecord: (entry: Record<string, unknown>) => void
+  onRecord: (entry: Record<string, unknown>) => void,
+  workspaceCompatibility = false
 ): Promise<StreamedJsonlResult> {
   const input = createReadStream(file, { encoding: "utf8" });
   const lines = createInterface({ input, crlfDelay: Infinity });
   let hadContent = false;
   let malformedLines = 0;
+  let pending: string[] = [], pendingBytes = 0;
+  const accept = (value: unknown) => { if (isRecord(value)) onRecord(value); };
   try {
     for await (const line of lines) {
       hadContent = true;
-      if (!line.trim()) continue;
-      let entry: unknown;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        malformedLines += 1;
+      if (workspaceCompatibility) {
+        if (!pending.length && !line.trim()) continue;
+        if (pending.length) {
+          pendingBytes += Buffer.byteLength(line, "utf8") + 1;
+          if (pending.length < 256 && pendingBytes <= 32 * 1024 * 1024) {
+            const combined = parseWorkspaceJsonRecord([...pending, line].join("\n"));
+            if (combined) { accept(combined.value); pending = []; pendingBytes = 0; continue; }
+          }
+          // A complete following record is a boundary. Never let a damaged
+          // preceding record swallow otherwise readable financial evidence.
+          const standalone = parseWorkspaceJsonRecord(line);
+          if (standalone) {
+            malformedLines += pending.length;
+            pending = []; pendingBytes = 0; accept(standalone.value); continue;
+          }
+          if (pending.length >= 256 || pendingBytes > 32 * 1024 * 1024) {
+            malformedLines += pending.length; pending = []; pendingBytes = 0;
+          }
+        }
+        const parsed = parseWorkspaceJsonRecord(line);
+        if (parsed) { accept(parsed.value); continue; }
+        pending.push(line);
+        if (pending.length === 1) pendingBytes = Buffer.byteLength(line, "utf8");
         continue;
       }
-      // Parsed event type is checked before any deeper traversal. This keeps
-      // qualitative payloads out of the fast path while still validating
-      // every JSONL line and reporting malformed coverage honestly.
-      if (isRecord(entry)) onRecord(entry);
+      if (!line.trim()) continue;
+      let entry: unknown;
+      try { entry = JSON.parse(line); } catch { malformedLines += 1; continue; }
+      accept(entry);
     }
+    malformedLines += pending.length;
   } finally {
     lines.close();
     input.destroy();
@@ -4806,6 +4910,8 @@ function recordParseDiagnostic(
     agent,
     code: diagnostic.code,
     severity: "warning",
+    ...(diagnostic.workspaceReason ? { workspaceReason: diagnostic.workspaceReason } : {}),
+    ...(diagnostic.workspaceFactCoverage ? { workspaceFactCoverage: diagnostic.workspaceFactCoverage } : {}),
     message: `${diagnostic.count} ${agentLabel(agent)} token snapshot(s) lacked the complete, internally consistent fields required for safe normalization and pricing.`,
     count: diagnostic.count
   });

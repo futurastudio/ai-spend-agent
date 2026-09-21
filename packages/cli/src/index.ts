@@ -1735,12 +1735,16 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (status.pending?.state === "refused") return fail("A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.");
     const now = runtime.workspaceNow ?? workspaceClock.now();
     const loaded = status.pending ? undefined : runtime.workspaceLoadCalls ? await runtime.workspaceLoadCalls()
-      : await loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, sinceIso: workspaceClock.daysBefore(now, 30) });
-    const blockingDiagnostics = loaded?.diagnostics.filter(item => item.code !== "directory_missing") ?? [];
+      : await loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, sinceIso: workspaceClock.daysBefore(now, 30),
+        untilIso: `${now.slice(0, 10)}T00:00:00.000Z` });
+    const representedUnknowns = loaded?.diagnostics.filter(item => item.code === "unsupported_token_shape"
+      && item.workspaceFactCoverage === "unknown_tokens").reduce((count, item) => count + item.count, 0) ?? 0;
+    const blockingDiagnostics = loaded?.diagnostics.filter(item => item.code !== "directory_missing"
+      && !(item.code === "unsupported_token_shape" && item.workspaceFactCoverage === "unknown_tokens")) ?? [];
     if (blockingDiagnostics.length) {
       const counts = new Map<string, number>();
       for (const diagnostic of blockingDiagnostics) {
-        const label = `${localAgentFormatLabel(diagnostic.agent)}: ${diagnostic.code}`;
+        const label = `${localAgentFormatLabel(diagnostic.agent)}: ${diagnostic.code}${diagnostic.workspaceReason ? ` (${diagnostic.workspaceReason})` : ""}`;
         counts.set(label, (counts.get(label) ?? 0) + diagnostic.count);
       }
       return fail(["Local source reading is incomplete. No facts were replaced or sent.",
@@ -1751,6 +1755,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
+        ...(representedUnknowns ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),
         status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
           : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n")) });
     if (prepared.state === "unchanged") return ok(prepared.coverage?.excludedCalls

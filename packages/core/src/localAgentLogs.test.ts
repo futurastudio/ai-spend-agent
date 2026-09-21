@@ -2418,7 +2418,48 @@ describe("loadLocalAgentFinancialUsage", () => {
     await writeFile(dailyPath, `${await readFile(dailyPath, "utf8")}${JSON.stringify({ type: "event_msg", timestamp: "2026-06-10T09:00:00.000Z",
       payload: { type: "token_count", info: { last_token_usage: { input_tokens: 500, cached_input_tokens: 100, output_tokens: 50 } } } })}\n`);
     const missingEndpoint = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true });
-    expect(missingEndpoint.diagnostics).toContainEqual(expect.objectContaining({ agent: "codex", code: "unsupported_token_shape" }));
+    expect(missingEndpoint.diagnostics).toContainEqual(expect.objectContaining({ agent: "codex", code: "unsupported_token_shape", workspaceReason: "missing_endpoint" }));
+    const bounded = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true, untilIso: "2026-06-10T00:00:00.000Z" });
+    expect(bounded.diagnostics.filter(entry => entry.agent === "codex")).toEqual([]);
+    expect(bounded.calls.every(call => call.timestamp < "2026-06-10T00:00:00.000Z")).toBe(true);
+
+    const repairedLine = claudeLine({ timestamp: "2026-06-08T11:00:00.000Z", requestId: "req-repaired",
+      message: { id: "msg-repaired", model: "claude-sonnet-4", usage: { input_tokens: 7, output_tokens: 3 },
+        content: "private first\nprivate second\tend" } }).replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    const unsupportedLine = (timestamp: string, id: string) => claudeLine({ timestamp, requestId: id,
+      message: { id, model: "claude-sonnet-4", usage: { input_tokens: "invalid", output_tokens: 3 } } });
+    const claudePath = join(claudeDir, "session.jsonl");
+    await writeFile(claudePath, [repairedLine,
+      unsupportedLine("2026-05-31T23:00:00.000Z", "before-window"),
+      unsupportedLine("2026-06-10T00:00:00.000Z", "after-window")].join("\n"));
+    const repaired = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true, untilIso: "2026-06-10T00:00:00.000Z" });
+    expect(repaired.diagnostics.filter(entry => entry.agent === "claude-code")).toEqual([]);
+    expect(repaired.calls.filter(call => call.agent === "claude-code").map(call => call.usage.inputTokens)).toEqual([7]);
+    expect(JSON.stringify(repaired)).not.toContain("private first");
+    const strictReader = await loadLocalAgentFinancialUsage(options);
+    expect(strictReader.diagnostics).toContainEqual(expect.objectContaining({ agent: "claude-code", code: "malformed_jsonl" }));
+    await writeFile(claudePath, [repairedLine, unsupportedLine("2026-06-08T12:00:00.000Z", "in-window"),
+      '{"type":"assistant","message":BROKEN}', claudeLine({ requestId: "after-broken" })].join("\n"));
+    const stillBlocked = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true, untilIso: "2026-06-10T00:00:00.000Z" });
+    expect(stillBlocked.diagnostics).toContainEqual(expect.objectContaining({ agent: "claude-code", code: "unsupported_token_shape", workspaceFactCoverage: "unknown_tokens" }));
+    expect(stillBlocked.diagnostics).toContainEqual(expect.objectContaining({ agent: "claude-code", code: "malformed_jsonl", count: 1 }));
+    expect(stillBlocked.diagnostics.find(entry => entry.code === "malformed_jsonl")?.workspaceFactCoverage).toBeUndefined();
+    expect(missingEndpoint.diagnostics.find(entry => entry.workspaceReason === "missing_endpoint")?.workspaceFactCoverage).toBeUndefined();
+    await writeFile(dailyPath, [
+      JSON.stringify({ type: "session_meta", payload: { id: "marker-session", timestamp: "2026-06-01T00:00:00.000Z", cwd: "/private/repo" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-06-08T09:00:00.000Z", payload: { type: "token_count",
+        info: { total_token_usage: { input_tokens: 100, output_tokens: 10 } } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-06-08T10:00:00.000Z", payload: { type: "token_count",
+        info: { total_token_usage: { input_tokens: 50, output_tokens: 5 } } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-06-07T10:00:00.000Z", payload: { type: "token_count",
+        info: { total_token_usage: { input_tokens: 200, output_tokens: 20 } } } })
+    ].join("\n"));
+    const marked = await loadLocalAgentFinancialUsage({ ...options, workspaceDailyFacts: true, untilIso: "2026-06-10T00:00:00.000Z" });
+    expect(marked.diagnostics).toContainEqual(expect.objectContaining({ agent: "codex", workspaceReason: "first_day_unknown", workspaceFactCoverage: "unknown_tokens" }));
+    expect(marked.diagnostics).toContainEqual(expect.objectContaining({ agent: "codex", workspaceReason: "counter_decreased", workspaceFactCoverage: "unknown_tokens" }));
+    expect(marked.diagnostics.find(entry => entry.workspaceReason === "nonchronological")?.workspaceFactCoverage).toBeUndefined();
+    expect(marked.calls.filter(call => call.agent === "codex").every(call => call.usageSupport === "unsupported_token_shape")).toBe(true);
+
 
 
   });
