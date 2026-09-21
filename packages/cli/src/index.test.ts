@@ -282,6 +282,25 @@ describe("zero-key evidence-first receipt", () => {
       consentRead: async (message: string) => { messages.push(message); return "y"; },
       workspaceLoadCalls: vi.fn(async () => ({ calls: [call], records: [], diagnostics: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const] })),
       workspaceTransport: async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); } };
+    const blocked = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: async () => ({
+      calls: [call], records: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const],
+      diagnostics: [
+        { agent: "claude-code" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 2, message: "/private/log hidden transcript" },
+        { agent: "claude-code" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 2, message: "hidden transcript" },
+        { agent: "claude-code" as const, code: "malformed_jsonl" as const, severity: "warning" as const, count: 11, message: "hidden transcript" },
+        { agent: "codex" as const, code: "unsupported_token_shape" as const, severity: "warning" as const, count: 3, message: "hidden transcript" },
+        { agent: "codex" as const, code: "directory_missing" as const, severity: "info" as const, count: 1, message: "hidden transcript" }
+      ] }) });
+    expect(blocked.exitCode).toBe(1);
+    expect(blocked.stderr).toContain("Claude Code: unsupported_token_shape: 4");
+    expect(blocked.stderr).toContain("Claude Code: malformed_jsonl: 11");
+    expect(blocked.stderr).toContain("Codex: unsupported_token_shape: 3");
+    expect(blocked.stderr).not.toContain("directory_missing");
+    expect(blocked.stderr).not.toContain("hidden transcript");
+    expect(blocked.stderr).not.toContain("/private/log");
+    expect(requests).toEqual([]);
+    expect(messages).toEqual([]);
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(state);
     const first = await runCli(["workspace", "push"], runtime);
     expect(first.stderr).toContain("outcome is unknown");
     expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");

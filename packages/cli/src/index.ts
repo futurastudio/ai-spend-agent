@@ -1736,8 +1736,18 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const now = runtime.workspaceNow ?? workspaceClock.now();
     const loaded = status.pending ? undefined : runtime.workspaceLoadCalls ? await runtime.workspaceLoadCalls()
       : await loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, sinceIso: workspaceClock.daysBefore(now, 30) });
-    if (loaded?.diagnostics.some(item => item.code !== "directory_missing"))
-      return fail("Local source reading is incomplete. No facts were replaced or sent; resolve the reported source coverage before pushing.");
+    const blockingDiagnostics = loaded?.diagnostics.filter(item => item.code !== "directory_missing") ?? [];
+    if (blockingDiagnostics.length) {
+      const counts = new Map<string, number>();
+      for (const diagnostic of blockingDiagnostics) {
+        const label = `${localAgentFormatLabel(diagnostic.agent)}: ${diagnostic.code}`;
+        counts.set(label, (counts.get(label) ?? 0) + diagnostic.count);
+      }
+      return fail(["Local source reading is incomplete. No facts were replaced or sent.",
+        "Local scan diagnostics (counts, without paths or transcript contents):",
+        ...[...counts].sort(([left], [right]) => left.localeCompare(right)).map(([label, count]) => `${label}: ${count}`),
+        "Share these diagnostic counts for help before retrying. Do not delete logs or reconnect this machine."].join("\n"));
+    }
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
