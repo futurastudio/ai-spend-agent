@@ -242,7 +242,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.10$/);
+    expect(result.stdout).toMatch(/^0\.9\.11$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -329,14 +329,52 @@ describe("zero-key evidence-first receipt", () => {
     expect(connectedRestart.exitCode).toBe(1);
     expect(connectedRestart.stderr).toContain("already connected");
     expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(acknowledged);
-    const disconnected = await runCli(["workspace", "disconnect"], { ...runtime,
+    const disconnectRequests: string[] = [];
+    const disconnectTransport = vi.fn(async (body: string) => {
+      disconnectRequests.push(body);
+      throw Error("lost disconnect reply");
+    });
+    const noPendingRetry = await runCli(["workspace", "disconnect", "--retry"], { ...runtime, workspaceDisconnectTransport: disconnectTransport });
+    expect(noPendingRetry.stderr).toContain("No uncertain disconnect is retained");
+    expect(disconnectTransport).not.toHaveBeenCalled();
+    const beforeDisconnectPrompts = messages.length;
+    const lostDisconnect = await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: disconnectTransport });
+    expect(lostDisconnect.stderr).toContain("workspace disconnect --retry");
+    expect(disconnectRequests).toHaveLength(1);
+    expect(messages).toHaveLength(beforeDisconnectPrompts + 1);
+    const heldDisconnect = JSON.parse(await readFile(statePath, "utf8"));
+    expect(heldDisconnect.disconnect.state).toBe("uncertain");
+    await runCli(["workspace", "disconnect"], { ...runtime, workspaceDisconnectTransport: disconnectTransport });
+    expect(disconnectRequests).toHaveLength(1);
+    expect(messages).toHaveLength(beforeDisconnectPrompts + 1);
+    const heldPush = await runCli(["workspace", "push"], { ...runtime, workspaceLoadCalls: load });
+    expect(heldPush.stderr).toContain("Disconnect is pending");
+    expect(load).not.toHaveBeenCalled();
+    const declinedRetry = await runCli(["workspace", "disconnect", "--retry"], { ...runtime, consentRead: async () => "n", workspaceDisconnectTransport: disconnectTransport });
+    expect(declinedRetry.stderr).toContain("Disconnect was not confirmed");
+    expect(disconnectRequests).toHaveLength(1);
+    const wrongReceipt = await runCli(["workspace", "disconnect", "--retry"], { ...runtime,
       workspaceDisconnectTransport: async body => {
+        disconnectRequests.push(body);
+        return { status: 200, body: { state: "revoked", grantId: state.device.grantId, connectionEpoch: "3", revokedAt: "2026-09-20T12:02:00.000Z" } };
+      } });
+    expect(wrongReceipt.stderr).toContain("outcome is unknown");
+    expect(disconnectRequests).toHaveLength(2);
+    expect(messages).toHaveLength(beforeDisconnectPrompts + 2);
+    expect(messages.at(-1)).toContain("identical retained disconnect request once");
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toEqual(heldDisconnect);
+    const disconnected = await runCli(["workspace", "disconnect", "--retry"], { ...runtime,
+      workspaceDisconnectTransport: async body => {
+        disconnectRequests.push(body);
         const { signature, publicKey, ...proof } = JSON.parse(body);
         expect(publicKey).toBe(key.publicKey.export({ format: "jwk" }).x);
         expect(verify(null, Buffer.from(workspaceCanonicalJson(proof)), key.publicKey, Buffer.from(signature, "base64url"))).toBe(true);
         return { status: 200, body: { state: "revoked", grantId: state.device.grantId, connectionEpoch: "2", revokedAt: "2026-09-20T12:02:00.000Z" } };
       } });
     expect(disconnected.stdout).toContain("Workspace revoked");
+    expect(disconnectRequests).toHaveLength(3);
+    expect(new Set(disconnectRequests).size).toBe(1);
+    expect(messages).toHaveLength(beforeDisconnectPrompts + 3);
     await expect(readFile(statePath)).rejects.toMatchObject({ code: "ENOENT" });
     const prepared = await beginWorkspaceEnrollment(home);
     expect(Object.keys(prepared.request).sort()).toEqual(["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"].sort());

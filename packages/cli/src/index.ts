@@ -268,6 +268,7 @@ type ParsedArgs = {
   workspaceAction?: string;
   workspaceCode?: string;
   workspaceRestart?: boolean;
+  workspaceDisconnectRetry?: boolean;
   sample: boolean;
   path: string;
   pathExplicit?: boolean;
@@ -1720,14 +1721,17 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           : fail("Pairing outcome is unknown. Do not replay this response bundle; inspect and revoke the enrollment in Settings before starting another.");
     }
     if (action === "disconnect") {
-      const result = await disconnectWorkspace({ home: runtime.homeDirectory, transport: runtime.workspaceDisconnectTransport,
+      const result = await disconnectWorkspace({ home: runtime.homeDirectory, retry: args.workspaceDisconnectRetry, transport: runtime.workspaceDisconnectTransport,
         confirm: action => consent(action === "abandon_unexchanged"
           ? "This native request has never attempted exchange. Destroy its unused private pairing key so it can no longer complete enrollment? Cancel any browser challenge in Settings as well. [y/N] "
-          : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
-      return result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
+          : action === "retry_revoke"
+            ? "Repeat the identical retained disconnect request once? If already revoked, Tilden returns that outcome; otherwise this revokes the same grant. No session facts are sent. Local pairing is removed only after a matching receipt. [y/N] "
+            : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
+      return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run workspace disconnect without --retry to start a new disconnect.")
+        : result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
         : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill workspace connect to start a new request.")
         : result.state === "cancelled" ? fail("Pairing kept. Disconnect was not confirmed; no request or key was removed.") : result.state === "not_paired" ? ok("No completed local pairing exists.")
-          : fail(`Disconnect outcome is unknown. Local keys remain; no retry was sent. Reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
+          : fail(`Disconnect outcome is unknown. Local keys remain and uploads are blocked. Run npx aibill@latest workspace disconnect --retry to review and explicitly repeat the identical retained request once, or inspect this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
     }
     const status = await workspaceStatus(runtime.homeDirectory);
     if (status.state !== "connected") return fail("Connect this machine before pushing local facts.");
@@ -8073,7 +8077,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.workspaceRestart = true;
       rest.shift();
     }
-    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], connect --restart, push, status, or disconnect");
+    if (parsed.workspaceAction === "disconnect" && rest.length === 1 && rest[0] === "--retry") {
+      parsed.workspaceDisconnectRetry = true;
+      rest.shift();
+    }
+    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], connect --restart, push, status, or disconnect [--retry]");
   }
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
@@ -8755,6 +8763,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  npx aibill workspace push            Preview and send local session facts",
     "  npx aibill workspace status          Read local pairing/pending status only",
     "  npx aibill workspace disconnect      Revoke the grant or abandon an unused pairing key",
+    "  npx aibill workspace disconnect --retry  Confirm one identical uncertain disconnect attempt",
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",

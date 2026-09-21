@@ -5,7 +5,15 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.10 (Unreleased)
+## 0.9.11 (Unreleased)
+
+`workspace disconnect --retry` recovers an uncertain disconnect after fresh
+confirmation. It sends the identical retained signed request once, with the
+same request ID and grant. If the grant was already revoked, Tilden returns
+that outcome. Uploads stay blocked and local keys stay in place until a
+matching receipt confirms revocation. Disconnect never retries automatically.
+
+## 0.9.10 (2026-09-21)
 
 Workspace pushes now report source-specific diagnostic counts without exposing
 paths or transcript contents. The Workspace reader can recover bounded JSON
