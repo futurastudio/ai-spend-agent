@@ -591,11 +591,13 @@ export async function finishWorkspaceEnrollment(options: { home?: string; bundle
   });
 }
 
-/** Revocation is one native attempt. Unknown outcomes retain keys and block further writes. */
-export async function disconnectWorkspace(options: { home?: string; confirm: (action: "revoke" | "abandon_unexchanged") => Promise<boolean>;
+/** One native attempt per confirmation. Explicit recovery repeats the retained proof; unknown outcomes keep writes blocked. */
+export async function disconnectWorkspace(options: { home?: string; retry?: boolean; confirm: (action: "revoke" | "retry_revoke" | "abandon_unexchanged") => Promise<boolean>;
   transport?: WorkspaceDisconnectTransport;
-}): Promise<{ state: "revoked" | "abandoned" | "cancelled" | "unconfirmed" | "not_paired" }> {
+}): Promise<{ state: "revoked" | "abandoned" | "cancelled" | "unconfirmed" | "not_paired" | "retry_not_pending" }> {
   return withState(options.home ?? homedir(), async (state, save, path) => {
+    if (options.retry && state?.disconnect?.state !== "uncertain")
+      return { state: "retry_not_pending" };
     if (!state) {
       const enrollment = await readEnrollment(path);
       if (!enrollment) return { state: "not_paired" };
@@ -609,12 +611,12 @@ export async function disconnectWorkspace(options: { home?: string; confirm: (ac
       try { await directory.sync(); } finally { await directory.close(); }
       return { state: "abandoned" };
     }
-    if (state.disconnect?.state === "uncertain") return { state: "unconfirmed" };
-    if (!await options.confirm("revoke")) return { state: "cancelled" };
-    if (!state.disconnect) {
+    if (state.disconnect?.state === "uncertain" && !options.retry) return { state: "unconfirmed" };
+    if (!await options.confirm(state.disconnect?.state === "uncertain" ? "retry_revoke" : "revoke")) return { state: "cancelled" };
+    if (state.disconnect?.state !== "revoked") {
       const proof = { purpose: "machine_disconnect_v1", grantId: state.device.grantId,
         grantRevision: state.device.grantRevision, connectionEpoch: state.device.connectionEpoch,
-        requestId: `oref_${randomBytes(32).toString("base64url")}` };
+        requestId: state.disconnect?.requestId ?? `oref_${randomBytes(32).toString("base64url")}` };
       const body = { ...proof, publicKey: createPublicKey(state.device.privateKeyPem).export({ format: "jwk" }).x!,
         signature: sign(null, Buffer.from(workspaceCanonicalJson(proof)), state.device.privateKeyPem).toString("base64url") };
       const uncertain: WorkspaceState = { ...state, disconnect: { state: "uncertain", requestId: proof.requestId, revokedAt: null } };
