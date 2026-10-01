@@ -36,7 +36,7 @@ const sections: LegalSection[] = [
     "title": "Your data and connections",
     "paragraphs": [
       "You retain your rights in the information you provide. You authorize Tilden to process that information and use the connections you configure as necessary to provide the service, including retrieving provider data, storing hosted records, and producing reports. Our Privacy policy describes the distinction between local CLI analysis and hosted processing.",
-      "You control whether to enable optional machine uploads. Those uploads can include project names and structured usage summaries. Review the relevant setup and consent information before enabling them. Your organization’s Workspace members may see information according to their assigned permissions.",
+      "You control whether to enable optional machine uploads. Review the Privacy policy and obtain any required permissions before sharing data.",
       "Removing a connection or disconnecting a machine limits future authorized access; it does not automatically delete historical information or revoke a provider key at its source. Contact contact@futurastudio.info for account closure or data-deletion requests."
     ]
   },
