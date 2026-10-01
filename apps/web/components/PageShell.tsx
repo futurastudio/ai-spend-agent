@@ -126,8 +126,11 @@ export function PageShell({
             >
               npm ↗
             </a>
-            <Link href="/#privacy" className="transition-colors hover:text-ink">
+            <Link href="/privacy" className="transition-colors hover:text-ink">
               Privacy
+            </Link>
+            <Link href="/terms" className="transition-colors hover:text-ink">
+              Terms
             </Link>
             <span className="text-green">$ npx aibill</span>
           </div>

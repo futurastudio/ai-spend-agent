@@ -5,6 +5,8 @@ const LAST_MODIFIED = new Date("2026-08-24");
 
 export default function sitemap(): MetadataRoute.Sitemap {
   return [
+    { url: `${SITE_URL}/privacy`, lastModified: new Date("2026-09-30"), priority: 0.3 },
+    { url: `${SITE_URL}/terms`, lastModified: new Date("2026-09-30"), priority: 0.3 },
     { url: `${SITE_URL}/`, lastModified: LAST_MODIFIED, priority: 1 },
     { url: `${SITE_URL}/docs`, lastModified: LAST_MODIFIED, priority: 0.9 },
     { url: `${SITE_URL}/docs/cli`, lastModified: LAST_MODIFIED, priority: 0.8 },

@@ -132,6 +132,8 @@ export function DocsPage({
                   Found a mismatch? Documentation is part of the product’s evidence boundary.
                 </p>
                 <div className="flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-faint">
+                  <a href="/privacy" className="inline-flex min-h-11 items-center hover:text-ink">Privacy</a>
+                  <a href="/terms" className="inline-flex min-h-11 items-center hover:text-ink">Terms</a>
                   <a
                     href={`${REPO_URL}/edit/main/${repoPath}`}
                     target="_blank"
