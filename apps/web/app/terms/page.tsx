@@ -97,4 +97,4 @@ const sections: LegalSection[] = [
   }
 ];
 
-export default function Page() { return <LegalPage title="Terms of service" intro="The terms for using Tilden\u2019s website and invitation-only Workspace, with separate treatment for the open-source aibill CLI." sections={sections} />; }
+export default function Page() { return <LegalPage title="Terms of service" intro="The terms for using Tilden’s website and invitation-only Workspace, with separate treatment for the open-source aibill CLI." sections={sections} />; }
