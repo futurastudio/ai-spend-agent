@@ -577,8 +577,11 @@ export default function Home() {
             <a href="/docs/roadmap" className="transition-colors hover:text-ink">
               Roadmap
             </a>
-            <a href="#privacy" className="transition-colors hover:text-ink">
+            <a href="/privacy" className="transition-colors hover:text-ink">
               Privacy
+            </a>
+            <a href="/terms" className="transition-colors hover:text-ink">
+              Terms
             </a>
           </div>
         </div>
