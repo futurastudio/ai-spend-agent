@@ -4,6 +4,7 @@ import {
   sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson, WorkspaceEnrollmentRefusal,
   type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
 } from "./workspaceConnect.js";
+import { workspaceSync, type WorkspaceSyncScheduler } from "./workspaceSync.js";
 import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -266,6 +267,7 @@ export type CliResult = {
 type ParsedArgs = {
   command?: string;
   workspaceAction?: string;
+  workspaceSyncAction?: string;
   workspaceCode?: string;
   workspaceRestart?: boolean;
   workspaceDisconnectRetry?: boolean;
@@ -351,6 +353,10 @@ export type CliRuntimeOptions = {
   workspaceExchangeTransport?: WorkspaceExchangeTransport;
   workspaceDisconnectTransport?: WorkspaceDisconnectTransport;
   workspaceLoadCalls?: () => Promise<Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>>;
+  workspaceSyncScheduler?: WorkspaceSyncScheduler;
+  workspaceSyncPlatform?: string;
+  workspaceSyncRuntimePath?: string;
+  workspaceSyncNodePath?: string;
   /** Test/embedding override. Production always defaults to the OS home. */
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
@@ -1674,9 +1680,9 @@ function renderCliQualitativeCoverage(coverage: CliQualitativeCoverage): string 
 async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
   const fail = (message: string): CliResult => ({ exitCode: 1, stdout: "", stderr: message });
   const action = args.workspaceAction;
-  if (!["connect", "push", "status", "disconnect"].includes(action ?? ""))
-    return fail("Use npx aibill workspace connect [response-bundle], push, status, or disconnect.");
-  if (action !== "status" && (runtime.interactive !== true || !runtime.consentRead && !runtime.prompt))
+  if (!["connect", "push", "status", "disconnect", "sync"].includes(action ?? ""))
+    return fail("Use npx aibill workspace connect [response-bundle], push, status, sync enable|status|disable, or disconnect.");
+  if (action !== "status" && !(action === "sync" && ["run", "status", "disable"].includes(args.workspaceSyncAction ?? "")) && (runtime.interactive !== true || !runtime.consentRead && !runtime.prompt))
     return fail("Workspace changes require an interactive terminal and explicit consent. Status remains available without a terminal.");
   const consent = async (message: string): Promise<boolean> => {
     try {
@@ -1685,6 +1691,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     } catch { return false; }
   };
   try {
+    const syncOptions = { home: runtime.homeDirectory, now: runtime.workspaceNow, platform: runtime.workspaceSyncPlatform,
+      scheduler: runtime.workspaceSyncScheduler, runtimePath: runtime.workspaceSyncRuntimePath, nodePath: runtime.workspaceSyncNodePath,
+      load: runtime.workspaceLoadCalls, transport: runtime.workspaceTransport, confirm: consent };
+    if (action === "sync") return ok(await workspaceSync(args.workspaceSyncAction ?? "status", syncOptions));
     if (action === "status") {
       const status = await workspaceStatus(runtime.homeDirectory);
       if (status.state === "not_connected") return ok("This machine has no completed local Workspace pairing. No logs or network were read.");
@@ -1722,11 +1732,18 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     }
     if (action === "disconnect") {
       const result = await disconnectWorkspace({ home: runtime.homeDirectory, retry: args.workspaceDisconnectRetry, transport: runtime.workspaceDisconnectTransport,
-        confirm: action => consent(action === "abandon_unexchanged"
+        confirm: async action => {
+          const approved = await consent(action === "abandon_unexchanged"
           ? "This native request has never attempted exchange. Destroy its unused private pairing key so it can no longer complete enrollment? Cancel any browser challenge in Settings as well. [y/N] "
           : action === "retry_revoke"
             ? "Repeat the identical retained disconnect request once? If already revoked, Tilden returns that outcome; otherwise this revokes the same grant. No session facts are sent. Local pairing is removed only after a matching receipt. [y/N] "
-            : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
+            : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ");
+          return approved;
+        } });
+      if (["revoked", "abandoned", "not_paired", "unconfirmed"].includes(result.state)) {
+        // Local disconnect state blocks uploads even if scheduler cleanup fails.
+        await workspaceSync("disable", syncOptions).catch(() => undefined);
+      }
       return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run workspace disconnect without --retry to start a new disconnect.")
         : result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
         : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill workspace connect to start a new request.")
@@ -8072,6 +8089,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
   if (command === "workspace" && rest[0] && !rest[0].startsWith("--")) {
     parsed.workspaceAction = rest.shift();
+    if (parsed.workspaceAction === "sync") {
+      parsed.workspaceSyncAction = rest.shift() ?? "status";
+      if (!["enable", "disable", "status", "run"].includes(parsed.workspaceSyncAction)) parsed.parseErrors.push("workspace sync accepts enable, status or disable");
+    }
     if (parsed.workspaceAction === "connect" && rest[0] && !rest[0].startsWith("--")) parsed.workspaceCode = rest.shift();
     if (parsed.workspaceAction === "connect" && !parsed.workspaceCode && rest.length === 1 && rest[0] === "--restart") {
       parsed.workspaceRestart = true;
@@ -8081,7 +8102,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.workspaceDisconnectRetry = true;
       rest.shift();
     }
-    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], connect --restart, push, status, or disconnect [--retry]");
+    if (rest.length) parsed.parseErrors.push("workspace accepts only connect [response-bundle], connect --restart, push, status, sync enable|status|disable, or disconnect [--retry]");
   }
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
@@ -8762,6 +8783,9 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  npx aibill workspace connect <code>  Finish the browser-confirmed pairing",
     "  npx aibill workspace push            Preview and send local session facts",
     "  npx aibill workspace status          Read local pairing/pending status only",
+    "  npx aibill workspace sync enable     Opt into hourly local-summary uploads on macOS",
+    "  npx aibill workspace sync status     Read automatic upload status without scanning",
+    "  npx aibill workspace sync disable    Stop automatic uploads; keep the pairing",
     "  npx aibill workspace disconnect      Revoke the grant or abandon an unused pairing key",
     "  npx aibill workspace disconnect --retry  Confirm one identical uncertain disconnect attempt",
     "",

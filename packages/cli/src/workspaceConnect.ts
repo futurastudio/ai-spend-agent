@@ -282,7 +282,7 @@ async function readState(path: string): Promise<WorkspaceState | null> {
 async function atomicState(path: string, state: WorkspaceState): Promise<void> {
   return atomicPrivateJson(path, STATE_FILE, state as unknown as Json);
 }
-async function atomicPrivateJson(path: string, name: string, value: Json): Promise<void> {
+export async function atomicPrivateJson(path: string, name: string, value: Json): Promise<void> {
   const serialized = `${workspaceCanonicalJson(value)}\n`;
   if (Buffer.byteLength(serialized) > MAX_STATE_BYTES) throw Error("Workspace state exceeds its byte bound.");
   const temporary = join(path, `.workspace-device-${randomBytes(16).toString("hex")}.tmp`);
@@ -294,7 +294,7 @@ async function atomicPrivateJson(path: string, name: string, value: Json): Promi
     try { await directory.sync(); } finally { await directory.close(); }
   } finally { await handle.close().catch(() => undefined); await unlink(temporary).catch(error => { if (!missing(error)) throw error; }); }
 }
-async function withState<T>(home: string, callback: (state: WorkspaceState | null, save: (state: WorkspaceState) => Promise<void>, path: string) => Promise<T>): Promise<T> {
+export async function withState<T>(home: string, callback: (state: WorkspaceState | null, save: (state: WorkspaceState) => Promise<void>, path: string) => Promise<T>): Promise<T> {
   const path = await privateDirectory(home, true), directory = await lstat(path);
   let lock;
   try { lock = await open(join(path, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600); }
@@ -385,7 +385,11 @@ export async function prepareWorkspacePush(options: {
   home?: string; calls: readonly LocalAgentCall[]; generatedAt: string;
   confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean>;
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
-  return withState(options.home ?? homedir(), async (state, save) => {
+  return withState(options.home ?? homedir(), (state, save) => prepareWorkspacePushLocked(state, save, options));
+}
+
+/** Shared locked path for interactive pushes and explicitly opted-in scheduled pushes. */
+export async function prepareWorkspacePushLocked(state: WorkspaceState | null, save: (state: WorkspaceState) => Promise<void>, options: { calls: readonly LocalAgentCall[]; generatedAt: string; confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean> }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
     if (!state) throw Error("This machine is not connected to a Workspace.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending) {
@@ -408,12 +412,14 @@ export async function prepareWorkspacePush(options: {
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
     await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
     return { state: "prepared", coverage };
-  });
 }
 
 /** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */
 export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
-  return withState(options.home ?? homedir(), async (state, save) => {
+  return withState(options.home ?? homedir(), (state, save) => sendWorkspacePendingLocked(state, save, options.transport));
+}
+
+export async function sendWorkspacePendingLocked(state: WorkspaceState | null, save: (state: WorkspaceState) => Promise<void>, transport?: WorkspaceTransport): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
     if (!state?.pending) throw Error("No prepared Workspace batch exists.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending.state !== "ready") throw Error("This batch already has a result or an uncertain outcome; reconcile it before another push.");
@@ -421,7 +427,7 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
     const dispatched: WorkspaceState = { ...state, pending: { ...state.pending, state: "uncertain" } };
     await save(dispatched);
     let result: WorkspaceTransportResult;
-    try { result = await (options.transport ?? workspaceTransport)(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
+    try { result = await (transport ?? workspaceTransport)(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
     catch { return { state: "unconfirmed" }; }
     try {
       const receipt = result.body;
@@ -446,7 +452,6 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
       }
     } catch { return { state: "unconfirmed" }; }
     return { state: "unconfirmed" };
-  });
 }
 
 export type WorkspaceEnrollmentRequest = {

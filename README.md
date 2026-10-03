@@ -674,6 +674,24 @@ current form records interest, not access to a signed download.
   reconciliation and the beta Cursor connector remain `estimated` until
   reconciled against a real invoice.
 
+## Optional automatic Workspace uploads on macOS
+
+Pair this machine with Tilden and approve its repository scope in **Settings → Machines** first. Pairing alone does not upload activity. You can continue using `npx aibill@latest workspace push` for a reviewed manual upload, or opt into recurring summaries:
+
+```sh
+npx aibill@latest workspace sync enable
+npx aibill@latest workspace sync status
+npx aibill@latest workspace sync disable
+```
+
+Enable asks for recurring-upload permission and previews the first changed batch. It installs a user LaunchAgent that checks hourly while your Mac is awake and you are logged in. Each check reads the latest 30 days of Claude Code and Codex local logs, within the approved collection dates; today's UTC day is included only after it closes. Each run sends at most 256 changed daily fact groups, so larger initial histories finish over later checks. Unchanged facts are skipped, and updated facts replace their earlier revision.
+
+Summaries include repository names, hashed directory/session references, session counts, model names and recorded token components. They contain no prompts, transcripts, raw paths, credentials or dollar amounts. Unknown tokens stay unknown. These are machine-reported activity summaries, separate from provider-reported tokens and billed costs.
+
+An uncertain response, refused batch, incomplete source reading, expired pairing or changed grant pauses automatic uploads. It does not retry an uncertain batch automatically. Run `workspace sync disable`, inspect `workspace status`, resolve the retained batch with the existing manual flow, then enable again. Disconnecting also disables automatic uploads. Disable keeps your pairing and previously accepted records.
+
+The schedule pins the installed upload code and parser version; it does not download updates in the background. If that installed runtime is removed (including npm-cache cleanup) or changes, disable and enable sync from the installed CLI again. Status shows local permission and the last check/result, not proof of a currently active server grant or running scheduler. Other platforms retain manual `workspace push` support.
+
 ## Open core, optional Workspace
 
 The CLI, parsers, MCP/plugin, public contracts, generated local action
