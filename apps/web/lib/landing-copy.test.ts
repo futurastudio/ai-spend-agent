@@ -31,6 +31,8 @@ const LANDING_FILES = [
   "app/thanks/page.tsx",
   "components/PageShell.tsx",
   "components/WaitlistForm.tsx",
+  "components/WaitlistThanks.tsx",
+  "components/iterations/trace-next/TraceNext.tsx",
   "lib/workspace-entry.ts",
 ] as const;
 
@@ -40,7 +42,7 @@ const LANDING_FILES = [
  * provider says so. It is masked before the scan rather than banned.
  */
 function scannable(source: string): string {
-  return source.replace(/unverified/gi, "«not-reported-label»");
+  return source.replace(/unverified/gi, "«not-reported-label»").replace(/role="alert"/g, "");
 }
 
 const FORBIDDEN_WORDS: ReadonlyArray<[string, RegExp]> = [
@@ -48,7 +50,6 @@ const FORBIDDEN_WORDS: ReadonlyArray<[string, RegExp]> = [
   ["proven", /\bproven\b/gi],
   ["saves", /\bsaves\b/gi],
   ["savings", /\bsavings\b/gi],
-  ["ROI", /\broi\b/gi],
   ["ask anything", /ask\s+anything/gi],
 ];
 
@@ -59,6 +60,7 @@ const FORBIDDEN_CLAIMS: ReadonlyArray<[string, RegExp]> = [
   ["alerts of any kind", /\balerts?\b/gi],
   ["Monday briefing", /monday\s+briefing/gi],
   ["continuous monitoring", /continuous\s+monitoring/gi],
+  ["ROI guarantee", /\bwe\s+(?:measure|prove|guarantee|calculate)\s+(?:your\s+)?roi\b/gi],
 ];
 
 function read(file: string): string {
@@ -76,7 +78,7 @@ describe("landing copy gate", () => {
   });
 
   it.each(LANDING_FILES)("%s claims no feature that is not live", (file) => {
-    const text = read(file);
+    const text = scannable(read(file));
     const hits = FORBIDDEN_CLAIMS.filter(([, re]) => {
       re.lastIndex = 0;
       return re.test(text);
@@ -91,10 +93,23 @@ describe("landing copy gate", () => {
     expect(text).not.toContain("—");
   });
 
-  it("labels the provider chips by basis, not by a verification claim", () => {
-    const page = read("app/page.tsx");
-    expect(page).toContain("LIVE · PROVIDER-REPORTED");
-    expect(page).toContain("BETA · FIXTURE ONLY");
+  it("keeps sample data and future coverage explicit on the landing page", () => {
+    const page = read("components/iterations/trace-next/TraceNext.tsx");
+    expect(page).toContain("Sample data · includes planned sources");
+    expect(page).toContain("invited CLI beta. Workspace coverage is planned");
+    expect(page).toContain("Jev + Kimi.");
+    expect(page).toContain("neither is an available integration");
+    expect(page).toContain("Use read-only Workspace cost evidence");
+    expect(page).toContain("Workspace access is invitation-only.");
+    expect(page).toContain("Illustrative example");
+    expect(page).toContain("No live connection in this preview.");
+  });
+
+  it("qualifies the ROI question rather than claiming a measured return", () => {
+    const page = read("components/iterations/trace-next/TraceNext.tsx");
+    expect(page).toContain("Tilden starts with the cost side.");
+    expect(page).toContain("Measuring return also requires evidence of useful outcomes");
+    expect(page).toContain("part of our longer-term ambition");
   });
 
   it("says the Workspace is not launched publicly", () => {

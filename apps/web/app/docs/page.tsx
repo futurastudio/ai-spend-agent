@@ -1,71 +1,23 @@
 import type { Metadata } from "next";
-import {
-  CodeBlock,
-  DocsCallout,
-  DocsPage,
-  DocsSection,
-  TextLink,
-} from "@/components/DocsPage";
-import { NPM_STABLE_VERSION } from "@/lib/docs";
+import { CodeBlock, DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
 
 export const metadata: Metadata = {
-  title: "aibill docs — private AI cost and usage evidence",
-  description:
-    "Install aibill, understand its evidence labels, and choose the CLI, Claude Code statusline, MCP, or Glance source preview.",
+  title: "Tilden docs — Workspace, CLI and MCP",
+  description: "Get started with Tilden Workspace, the local aibill CLI and read-only Workspace MCP. Understand access, supported sources and the evidence behind each number.",
   alternates: { canonical: "/docs" },
 };
 
 const surfaces = [
-  {
-    name: "CLI",
-    state: "Published",
-    copy: "The complete private receipt, source diagnostics, reports, Context Health, the guided improve loop, and the evidence-constrained Apply workflow.",
-    href: "/docs/cli",
-  },
-  {
-    name: "Claude Code statusline",
-    state: "Published · opt-in",
-    copy: "A cache-only monitor for plan-aware Claude Code and Codex cohorts. It never scans transcripts or calls a provider while rendering.",
-    href: "/docs/cli#statusline",
-  },
-  {
-    name: "MCP",
-    state: "Published · explicit",
-    copy: "A structured interface for compatible AI clients. The client receives each tool result; approval and automatic-use behavior follow that client’s settings.",
-    href: "/docs/mcp",
-  },
-  {
-    name: "Glance",
-    state: "Source preview",
-    copy: "An unsigned native macOS hover surface over the shared Glance JSON contract. No public Mac download exists yet.",
-    href: "/docs/glance",
-  },
+  { name: "Workspace", state: "Invited onboarding", copy: "Review supported provider costs, project and model breakdowns, briefings and budgets. Add explicitly shared coding-agent activity when your team wants that context.", href: "/docs/workspace" },
+  { name: "CLI", state: "Public · runs locally", copy: "Use aibill to inspect Claude Code and Codex evidence on your machine, understand estimates and coverage, and prepare a bounded improvement test. No Workspace account is required.", href: "/docs/cli" },
+  { name: "Workspace MCP", state: "Assisted invited setup", copy: "Let a supported AI client read your Workspace spend, projects, briefing and budget settings with owner or admin consent. Client setup is checked during onboarding.", href: "/docs/mcp" },
 ] as const;
 
 export default function DocsOverviewPage() {
   return (
-    <DocsPage
-      current="/docs"
-      title="Start with evidence you can inspect."
-      intro="aibill turns supported local coding-agent metadata and optional provider reports into evidence-labeled views that keep local estimates, subscription context, and provider cost separate. This guide distinguishes what works today from preview and roadmap items."
-      repoPath="apps/web/app/docs/page.tsx"
-    >
-      <DocsSection id="quickstart" label="01 · Quickstart" title="Your first private receipt">
-        <p>
-          Run init inside a specific project. On npm v{NPM_STABLE_VERSION} it reads the last 30 days of supported Claude Code, Codex, and experimental Gemini CLI financial metadata on this machine, prints a personal receipt, preserves or creates project-local aibill state, and seeds a private aggregate cache for Claude Code and Codex.
-        </p>
-        <CodeBlock label="Terminal">{`npx aibill init
-npx aibill`}</CodeBlock>
-        <p>
-          Init uses real local evidence only. It does not substitute sample dollars and it does not install the statusline unless you explicitly pass <code className="font-mono text-ink">--statusline</code>. If the default readout finds no supported evidence, it says so and substitutes nothing — &ldquo;No sample data was substituted.&rdquo; Pass <code className="font-mono text-ink">--sample</code> to see a labeled demo on purpose.
-        </p>
-        <DocsCallout title="Requirements" tone="published">
-          Node 22 or newer. The default local run needs no account, provider key, or signup.
-        </DocsCallout>
-      </DocsSection>
-
-      <DocsSection id="surfaces" label="02 · Choose a surface" title="One evidence model, different jobs">
-        <div className="docs-status-grid" data-columns="2">
+    <DocsPage current="/docs" title="Know where your AI spend goes." intro="Tilden gives you a shared Workspace, a local CLI and a read-only MCP connection for supported AI clients. Start with the guide for your job, then check the sources and coverage behind the answer." repoPath="apps/web/app/docs/page.tsx">
+      <DocsSection id="start" label="01 · Start here" title="Choose how you want to work">
+        <div className="docs-status-grid" data-columns="3">
           {surfaces.map((surface) => (
             <article key={surface.name} className="docs-status-cell p-5">
               <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-green">{surface.state}</p>
@@ -75,47 +27,38 @@ npx aibill`}</CodeBlock>
             </article>
           ))}
         </div>
-      </DocsSection>
-
-      <DocsSection id="evidence" label="03 · Trust model" title="Three questions stay separate">
-        <ol className="space-y-6">
-          <li>
-            <strong className="text-ink">What financial evidence supports this number?</strong>
-            <p className="mt-1"><code className="font-mono text-ink">verified</code> is provider-reported and source-authoritative, though not necessarily a final invoice. <code className="font-mono text-ink">estimated</code> is local usage priced at published API rates. <code className="font-mono text-ink">detected_unverified</code> is a signal that has not been reconciled. <code className="font-mono text-ink">missing</code> means no supported cost basis exists.</p>
-          </li>
-          <li>
-            <strong className="text-ink">How has the reader or connector been tested?</strong>
-            <p className="mt-1"><code className="font-mono text-ink">live_verified</code>, <code className="font-mono text-ink">fixture_verified</code>, <code className="font-mono text-ink">untested</code>, and <code className="font-mono text-ink">failed</code> describe validation coverage. They never upgrade a number’s financial evidence.</p>
-          </li>
-          <li>
-            <strong className="text-ink">Was this location approved for reading?</strong>
-            <p className="mt-1">Folder approval is a permission boundary, not proof that its contents are financially verified.</p>
-          </li>
-        </ol>
-        <p className="mt-7">
-          Run <code className="font-mono text-ink">npx aibill doctor --sources</code> to inspect validation, financial evidence, freshness, and the latest sanitized error together.
-        </p>
-      </DocsSection>
-
-      <DocsSection id="privacy" label="04 · Privacy" title="Local by default, explicit at every boundary">
-        <p>
-          CLI and Glance analysis runs locally; transcripts, prompts, file names, and dollar amounts are never uploaded. The CLI counts which commands run — anonymous, never your data or content — and sends nothing before a one-time printed notice. <code className="font-mono text-ink">aibill telemetry</code> shows the exact last payload verbatim; <code className="font-mono text-ink">aibill telemetry off</code> (or <code className="font-mono text-ink">DO_NOT_TRACK</code>, <code className="font-mono text-ink">AI_SPEND_NO_TELEMETRY</code>, <code className="font-mono text-ink">CI</code>) turns it off, and every receipt states the current mode. An explicit <code className="font-mono text-ink">sync-provider</code> call contacts only the selected provider using an inherited <code className="font-mono text-ink">env:NAME</code> reference. MCP returns the selected structured result to the invoking AI client, so that result follows the client’s own data policy.
-        </p>
-        <p className="mt-4">
-          aibill rejects raw credential arguments and never sits in the inference path or stores, prints, or proxies provider credentials.
-        </p>
-      </DocsSection>
-
-      <DocsSection id="boundary" label="05 · Product boundary" title="What is—and is not—available">
-        <DocsCallout title={`Published · npm v${NPM_STABLE_VERSION}`} tone="published">
-          Claude Code and Codex local evidence, the experimental Gemini CLI financial reader, the CLI with the guided <code className="font-mono text-ink">improve</code> loop and local accountability commands (<code className="font-mono text-ink">identify</code>, <code className="font-mono text-ink">outcome github</code>, <code className="font-mono text-ink">accountability</code>), optional Claude Code statusline, explicit MCP/plugin with the read-only <code className="font-mono text-ink">draft_improve_command</code> tool, provider connectors, parser registry, generated source documentation, and the additive Receipt v0 core contract.
+        <DocsCallout title="Workspace access">
+          Join the waitlist for future access. Selected partners are invited to assisted onboarding, where we agree on supported sources and setup. Joining does not create a Workspace or enable MCP immediately. No provider key is needed to join. <TextLink href="/#beta">Join the waitlist →</TextLink>
         </DocsCallout>
-        <DocsCallout title="Gemini CLI · published experimental boundary" tone="preview">
-          Gemini is <code className="font-mono text-ink">fixture_verified</code>, not live-verified. Its supported chat records can contribute estimated API-equivalent financial value or missing evidence, but it does not feed statusline, Glance, Context Health, Apply, plan, runway, or invocation surfaces.
-        </DocsCallout>
-        <p>
-          Workspace, company-wide reconciliation, accepted-outcome economics, ROI measurement, autonomous enforcement, and a signed Glance download are not shipped. See the factual <TextLink href="/docs/roadmap">Now / Next / Later roadmap</TextLink>.
-        </p>
+      </DocsSection>
+
+      <DocsSection id="quickstart" label="02 · Try the CLI" title="Start with the evidence on your machine">
+        <p>With Node 22 or newer, run these commands inside a project. The local CLI needs no account or provider key. Tilden is the product; <code className="font-mono text-ink">aibill</code> remains the published command and package name.</p>
+        <CodeBlock label="Terminal">{`npx aibill@latest init
+npx aibill@latest`}</CodeBlock>
+        <p>Init reads supported local metadata and creates or preserves local state. It does not connect the machine to Workspace. Empty evidence stays empty; use <code className="font-mono text-ink">--sample</code> only when you want a labeled demonstration. See the <TextLink href="/docs/cli">CLI guide</TextLink> for commands, telemetry controls and the optional Claude Code statusline.</p>
+      </DocsSection>
+
+      <DocsSection id="evidence" label="03 · Read the evidence" title="Cost, usage and activity answer different questions">
+        <dl className="space-y-6">
+          <div><dt className="font-medium text-ink">Provider-reported cost</dt><dd className="mt-1">Amounts returned by a supported provider cost source. These can be a known subtotal with missing or pending days, and can differ from the final invoice after credits, taxes or adjustments.</dd></div>
+          <div><dt className="font-medium text-ink">Estimated value</dt><dd className="mt-1">A value with a stated calculation or incomplete billing basis. Local tokens priced at API list rates are API-equivalent estimates, not subscription charges. Estimates do not become provider-reported costs when shared.</dd></div>
+          <div><dt className="font-medium text-ink">Shared activity</dt><dd className="mt-1">Supported machine-reported sessions, tokens and repository context. This can help you investigate work, but does not prove which person or agent caused a bill, whether a task was accepted, or its ROI.</dd></div>
+        </dl>
+        <p className="mt-7">Missing data is never silently treated as zero. Source availability, reader validation and the basis of a number stay separate. <TextLink href="/docs/sources">Read the source and evidence guide →</TextLink></p>
+      </DocsSection>
+
+      <DocsSection id="data" label="04 · Data choices" title="Understand what you connect">
+        <p>The default CLI analysis runs on your machine. Optional provider requests, Workspace sharing and MCP connections are separate choices. Workspace is hosted and stores the supported records you connect or explicitly share; a local-first claim about the CLI does not describe Workspace.</p>
+        <p className="mt-4">CLI usage telemetry is disclosed before sending and can be disabled with <code className="font-mono text-ink">aibill telemetry off</code>. A configured MCP client receives the tool results it requests, which then follow that client&apos;s data policy. Read the <TextLink href="/privacy">privacy policy</TextLink> for the full data flows.</p>
+      </DocsSection>
+
+      <DocsSection id="references" label="05 · More guides" title="Go deeper when you need it">
+        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+          <li><TextLink href="/docs/mcp/local">Local MCP reference</TextLink>: run the aibill stdio server against local evidence, without a Workspace account.</li>
+          <li><TextLink href="/docs/glance">Glance source preview</TextLink>: build the optional local macOS monitor. A public signed download is not available.</li>
+          <li><TextLink href="/docs/roadmap">Weekly roadmap</TextLink>: current priorities and what we are exploring.</li>
+        </ul>
       </DocsSection>
     </DocsPage>
   );

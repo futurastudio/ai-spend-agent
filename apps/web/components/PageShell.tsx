@@ -56,9 +56,10 @@ export function PageShell({
           </h2>
           <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
             Free and open source. The default CLI runs locally with no
-            account, and your code, prompts, and financial data never leave
-            your machine; provider connections and MCP sharing are always
-            explicit.
+            account. Local report generation keeps code, prompts, and financial
+            records on your machine. Optional provider connections, report
+            sharing, Workspace uploads, and MCP-client use have separate data
+            boundaries described in the <Link href="/privacy" className="underline underline-offset-4">privacy policy</Link>.
           </p>
           <div className="mt-6 max-w-[380px]">
             <CopyCommand />

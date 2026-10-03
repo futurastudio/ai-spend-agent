@@ -1,0 +1,18 @@
+.page { min-height:100vh; background:var(--tn-paper); color:var(--tn-ink); color-scheme:light; font-family:var(--tn-font); }
+.header,.main,.footer { max-width:1100px; margin:auto; padding-left:var(--tn-gutter); padding-right:var(--tn-gutter); }
+.header { display:flex; justify-content:space-between; align-items:center; padding-top:var(--tn-space-8); padding-bottom:var(--tn-space-8); font-size:12px; }
+.header img { width:120px; height:auto; }
+.main { padding-top:var(--tn-space-20); padding-bottom:var(--tn-space-20); }
+.eyebrow { color:var(--tn-accent); text-transform:uppercase; font:11px var(--tn-mono); letter-spacing:.07em; }
+.main h1 { font-size:clamp(38px,5vw,64px); font-weight:500; line-height:1.07; letter-spacing:-.05em; margin-top:var(--tn-space-5); }
+.main > p:not(.eyebrow) { max-width:55ch; font-size:16px; line-height:1.65; color:var(--tn-muted); margin-top:var(--tn-space-6); }
+.question { border-top:1px solid var(--tn-line); margin-top:var(--tn-space-12); padding-top:var(--tn-space-8); max-width:640px; }
+.question h2 { font-size:24px; font-weight:500; letter-spacing:-.035em; line-height:1.25; }
+.question p { color:var(--tn-muted); font-size:14px; line-height:1.65; margin-top:var(--tn-space-4); }
+.question a { display:inline-flex; gap:var(--tn-space-6); align-items:center; min-height:48px; color:var(--tn-accent); font-size:13px; margin-top:var(--tn-space-4); }
+.back { display:inline-block; margin-top:var(--tn-space-10); font-size:12px; min-height:44px; }
+.footer { display:flex; flex-wrap:wrap; gap:var(--tn-space-6); border-top:1px solid var(--tn-line); font-size:11px; padding-top:var(--tn-space-6); padding-bottom:var(--tn-space-6); }
+.page a { text-decoration:none; white-space:nowrap; }
+.page a:hover { text-decoration:underline; text-underline-offset:4px; }
+.page a:focus-visible { outline:2px solid var(--tn-accent); outline-offset:4px; }
+@media(max-width:600px) { .main { padding-top:var(--tn-space-12); padding-bottom:var(--tn-space-12); }.main > p:not(.eyebrow) { font-size:14px; }.question h2 { font-size:22px; }.question a { font-size:12px; gap:var(--tn-space-3); } }

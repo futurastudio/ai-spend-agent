@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { CodeBlock, DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
-import { NPM_STABLE_VERSION } from "@/lib/docs";
+import { NPM_STABLE_VERSION, NPM_VERSION_CHECKED } from "@/lib/docs";
 
 export const metadata: Metadata = {
-  title: "aibill CLI and Claude Code statusline docs",
+  title: "Tilden CLI guide — aibill and Claude Code statusline",
   description: "Run a private AI cost receipt, connect provider reports, create an evidence-constrained Apply plan, and install the optional Claude Code statusline.",
   alternates: { canonical: "/docs/cli" },
 };
@@ -13,7 +13,7 @@ const commandGroups = [
     title: "Inspect",
     commands: [
       ["npx aibill", "Complete local readout. When no supported evidence is found it says so and substitutes nothing; pass --sample to see a labeled demo."],
-      ["npx aibill --group-by project", "Project breakdown; replace project with source, model, client, agent, user, workspace, or apiKey for another dimension."],
+      ["npx aibill --group-by project", "Group supported evidence by project. Other dimensions include source, model, client, agent, user, workspace and apiKey; records without those fields remain unattributed."],
       ["npx aibill context", "Canonical hook-aware Context Health decision."],
       ["npx aibill doctor --sources", "Reader validation, financial evidence, freshness, and source errors."],
     ],
@@ -34,14 +34,15 @@ export default function CliDocsPage() {
   return (
     <DocsPage
       current="/docs/cli"
-      title="The complete private workflow."
-      intro={`Use the CLI to inspect the full evidence receipt, understand coverage, draft one bounded action, and compare what happened afterward. npm latest is v${NPM_STABLE_VERSION}.`}
+      title="Inspect AI usage on your machine."
+      intro="Use the aibill CLI to inspect local evidence, understand coverage, draft one bounded action and compare what happened afterward. The default local workflow needs no Workspace account."
       repoPath="apps/web/app/docs/cli/page.tsx"
     >
       <DocsSection id="first-run" label="01 · First run" title="Initialize once, inspect anytime">
-        <CodeBlock label="Terminal">{`npx aibill init
-npx aibill
-npx aibill doctor --sources`}</CodeBlock>
+        <p>Requires Node 22 or newer. The public npm registry reports v{NPM_STABLE_VERSION}, checked {NPM_VERSION_CHECKED}. Use <code className="font-mono text-ink">npx aibill@latest --version</code> to check the version you run.</p>
+        <CodeBlock label="Terminal">{`npx aibill@latest init
+npx aibill@latest
+npx aibill@latest doctor --sources`}</CodeBlock>
         <p>
           Init performs a real 30-day machine-wide Claude Code, Codex, and experimental Gemini CLI financial scan. The project where you run it owns the project-local <code className="font-mono text-ink">.ai-spend-agent</code> state directory; init preserves existing connector, audit, and spend state. The private status cache contains Claude Code and Codex aggregates—not prompts, responses, project names, transcript paths, session IDs, or credential references.
         </p>
@@ -74,7 +75,7 @@ npx aibill doctor --sources`}</CodeBlock>
         </p>
       </DocsSection>
 
-      <DocsSection id="statusline" label="03 · Statusline" title="Ambient runway without an ambient scanner">
+      <DocsSection id="statusline" label="03 · Statusline" title="Read the cached status at a glance">
         <CodeBlock label="Install, refresh, remove">{`npx aibill statusline install
 npx aibill statusline refresh
 npx aibill statusline uninstall`}</CodeBlock>
@@ -109,7 +110,7 @@ npx aibill sync-provider \
         </p>
       </DocsSection>
 
-      <DocsSection id="apply" label="05 · Apply" title="A plan for an agent, not an autonomous change">
+      <DocsSection id="apply" label="05 · Apply" title="Prepare a bounded improvement test">
         <p>
           <code className="font-mono text-ink">npx aibill apply</code> writes a prompt, action plan, policy draft, verification plan, and demo package under the project’s <code className="font-mono text-ink">.ai-spend-agent/</code> directory. In local-transcript mode it freshly rereads the matching evidence. In connected-provider mode it uses receipt-bound state from the latest explicit sync and does not silently contact the provider. It changes no external system.
         </p>
@@ -124,9 +125,25 @@ npx aibill sync-provider \
         </DocsCallout>
       </DocsSection>
 
-      <DocsSection id="next" label="06 · Continue" title="Add an interface only when it helps">
+      <DocsSection id="workspace" label="06 · Workspace sharing" title="Connect only when you want to share">
+        <p>The local CLI and hosted Workspace are separate data flows. Invited members can pair a machine from Workspace Settings → Machines, review the sharing scope and explicitly approve an upload. See the <TextLink href="/docs/workspace#activity">Workspace activity guide</TextLink> before connecting.</p>
+        <CodeBlock label="Workspace commands · invited access required">{`npx aibill@latest workspace connect
+npx aibill@latest workspace status
+npx aibill@latest workspace push
+npx aibill@latest workspace disconnect`}</CodeBlock>
+        <p>Run each command when needed; these are separate actions. Connect walks through enrollment and sends no session facts. Status reads local pairing state and does not confirm server access. Push previews outgoing facts and asks for consent. Disconnect asks to revoke access before removing local pairing after confirmation.</p>
+        <DocsCallout title="If an outcome is uncertain">Follow the command&apos;s recovery instructions. Do not replay an uncertain enrollment response or reconnect to repair a push. A pending push retains its exact batch; a refused batch requires resolving the refusal. Settings → Machines is the place to inspect the server&apos;s recorded state.</DocsCallout>
+        <p>Shared machine facts are sessions and tokens, not provider-billed dollars. Provider credentials are handled separately in Workspace Connections; never paste them into a machine pairing command.</p>
+      </DocsSection>
+
+      <DocsSection id="privacy" label="07 · Local data" title="Review the data flows">
+        <p>Local analysis reads supported metadata on your machine. CLI usage telemetry is disclosed before sending and includes a random installation identifier and command/runtime information. It excludes report contents, credentials, paths, email addresses and dollar amounts. <code className="font-mono text-ink">aibill telemetry</code> displays the last payload; <code className="font-mono text-ink">aibill telemetry off</code>, <code className="font-mono text-ink">DO_NOT_TRACK</code>, <code className="font-mono text-ink">AI_SPEND_NO_TELEMETRY</code> or <code className="font-mono text-ink">CI</code> disables it.</p>
+        <p className="mt-4">Explicit provider sync contacts the selected provider using an inherited environment reference. Explicit Workspace pushes send the approved facts to hosted Workspace. Local MCP returns selected results to the configured AI client under that client&apos;s data policy. Reports and report cards are files you choose whether to share. See the <TextLink href="/privacy">privacy policy</TextLink>.</p>
+      </DocsSection>
+
+      <DocsSection id="next" label="08 · Continue" title="Add an interface when it helps">
         <p>
-          Install the <TextLink href="/docs/mcp">MCP server</TextLink> when an AI client should query the structured evidence on demand, or build the <TextLink href="/docs/glance">Glance source preview</TextLink> when you want a compact Mac monitor. Neither replaces the full CLI inspection and Apply workflow.
+          Install the <TextLink href="/docs/mcp/local">local MCP server</TextLink> when an AI client should query the structured evidence on demand, or build the <TextLink href="/docs/glance">Glance source preview</TextLink> when you want a compact Mac monitor. Neither replaces the full CLI inspection and Apply workflow.
         </p>
       </DocsSection>
     </DocsPage>

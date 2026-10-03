@@ -44,7 +44,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-29",
-          dateModified: "2026-08-24",
+          dateModified: "2026-10-03",
           mainEntityOfPage: `${SITE_URL}/blog/ai-coding-context-health`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -160,23 +160,32 @@ export default function Page() {
         <Reveal>
           <H2>Privacy depends on the surface</H2>
           <P>
-            Terminal and Glance analysis stays on the machine: transcripts,
-            prompts, file names, and dollar amounts are never uploaded. The
-            CLI counts which commands run — anonymous, never your data or
-            content — after a printed first-run notice, and{" "}
-            <span className="font-mono text-ink">aibill telemetry off</span>{" "}
-            (or DO_NOT_TRACK) ends it. If you explicitly invoke an MCP-backed
-            skill, the selected structured result is returned to that AI
-            client and is governed by the client&apos;s data policy. That
-            boundary is more useful than a vague promise: you can choose the
-            terminal when you want no AI-client handoff and the plugin when
-            conversational explanation is worth it.
+            Default terminal and Glance analysis runs locally. Local report
+            generation does not send raw prompts, transcripts, source-file
+            contents, or report amounts to Tilden. The CLI discloses limited
+            command and runtime telemetry before sending. Events include a
+            random installation identifier, software and system information,
+            timing, and success status; they exclude report contents, credentials,
+            paths, email addresses, and dollar amounts. Run{" "}
+            <span className="font-mono text-ink">npx aibill telemetry off</span>{" "}
+            or set DO_NOT_TRACK=1 to disable future events.
+          </P>
+          <P>
+            Optional provider requests, Workspace uploads, and MCP-client use
+            are separate choices. An approved Workspace push shares supported
+            activity summaries with hosted Workspace. If you invoke an
+            MCP-backed skill, the selected structured result is returned to that
+            AI client and follows its data policy. The local MCP server itself
+            sends no telemetry. See the{" "}
+            <a href="/privacy" className="text-ink underline underline-offset-4">privacy policy</a>{" "}
+            for the data flows associated with each choice.
           </P>
           <p className="mt-4 text-sm leading-relaxed text-faint">
-            Correction (August 24, 2026): an earlier version of this post said
-            aibill sends no telemetry. Since v0.9.2 the CLI sends disclosed,
-            anonymous command counts as described above; the MCP server still
-            sends none.
+            Correction (October 3, 2026): earlier versions described the CLI as
+            having no telemetry, then as sending anonymous command counts.
+            The disclosed events include a random installation identifier and
+            command/runtime information, so they are pseudonymous. The local
+            MCP server still sends no telemetry.
           </p>
         </Reveal>
       </article>

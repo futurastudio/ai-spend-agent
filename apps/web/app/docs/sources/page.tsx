@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
-import { NPM_STABLE_VERSION, REPO_URL, localSources, providerSources } from "@/lib/docs";
+import { NPM_STABLE_VERSION, NPM_VERSION_CHECKED, REPO_URL, localSources, providerSources, workspaceSources } from "@/lib/docs";
 
 export const metadata: Metadata = {
-  title: "aibill supported sources and evidence coverage",
-  description: "See which local coding-agent and provider sources aibill supports, how each reader has been validated, and which financial evidence it can produce.",
+  title: "Tilden sources — Workspace, CLI and evidence coverage",
+  description: "Compare Workspace and local CLI source support. Understand provider-reported costs, estimates, shared activity and missing coverage before using a number.",
   alternates: { canonical: "/docs/sources" },
 };
 
@@ -13,7 +13,7 @@ export default function SourcesDocsPage() {
     <DocsPage
       current="/docs/sources"
       title="Know where every number stops."
-      intro="Availability, reader validation, and financial evidence are independent. This page keeps all three visible so a supported source is never mistaken for a verified bill."
+      intro="Workspace connections and local CLI readers have different setup and availability. For both, source support, reader validation and the evidence behind a number remain separate."
       repoPath="apps/web/app/docs/sources/page.tsx"
     >
       <DocsSection id="labels" label="01 · Read the labels" title="Three axes, one source row">
@@ -32,9 +32,31 @@ export default function SourcesDocsPage() {
         <p className="mt-6">
           A live-verified local reader still produces API-equivalent <code className="font-mono text-ink">estimated</code> values, not billed spend. Approving a folder is a separate read boundary and verifies neither the reader nor the money.
         </p>
+        <p className="mt-4">
+          In CLI output, <code className="font-mono text-ink">verified</code> means provider-reported and source-authoritative; it does not guarantee a final invoice. <code className="font-mono text-ink">estimated</code> states a calculation or qualified billing basis, <code className="font-mono text-ink">detected_unverified</code> is an unreconciled signal, and <code className="font-mono text-ink">missing</code> means a supported cost basis is absent. Workspace reports use their displayed source labels and coverage.
+        </p>
       </DocsSection>
 
-      <DocsSection id="local" label="02 · Local coding agents" title="On-device transcript metadata">
+      <DocsSection id="workspace" label="02 · Workspace" title="Hosted sources and optional shared activity">
+        <p>Workspace access is invitation-only. Source setup and availability are confirmed during assisted onboarding; a published CLI connector does not automatically enable that provider in Workspace.</p>
+        <div className="mt-6 space-y-7">
+          {workspaceSources.map((source) => (
+            <article key={source.name} className="border-t border-hairline pt-5">
+              <h3 className="text-lg font-medium text-ink">{source.name}</h3>
+              <p className="mt-2 font-mono text-[11px] text-green">{source.availability}</p>
+              <p className="mt-3 text-sm font-medium text-ink">{source.evidence}</p>
+              <p className="mt-2">{source.summary}</p>
+            </article>
+          ))}
+        </div>
+        <DocsCallout title="Keep scope attached to the amount">
+          Provider reports can differ in billing period, currency, freshness and coverage. OpenAI and Anthropic known subtotals can exclude unavailable records. Shared machine activity does not allocate these totals to people, agents or outcomes. Compare like-for-like scopes and preserve gaps. <TextLink href="/docs/workspace#costs">Read a Workspace report →</TextLink>
+        </DocsCallout>
+        <p>Jev, Kimi and other planned integrations are not included as supported Workspace sources here. Historical availability depends on each connected source; there is no promise of complete account history.</p>
+      </DocsSection>
+
+      <DocsSection id="local" label="03 · Local CLI readers" title="On-device transcript metadata">
+        <p className="mb-6">The following entries describe the local aibill CLI and local MCP. The public CLI version is v{NPM_STABLE_VERSION}, checked {NPM_VERSION_CHECKED}.</p>
         <div className="space-y-8">
           {localSources.map((source) => (
             <article key={source.id} id={source.id} className="scroll-mt-24 border-t border-hairline pt-6">
@@ -71,7 +93,8 @@ export default function SourcesDocsPage() {
         </DocsCallout>
       </DocsSection>
 
-      <DocsSection id="providers" label="03 · Provider reports" title="Official APIs, explicit connection">
+      <DocsSection id="providers" label="04 · CLI provider reports" title="Official APIs, explicit local sync">
+        <p className="mb-6">These are optional local CLI connectors. The Workspace setup above is separate. CLI connection registration and an explicit provider sync are also separate steps.</p>
         <div className="space-y-7">
           {providerSources.map((source) => (
             <article key={source.id} id={source.id} className="scroll-mt-24 border-t border-hairline pt-5">
@@ -97,7 +120,7 @@ export default function SourcesDocsPage() {
         </p>
       </DocsSection>
 
-      <DocsSection id="unsupported" label="04 · Coverage gaps" title="Missing is a product answer">
+      <DocsSection id="unsupported" label="05 · Coverage gaps" title="Missing is a product answer">
         <p>
           Cursor local session storage, Cline, Aider, and other long-tail local formats do not currently produce financial rows. The investigated Cursor local store did not provide sufficiently stable evidence for routed model, billing mode, token semantics, adjustments, or reconciled spend, so a speculative local financial parser is not currently planned; official admin APIs remain the financial path unless a stable, versioned local format emerges.
         </p>

@@ -1,22 +1,26 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { SITE_URL } from "../lib/site";
 import { JsonLd } from "@/components/JsonLd";
 
-const geistSans = Geist({
-  subsets: ["latin"],
+const geistSans = localFont({
+  src: "../public/fonts/geist-latin.woff2",
+  display: "swap",
+  weight: "100 900",
   variable: "--font-geist-sans",
 });
 
-const geistMono = Geist_Mono({
-  subsets: ["latin"],
+const geistMono = localFont({
+  src: "../public/fonts/geist-mono-latin.woff2",
+  display: "swap",
+  weight: "100 900",
   variable: "--font-geist-mono",
 });
 
-const title = "Tilden: financial accountability for AI agents";
+const title = "Tilden | Explain your AI spend";
 const description =
-  "Know what your AI agents cost and see the work behind the bill. Tilden reads supported coding-agent activity and optional provider cost reports. Local-first, every number labeled, in 90 seconds. Built on the open-source aibill engine (npx aibill).";
+  "AI spend visibility for engineering leaders, founders and finance teams. Review supported provider costs and shared agent activity. Join the Tilden waitlist.";
 
 export const metadata: Metadata = {
   title,
@@ -28,16 +32,9 @@ export const metadata: Metadata = {
     "AI cost tracker",
     "AI bill",
     "Claude Code cost",
-    "Claude Code usage limit",
-    "Codex usage limit",
-    "AI coding runway",
-    "AI coding context health",
-    "Claude usage credits",
-    "Copilot AI credits",
     "AI usage tracker",
-    "token cost tracker",
-    "ccusage alternative",
     "AI spend",
+    "AI spend management",
     "AI financial accountability",
     "AI agent workforce",
   ],
@@ -46,13 +43,13 @@ export const metadata: Metadata = {
     description,
     type: "website",
     url: "/",
-    images: [{ url: "/og.png", width: 1280, height: 640 }],
+    images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: "Tilden. Your agents are doing more. Know where the money goes." }],
   },
   twitter: {
     card: "summary_large_image",
     title,
     description,
-    images: ["/og.png"],
+    images: ["/opengraph-image"],
   },
 };
 
@@ -70,16 +67,12 @@ export default function RootLayout({
         <JsonLd
           data={{
             "@context": "https://schema.org",
-            "@type": "SoftwareApplication",
-            name: "aibill",
-            alternateName: ["Tilden", "AI Spend Agent"],
+            "@type": "Organization",
+            name: "Tilden",
+            legalName: "Futura Studio, LLC",
             description,
-            applicationCategory: "DeveloperApplication",
-            operatingSystem: "macOS, Linux, Windows",
             url: SITE_URL,
-            downloadUrl: "https://www.npmjs.com/package/aibill",
-            codeRepository: "https://github.com/futurastudio/ai-spend-agent",
-            license: "https://opensource.org/license/mit",
+            logo: `${SITE_URL}/brand/lockup/tilden-lockup-horizontal-ink.svg`,
           }}
         />
         {/* Scroll-reveal is progressive enhancement: without JS, content
