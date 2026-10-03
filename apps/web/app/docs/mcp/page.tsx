@@ -1,114 +1,69 @@
 import type { Metadata } from "next";
-import { CodeBlock, DocsCallout, DocsPage, DocsSection } from "@/components/DocsPage";
-import { NPM_STABLE_VERSION } from "@/lib/docs";
+import { CodeBlock, DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
 
 export const metadata: Metadata = {
-  title: "aibill MCP setup for Codex, Claude Code, and Cursor",
-  description: "Connect the local-first aibill MCP server to a compatible AI client and understand its ten evidence tools and safety boundaries.",
+  title: "Tilden Workspace MCP — read-only AI client connection",
+  description: "Connect a supported AI client to Tilden Workspace through assisted invited onboarding. Read spend, projects, briefings and budget settings with explicit consent.",
   alternates: { canonical: "/docs/mcp" },
 };
 
 const tools = [
-  ["scan_ai_spend", "Discover provider and configuration signals inside one caller-supplied absolute path and persist local discovery state."],
-  ["sync_local_agent_spend", "Read supported local coding-agent financial metadata and persist a local report."],
-  ["sync_provider_spend", "Read provider billing or usage through an env-reference credential."],
-  ["get_usage_glance", "Return the read-only Claude Code/Codex Glance contract."],
-  ["get_context_health", "Return canonical hook-aware Context Health."],
-  ["get_token_reduction_test", "Read-only: revalidate the bounded local token-reduction experiment and return its matched-session, quality-gated result from the canonical core evaluator."],
-  ["draft_improve_command", "Read-only: validate drafted plan sentences and compose the one paste-safe improve --draft command. It writes nothing and authorizes nothing."],
-  ["list_sources", "Show approved sources and separate status axes."],
-  ["get_spend_report", "Return the current local, provider, or explicitly labeled sample report."],
-  ["recommend_cuts", "Legacy compatibility name for evidence-constrained candidate inspection."],
+  ["workspace_spend", "Read retained cost data, evidence labels and missing-data coverage for selected dates and accounts."],
+  ["workspace_projects", "Read the project cost groups in the same Workspace report. Provider projects do not establish repository ownership or agent outcomes."],
+  ["workspace_briefing", "Read the spending summary, available comparisons and investigation suggestions with their evidence and coverage."],
+  ["workspace_budgets", "Read configured monthly budgets and their settings. Budget evaluations, reached thresholds and alert history are not included."],
 ] as const;
 
 export default function McpDocsPage() {
   return (
-    <DocsPage
-      current="/docs/mcp"
-      title="Let your AI client ask the receipt."
-      intro="The aibill MCP server exposes the same evidence contract as structured, explicit tools. It is local stdio—not an always-on prompt, proxy, or cloud service."
-      repoPath="apps/web/app/docs/mcp/page.tsx"
-    >
-      <DocsSection id="install" label="01 · Install" title="Choose your MCP client">
-        <DocsCallout title="AI-client data boundary" tone="neutral">
-          This MCP server sends no telemetry and does not upload transcript contents. A selected tool result is returned to the AI client you configure below and then follows that client&apos;s data policy. The aibill CLI&apos;s separate anonymous command counts are disclosed at first run and end with <code className="font-mono text-ink">aibill telemetry off</code>.
-        </DocsCallout>
-        <h3 className="text-lg font-medium text-ink">Codex</h3>
-        <CodeBlock label="Terminal">{`codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
-codex mcp list`}</CodeBlock>
-        <h3 className="mt-8 text-lg font-medium text-ink">Claude Code</h3>
-        <CodeBlock label="Terminal">{`claude mcp add --scope user aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mcp
-claude mcp list`}</CodeBlock>
-        <h3 className="mt-8 text-lg font-medium text-ink">Cursor or another stdio client</h3>
-        <CodeBlock label="mcp.json">{`{
-  "mcpServers": {
-    "aibill": {
-      "command": "npx",
-      "args": ["--yes", "--package", "@agent-finops/mcp@latest", "ai-spend-mcp"]
-    }
-  }
-}`}</CodeBlock>
-        <p>
-          Use <code className="font-mono text-ink">~/.cursor/mcp.json</code> for all Cursor projects or <code className="font-mono text-ink">.cursor/mcp.json</code> for one project. Other clients use the same command and arguments at their documented local stdio configuration path.
-        </p>
-        <DocsCallout title="Stable version boundary" tone="published">
-          npm latest v{NPM_STABLE_VERSION} reads Claude Code and Codex local evidence plus experimental, <code className="font-mono text-ink">fixture_verified</code> Gemini CLI financial evidence. Gemini can appear in local financial sync and report results only; it does not feed <code className="font-mono text-ink">get_usage_glance</code>, <code className="font-mono text-ink">get_context_health</code>, recommendations, Apply, plan, runway, or invocation evidence.
-        </DocsCallout>
+    <DocsPage current="/docs/mcp" title="Ask your AI client about Workspace spend." intro="Workspace MCP gives a supported AI client read-only access to your Tilden reports. It is available through assisted invited onboarding, with explicit owner or admin consent for the requesting app." repoPath="apps/web/app/docs/mcp/page.tsx">
+      <DocsSection id="access" label="01 · Access" title="Start with your invited Workspace">
+        <p>You need an active invited Workspace, owner or admin access, and MCP enabled for that Workspace. Your onboarding contact helps confirm the client version and connection flow. Joining the <TextLink href="/#beta">waitlist</TextLink> does not immediately enable a Workspace or this endpoint.</p>
+        <DocsCallout title="Choose the right MCP connection">This guide covers hosted Workspace reports over HTTP. To read evidence on your own machine without Workspace, use the separate <TextLink href="/docs/mcp/local">local aibill MCP reference</TextLink>.</DocsCallout>
       </DocsSection>
 
-      <DocsSection id="tools" label="02 · Tools" title="Ten bounded operations">
+      <DocsSection id="connect" label="02 · Connect" title="Add the Workspace endpoint">
+        <CodeBlock label="Remote MCP server URL">{`https://app.asktilden.com/api/workspace/mcp`}</CodeBlock>
+        <ol className="list-decimal space-y-3 pl-5 marker:text-faint">
+          <li>In the client selected during onboarding, add a remote HTTP MCP server using the URL above.</li>
+          <li>Start the client&apos;s sign-in flow and sign in with your invited owner or admin account.</li>
+          <li>On the Tilden consent screen, check the app name, Workspace and read-only access before choosing Allow access.</li>
+          <li>Return to the client and confirm that the four Workspace tools appear. Read a report and compare it with Workspace using the same dates and accounts.</li>
+        </ol>
+        <DocsCallout title="Client setup is part of onboarding">Remote MCP and sign-in support vary by client and version. We confirm sign-in, report reads and connection management for the client you will use; support for every MCP client is not implied. A saved server configuration or successful sign-in alone does not confirm a report read.</DocsCallout>
+        <p>Use the canonical URL exactly. Provider API keys, browser cookies and machine-sharing credentials are not MCP login credentials. The client follows the server&apos;s OAuth sign-in flow; provider keys stay out of the client configuration.</p>
+      </DocsSection>
+
+      <DocsSection id="tools" label="03 · Read reports" title="Four read-only tools">
         <div className="docs-status-grid" data-columns="2">
           {tools.map(([name, description]) => (
-            <article key={name} className="docs-status-cell p-5">
-              <h3 className="font-mono text-[13px] text-green">{name}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted">{description}</p>
-            </article>
+            <article key={name} className="docs-status-cell p-5"><h3 className="font-mono text-[13px] text-green">{name}</h3><p className="mt-2 text-sm leading-6 text-muted">{description}</p></article>
           ))}
         </div>
-        <p className="mt-6">
-          Each scan/sync tool may write local aibill state; <code className="font-mono text-ink">sync_provider_spend</code> also contacts the selected provider API. The get, list, draft, and recommendation tools are read-only, and no MCP tool can approve, start, apply, or record anything — approval exists only as the word APPROVE typed by the human in their own terminal. <code className="font-mono text-ink">recommend_cuts</code> can return an evidence gap or observed exposure instead of a cut; the name remains for compatibility.
-        </p>
+        <p className="mt-6">Spend, projects and briefing accept inclusive UTC start and end dates, plus optional connected account IDs within the consented Workspace. Budget reads return settings in pages. All tools read retained records; none triggers a provider refresh.</p>
+        <CodeBlock label="Example request">{`Show my Workspace spend for September 1–30, 2026.
+Name the included accounts and currency. Keep provider-reported costs,
+estimates and missing coverage separate. Show the largest reported
+project groups and one question worth investigating.
+Do not infer per-person spend, savings or ROI from activity.`}</CodeBlock>
+        <p>When separately enabled, Cursor and Copilot results retain their own periods and estimate labels. They are not added to the OpenAI/Anthropic cost report, its comparison, or each other. An unavailable report is not a zero-dollar result.</p>
       </DocsSection>
 
-      <DocsSection id="workflow" label="03 · Recommended flow" title="Sync, ask, inspect the basis">
-        <CodeBlock label="Suggested agent request">{`Use aibill to sync my local coding-agent evidence for this project.
-Then show the spend report, source status, Context Health, and one
-evidence-constrained next action. Keep billed cost, API-equivalent value,
-subscription context, and missing evidence separate.`}</CodeBlock>
-        <ol className="list-decimal space-y-2 pl-5 marker:text-faint">
-          <li>Call <code className="font-mono text-ink">sync_local_agent_spend</code> with a specific absolute project path.</li>
-          <li>Read <code className="font-mono text-ink">get_spend_report</code> and <code className="font-mono text-ink">list_sources</code>.</li>
-          <li>Ask for <code className="font-mono text-ink">get_context_health</code> or <code className="font-mono text-ink">get_usage_glance</code> only when that decision surface helps.</li>
-          <li>Let the client draft a token test with <code className="font-mono text-ink">draft_improve_command</code>, then run the composed <code className="font-mono text-ink">npx aibill improve --draft …</code> yourself — approval and the quality-gated result stay in your terminal.</li>
-        </ol>
-        <p className="mt-5">
-          With no synced state, <code className="font-mono text-ink">get_spend_report</code> returns <code className="font-mono text-ink">no_state</code>, zero rows, a null financial headline, and exact next steps. Sample rows appear only after an explicit <code className="font-mono text-ink">scan_ai_spend(sample=true)</code> request.
-        </p>
+      <DocsSection id="consent" label="04 · Manage access" title="Review, expire or remove a connection">
+        <p>Approval grants read-only access for seven days. The app can keep reading without a fresh sign-in until that access expires or is removed. Open <TextLink href="https://app.asktilden.com/settings/apps">Settings → Apps</TextLink> to review connections and remove access. If the page reports an uncertain outcome, check the recorded connection before starting a new request.</p>
+        <p className="mt-4">Removing access stops future authorized reads. It cannot erase results an AI client already received. Those results follow the client&apos;s data policy. A fresh connection after removal may also require resetting that app&apos;s sign-in consent, as explained in Settings.</p>
+        <DocsCallout title="What this connection can do">It can read the four report types above. It cannot change budgets, enforce provider limits, manage keys, upload machine activity or refresh provider data. Project ownership, budget evaluations and alert history are not included in these tools.</DocsCallout>
       </DocsSection>
 
-      <DocsSection id="safety" label="04 · Safety" title="The client and provider are different boundaries">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
-          <li>State tools require a specific absolute project path; home, filesystem, and system roots are refused.</li>
-          <li>Raw provider keys are rejected. Provider tools accept an inherited <code className="font-mono text-ink">env:NAME</code> reference.</li>
-          <li>Provider syncs are read-only against the selected provider API.</li>
-          <li>This MCP server sends no telemetry and does not upload transcript contents.</li>
-          <li>The selected structured tool result is returned to the invoking AI client and then follows that client’s data policy.</li>
-          <li>A project cannot declare its own connected totals trusted; a separate hash-only local receipt binds trusted provider state to this machine.</li>
-        </ul>
-      </DocsSection>
-
-      <DocsSection id="troubleshooting" label="05 · Troubleshooting" title="Fast checks">
+      <DocsSection id="troubleshooting" label="05 · Troubleshooting" title="Check the connection and the evidence">
         <dl className="border-t border-hairline">
           {[
-            ["Tools do not appear", "Run the exact npx server command in a terminal, confirm Node 22+, restart the client, and verify that it supports local stdio MCP."],
-            ["Provider returns 401 or 403", "Use an organization/admin billing-read credential rather than a normal inference API key."],
-            ["A path is refused", "Select one project directory. Broad-root refusal is intentional prompt-injection protection."],
-            ["Report says no_state", "Run a local or provider sync for real evidence. No zero-dollar total or sample rows were inferred; sample data requires an explicit demo request."],
+            ["Sign-in does not finish", "Return to the client and use its normal sign-in flow. Confirm the invited account and client version with your onboarding contact."],
+            ["Access is unavailable", "Check that Workspace MCP is enabled, your owner or admin membership remains active, and the app connection has not expired or been removed."],
+            ["A report is unavailable", "Check the requested dates, selected accounts and source coverage in Workspace. MCP reads existing records and cannot create missing provider data."],
+            ["The answer differs from Workspace", "Compare the same period and accounts, then inspect the returned evidence labels and coverage. An AI-generated answer can omit qualifications present in the tool result."],
           ].map(([term, detail]) => (
-            <div key={term} className="border-b border-hairline py-4">
-              <dt className="font-medium text-ink">{term}</dt>
-              <dd className="mt-1 text-sm leading-6 text-muted">{detail}</dd>
-            </div>
+            <div key={term} className="border-b border-hairline py-4"><dt className="font-medium text-ink">{term}</dt><dd className="mt-1 text-sm leading-6 text-muted">{detail}</dd></div>
           ))}
         </dl>
       </DocsSection>

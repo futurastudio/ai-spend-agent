@@ -1,0 +1,36 @@
+/* Tilden Trace next: scoped tokens, preserving the approved brand. */
+[data-trace-next] {
+  --tilden-blue: #243ccb;
+  --tilden-paper: #fafbff;
+  --tilden-ink: #1d2540;
+  --tn-accent: var(--tilden-blue);
+  --tn-paper: var(--tilden-paper);
+  --tn-ink: var(--tilden-ink);
+  --tn-white: #fff;
+  --tn-muted: #58617a;
+  --tn-line: #d9deea;
+  --tn-wash: #eef1fa;
+  --tn-navy: #111c40;
+  --tn-pale: #d3dcff;
+  --tn-blue-line: #6879dc;
+  --tn-focus: #afcaff;
+  --tn-error: #a52d35;
+  --tn-clear: transparent;
+  --tn-font: var(--font-geist-sans);
+  --tn-mono: var(--font-geist-mono);
+  --tn-space-1: 4px;
+  --tn-space-2: 8px;
+  --tn-space-3: 12px;
+  --tn-space-4: 16px;
+  --tn-space-5: 20px;
+  --tn-space-6: 24px;
+  --tn-space-8: 32px;
+  --tn-space-10: 40px;
+  --tn-space-12: 48px;
+  --tn-space-16: 64px;
+  --tn-space-20: 80px;
+  --tn-radius: 4px;
+  --tn-gutter: clamp(20px, 4.5vw, 72px);
+  --tn-ease-out: cubic-bezier(.16, 1, .3, 1);
+  --tn-duration: 220ms;
+}

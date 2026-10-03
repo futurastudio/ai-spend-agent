@@ -57,6 +57,7 @@ const sections: LegalSection[] = [
     "title": "Service providers and disclosure",
     "paragraphs": [
       "We use Vercel for hosting and Supabase for authentication and data storage. Google and GitHub process sign-in when selected, and connected AI providers process the requests you authorize. Relevant information is processed by these services to deliver their functions. They have their own privacy policies.",
+      "When email confirmation is enabled, Resend processes your email address and confirmation message to deliver it.",
       "We may disclose information to comply with applicable law, investigate abuse, or protect the service and people. Information you export or share goes to the recipients you choose. Service providers may process information outside your country."
     ]
   },
@@ -80,4 +81,4 @@ const sections: LegalSection[] = [
   }
 ];
 
-export default function Page() { return <LegalPage title="Privacy policy" intro="What stays on your computer, what Workspace receives, and the choices available to you." sections={sections} />; }
+export default function Page() { return <LegalPage title="Privacy policy" intro="What stays on your computer, what Workspace receives, and the choices available to you." sections={sections} effectiveDate="October 3, 2026" />; }
