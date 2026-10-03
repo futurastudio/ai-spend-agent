@@ -8,7 +8,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: `${SITE_URL}/privacy`, lastModified: new Date("2026-10-03"), priority: 0.3 },
     { url: `${SITE_URL}/terms`, lastModified: new Date("2026-09-30"), priority: 0.3 },
-    { url: `${SITE_URL}/`, lastModified: new Date("2026-10-02"), priority: 1 },
+    { url: `${SITE_URL}/`, lastModified: new Date("2026-10-03"), priority: 1 },
     { url: `${SITE_URL}/docs`, lastModified: DOCS_LAST_MODIFIED, priority: 0.9 },
     { url: `${SITE_URL}/docs/workspace`, lastModified: DOCS_LAST_MODIFIED, priority: 0.8 },
     { url: `${SITE_URL}/docs/cli`, lastModified: DOCS_LAST_MODIFIED, priority: 0.8 },
@@ -19,12 +19,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/docs/roadmap`, lastModified: DOCS_LAST_MODIFIED, priority: 0.7 },
     {
       url: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
-      lastModified: LAST_MODIFIED,
+      lastModified: new Date("2026-10-03"),
       priority: 0.8,
     },
     {
       url: `${SITE_URL}/blog/ai-coding-context-health`,
-      lastModified: LAST_MODIFIED,
+      lastModified: new Date("2026-10-03"),
       priority: 0.8,
     },
     { url: `${SITE_URL}/vs/ccusage`, lastModified: LAST_MODIFIED, priority: 0.7 },
