@@ -325,6 +325,64 @@ describe("zero-key evidence-first receipt", () => {
     const acknowledged = JSON.parse(await readFile(statePath, "utf8"));
     expect(acknowledged.pending).toBeNull();
     expect(acknowledged.device.sequence).toBe("1");
+    // Recurring consent is separate, pinned to this pairing, and exercised only with synthetic I/O.
+    const syncHome = await mkdtemp(join(tmpdir(), "aibill-workspace-sync-"));
+    const syncDir = join(syncHome, ".aibill"); await mkdir(syncDir, { mode: 0o700 });
+    const syncDevice = join(syncDir, "workspace-device.json");
+    await writeFile(syncDevice, workspaceCanonicalJson(acknowledged), { mode: 0o600 });
+    const scheduler = { install: vi.fn(async () => {
+      expect(JSON.parse(await readFile(join(syncDir, "workspace-sync.json"), "utf8")).enabled).toBe(false);
+    }), remove: vi.fn(async () => {}) };
+    const syncRequests: string[] = [];
+    const syncLoad = vi.fn(async () => ({ calls: [call], records: [], diagnostics: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const] }));
+    const syncRuntime = { ...runtime, homeDirectory: syncHome, workspaceLoadCalls: syncLoad,
+      workspaceSyncScheduler: scheduler, workspaceSyncPlatform: "darwin", workspaceSyncNodePath: await realpath(process.execPath),
+      workspaceSyncRuntimePath: await realpath(join(process.cwd(), "packages/cli/src/index.ts")),
+      workspaceTransport: async (_path: string, body: string) => {
+        syncRequests.push(body); const envelope = JSON.parse(body);
+        return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
+          factCount: envelope.facts.length, introduced: 0, replaced: envelope.facts.length, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z" } };
+      } };
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false })).stdout).toContain("off or paused");
+    expect(syncLoad).not.toHaveBeenCalled();
+    expect((await runCli(["workspace", "sync", "enable"], { ...syncRuntime, interactive: false })).exitCode).toBe(1);
+    expect((await runCli(["workspace", "sync", "enable"], { ...syncRuntime, consentRead: async () => "n" })).stdout).toContain("not enabled");
+    expect(syncLoad).not.toHaveBeenCalled();
+    expect((await runCli(["workspace", "sync", "enable"], syncRuntime)).stdout).toContain("enabled hourly");
+    expect(scheduler.install).toHaveBeenCalledExactlyOnceWith(syncHome, syncRuntime.workspaceSyncNodePath, syncRuntime.workspaceSyncRuntimePath);
+    expect(syncRequests).toHaveLength(1);
+    expect(syncRequests[0]).not.toMatch(/private-session|\/private\/repo|amountCents|prompt/);
+    const enabledState = JSON.parse(await readFile(join(syncDir, "workspace-sync.json"), "utf8"));
+    expect(enabledState).toMatchObject({ enabled: true, outcome: "accepted", runtime: syncRuntime.workspaceSyncRuntimePath });
+    const firstScanCount = syncLoad.mock.calls.length;
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false })).stdout).toContain("not due");
+    expect(syncLoad).toHaveBeenCalledTimes(firstScanCount);
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false, workspaceNow: "2026-09-20T13:00:00.000Z" })).stdout).toContain("No changed eligible facts");
+    expect(syncRequests).toHaveLength(1);
+    await writeFile(join(syncDir, ".workspace-device.lock"), "", { mode: 0o600 });
+    const scansBeforeLock = syncLoad.mock.calls.length;
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false, workspaceNow: "2026-09-20T14:00:00.000Z" })).exitCode).toBe(1);
+    expect(syncLoad).toHaveBeenCalledTimes(scansBeforeLock); await unlink(join(syncDir, ".workspace-device.lock"));
+    const uncertainSync = await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false,
+      workspaceNow: "2026-09-20T14:00:00.000Z", workspaceLoadCalls: async () => ({ ...(await syncLoad()), calls: [{ ...call, usage: { ...call.usage, outputTokens: 8 } }] }),
+      workspaceTransport: async (_path, body) => { syncRequests.push(body); throw Error("lost synthetic response"); } });
+    expect(uncertainSync.stdout).toContain("paused");
+    expect(JSON.parse(await readFile(syncDevice, "utf8")).pending.state).toBe("uncertain");
+    const scansBeforePause = syncLoad.mock.calls.length;
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false, workspaceNow: "2026-09-20T15:00:00.000Z" })).stdout).toContain("off or paused");
+    expect(syncRequests).toHaveLength(2); expect(syncLoad).toHaveBeenCalledTimes(scansBeforePause);
+    expect((await runCli(["workspace", "sync", "status"], syncRuntime)).stdout).toContain("paused");
+    expect((await runCli(["workspace", "sync", "disable"], syncRuntime)).stdout).toContain("disabled");
+    expect(scheduler.remove).toHaveBeenCalledOnce();
+    await writeFile(syncDevice, workspaceCanonicalJson(acknowledged), { mode: 0o600 });
+    await runCli(["workspace", "sync", "enable"], syncRuntime);
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, workspaceSyncRuntimePath: "/different/runtime.js", interactive: false, workspaceNow: "2026-09-20T15:00:00.000Z" })).stdout).toContain("reviewed installed runtime");
+    const changedGrant = JSON.parse(await readFile(syncDevice, "utf8")); changedGrant.device.grantRevision = "2";
+    await writeFile(syncDevice, workspaceCanonicalJson(changedGrant), { mode: 0o600 });
+    await writeFile(join(syncDir, "workspace-sync.json"), JSON.stringify(enabledState), { mode: 0o600 });
+    expect((await runCli(["workspace", "sync", "run"], { ...syncRuntime, interactive: false, workspaceNow: "2026-09-20T16:00:00.000Z" })).stdout).toContain("off or paused");
+    expect(JSON.parse(await readFile(join(syncDir, "workspace-sync.json"), "utf8")).enabled).toBe(false);
+    expect((await runCli(["workspace", "sync", "enable"], { ...syncRuntime, workspaceSyncPlatform: "linux" })).stdout).toContain("macOS only");
     const connectedRestart = await runCli(["workspace", "connect", "--restart"], runtime);
     expect(connectedRestart.exitCode).toBe(1);
     expect(connectedRestart.stderr).toContain("already connected");
