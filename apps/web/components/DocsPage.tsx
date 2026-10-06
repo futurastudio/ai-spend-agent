@@ -1,31 +1,20 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { CopyCodeButton } from "@/components/CopyCodeButton";
-import {
-  DOCS_UPDATED,
-  ISSUE_URL,
-  NPM_STABLE_VERSION,
-  REPO_URL,
-  docsNavigation,
-  type DocsHref,
-} from "@/lib/docs";
+import { DOCS_UPDATED, ISSUE_URL, REPO_URL, docsNavigation, type DocsHref } from "@/lib/docs";
+import "./iterations/trace-next/tokens.css";
+import s from "./DocsPage.module.css";
 
 function DocsLinks({ current, mobile = false }: { current: DocsHref; mobile?: boolean }) {
   return (
-    <nav
-      aria-label={mobile ? "Documentation sections" : "Documentation"}
-      className={mobile ? "grid grid-cols-2 border-l border-t border-hairline sm:grid-cols-3" : "py-6"}
-    >
+    <nav aria-label={mobile ? "Documentation sections" : "Documentation"} className={s.sectionNav}>
       {docsNavigation.map((item) => (
         <Link
           key={item.href}
           href={item.href}
           aria-current={item.href === current ? "page" : undefined}
-          className={
-            mobile
-              ? "flex min-h-11 items-center whitespace-nowrap border-b border-r border-hairline px-3 text-sm text-muted transition-colors hover:text-ink focus-visible:text-ink aria-[current=page]:bg-green-wash aria-[current=page]:text-ink"
-              : "docs-side-link px-6"
-          }
+          data-nested={item.href.startsWith("/docs/mcp/") || undefined}
+          className={s.sectionLink}
         >
           {item.label}
         </Link>
@@ -34,124 +23,100 @@ function DocsLinks({ current, mobile = false }: { current: DocsHref; mobile?: bo
   );
 }
 
-export function DocsPage({
-  current,
-  title,
-  intro,
-  repoPath,
-  children,
-}: {
+export function DocsPage({ current, title, intro, children }: {
   current: DocsHref;
   title: string;
   intro: string;
   repoPath: string;
   children: ReactNode;
 }) {
+  const currentIndex = docsNavigation.findIndex((item) => item.href === current);
+  const currentLabel = docsNavigation[currentIndex]?.label ?? "Documentation";
+  const previous = docsNavigation[currentIndex - 1];
+  const next = docsNavigation[currentIndex + 1];
+
   return (
-    <div className="docs-shell border-x-0 border-hairline lg:border-x">
-      <header className="docs-header sticky top-0 z-40 border-b border-hairline">
-        <div className="flex h-14 items-center justify-between px-5 sm:px-8">
-          <Link href="/" className="wordmark min-h-11" aria-label="Tilden — home">
-            Tilden
-            <span className="wordmark-cursor" aria-hidden="true" />
-          </Link>
-          <nav className="flex items-center gap-5" aria-label="Primary navigation">
-            <Link href="/" className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex">
-              Product
+    <div data-trace-next data-tilden-docs className={s.page}>
+      <a href="#docs-content" className={s.skipLink}>Skip to content</a>
+      <header className={s.header}>
+        <div className={s.headerInner}>
+          <div className={s.brandGroup}>
+            <Link href="/" className={s.brandLink} aria-label="Tilden home">
+              <img src="/brand/lockup/tilden-lockup-horizontal-ink.svg" alt="Tilden" width="120" height="28" className={s.brand} />
             </Link>
-            <Link
-              href="/docs"
-              aria-current={current === "/docs" ? "page" : undefined}
-              className="inline-flex min-h-11 items-center whitespace-nowrap text-sm text-ink"
-            >
-              Docs
-            </Link>
-            <Link href="/#teams" className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink md:inline-flex">
-              Teams
-            </Link>
-            <a
-              href={REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="hidden min-h-11 items-center whitespace-nowrap text-sm text-muted transition-colors hover:text-ink sm:inline-flex"
-            >
-              GitHub ↗
+            <Link href="/docs" className={s.docsLabel}>Docs</Link>
+          </div>
+          <nav className={s.headerNav} aria-label="Primary navigation">
+            <Link href="/" className={s.productLink}>Product</Link>
+            <a href={REPO_URL} target="_blank" rel="noreferrer" className={s.repositoryLink}>
+              GitHub <span aria-hidden="true">↗</span>
             </a>
+            <Link href="/#beta" className={s.waitlistLink}>Join waitlist</Link>
           </nav>
         </div>
       </header>
 
-      <div className="docs-layout">
-        <aside className="docs-side-index hidden lg:block">
-          <p className="px-6 pt-8 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
-            Documentation
-          </p>
+      <div className={s.layout}>
+        <aside className={s.sidebar}>
+          <p className={s.sidebarHeading}>Documentation</p>
           <DocsLinks current={current} />
-          <div className="mx-6 border-t border-hairline pt-5 font-mono text-[11px] leading-6 text-faint">
-            <p>npm latest · v{NPM_STABLE_VERSION}</p>
-            <p>Gemini CLI · experimental</p>
+          <div className={s.sidebarHelp}>
+            <p>Building with Tilden?</p>
+            <a href={ISSUE_URL} target="_blank" rel="noreferrer">Ask a question <span aria-hidden="true">↗</span></a>
           </div>
         </aside>
 
-        <main className="min-w-0 px-5 pb-20 pt-10 sm:px-8 sm:pt-14 lg:px-12 lg:pb-28 lg:pt-16">
-          <div className="mb-10 lg:hidden">
-            <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
-              Documentation
-            </p>
+        <main id="docs-content" tabIndex={-1} className={s.main}>
+          <details className={s.mobileNav}>
+            <summary>
+              <span>Browse docs</span>
+              <span className={s.mobileCurrent}>
+                {currentLabel}
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+                  <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" />
+                </svg>
+              </span>
+            </summary>
             <DocsLinks current={current} mobile />
-          </div>
+          </details>
 
-          <div className="docs-reading-column">
-            <div className="mb-9 border-y border-hairline py-3 font-mono text-[11px] leading-5 text-faint">
-              <p>
-                <span className="text-green">Published</span> · npm latest v{NPM_STABLE_VERSION}
-              </p>
-              <p>
-                <span className="text-muted">Gemini CLI</span> · experimental, fixture-verified, financial-only
-              </p>
-            </div>
-
-            <header className="border-b border-hairline pb-10">
-              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-green">
-                aibill documentation
-              </p>
-              <h1 className="mt-4 text-[36px] font-medium leading-[1.08] tracking-[-0.035em] text-ink sm:text-[50px]">
-                {title}
-              </h1>
-              <p className="mt-5 max-w-[42rem] text-base leading-7 text-muted sm:text-lg">
-                {intro}
-              </p>
-              <p className="mt-5 font-mono text-[11px] text-faint">Updated {DOCS_UPDATED}</p>
+          <div className={s.readingColumn}>
+            <header className={s.introduction}>
+              <p className={s.breadcrumb}>Documentation <span aria-hidden="true">/</span> {currentLabel}</p>
+              <h1>{title}</h1>
+              <p className={s.intro}>{intro}</p>
+              <p className={s.updated}>Updated {DOCS_UPDATED}</p>
             </header>
 
-            <div>{children}</div>
+            <div className={s.content}>{children}</div>
 
-            <footer className="mt-20 border-t border-hairline pt-6">
-              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-                <p className="max-w-md text-sm leading-6 text-muted">
-                  Found a mismatch? Documentation is part of the product’s evidence boundary.
-                </p>
-                <div className="flex flex-wrap gap-x-5 gap-y-2 font-mono text-xs text-faint">
-                  <a href="/privacy" className="inline-flex min-h-11 items-center hover:text-ink">Privacy</a>
-                  <a href="/terms" className="inline-flex min-h-11 items-center hover:text-ink">Terms</a>
-                  <a
-                    href={`${REPO_URL}/edit/main/${repoPath}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex min-h-11 items-center whitespace-nowrap transition-colors hover:text-ink"
-                  >
-                    Edit on GitHub ↗
-                  </a>
-                  <a
-                    href={ISSUE_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex min-h-11 items-center whitespace-nowrap transition-colors hover:text-ink"
-                  >
-                    Report an issue ↗
-                  </a>
+            <nav className={s.pagination} aria-label="More documentation">
+              {previous && (
+                <Link href={previous.href} className={s.previousPage}>
+                  <span>Previous</span>
+                  <strong><span aria-hidden="true">←</span> {previous.label}</strong>
+                </Link>
+              )}
+              {next && (
+                <Link href={next.href} className={s.nextPage}>
+                  <span>Next</span>
+                  <strong>{next.label} <span aria-hidden="true">→</span></strong>
+                </Link>
+              )}
+            </nav>
+
+            <footer className={s.footer}>
+              <div className={s.feedback}>
+                <p>Questions or a correction?</p>
+                <div>
+                  <a href="mailto:contact@asktilden.com">Suggest a correction <span aria-hidden="true">↗</span></a>
+                  <a href={ISSUE_URL} target="_blank" rel="noreferrer">Report an issue <span aria-hidden="true">↗</span></a>
                 </div>
               </div>
+              <nav className={s.legalLinks} aria-label="Legal">
+                <Link href="/privacy">Privacy</Link>
+                <Link href="/terms">Terms</Link>
+              </nav>
             </footer>
           </div>
         </main>
@@ -160,65 +125,48 @@ export function DocsPage({
   );
 }
 
-export function DocsSection({
-  id,
-  label,
-  title,
-  children,
-}: {
+export function DocsSection({ id, label, title, children }: {
   id: string;
   label: string;
   title: string;
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-24 border-b border-hairline py-12 sm:py-14">
-      <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">{label}</p>
-      <h2 className="mt-3 text-2xl font-medium tracking-[-0.025em] text-ink sm:text-[30px]">
-        {title}
-      </h2>
-      <div className="mt-6 text-[15px] leading-7 text-muted">{children}</div>
+    <section id={id} className={s.section} aria-labelledby={`${id}-heading`}>
+      <p className={s.sectionLabel}>{label}</p>
+      <h2 id={`${id}-heading`}>{title}</h2>
+      <div className={s.sectionContent}>{children}</div>
     </section>
   );
 }
 
 export function CodeBlock({ children, label }: { children: string; label?: string }) {
   return (
-    <figure className="my-6">
-      <figcaption className="flex min-h-11 items-center justify-between border-t border-hairline pl-1 font-mono text-[10px] uppercase tracking-[0.12em] text-faint">
+    <figure className={s.codeFigure}>
+      <figcaption className={s.codeCaption}>
         <span>{label ?? "Code"}</span>
         <CopyCodeButton value={children} />
       </figcaption>
-      <pre className="docs-code px-4 py-4" tabIndex={0}>
+      <pre className={s.code} tabIndex={0} aria-label={label ?? "Code example"}>
         <code>{children}</code>
       </pre>
     </figure>
   );
 }
 
-export function DocsCallout({
-  title,
-  children,
-  tone = "neutral",
-}: {
+export function DocsCallout({ title, children, tone = "neutral" }: {
   title: string;
   children: ReactNode;
   tone?: "neutral" | "published" | "preview";
 }) {
-  const border = `docs-callout-${tone}`;
-  const titleColor = `docs-callout-title-${tone}`;
   return (
-    <aside className={`my-6 border-l ${border} bg-well px-5 py-4`}>
-      <p className={`font-mono text-[11px] uppercase tracking-[0.1em] ${titleColor}`}>{title}</p>
-      <div className="mt-2 text-sm leading-6 text-muted">{children}</div>
+    <aside className={s.callout} data-tone={tone}>
+      <p className={s.calloutTitle}>{title}</p>
+      <div className={s.calloutContent}>{children}</div>
     </aside>
   );
 }
 
 export function TextLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <Link href={href} className="font-medium text-ink underline decoration-hairline-bright underline-offset-4 transition-colors hover:decoration-green">
-      {children}
-    </Link>
-  );
+  return <Link href={href} className={s.textLink}>{children}</Link>;
 }

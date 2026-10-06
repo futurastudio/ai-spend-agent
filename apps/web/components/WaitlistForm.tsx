@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import styles from "./WaitlistForm.module.css";
 
 type Status = "idle" | "loading" | "success" | "error";
 
-export function WaitlistForm() {
+export function WaitlistForm({ presentation = "legacy" }: { presentation?: "legacy" | "landing" }) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("");
@@ -26,9 +27,14 @@ export function WaitlistForm() {
       const ref = typeof window !== "undefined"
         ? new URLSearchParams(window.location.search).get("ref")
         : null;
+      const requestConfirmation = presentation === "landing"
+        && !ref?.trim().toLowerCase().includes("glance-study");
       const res = await fetch("/api/waitlist", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(requestConfirmation ? { "x-tilden-confirmation": "waitlist-v1" } : {}),
+        },
         body: JSON.stringify({ email, ref }),
       });
 
@@ -55,10 +61,11 @@ export function WaitlistForm() {
   }
 
   if (status === "success") {
+    if (presentation === "landing") return <p className={styles.success} role="status">Your interest is registered. Opening your confirmation…</p>;
     return (
       <div
         role="status"
-        className="flex items-center gap-3 rounded-sm border border-green-line bg-green-wash px-5 py-4 text-sm text-ink"
+        className="flex items-center gap-3 rounded-xs border border-green-line bg-green-wash px-5 py-4 text-sm text-ink"
       >
         <span
           aria-hidden="true"
@@ -86,17 +93,24 @@ export function WaitlistForm() {
               short session and a day-seven check-in.
             </>
           ) : (
-            <>
-              Thanks. We&apos;ll follow up at{" "}
-              <span className="font-medium text-green">{email}</span>. Reply
-              with your CLI receipt total, or your monthly AI spend and
-              providers, to move up the list.
-            </>
+            <>Thanks. Your interest is registered. Joining does not grant immediate Workspace access.</>
           )}
         </span>
       </div>
     );
   }
+
+  if (presentation === "landing") return <form onSubmit={onSubmit} className={styles.form} aria-busy={status === "loading"}>
+    <label htmlFor="waitlist-email">Email address</label>
+    <div className={styles.fields}>
+      <input id="waitlist-email" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254} required placeholder="you@company.com" value={email}
+        onChange={event => { setEmail(event.target.value); if (status === "error") { setStatus("idle"); setMessage(""); } }}
+        aria-invalid={status === "error"} aria-describedby={status === "error" ? "waitlist-error waitlist-note" : "waitlist-note"} />
+      <button type="submit" disabled={status === "loading"}>{status === "loading" ? "Joining…" : "Join the waitlist"}<span aria-hidden="true">↗</span></button>
+    </div>
+    {status === "error" && <p id="waitlist-error" className={styles.error} role="alert">{message}</p>}
+    <p id="waitlist-note" className={styles.note}>By joining, you agree to receive Tilden updates and access invitations. <a href="/privacy">Privacy policy</a>. You can opt out by <a href="mailto:contact@asktilden.com?subject=Tilden%20updates">contacting us</a>.</p>
+  </form>;
 
   return (
     <form onSubmit={onSubmit} className="w-full" noValidate>
@@ -119,12 +133,12 @@ export function WaitlistForm() {
           }}
           aria-invalid={status === "error"}
           aria-describedby={status === "error" ? "email-error" : undefined}
-          className="h-11 min-w-0 flex-1 rounded-sm border border-hairline bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green-line focus:outline-none focus:ring-2 focus:ring-[rgba(76,201,138,0.25)]"
+          className="h-11 min-w-0 flex-1 rounded-xs border border-hairline bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green-line focus:outline-hidden focus:ring-2 focus:ring-[rgba(76,201,138,0.25)]"
         />
         <button
           type="submit"
           disabled={status === "loading"}
-          className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-sm bg-green px-6 text-sm font-medium text-ground transition-colors hover:bg-green-hi disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ground"
+          className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-xs bg-green px-6 text-sm font-medium text-ground transition-colors hover:bg-green-hi disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ground"
         >
           {status === "loading"
             ? "Submitting..."
@@ -141,13 +155,13 @@ export function WaitlistForm() {
       <p className="mt-3 text-xs text-faint">
         {isGlanceStudy
           ? "We’ll schedule one short study session and a day-seven check-in."
-          : "We onboard a few teams at a time. Reply to our email with your CLI receipt, or your monthly AI spend and providers, and we’ll prioritize you."}
+          : "Join for product updates and access invitations. Joining does not grant immediate Workspace access."}
       </p>
       {isGlanceStudy ? null : (
         <div className="mt-5 border-t border-hairline pt-4" data-cli-free-tier="">
           <p className="text-sm text-ink">
             Want a number today? Run the free CLI on your machine:{" "}
-            <code className="rounded-sm bg-well px-1.5 py-0.5 font-mono text-[13px]">npx aibill</code>
+            <code className="rounded-xs bg-well px-1.5 py-0.5 font-mono text-[13px]">npx aibill</code>
           </p>
           <p className="mt-2 text-xs leading-relaxed text-faint">
             The CLI prices the agent logs on your machine. The Workspace reads what your providers billed. Same rules, different sources, so the two numbers differ and each says why.

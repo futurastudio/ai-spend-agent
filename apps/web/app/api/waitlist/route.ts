@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { sendWaitlistConfirmation } from "../../../lib/server/waitlist-confirmation";
 
 export const runtime = "nodejs";
 
@@ -8,6 +9,7 @@ export const runtime = "nodejs";
 // rejecting valid-but-unusual addresses.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REF_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const STORAGE_TIMEOUT_MS = 5_000;
 
 function normalizeSourceRef(value: unknown): string {
   if (typeof value !== "string") return "direct";
@@ -84,6 +86,17 @@ export async function POST(request: Request) {
 
   const stored = await storeInSupabase(email, sourceRef);
   if (stored === "stored" || stored === "duplicate") {
+    // The new landing form requests its own acknowledgment. This marker routes
+    // copy, not authorization: existing CLI/study surfaces retain their promises
+    // and never wait on the email provider, even if a caller adds the marker.
+    const requestConfirmation = request.headers.get("x-tilden-confirmation") === "waitlist-v1"
+      && !sourceRef.startsWith("cli-")
+      && !sourceRef.includes("glance-study");
+    if (stored === "stored" && requestConfirmation) {
+      await sendWaitlistConfirmation(email);
+    }
+    // Same acknowledgment for new/duplicate signups and email failures.
+    // We confirm registration, never claim inbox delivery here.
     return NextResponse.json({ ok: true }, { status: 201 });
   }
   if (stored === "error") {
@@ -132,6 +145,9 @@ async function storeInSupabase(email: string, sourceRef: string): Promise<"store
   if (!url || !serviceKey) {
     return "skipped";
   }
+  // Bound the complete storage attempt, including the legacy-column fallback.
+  // An uncertain write is never retried automatically or treated as saved.
+  const signal = AbortSignal.timeout(STORAGE_TIMEOUT_MS);
   const insert = (payload: Record<string, string>) =>
     fetch(`${url}/rest/v1/waitlist`, {
       method: "POST",
@@ -142,34 +158,48 @@ async function storeInSupabase(email: string, sourceRef: string): Promise<"store
         Prefer: "return=minimal",
       },
       body: JSON.stringify(payload),
+      signal,
+      cache: "no-store",
     });
 
   try {
     let response = await insert({ email, source_ref: sourceRef });
+    let detail = response.ok ? null : await storageError(response);
     if (response.status === 400) {
       // Older waitlist tables predate the source_ref column (PGRST204).
       // A signup with lost attribution beats a lost signup — retry bare.
-      const detail = await response.text();
-      if (detail.includes("source_ref")) {
+      if (detail?.code === "PGRST204" && detail.message.includes("source_ref")) {
         console.error(
           "[waitlist] waitlist table is missing the source_ref column — storing signup without attribution. Run: alter table waitlist add column source_ref text not null default 'direct';",
         );
         response = await insert({ email });
-      } else {
-        console.error(`[waitlist] supabase insert failed: 400 ${detail}`);
-        return "error";
+        detail = response.ok ? null : await storageError(response);
       }
     }
     if (response.ok) {
       return "stored";
     }
-    if (response.status === 409) {
+    // PostgREST also uses 409 for foreign-key violations. Only a unique
+    // constraint conflict is the duplicate path; the live email constraint
+    // must be verified at release acceptance.
+    if (response.status === 409 && detail?.code === "23505") {
       return "duplicate";
     }
-    console.error(`[waitlist] supabase insert failed: ${response.status} ${await response.text()}`);
+    // Error details can contain the submitted address; retain only status/code.
+    console.error(`[waitlist] supabase insert failed: ${response.status} ${detail?.code ?? "unknown"}`);
     return "error";
-  } catch (err) {
-    console.error("[waitlist] supabase unreachable:", err);
+  } catch {
+    console.error("[waitlist] supabase request failed or timed out; storage outcome unconfirmed");
     return "error";
   }
+}
+
+async function storageError(response: Response): Promise<{ code: string; message: string } | null> {
+  const value: unknown = await response.json().catch(() => null);
+  if (typeof value !== "object" || value === null) return null;
+  const error = value as Record<string, unknown>;
+  return {
+    code: typeof error.code === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(error.code) ? error.code : "unknown",
+    message: typeof error.message === "string" ? error.message : "",
+  };
 }

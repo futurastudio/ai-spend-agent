@@ -38,7 +38,7 @@ export function PageShell({
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
+              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-xs border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
               Design partners
             </Link>
@@ -56,9 +56,10 @@ export function PageShell({
           </h2>
           <p className="mt-3 max-w-[560px] text-base leading-relaxed text-muted">
             Free and open source. The default CLI runs locally with no
-            account, and your code, prompts, and financial data never leave
-            your machine; provider connections and MCP sharing are always
-            explicit.
+            account. Local report generation keeps code, prompts, and financial
+            records on your machine. Optional provider connections, report
+            sharing, Workspace uploads, and MCP-client use have separate data
+            boundaries described in the <Link href="/privacy" className="underline underline-offset-4">privacy policy</Link>.
           </p>
           <div className="mt-6 max-w-[380px]">
             <CopyCommand />

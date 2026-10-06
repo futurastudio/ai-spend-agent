@@ -1,81 +1,39 @@
 import type { Metadata } from "next";
-import { DocsCallout, DocsPage, DocsSection } from "@/components/DocsPage";
-import { NPM_STABLE_VERSION } from "@/lib/docs";
+import { DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
 
 export const metadata: Metadata = {
-  title: "aibill product roadmap — now, next, and later",
-  description: "A factual roadmap for aibill, separating published product, experimental boundaries, next-30-day priorities, and capabilities that are not yet available.",
+  title: "Tilden roadmap — weekly product focus",
+  description: "A high-level weekly view of Tilden priorities across Workspace, CLI and MCP: current work, what comes next and ideas being explored.",
   alternates: { canonical: "/docs/roadmap" },
 };
 
 export default function RoadmapDocsPage() {
   return (
-    <DocsPage
-      current="/docs/roadmap"
-      title="Now, next, and not yet."
-      intro="This is product direction, not a delivery guarantee. Published behavior lives in the release notes; every planned item remains unavailable until it passes its own evidence, privacy, compatibility, and release gates."
-      repoPath="apps/web/app/docs/roadmap/page.tsx"
-    >
-      <DocsSection id="now" label="01 · Available now" title={`npm v${NPM_STABLE_VERSION}`}>
-        <ul className="list-disc space-y-3 pl-5 marker:text-green">
-          <li>The guided action loop: <code className="font-mono text-ink">npx aibill improve</code> finds a waste pattern in your own local evidence, drafts one reversible test, records your typed APPROVE before anything changes, and calculates one canonical matched-session, quality-gated result. <code className="font-mono text-ink">improve --sample</code> is the labeled practice run; it writes nothing.</li>
-          <li>The agent-native loop: the read-only <code className="font-mono text-ink">draft_improve_command</code> MCP tool lets an AI client draft the change/rollback/canary plan conversationally and hand over one paste-safe <code className="font-mono text-ink">improve --draft</code> command. Approval is still typed by the human in the terminal, never by an agent.</li>
-          <li>Local accountability contracts: <code className="font-mono text-ink">identify</code> records explicitly confirmed ownership, <code className="font-mono text-ink">outcome github</code> opt-in verifies a merged PR whose observed checks passed, and <code className="font-mono text-ink">accountability</code> answers owner, outcome, approval, and measured result from one private view. These are foundations for Workspace, not company identity or approval routing.</li>
-          <li>Claude Code and Codex local evidence in the CLI, explicit MCP/plugin, private init/cache, and optional cache-only Claude Code statusline.</li>
-          <li>Separate provider-billed cost, subscription context, API-equivalent value, validation coverage, freshness, and missing coverage.</li>
-          <li>Optional OpenAI and Anthropic provider reports; Cursor and GitHub Copilot connectors remain fixture-verified beta.</li>
-          <li>An experimental, fixture-verified Gemini CLI financial reader. It is financial-only and never enters statusline, Glance, Context Health, Apply, plan, runway, or invocation evidence.</li>
-          <li>An additive Agent Economics Receipt v0 contract in <code className="font-mono text-ink">@agent-finops/core</code>, plus a registry and generated-doc foundation for local readers.</li>
-          <li>An unsigned, source-built Glance preview. The public Mac download and shared Workspace are not launched.</li>
+    <DocsPage current="/docs/roadmap" title="What we’re working on." intro="A weekly view of our product focus across Workspace, CLI and MCP. Priorities follow what we learn with invited teams. This is direction, not a delivery calendar." repoPath="apps/web/app/docs/roadmap/page.tsx">
+      <DocsSection id="this-week" label="Week of September 28 · updated October 3, 2026" title="This week">
+        <ul className="list-disc legacy-space-y-4 pl-5 marker:text-green">
+          <li><strong className="text-ink">A clearer Workspace.</strong> Make spending views, briefings and chart navigation easier to follow, while keeping coverage and missing data beside the numbers.</li>
+          <li><strong className="text-ink">A better first setup.</strong> Bring the guides together around Workspace, the local CLI and assisted MCP onboarding so invited teams know where to start.</li>
+          <li><strong className="text-ink">Read-only answers in your AI client.</strong> Check the connection, consent and report-reading experience for the clients used during onboarding.</li>
         </ul>
       </DocsSection>
 
-      <DocsSection id="experimental" label="02 · Current boundary" title="Gemini CLI remains deliberately narrow">
-        <DocsCallout title="Published experimental financial reader" tone="preview">
-          Supported complete Gemini chat records can produce <code className="font-mono text-ink">estimated</code> API-equivalent value. Unknown, incomplete, inconsistent, or unsupported evidence stays <code className="font-mono text-ink">missing</code>. The reader is fixture-verified, not live-verified.
-        </DocsCallout>
-        <p>
-          <code className="font-mono text-ink">logs.json</code> is detection-only and creates no financial row. Gemini does not feed statusline, Glance, Context Health, plan, runway, invocation evidence, recommendations, or Apply.
-        </p>
-      </DocsSection>
-
-      <DocsSection id="next" label="03 · Next 30 days" title="Current focus areas, not an exhaustive build order">
-        <ol className="space-y-7">
-          {[
-            ["1", "Deepen attribution and session evidence before outcomes", "Add branch, ticket, and work-unit attribution plus plan presets and session vitals before accepted/rejected/reverted/rework outcome states. The first verified unit is an accepted coding task or merged PR—not lines of code or modeled hours."],
-            ["2", "Add financial CI without autonomous enforcement", "Start with warnings, preview, dry-run, explicit approval, rollback, and verified result. No autonomous control claim without a real adapter and validated team policy."],
-            ["3", "Close distribution and comprehension proof", "Run the 8–12-person study, collect real billing-reconciliation cases, and complete signed, notarized, safely updated Glance distribution before offering a public download."],
-            ["4", "Earn the organization foundation with design partners", "Test one read-only observability import and gather design-partner proof first. Then begin an opt-in aggregate receipt sync for shared reconciliation, allocation, and approval history. This is a foundation—not Workspace general availability."],
-          ].map(([number, title, description]) => (
-            <li key={number} className="grid gap-3 border-t border-hairline pt-5 sm:grid-cols-[2rem_minmax(0,1fr)]">
-              <span className="font-mono text-sm text-green">{number}</span>
-              <div>
-                <h3 className="text-lg font-medium text-ink">{title}</h3>
-                <p className="mt-2 text-sm leading-6 text-muted">{description}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </DocsSection>
-
-      <DocsSection id="later" label="04 · Later" title="The paid accountability system">
-        <p>
-          The intended company product is an opt-in, permissioned Workspace over approved Agent Economics Receipts: organization-wide reconciliation, project/client/user/agent allocation, budgets, anomalies, approvals, audit history, accepted-outcome economics, and a read-only financial teammate that cites its evidence and missing coverage.
-        </p>
-        <p className="mt-4">
-          Defensible ROI needs reconciled cost, an accepted outcome, and independently evidenced business value. Token volume, activity, lines of code, or invented hours saved are not ROI.
-        </p>
-      </DocsSection>
-
-      <DocsSection id="not-yet" label="05 · Explicitly not yet" title="Do not mistake direction for product">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
-          <li>ROI or productivity claims from usage evidence alone.</li>
-          <li>Autonomous budget enforcement or provider changes.</li>
-          <li>Cursor-local financial parsing from current internal IDE databases; official admin APIs remain the financial path unless a stable, versioned local format emerges.</li>
-          <li>General Workspace availability, RBAC, or team billing.</li>
-          <li>A signed public Glance binary.</li>
-          <li>A general trace explorer, prompt warehouse, model gateway, or long-tail parser race.</li>
+      <DocsSection id="next" label="Next" title="Learn from the connected teams">
+        <ul className="list-disc legacy-space-y-4 pl-5 marker:text-faint">
+          <li>Improve onboarding and the first spending review around real account coverage and the questions teams bring.</li>
+          <li>Validate more supported provider connections with partners, keeping different cost bases and billing periods clear.</li>
+          <li>Make historical usage and shared coding-agent activity easier to inspect without overstating attribution.</li>
         </ul>
+      </DocsSection>
+
+      <DocsSection id="exploring" label="Exploring" title="Connect spending to useful work">
+        <p>We are exploring richer project and workflow context, better evidence for accepted outcomes, and carefully scoped ways to act on spending insights. Broader source coverage and an easier desktop experience are also areas of interest.</p>
+        <p className="mt-4">Activity and token volume alone do not establish value. Work on outcome economics, ROI or automated controls needs its own evidence before it can become a product claim.</p>
+        <DocsCallout title="How to read this roadmap">“Next” and “Exploring” are priorities and questions, not commitments to ship in a particular week. Current access and source support live in the <TextLink href="/docs/workspace">Workspace guide</TextLink>, <TextLink href="/docs/cli">CLI guide</TextLink> and <TextLink href="/docs/sources">source reference</TextLink>.</DocsCallout>
+      </DocsSection>
+
+      <DocsSection id="participate" label="Shape what comes next" title="Bring a real spending question">
+        <p><TextLink href="/#beta">Join the waitlist</TextLink> if you want to help shape Tilden. Selected partners receive assisted onboarding. Tell us which sources you use and what you cannot explain about your AI spend today; joining does not grant immediate access or promise a delivery date.</p>
       </DocsSection>
     </DocsPage>
   );

@@ -38,7 +38,7 @@ export default function Page() {
           headline: title,
           description,
           datePublished: "2026-07-20",
-          dateModified: "2026-08-24",
+          dateModified: "2026-10-03",
           mainEntityOfPage: `${SITE_URL}/blog/claude-code-cost-usage-credits`,
           author: { "@type": "Organization", name: "Futura Studio" },
           publisher: { "@type": "Organization", name: "Futura Studio" },
@@ -112,18 +112,18 @@ export default function Page() {
             session logs already on your machine—locally, with no signup,
             provider connection, or upload—and shows:
           </P>
-          <ul className="mt-4 space-y-3 text-base leading-relaxed text-muted">
-            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
+          <ul className="mt-4 legacy-space-y-3 text-base leading-relaxed text-muted">
+            <li className="rounded-xs border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Observed API-equivalent value</span> —
               supported local usage priced at published rates, broken down by
               project and model where the transcript exposes them.
             </li>
-            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
+            <li className="rounded-xs border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Plan context and comparison</span> —
               API-rate value beside a detected or user-declared plan label. It
               is comparison math, not proof of plan coverage or the cheapest option.
             </li>
-            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
+            <li className="rounded-xs border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Evidence-ranked action candidates</span>
               {" "}— local transcript aggregates are treated as observed exposure,
               not invented monthly savings. Apply asks the coding agent to inspect
@@ -131,7 +131,7 @@ export default function Page() {
               and compare matched future sessions. A dollar result requires a
               source-supported counterfactual and, for a cash claim, provider cost.
             </li>
-            <li className="rounded-sm border border-hairline bg-panel px-5 py-4">
+            <li className="rounded-xs border border-hairline bg-panel px-5 py-4">
               <span className="text-ink">Context inventory and invocation evidence</span>
               {" "}— items that are discoverable, invoked, MCP-configured,
               explicitly requested as always-loaded, hook-injected, unmeasured,
@@ -159,23 +159,32 @@ export default function Page() {
         <Reveal>
           <H2>Local-first, because it&apos;s your evidence</H2>
           <P>
-            Default transcript analysis runs on your machine with no signup:
-            transcripts, prompts, file names, and dollar amounts are never
-            uploaded. The CLI&apos;s one disclosed signal is anonymous command
-            counts — no code, no prompts, no file names — announced by a
-            printed notice before the first byte and ended by{" "}
-            <span className="font-mono text-ink">aibill telemetry off</span>{" "}
-            or DO_NOT_TRACK. A deliberate provider connection sends the
-            referenced credential only to that provider&apos;s official API; an
-            explicit MCP result goes only to the AI client you invoked. The code
-            is MIT-licensed and open source. aibill never sits in the inference path and never stores, prints, or proxies provider credentials. The
-            meters are multiplying; know which number you are looking at before
-            acting on it.
+            Default transcript analysis runs on your machine with no signup.
+            Local report generation does not send raw prompts, transcripts,
+            source-file contents, or report amounts to Tilden. The CLI discloses
+            limited command and runtime telemetry before sending. Events include
+            a random installation identifier, software and system information,
+            timing, and success status; they exclude report contents, credentials,
+            paths, email addresses, and dollar amounts. Run{" "}
+            <span className="font-mono text-ink">npx aibill telemetry off</span>{" "}
+            or set DO_NOT_TRACK=1 to disable future events.
+          </P>
+          <P>
+            Optional provider requests, Workspace uploads, and MCP-client use
+            are separate choices. Explicit provider sync contacts the selected
+            provider with your referenced credential. An approved Workspace
+            push shares supported activity summaries with hosted Workspace;
+            selected MCP results go to the AI client and follow its data policy.
+            The CLI is MIT-licensed and open source. Read the{" "}
+            <a href="/privacy" className="text-ink underline underline-offset-4">privacy policy</a>{" "}
+            for these data flows before connecting or sharing.
           </P>
           <p className="mt-4 text-sm leading-relaxed text-faint">
-            Correction (August 24, 2026): an earlier version of this post said
-            the default run involves no telemetry. Since v0.9.2 the CLI sends
-            disclosed, anonymous command counts as described above.
+            Correction (October 3, 2026): earlier versions described the CLI as
+            having no telemetry, then as sending anonymous command counts.
+            The disclosed events include a random installation identifier and
+            command/runtime information, so they are pseudonymous. The local
+            analysis and optional sharing boundaries are clarified above.
           </p>
         </Reveal>
       </article>

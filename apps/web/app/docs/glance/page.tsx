@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { CodeBlock, DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
 
 export const metadata: Metadata = {
-  title: "aibill Glance macOS source preview",
+  title: "Tilden Glance — local macOS source preview",
   description: "Build the unsigned aibill Glance macOS hover preview from source and understand its data, freshness, and distribution boundaries.",
   alternates: { canonical: "/docs/glance" },
 };
@@ -11,8 +11,8 @@ export default function GlanceDocsPage() {
   return (
     <DocsPage
       current="/docs/glance"
-      title="A quiet monitor, not a second engine."
-      intro="Glance is a native hover surface below the Mac camera area. It renders the shared aibill JSON contract and stays hidden until the pointer reaches the menu bar."
+      title="A quiet view of local activity."
+      intro="Glance is an optional local macOS companion to the aibill CLI. It renders supported Claude Code and Codex evidence and stays hidden until the pointer reaches the menu bar. It does not display hosted Workspace reports."
       repoPath="apps/web/app/docs/glance/page.tsx"
     >
       <DocsSection id="status" label="01 · Availability" title="Source preview only">
@@ -20,7 +20,7 @@ export default function GlanceDocsPage() {
           Glance is unsigned and built from source for testing. Do not redistribute the ad-hoc-signed app bundle. A public download requires a universal Developer ID-signed, Apple-notarized build with a stapled ticket and signed updates.
         </DocsCallout>
         <p>
-          Current source-build requirements are macOS 14 or newer, Apple silicon, Swift/Xcode command-line tools, Node 22, and a built checkout of the public repository.
+          For shared team reports, use <TextLink href="/docs/workspace">Workspace</TextLink>. Glance is a separate source preview. Current source-build requirements are macOS 14 or newer, Apple silicon, Swift/Xcode command-line tools, Node 22, and a built checkout of the public repository.
         </p>
       </DocsSection>
 
@@ -40,7 +40,7 @@ export AIBILL_NODE_PATH="$(command -v node)"
       </DocsSection>
 
       <DocsSection id="behavior" label="03 · Behavior" title="Hidden until it is useful">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>At rest, no widget is visible. Moving into the top menu-bar strip reveals one stationary aibill wordmark to the left of the camera.</li>
           <li>Hovering the wordmark reveals the panel; moving away hides both surfaces. No click is required.</li>
           <li>Right-click offers refresh, launch-at-login, update check in release builds, and quit.</li>
@@ -50,9 +50,9 @@ export AIBILL_NODE_PATH="$(command -v node)"
 
       <DocsSection id="data" label="04 · Data contract" title="Claude Code and Codex only">
         <p>
-          Glance runs <code className="font-mono text-ink">aibill glance --since-days 30</code> and consumes the same typed contract as the CLI and MCP. It currently reads Claude Code and Codex data; Gemini is intentionally excluded from Glance.
+          Glance runs <code className="font-mono text-ink">aibill glance --since-days 30</code> and consumes the same typed contract as the CLI and local MCP. It currently reads Claude Code and Codex data; Gemini is intentionally excluded from Glance.
         </p>
-        <ul className="mt-5 list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="mt-5 list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>Session value is local token evidence multiplied by published API list rates—an estimate, not a subscription charge.</li>
           <li>Limit windows appear only when a transcript reports remaining percentage and reset metadata. Projected exhaustion is separately labeled as a local pace estimate.</li>
           <li>Main focus is the share of observed prompt/tool activity in the focus window, not elapsed time or spend. Raw prompts do not enter the JSON contract.</li>

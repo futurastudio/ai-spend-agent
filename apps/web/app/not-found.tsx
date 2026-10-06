@@ -13,7 +13,7 @@ export default function NotFound() {
         </div>
       </header>
       <main className="flex flex-1 flex-col justify-center px-5 py-24 sm:px-8">
-        <div className="receipt max-w-[420px] rounded-sm border border-hairline-bright bg-well p-4 font-mono text-[13px] leading-[1.7]">
+        <div className="receipt max-w-[420px] rounded-xs border border-hairline-bright bg-well p-4 font-mono text-[13px] leading-[1.7]">
           <div className="tl-line">
             <span className="tl-green">$ </span>
             <span>open {"<page>"}</span>

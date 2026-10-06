@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import { WORKSPACE_STATUS_LINE } from "@/lib/workspace-entry";
 import Link from "next/link";
 import { CopyCommand } from "@/components/CopyCommand";
+import { WaitlistThanks } from "@/components/WaitlistThanks";
 
 export const metadata: Metadata = {
   title: "Thanks · Tilden",
   description:
-    "Request received. We'll follow up by email about the waitlist.",
+    "Your interest in Tilden is registered. Workspace access is invitation-only.",
   robots: { index: false, follow: true },
 };
 
@@ -17,6 +18,7 @@ export default async function Thanks({
 }) {
   const { ref } = await searchParams;
   const isGlanceStudy = ref?.includes("glance-study") ?? false;
+  if (!isGlanceStudy) return <WaitlistThanks />;
 
   return (
     <div className="frame flex min-h-screen flex-col">

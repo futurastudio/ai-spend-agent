@@ -2,7 +2,7 @@
 
 # Provider financial contracts
 
-Contract schema v1; reviewed 2026-09-20.
+Contract schema v1; reviewed 2026-10-06.
 
 These contracts are the reviewed financial rulebook for each provider source. They do not imply that every declared surface is implemented, that a user's account was connected, or that an invoice reconciled. Implemented connector coverage is listed separately. Provider-reported cost, API-equivalent value, plan context, credits and final invoices remain separate.
 
@@ -10,7 +10,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 | --- | --- | --- | --- | --- |
 | OpenAI Platform organization usage and costs | `first_class` / `current` | `live_verified` | `provider_reported_accrued_cost` | OpenAI Costs export or invoice-detail export for the identical organization scope and period |
 | Anthropic Platform Usage and Cost Admin API | `first_class` / `current` | `live_verified` | `provider_reported_accrued_cost` | Claude Console cost export or invoice for the identical organization scope and period |
-| Claude Enterprise Analytics | `contract_only` / `current` | `untested` | `provider_reported_provisional_usage_credit_cost_not_seat_bill` | Organization cost report older than the revision window reconciled separately from the matching Enterprise seat invoice/contract |
+| Claude Enterprise Analytics | `contract_only` / `current` | `untested` | `provider_reported_provisional_usage_credit_cost_not_seat_bill` | Organization cost report after the applicable documented revision bounds, reconciled separately from the matching Enterprise seat invoice/contract; finality remains provisional while the revision guidance conflicts |
 | Gemini CLI and Google billing evidence | `experimental` / `current` | `fixture_verified` | `api_equivalent_value_until_billing_export` | Google Cloud Billing detailed or FOCUS export for the same project/billing account and period |
 | Cursor Admin API spending and usage events | `beta` / `current` | `fixture_verified` | `provider_reported_cost_beta` | Sum filtered usage-event chargedCents and reconcile to /teams/spend for the identical current cycle, then compare with invoice/export |
 | GitHub Copilot AI-credit billing | `beta` / `current` | `fixture_verified` | `provider_reported_net_cost_beta` | Organization or enterprise AI-credit report reconciled to the matching billing usage summary and invoice period |
@@ -38,10 +38,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Prepaid credit application, tax, refunds, discounts and final cash settlement
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
-  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8`; reviewed content `f67300663e4736e1db8564073afae151b0990d3d6de5044c0c79049e276a155e`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `67cad21c380d3a7a11bfd841b0a6f38d901f09e5bfcccd621a64c072535c2b65`; reviewed content `cfe87309ae09a49156fcd873a111c3187974efe8e26059766044d071c672b436`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `2763e9956c011a2fa4243f98640bead6f3c34cebd51a9cacca2c36adf684f9bc`; reviewed content `adc1f17a4febf32465668ebcdce54eba45ed639f5f6cc08399dc19779401e995`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `0cc762119398ad86ccf25c7e655632a52f87037cf27bc2c9e33ec623df10e1dc`; reviewed content `507672df703af2058fef3a5ed5ab454beeb5a2e2abbaf0126a3d507e47958ce7`
+  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `57f3e493e666e8d3789c77651033d418875196605bfc85054ca66446ae7f9dcf`; reviewed content `1559bc28f1ade471bb9b16043046840432f8565f659e94895e77fd97dadf8806`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52`; reviewed content `76118481a0c8fe041fb52d7944e6083e73c55e5588f12b64711ea91d8b56b91c`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463`; reviewed content `896f7a6d146966da777e9b906408c8346d57238874984b3a4a0ea6c751c700ff`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a`; reviewed content `ad977a30129b8c2b6191234b665dc5cb25f9e01a57de3860e66604574cda361d`
 
 ## Anthropic Platform Usage and Cost Admin API
 
@@ -53,7 +53,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Pagination/completeness: Follow has_more and next_page without changing the original query
 - Units: Usage separates uncached input, cache creation/read, output and server tools. Cost amount is a decimal string in fractional cents.
 - Currency/basis: USD fractional cents divided by 100 using decimal-safe arithmetic
-- Freshness/revisions: Usage/cost data normally appears within minutes; exact invoice settlement and Priority Tier cost remain outside the Cost endpoint
+- Freshness/revisions: Usage/cost data normally appears within minutes; Claude Code analytics is daily with typically one-hour freshness. Exact invoice settlement and Priority Tier cost remain outside the Cost endpoint
 - Reconciliation: Claude Console cost export or invoice for the identical organization scope and period
 - Endpoints/evidence surfaces:
   - `GET /v1/organizations/usage_report/messages`
@@ -69,8 +69,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Bedrock, Vertex and Foundry activity not returned by the named endpoints
   - Claude Platform on AWS, which does not expose the named Usage and Cost APIs
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08`; reviewed content `e27785131d4f895eb02e56e26efb23633b714f1ff88a5e6b0f0be0cd5d9fc0d4`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `56cf1bd65245b7a9d681b51f62f48c19cbf8713e965896bedfbca4345dafab6c`; reviewed content `df9c3df0a0a093381fab679545b024f73a31995ffd586f4b7de7c7d72186e828`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08`; reviewed content `c95b199338b13f6de6fa1de2d88dedc78f1595017cf4caef7e23600e2710fd0e`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `3a6f0ecae4215f6cf74effd2e2dc13424b1a0082ee6551e7669b958b5aa8e212`; reviewed content `08f61709d12ec8b58ffd5874391f6ba879b2d648df3024be5e52f9e5cb3f2e97`
 
 ## Claude Enterprise Analytics
 
@@ -78,12 +78,12 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Owner: `aibill-provider-contracts`
 - Authentication: Analytics API key with read:analytics created by the Claude Enterprise primary owner; not interchangeable with an Admin API key
 - API/version: Claude Enterprise Analytics API current reference
-- Window: Explicit ending_at at or before data_refreshed_at for stable cost/usage results
+- Window: Explicit ending_at at or before data_refreshed_at; data starts January 1, 2026. Organization cost queries start within the last 365 days and span at most 31 days
 - Pagination/completeness: Cursors are bound to the original filters, grouping and period; changing scope requires restarting from page one
 - Units: Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only
 - Currency/basis: Post-discount, pre-credit USD fractional cents for reported usage credits; not the contracted Enterprise seat invoice
-- Freshness/revisions: Reports typically refresh every four hours and can take up to 24 hours; cost and usage may be revised for up to 30 days, and tails after data_refreshed_at are incomplete
-- Reconciliation: Organization cost report older than the revision window reconciled separately from the matching Enterprise seat invoice/contract
+- Freshness/revisions: Cost/usage typically refreshes within four hours and can take up to 24 hours; engagement snapshots lag about one day. The guide permits cost/usage revisions until about seven days after calendar-month end, while endpoint references still describe about 30 days after usage. Preserve provisional status across this documentation discrepancy; data_refreshed_at does not establish finality
+- Reconciliation: Organization cost report after the applicable documented revision bounds, reconciled separately from the matching Enterprise seat invoice/contract; finality remains provisional while the revision guidance conflicts
 - Endpoints/evidence surfaces:
   - `GET /v1/organizations/analytics/cost_report`
   - `GET /v1/organizations/analytics/user_cost_report`
@@ -98,9 +98,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Contracted Enterprise seat charges are not reported by Analytics usage-credit cost rows
   - Per-user rows do not include unattributable automation/API traffic
   - RBAC-group rows can overlap and must not be summed
+  - Grouped cost buckets include only the top 100 groups without a remainder; their sum need not equal the organization total
   - Claude Code through Amazon Bedrock
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `15c07eed7e338fc05844a1be6cfe9380973aa992f349bd99bcb4dfa3a7cfbcfe`; reviewed content `b6ed4a35d6d1b5a27387921b9c40401a4ec5f8ab449c4b0d77ae9d6a2140d944`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55`; reviewed content `862512c81884b2c86d78ecfe80771a00a017a568960413e0ae324a6a726f9990`
 
 ## Gemini CLI and Google billing evidence
 
@@ -128,8 +129,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Local session value is not a Google invoice
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `17ccc4900c1571dc4ea437d7a98be93b76fd7ab8f5e182c8701410390676991c`
-  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `27d92d537ccf670fcb195749c2dba8cde61d80bbfbf75af57307b4d1b92e369b`; reviewed content `292edaa081435fd8f4dfa429e62f448af2fe5771fb1f11b2134970e2e47e8ca2`
-  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `a98d7d8656f3dafaecf93b5ada88c3a4548da0cf6f67febef9cbcedf09321b27`
+  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `27d92d537ccf670fcb195749c2dba8cde61d80bbfbf75af57307b4d1b92e369b`; reviewed content `368cea3a92766632aa2e06b0a98a99edbabbda01f8151d1bf5010e72e9627919`
+  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `2e7a78295e6cf9b41652b11b84e6c597c7c881e06718e88a0dee9d43c91142b0`
 
 ## Cursor Admin API spending and usage events
 
@@ -140,7 +141,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Window: Team spend is the current subscription cycle; filtered events use inclusive epoch-millisecond bounds and hourly aggregation
 - Pagination/completeness: One-indexed page/pageSize; complete all reported pages and prove member/event coverage for the requested scope
 - Units: Use spendCents/overallSpendCents aggregates and chargedCents event details as provider fields; preserve model, kind, usage pool, Cursor Token Rate context, Max mode and token/cache splits without repricing
-- Currency/basis: Provider cents divided by 100 only after event detail reconciles to the matching aggregate; keep Cursor Models, Other Models, included, on-demand and BYOK bases separate
+- Currency/basis: Provider cents divided by 100; the implemented spend aggregate remains estimated until a separate same-cycle dashboard/invoice check. Event-detail reconciliation is a separate target, and Cursor Models, Other Models, included, on-demand and BYOK bases remain distinct
 - Freshness/revisions: Polling guidance is hourly; incomplete pagination or event/aggregate residual remains partial/missing
 - Reconciliation: Sum filtered usage-event chargedCents and reconcile to /teams/spend for the identical current cycle, then compare with invoice/export
 - Endpoints/evidence surfaces:
@@ -155,14 +156,14 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - A fixture-only connector is not live or invoice reconciliation
   - Seat contracts, tax, credits and final invoice adjustments
 - Official sources:
-  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `750ee6ca2d400e7fbdd45621e15875ca8708ef94bf04c74f54a55b393ffd2fe9`
-  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `ab85ba5999e60ea1ebfd68d8e650b4818fc300bc34346294ec32ae79c383df31`; reviewed content `2961b876816b7f32489b006e6fa9aec93782ef70c40d767ba0323e21ac6a4ac4`
+  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `c463e688238e4fe8f699f4235dd9aa0a5ab1dc2fc591959e34eb7cefea93d869`
+  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `f7b2ffdf52786bc7e255cabbacfa0cdc42e05d0393d5a2fb40ae8a069976cbf0`; reviewed content `94e58dab1aaf1627fad26e90296f0d91367f69a67080552f915fd6609ba6e20f`
 
 ## GitHub Copilot AI-credit billing
 
 - Contract ID: `github-copilot`
 - Owner: `aibill-provider-contracts`
-- Authentication: Organization or enterprise administrator/billing manager using a fine-grained token or GitHub App with read Administration permission
+- Authentication: Organization administrator/billing manager with read Administration permission for organization billing; enterprise billing requires read Enterprise billing permission. Use a supported fine-grained token or GitHub App token for the selected scope
 - API/version: X-GitHub-Api-Version: 2026-03-10
 - Window: Explicit organization/enterprise year, month and optional day; only the past 24 months are available on the AI-credit endpoint
 - Pagination/completeness: AI-credit reports are period/filter scoped; seats and metrics retain their own pagination/completeness contracts
@@ -183,8 +184,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Premium-request legacy units are not silently blended with AI credits
   - Tax, contract true-ups, credits and invoice payment settlement
 - Official sources:
-  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `ebe6a2a00a53131257e52cf85c504bd8239e8a2d4f0f92f3dd94faec6a0b9cf7`
-  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `39ae47ae443fac8c1458d2c70759655c3981da0c6368e870ac94a25d6a23abef`
+  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `69bf2b78464ff61db36533866fb8921ff0172791a37b28da7ab663ca8532be0f`
+  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `f87160ecb1b4521a2dd6f850f408dc7587ea85b2cf19223416f44ebc53867abb`
 
 ## Drift behavior
 

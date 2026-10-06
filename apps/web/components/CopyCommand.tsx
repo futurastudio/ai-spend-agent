@@ -22,7 +22,7 @@ export function CopyCommand() {
       type="button"
       onClick={copy}
       aria-label={copied ? "Copied command" : "Copy command"}
-      className="group flex h-11 w-full max-w-md items-center justify-between gap-4 rounded-sm border border-green-line bg-green-wash px-4 font-mono text-sm transition-colors hover:border-[rgba(76,201,138,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/50"
+      className="group flex h-11 w-full max-w-md items-center justify-between gap-4 rounded-xs border border-green-line bg-green-wash px-4 font-mono text-sm transition-colors hover:border-[rgba(76,201,138,0.55)] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-green/50"
     >
       <code className="flex min-w-0 items-center gap-2.5 truncate">
         <span className="select-none text-green" aria-hidden="true">

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-09-20",
+  "reviewedAt": "2026-10-06",
   "defaultReviewCadenceDays": 14,
   "statusVocabulary": [
     "current",
@@ -47,8 +47,8 @@
             "across text, audio, and image outputs",
             "GET /organization/costs"
           ],
-          "semanticSha256": "84d124b58fb73fab11e8a7b68d3850d9e08a4bf0e96b7debeb20867081c5b4a8",
-          "contentSha256": "f67300663e4736e1db8564073afae151b0990d3d6de5044c0c79049e276a155e"
+          "semanticSha256": "57f3e493e666e8d3789c77651033d418875196605bfc85054ca66446ae7f9dcf",
+          "contentSha256": "1559bc28f1ade471bb9b16043046840432f8565f659e94895e77fd97dadf8806"
         },
         {
           "kind": "pricing",
@@ -59,8 +59,8 @@
             "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
-          "semanticSha256": "67cad21c380d3a7a11bfd841b0a6f38d901f09e5bfcccd621a64c072535c2b65",
-          "contentSha256": "cfe87309ae09a49156fcd873a111c3187974efe8e26059766044d071c672b436"
+          "semanticSha256": "30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52",
+          "contentSha256": "76118481a0c8fe041fb52d7944e6083e73c55e5588f12b64711ea91d8b56b91c"
         },
         {
           "kind": "pricing",
@@ -71,8 +71,8 @@
             "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
-          "semanticSha256": "2763e9956c011a2fa4243f98640bead6f3c34cebd51a9cacca2c36adf684f9bc",
-          "contentSha256": "adc1f17a4febf32465668ebcdce54eba45ed639f5f6cc08399dc19779401e995"
+          "semanticSha256": "e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463",
+          "contentSha256": "896f7a6d146966da777e9b906408c8346d57238874984b3a4a0ea6c751c700ff"
         },
         {
           "kind": "pricing",
@@ -83,8 +83,8 @@
             "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
-          "semanticSha256": "0cc762119398ad86ccf25c7e655632a52f87037cf27bc2c9e33ec623df10e1dc",
-          "contentSha256": "507672df703af2058fef3a5ed5ab454beeb5a2e2abbaf0126a3d507e47958ce7"
+          "semanticSha256": "5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a",
+          "contentSha256": "ad977a30129b8c2b6191234b665dc5cb25f9e01a57de3860e66604574cda361d"
         }
       ]
     },
@@ -111,7 +111,7 @@
       "units": "Usage separates uncached input, cache creation/read, output and server tools. Cost amount is a decimal string in fractional cents.",
       "currency": "USD fractional cents divided by 100 using decimal-safe arithmetic",
       "window": "RFC3339 starting_at/ending_at with source-specific bucket widths; Claude Code analytics is daily",
-      "freshnessAndRevision": "Usage/cost data normally appears within minutes; exact invoice settlement and Priority Tier cost remain outside the Cost endpoint",
+      "freshnessAndRevision": "Usage/cost data normally appears within minutes; Claude Code analytics is daily with typically one-hour freshness. Exact invoice settlement and Priority Tier cost remain outside the Cost endpoint",
       "financialBasis": "provider_reported_accrued_cost",
       "reconciliationAnchor": "Claude Console cost export or invoice for the identical organization scope and period",
       "exclusions": [
@@ -132,7 +132,7 @@
             "next_page"
           ],
           "semanticSha256": "51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08",
-          "contentSha256": "e27785131d4f895eb02e56e26efb23633b714f1ff88a5e6b0f0be0cd5d9fc0d4"
+          "contentSha256": "c95b199338b13f6de6fa1de2d88dedc78f1595017cf4caef7e23600e2710fd0e"
         },
         {
           "kind": "pricing",
@@ -141,15 +141,17 @@
             "Input Tokens",
             "Output Tokens",
             "Prompt caching",
-            "Claude Fable 5 $10 / MTok $12.50 / MTok $20 / MTok $1 / MTok $50 / MTok",
-            "Claude Mythos 5 ( limited availability ) $10 / MTok $12.50 / MTok $20 / MTok $1 / MTok $50 / MTok",
-            "Claude Opus 5 $5 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok $25 / MTok",
-            "Claude Sonnet 5 $2 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok $10 / MTok",
-            "Claude Fable 5.1 $10 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
-            "Claude Mythos 5.1 ( limited availability ) $10 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok"
+            "Claude Fable 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
+            "Claude Mythos 5",
+            "Claude Opus 5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+            "Claude Sonnet 5 $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok",
+            "Claude Fable 5.1",
+            "Claude Mythos 5.1",
+            "On Claude Fable 5.1 and Claude Mythos 5.1, a cache hit costs 2.5% of the standard input price ($0.25 USD per million tokens).",
+            "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok"
           ],
-          "semanticSha256": "56cf1bd65245b7a9d681b51f62f48c19cbf8713e965896bedfbca4345dafab6c",
-          "contentSha256": "df9c3df0a0a093381fab679545b024f73a31995ffd586f4b7de7c7d72186e828"
+          "semanticSha256": "3a6f0ecae4215f6cf74effd2e2dc13424b1a0082ee6551e7669b958b5aa8e212",
+          "contentSha256": "08f61709d12ec8b58ffd5874391f6ba879b2d648df3024be5e52f9e5cb3f2e97"
         }
       ]
     },
@@ -175,15 +177,16 @@
       "pagination": "Cursors are bound to the original filters, grouping and period; changing scope requires restarting from page one",
       "units": "Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only",
       "currency": "Post-discount, pre-credit USD fractional cents for reported usage credits; not the contracted Enterprise seat invoice",
-      "window": "Explicit ending_at at or before data_refreshed_at for stable cost/usage results",
-      "freshnessAndRevision": "Reports typically refresh every four hours and can take up to 24 hours; cost and usage may be revised for up to 30 days, and tails after data_refreshed_at are incomplete",
+      "window": "Explicit ending_at at or before data_refreshed_at; data starts January 1, 2026. Organization cost queries start within the last 365 days and span at most 31 days",
+      "freshnessAndRevision": "Cost/usage typically refreshes within four hours and can take up to 24 hours; engagement snapshots lag about one day. The guide permits cost/usage revisions until about seven days after calendar-month end, while endpoint references still describe about 30 days after usage. Preserve provisional status across this documentation discrepancy; data_refreshed_at does not establish finality",
       "financialBasis": "provider_reported_provisional_usage_credit_cost_not_seat_bill",
-      "reconciliationAnchor": "Organization cost report older than the revision window reconciled separately from the matching Enterprise seat invoice/contract",
+      "reconciliationAnchor": "Organization cost report after the applicable documented revision bounds, reconciled separately from the matching Enterprise seat invoice/contract; finality remains provisional while the revision guidance conflicts",
       "exclusions": [
         "Credits, tax, contract true-ups and payment settlement",
         "Contracted Enterprise seat charges are not reported by Analytics usage-credit cost rows",
         "Per-user rows do not include unattributable automation/API traffic",
         "RBAC-group rows can overlap and must not be summed",
+        "Grouped cost buckets include only the top 100 groups without a remainder; their sum need not equal the organization total",
         "Claude Code through Amazon Bedrock"
       ],
       "resources": [
@@ -194,10 +197,10 @@
             "Analytics API key",
             "read:analytics",
             "data_refreshed_at",
-            "revised for up to 30 days"
+            "until about 7 days after the end of the calendar month"
           ],
-          "semanticSha256": "15c07eed7e338fc05844a1be6cfe9380973aa992f349bd99bcb4dfa3a7cfbcfe",
-          "contentSha256": "b6ed4a35d6d1b5a27387921b9c40401a4ec5f8ab449c4b0d77ae9d6a2140d944"
+          "semanticSha256": "739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55",
+          "contentSha256": "862512c81884b2c86d78ecfe80771a00a017a568960413e0ae324a6a726f9990"
         }
       ]
     },
@@ -255,7 +258,7 @@
             "Paid Tier"
           ],
           "semanticSha256": "27d92d537ccf670fcb195749c2dba8cde61d80bbfbf75af57307b4d1b92e369b",
-          "contentSha256": "292edaa081435fd8f4dfa429e62f448af2fe5771fb1f11b2134970e2e47e8ca2"
+          "contentSha256": "368cea3a92766632aa2e06b0a98a99edbabbda01f8151d1bf5010e72e9627919"
         },
         {
           "kind": "reconciliation",
@@ -267,7 +270,7 @@
             "Pricing data"
           ],
           "semanticSha256": "e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e",
-          "contentSha256": "a98d7d8656f3dafaecf93b5ada88c3a4548da0cf6f67febef9cbcedf09321b27"
+          "contentSha256": "2e7a78295e6cf9b41652b11b84e6c597c7c881e06718e88a0dee9d43c91142b0"
         }
       ]
     },
@@ -290,7 +293,7 @@
       ],
       "pagination": "One-indexed page/pageSize; complete all reported pages and prove member/event coverage for the requested scope",
       "units": "Use spendCents/overallSpendCents aggregates and chargedCents event details as provider fields; preserve model, kind, usage pool, Cursor Token Rate context, Max mode and token/cache splits without repricing",
-      "currency": "Provider cents divided by 100 only after event detail reconciles to the matching aggregate; keep Cursor Models, Other Models, included, on-demand and BYOK bases separate",
+      "currency": "Provider cents divided by 100; the implemented spend aggregate remains estimated until a separate same-cycle dashboard/invoice check. Event-detail reconciliation is a separate target, and Cursor Models, Other Models, included, on-demand and BYOK bases remain distinct",
       "window": "Team spend is the current subscription cycle; filtered events use inclusive epoch-millisecond bounds and hourly aggregation",
       "freshnessAndRevision": "Polling guidance is hourly; incomplete pagination or event/aggregate residual remains partial/missing",
       "financialBasis": "provider_reported_cost_beta",
@@ -313,7 +316,7 @@
             "reconcile event-level costs"
           ],
           "semanticSha256": "04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59",
-          "contentSha256": "750ee6ca2d400e7fbdd45621e15875ca8708ef94bf04c74f54a55b393ffd2fe9"
+          "contentSha256": "c463e688238e4fe8f699f4235dd9aa0a5ab1dc2fc591959e34eb7cefea93d869"
         },
         {
           "kind": "pricing",
@@ -323,8 +326,8 @@
             "Usage pools",
             "Token"
           ],
-          "semanticSha256": "ab85ba5999e60ea1ebfd68d8e650b4818fc300bc34346294ec32ae79c383df31",
-          "contentSha256": "2961b876816b7f32489b006e6fa9aec93782ef70c40d767ba0323e21ac6a4ac4"
+          "semanticSha256": "f7b2ffdf52786bc7e255cabbacfa0cdc42e05d0393d5a2fb40ae8a069976cbf0",
+          "contentSha256": "94e58dab1aaf1627fad26e90296f0d91367f69a67080552f915fd6609ba6e20f"
         }
       ]
     },
@@ -337,7 +340,7 @@
       "availability": "beta",
       "validationTarget": "fixture_verified",
       "apiVersion": "X-GitHub-Api-Version: 2026-03-10",
-      "auth": "Organization or enterprise administrator/billing manager using a fine-grained token or GitHub App with read Administration permission",
+      "auth": "Organization administrator/billing manager with read Administration permission for organization billing; enterprise billing requires read Enterprise billing permission. Use a supported fine-grained token or GitHub App token for the selected scope",
       "endpoints": [
         "GET /organizations/{org}/settings/billing/ai_credit/usage",
         "GET /organizations/{org}/settings/billing/usage",
@@ -372,7 +375,7 @@
             "netAmount"
           ],
           "semanticSha256": "6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c",
-          "contentSha256": "ebe6a2a00a53131257e52cf85c504bd8239e8a2d4f0f92f3dd94faec6a0b9cf7"
+          "contentSha256": "69bf2b78464ff61db36533866fb8921ff0172791a37b28da7ab663ca8532be0f"
         },
         {
           "kind": "pricing",
@@ -383,7 +386,7 @@
             "input tokens"
           ],
           "semanticSha256": "6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815",
-          "contentSha256": "39ae47ae443fac8c1458d2c70759655c3981da0c6368e870ac94a25d6a23abef"
+          "contentSha256": "f87160ecb1b4521a2dd6f850f408dc7587ea85b2cf19223416f44ebc53867abb"
         }
       ]
     }
