@@ -1,4 +1,8 @@
-# aibill plugin
+# aibill local Codex plugin
+
+Part of Tilden’s free local CLI offering. This repository’s Codex plugin is
+separate from hosted Workspace MCP and the private Plugin / ChatGPT Pilot.
+It does not grant Workspace or private-pilot access.
 
 The optional aibill plugin exposes the existing local MCP server and three
 explicit-only skills. It adds no lifecycle hooks and injects no always-on

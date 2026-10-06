@@ -1,5 +1,13 @@
 # @agent-finops/mcp
 
+This is **aibill’s local MCP server**, part of Tilden’s free CLI offering. It
+runs on your machine and returns selected evidence to your configured AI
+client. It is separate from [hosted Workspace MCP](https://asktilden.com/docs/mcp),
+which reads reports already held in an invited Tilden Workspace, and from the
+private **Plugin / ChatGPT Pilot**. Installing this npm package grants neither
+Workspace access nor access to that private pilot.
+
+
 **aibill for MCP.** A local-first stdio server that lets Claude, Codex,
 Cursor, and other MCP clients answer sourced attribution, runway, and Context
 Health questions from local Claude Code/Codex work. It can also add
@@ -82,7 +90,7 @@ or claims savings, an accepted outcome, or ROI. See the
 configuration, and troubleshooting.
 
 This MCP server sends no telemetry or transcripts to an aibill service; the
-CLI's own optional anonymous command counts are disclosed at first run, end
+CLI's own optional command counts are disclosed at first run, end
 with `aibill telemetry off`, and are documented in
 [`docs/TELEMETRY.md`](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/TELEMETRY.md). Explicit
 provider sync sends the referenced credential only to the selected provider's

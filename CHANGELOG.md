@@ -5,7 +5,7 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.11 (Unreleased)
+## 0.9.11 (published on npm)
 
 `workspace disconnect --retry` recovers an uncertain disconnect after fresh
 confirmation. It sends the identical retained signed request once, with the

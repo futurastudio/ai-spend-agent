@@ -1,12 +1,17 @@
-# aibill telemetry — anonymous command counts, notice-before-first-byte
+# aibill telemetry — command counts, notice before sending
 
-aibill can count **which commands run**. That is the entire scope. It exists
-so the team knows which surfaces people actually use; it can never say who
-ran them, on what project, or with what data.
+aibill sends limited **command-count events** so the team can understand which
+surfaces are used. Each event includes a random installation ID and operational
+fields shown below. Events can be linked to the same installation; they are
+pseudonymous, not fully anonymous. The payload excludes identity, project
+content and financial amounts. Network requests also carry transport metadata.
+See [Tilden’s privacy policy](https://asktilden.com/privacy).
 
 ## Consent model (disclosed opt-out, notice before the first byte)
 
-1. Your **first interactive run prints a notice and sends nothing**:
+1. Your **first interactive run prints a notice and sends nothing**. The current
+   terminal notice uses the word “anonymous”; the precise scope is the
+   installation-linked payload described above and below:
 
    ```
    aibill counts which commands run — anonymous, never your data or content

@@ -1,7 +1,7 @@
 {
   "name": "aibill",
   "version": "0.9.11",
-  "description": "On-demand, sourced answers about AI-agent work, cost evidence, runway, and Context Health through local aibill MCP; provider sync is explicit and optional.",
+  "description": "Local Codex plugin for Tilden\u2019s free aibill CLI. Ask about coding-agent usage, cost evidence and Context Health; provider sync is explicit.",
   "author": {
     "name": "Futura Studio",
     "url": "https://github.com/futurastudio"
@@ -20,8 +20,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "aibill",
-    "shortDescription": "Agent cost evidence and Context Health",
-    "longDescription": "Ask sourced questions about local Claude Code and Codex work, cost evidence, plan-window availability, attribution, and hook-aware Context Health without always-on prompt injection. Optional provider billing sync runs only when explicitly requested.",
+    "shortDescription": "Local AI usage and cost evidence",
+    "longDescription": "Inspect local Claude Code and Codex usage, API-rate estimates and Context Health through aibill MCP. Selected results go to this AI client. Provider sync is explicit. Separate from hosted Workspace MCP and the private ChatGPT Pilot.",
     "developerName": "Futura Studio",
     "category": "Developer Tools",
     "capabilities": [

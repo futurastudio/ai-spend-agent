@@ -1,5 +1,13 @@
 # aibill MCP Server
 
+This is **aibill’s local MCP server**, part of Tilden’s free CLI offering. It
+runs on your machine and returns selected evidence to your configured AI
+client. It is separate from [hosted Workspace MCP](https://asktilden.com/docs/mcp),
+which reads reports already held in an invited Tilden Workspace, and from the
+private **Plugin / ChatGPT Pilot**. Installing this npm package grants neither
+Workspace access nor access to that private pilot.
+
+
 > **Version boundary:** the published npm `latest` reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
@@ -57,9 +65,8 @@ codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mc
 codex mcp list
 ```
 
-Codex stores user-level MCP configuration in `~/.codex/config.toml`. The
-ChatGPT desktop app, Codex CLI, and Codex IDE extension share that
-configuration on the same host. For a trusted project-only setup, place the
+Codex stores user-level MCP configuration in `~/.codex/config.toml`. Use the setup instructions for your chosen client; this local configuration
+does not install the private Tilden Plugin / ChatGPT Pilot. For a trusted project-only setup, place the
 same table in `.codex/config.toml` at the project root:
 
 ```toml
@@ -216,7 +223,7 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   source-status truth axes trusted. Reset, sample, and local-log syncs
   invalidate the receipt.
 - This MCP server does not upload local transcript contents or send
-  telemetry; the aibill CLI's separate anonymous command counts are disclosed
+  telemetry; the aibill CLI's separate command counts are disclosed
   at first run and end with `npx aibill telemetry off`. An MCP tool's selected
   structured result is returned to the invoking AI client and follows that
   client's data-handling policy.

@@ -29,7 +29,7 @@
     "!dist/**/*.tsbuildinfo"
   ],
   "license": "MIT",
-  "description": "Terminal renderer and shareable, evidence-labeled AI Receipt for aibill.",
+  "description": "Terminal, Markdown, HTML and redacted receipt renderers for Tilden\u2019s aibill CLI, preserving financial evidence labels.",
   "keywords": [
     "ai",
     "finops",

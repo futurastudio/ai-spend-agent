@@ -2,7 +2,7 @@
   "name": "aibill",
   "version": "0.9.11",
   "funding": "https://asktilden.com",
-  "description": "Short command for ai-spend-agent: local financial accountability for Claude Code, Codex, and experimental Gemini CLI cost evidence. Run: npx aibill",
+  "description": "Tilden\u2019s free AI spend CLI. Inspect local Claude Code and Codex usage, keep API-rate estimates separate from provider costs. Run: npx aibill",
   "type": "module",
   "bin": {
     "aibill": "run.js"

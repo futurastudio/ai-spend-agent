@@ -2,7 +2,7 @@
   "name": "ai-spend-agent",
   "version": "0.9.11",
   "funding": "https://asktilden.com",
-  "description": "Local-first financial accountability CLI: Claude Code/Codex attribution, provenance, and next actions, plus experimental Gemini CLI cost evidence.",
+  "description": "Tilden\u2019s free CLI for local coding-agent usage and optional provider cost reports. Estimates, reported costs and missing coverage stay separate.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
