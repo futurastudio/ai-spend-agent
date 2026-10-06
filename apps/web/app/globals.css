@@ -1,8 +1,25 @@
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "./preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
 @import "./tokens.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@config "../tailwind.config.ts";
+@source "./";
+@source "../components";
+
+/* Preserve the approved hover and sibling-spacing behavior across the
+ * compiler upgrade. Tailwind 4 otherwise restricts hover to hover-capable
+ * devices and moves space-y margins from following siblings to predecessors. */
+@custom-variant hover (&:hover);
+
+@utility legacy-space-y-* {
+  > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(--value(integer) * 0.25rem);
+    margin-bottom: 0;
+  }
+}
 
 :root {
   color-scheme: dark;

@@ -55,7 +55,7 @@ npx aibill@latest doctor --sources`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="commands" label="02 · Commands" title="Task-first command reference">
-        <div className="space-y-9">
+        <div className="legacy-space-y-9">
           {commandGroups.map((group) => (
             <div key={group.title}>
               <h3 className="text-lg font-medium text-ink">{group.title}</h3>
@@ -82,7 +82,7 @@ npx aibill statusline uninstall`}</CodeBlock>
         <p>
           The optional line is installed only in Claude Code, but its cache can hold separately labeled Claude Code and Codex cohorts. Claude Code asks the runner to render about every 30 seconds; that re-reads the cache and does <strong className="text-ink">not</strong> rescan transcripts. Use <code className="font-mono text-ink">statusline refresh</code> or rerun init when you need fresh evidence.
         </p>
-        <ul className="mt-5 list-disc space-y-2 pl-5 marker:text-faint">
+        <ul className="mt-5 list-disc legacy-space-y-2 pl-5 marker:text-faint">
           <li>Metered mode leads with evidence-labeled dollars.</li>
           <li>Subscription mode leads with transcript-reported runway only; missing limits are not inferred.</li>
           <li>Mixed mode keeps subscribed runway and metered money separate.</li>

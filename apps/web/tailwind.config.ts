@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  // Source directories are explicit in app/globals.css for Tailwind 4.
   theme: {
     extend: {
       colors: {

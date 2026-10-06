@@ -11,7 +11,7 @@ export default function RoadmapDocsPage() {
   return (
     <DocsPage current="/docs/roadmap" title="What we’re working on." intro="A weekly view of our product focus across Workspace, CLI and MCP. Priorities follow what we learn with invited teams. This is direction, not a delivery calendar." repoPath="apps/web/app/docs/roadmap/page.tsx">
       <DocsSection id="this-week" label="Week of September 28 · updated October 3, 2026" title="This week">
-        <ul className="list-disc space-y-4 pl-5 marker:text-green">
+        <ul className="list-disc legacy-space-y-4 pl-5 marker:text-green">
           <li><strong className="text-ink">A clearer Workspace.</strong> Make spending views, briefings and chart navigation easier to follow, while keeping coverage and missing data beside the numbers.</li>
           <li><strong className="text-ink">A better first setup.</strong> Bring the guides together around Workspace, the local CLI and assisted MCP onboarding so invited teams know where to start.</li>
           <li><strong className="text-ink">Read-only answers in your AI client.</strong> Check the connection, consent and report-reading experience for the clients used during onboarding.</li>
@@ -19,7 +19,7 @@ export default function RoadmapDocsPage() {
       </DocsSection>
 
       <DocsSection id="next" label="Next" title="Learn from the connected teams">
-        <ul className="list-disc space-y-4 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-4 pl-5 marker:text-faint">
           <li>Improve onboarding and the first spending review around real account coverage and the questions teams bring.</li>
           <li>Validate more supported provider connections with partners, keeping different cost bases and billing periods clear.</li>
           <li>Make historical usage and shared coding-agent activity easier to inspect without overstating attribution.</li>

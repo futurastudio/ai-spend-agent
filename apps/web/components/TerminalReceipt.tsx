@@ -122,7 +122,7 @@ export function TerminalReceipt() {
   return (
     <div
       ref={rootRef}
-      className="receipt overflow-hidden rounded-sm border border-hairline-bright bg-well"
+      className="receipt overflow-hidden rounded-xs border border-hairline-bright bg-well"
     >
       <div className="flex h-9 items-center justify-between border-b border-hairline bg-panel px-4 font-mono text-[11px] text-faint">
         <span>aibill — sample receipt</span>

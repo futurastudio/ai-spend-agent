@@ -40,7 +40,7 @@ npx aibill@latest`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="evidence" label="03 · Read the evidence" title="Cost, usage and activity answer different questions">
-        <dl className="space-y-6">
+        <dl className="legacy-space-y-6">
           <div><dt className="font-medium text-ink">Provider-reported cost</dt><dd className="mt-1">Amounts returned by a supported provider cost source. These can be a known subtotal with missing or pending days, and can differ from the final invoice after credits, taxes or adjustments.</dd></div>
           <div><dt className="font-medium text-ink">Estimated value</dt><dd className="mt-1">A value with a stated calculation or incomplete billing basis. Local tokens priced at API list rates are API-equivalent estimates, not subscription charges. Estimates do not become provider-reported costs when shared.</dd></div>
           <div><dt className="font-medium text-ink">Shared activity</dt><dd className="mt-1">Supported machine-reported sessions, tokens and repository context. This can help you investigate work, but does not prove which person or agent caused a bill, whether a task was accepted, or its ROI.</dd></div>
@@ -54,7 +54,7 @@ npx aibill@latest`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="references" label="05 · More guides" title="Go deeper when you need it">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li><TextLink href="/docs/mcp/local">Local MCP reference</TextLink>: run the aibill stdio server against local evidence, without a Workspace account.</li>
           <li><TextLink href="/docs/glance">Glance source preview</TextLink>: build the optional local macOS monitor. A public signed download is not available.</li>
           <li><TextLink href="/docs/roadmap">Weekly roadmap</TextLink>: current priorities and what we are exploring.</li>

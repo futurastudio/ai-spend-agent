@@ -39,7 +39,7 @@ export default function SourcesDocsPage() {
 
       <DocsSection id="workspace" label="02 · Workspace" title="Hosted sources and optional shared activity">
         <p>Workspace access is invitation-only. Source setup and availability are confirmed during assisted onboarding; a published CLI connector does not automatically enable that provider in Workspace.</p>
-        <div className="mt-6 space-y-7">
+        <div className="mt-6 legacy-space-y-7">
           {workspaceSources.map((source) => (
             <article key={source.name} className="border-t border-hairline pt-5">
               <h3 className="text-lg font-medium text-ink">{source.name}</h3>
@@ -57,7 +57,7 @@ export default function SourcesDocsPage() {
 
       <DocsSection id="local" label="03 · Local CLI readers" title="On-device transcript metadata">
         <p className="mb-6">The following entries describe the local aibill CLI and local MCP. The public CLI version is v{NPM_STABLE_VERSION}, checked {NPM_VERSION_CHECKED}.</p>
-        <div className="space-y-8">
+        <div className="legacy-space-y-8">
           {localSources.map((source) => (
             <article key={source.id} id={source.id} className="scroll-mt-24 border-t border-hairline pt-6">
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-baseline">
@@ -95,7 +95,7 @@ export default function SourcesDocsPage() {
 
       <DocsSection id="providers" label="04 · CLI provider reports" title="Official APIs, explicit local sync">
         <p className="mb-6">These are optional local CLI connectors. The Workspace setup above is separate. CLI connection registration and an explicit provider sync are also separate steps.</p>
-        <div className="space-y-7">
+        <div className="legacy-space-y-7">
           {providerSources.map((source) => (
             <article key={source.id} id={source.id} className="scroll-mt-24 border-t border-hairline pt-5">
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-baseline">

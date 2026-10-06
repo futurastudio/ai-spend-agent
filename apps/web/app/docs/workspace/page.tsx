@@ -21,7 +21,7 @@ export default function WorkspaceDocsPage() {
     <DocsPage current="/docs/workspace" title="A shared view of supported AI spend." intro="Use Workspace to review provider costs and coverage with your team, investigate project and model changes, and bring explicitly shared coding-agent activity into the conversation." repoPath="apps/web/app/docs/workspace/page.tsx">
       <DocsSection id="access" label="01 · Access" title="Begin with invited onboarding">
         <p>Workspace is invitation-only. <TextLink href="/#beta">Join the waitlist</TextLink> to express interest; selected partners receive an invitation and help setting up supported sources. A waitlist submission does not provide immediate access. Existing invited members can <TextLink href="https://app.asktilden.com/sign-in">sign in to Workspace</TextLink>.</p>
-        <ol className="mt-6 list-decimal space-y-3 pl-5 marker:text-faint">
+        <ol className="mt-6 list-decimal legacy-space-y-3 pl-5 marker:text-faint">
           <li>Agree on the accounts and questions you want to review during onboarding.</li>
           <li>Accept your Workspace invitation and sign in with the invited account.</li>
           <li>Ask the appropriate provider organization owner or admin to connect supported cost sources.</li>
@@ -60,7 +60,7 @@ npx aibill@latest workspace push`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="help" label="06 · If something is missing" title="Check scope before the number">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>Confirm the selected dates and accounts, source status and last successful read.</li>
           <li>Check whether the view shows provider cost, provider usage or machine activity.</li>
           <li>For a new connection, wait for its first accepted read; a saved key alone is not a completed report.</li>

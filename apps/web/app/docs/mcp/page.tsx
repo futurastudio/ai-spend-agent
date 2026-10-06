@@ -24,7 +24,7 @@ export default function McpDocsPage() {
 
       <DocsSection id="connect" label="02 · Connect" title="Add the Workspace endpoint">
         <CodeBlock label="Remote MCP server URL">{`https://app.asktilden.com/api/workspace/mcp`}</CodeBlock>
-        <ol className="list-decimal space-y-3 pl-5 marker:text-faint">
+        <ol className="list-decimal legacy-space-y-3 pl-5 marker:text-faint">
           <li>In the client selected during onboarding, add a remote HTTP MCP server using the URL above.</li>
           <li>Start the client&apos;s sign-in flow and sign in with your invited owner or admin account.</li>
           <li>On the Tilden consent screen, check the app name, Workspace and read-only access before choosing Allow access.</li>

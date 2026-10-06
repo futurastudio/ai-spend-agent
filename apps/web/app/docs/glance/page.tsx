@@ -40,7 +40,7 @@ export AIBILL_NODE_PATH="$(command -v node)"
       </DocsSection>
 
       <DocsSection id="behavior" label="03 · Behavior" title="Hidden until it is useful">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>At rest, no widget is visible. Moving into the top menu-bar strip reveals one stationary aibill wordmark to the left of the camera.</li>
           <li>Hovering the wordmark reveals the panel; moving away hides both surfaces. No click is required.</li>
           <li>Right-click offers refresh, launch-at-login, update check in release builds, and quit.</li>
@@ -52,7 +52,7 @@ export AIBILL_NODE_PATH="$(command -v node)"
         <p>
           Glance runs <code className="font-mono text-ink">aibill glance --since-days 30</code> and consumes the same typed contract as the CLI and local MCP. It currently reads Claude Code and Codex data; Gemini is intentionally excluded from Glance.
         </p>
-        <ul className="mt-5 list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="mt-5 list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>Session value is local token evidence multiplied by published API list rates—an estimate, not a subscription charge.</li>
           <li>Limit windows appear only when a transcript reports remaining percentage and reset metadata. Projected exhaustion is separately labeled as a local pace estimate.</li>
           <li>Main focus is the share of observed prompt/tool activity in the focus window, not elapsed time or spend. Raw prompts do not enter the JSON contract.</li>

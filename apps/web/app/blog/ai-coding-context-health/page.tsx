@@ -110,14 +110,14 @@ export default function Page() {
 
         <Reveal>
           <H2>Run it in the interface you already use</H2>
-          <div className="mt-5 space-y-3">
+          <div className="mt-5 legacy-space-y-3">
             {[
               ["Terminal", "npx aibill context"],
               ["Structured terminal", "npx aibill context --json"],
               ["AI client", "$aibill-check through the optional MCP plugin"],
               ["macOS", "source-built aibill Glance preview, hidden until menu-bar hover"],
             ].map(([label, command]) => (
-              <div className="rounded-sm border border-hairline bg-panel px-5 py-4" key={label}>
+              <div className="rounded-xs border border-hairline bg-panel px-5 py-4" key={label}>
                 <span className="text-ink">{label}</span>
                 <span className="ml-3 font-mono text-sm text-muted">{command}</span>
               </div>

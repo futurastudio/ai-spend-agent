@@ -38,7 +38,7 @@ export function PageShell({
             </a>
             <Link
               href={`/?ref=${ctaRef}#beta`}
-              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-sm border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
+              className="inline-flex min-h-11 items-center whitespace-nowrap rounded-xs border border-hairline-bright px-3.5 py-2 text-sm text-muted transition-colors hover:border-[rgba(255,255,255,0.25)] hover:text-ink"
             >
               Design partners
             </Link>

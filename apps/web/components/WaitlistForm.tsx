@@ -65,7 +65,7 @@ export function WaitlistForm({ presentation = "legacy" }: { presentation?: "lega
     return (
       <div
         role="status"
-        className="flex items-center gap-3 rounded-sm border border-green-line bg-green-wash px-5 py-4 text-sm text-ink"
+        className="flex items-center gap-3 rounded-xs border border-green-line bg-green-wash px-5 py-4 text-sm text-ink"
       >
         <span
           aria-hidden="true"
@@ -133,12 +133,12 @@ export function WaitlistForm({ presentation = "legacy" }: { presentation?: "lega
           }}
           aria-invalid={status === "error"}
           aria-describedby={status === "error" ? "email-error" : undefined}
-          className="h-11 min-w-0 flex-1 rounded-sm border border-hairline bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green-line focus:outline-none focus:ring-2 focus:ring-[rgba(76,201,138,0.25)]"
+          className="h-11 min-w-0 flex-1 rounded-xs border border-hairline bg-well px-4 font-mono text-sm text-ink placeholder:text-faint transition-colors focus:border-green-line focus:outline-hidden focus:ring-2 focus:ring-[rgba(76,201,138,0.25)]"
         />
         <button
           type="submit"
           disabled={status === "loading"}
-          className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-sm bg-green px-6 text-sm font-medium text-ground transition-colors hover:bg-green-hi disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ground"
+          className="inline-flex h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-xs bg-green px-6 text-sm font-medium text-ground transition-colors hover:bg-green-hi disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-green/60 focus-visible:ring-offset-2 focus-visible:ring-offset-ground"
         >
           {status === "loading"
             ? "Submitting..."
@@ -161,7 +161,7 @@ export function WaitlistForm({ presentation = "legacy" }: { presentation?: "lega
         <div className="mt-5 border-t border-hairline pt-4" data-cli-free-tier="">
           <p className="text-sm text-ink">
             Want a number today? Run the free CLI on your machine:{" "}
-            <code className="rounded-sm bg-well px-1.5 py-0.5 font-mono text-[13px]">npx aibill</code>
+            <code className="rounded-xs bg-well px-1.5 py-0.5 font-mono text-[13px]">npx aibill</code>
           </p>
           <p className="mt-2 text-xs leading-relaxed text-faint">
             The CLI prices the agent logs on your machine. The Workspace reads what your providers billed. Same rules, different sources, so the two numbers differ and each says why.

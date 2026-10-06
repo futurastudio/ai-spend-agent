@@ -76,7 +76,7 @@ claude mcp list`}</CodeBlock>
 Then show the spend report, source status, Context Health, and one
 evidence-constrained next action. Keep billed cost, API-equivalent value,
 subscription context, and missing evidence separate.`}</CodeBlock>
-        <ol className="list-decimal space-y-2 pl-5 marker:text-faint">
+        <ol className="list-decimal legacy-space-y-2 pl-5 marker:text-faint">
           <li>Call <code className="font-mono text-ink">sync_local_agent_spend</code> with a specific absolute project path.</li>
           <li>Read <code className="font-mono text-ink">get_spend_report</code> and <code className="font-mono text-ink">list_sources</code>.</li>
           <li>Ask for <code className="font-mono text-ink">get_context_health</code> or <code className="font-mono text-ink">get_usage_glance</code> only when that decision surface helps.</li>
@@ -88,7 +88,7 @@ subscription context, and missing evidence separate.`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="safety" label="04 · Safety" title="The client and provider are different boundaries">
-        <ul className="list-disc space-y-3 pl-5 marker:text-faint">
+        <ul className="list-disc legacy-space-y-3 pl-5 marker:text-faint">
           <li>State tools require a specific absolute project path; home, filesystem, and system roots are refused.</li>
           <li>Raw provider keys are rejected. Provider tools accept an inherited <code className="font-mono text-ink">env:NAME</code> reference.</li>
           <li>Provider syncs are read-only against the selected provider API.</li>
