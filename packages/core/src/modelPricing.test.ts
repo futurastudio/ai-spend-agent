@@ -14,6 +14,16 @@ describe("model pricing coverage", () => {
     expect(estimateTokenCostUsd("claude-fable-5", usage)).toBe(15);
     expect(estimateTokenCostUsd("claude-mythos-5", usage)).toBe(15);
     expect(estimateTokenCostUsd("claude-opus-5", usage)).toBe(7.5);
+    expect(estimateTokenCostUsd("claude-opus-5-5", usage)).toBe(6);
+    expect(estimateTokenCostUsd("claude-opus-5-5", {
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000
+    })).toBe(0.2);
+    expect(estimateTokenCostUsd("claude-opus-5-5", {
+      inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000
+    })).toBe(5);
+    expect(estimateTokenCostUsd("claude-opus-5-5", {
+      inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000
+    })).toBe(8);
     expect(estimateTokenCostUsd("claude-sonnet-5", usage)).toBe(3);
     expect(estimateTokenCostUsd("claude-mythos-preview", usage)).toBeUndefined();
   });

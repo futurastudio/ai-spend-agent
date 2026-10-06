@@ -49,6 +49,9 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-(?:fable|mythos)-5-1$/i, inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25 },
   { match: /^claude-fable-5/i, inputPerM: 10, outputPerM: 50 },
   { match: /^claude-mythos-5/i, inputPerM: 10, outputPerM: 50 },
+  // Reviewed 2026-10-06: platform.claude.com/docs/en/about-claude/pricing.
+  // Opus 5.5 has lower base/write rates and a 5% cache-read rate.
+  { match: /^claude-opus-5-5$/i, inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 },
   { match: /^claude-opus-5/i, inputPerM: 5, outputPerM: 25 },
   { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },

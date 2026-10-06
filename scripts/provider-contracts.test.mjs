@@ -14,7 +14,7 @@ import {
 
 test("the public provider contract matrix is structurally complete", async () => {
   const contracts = await readProviderContracts();
-  assert.deepEqual(validateProviderContracts(contracts, new Date("2026-09-20T12:00:00.000Z")), []);
+  assert.deepEqual(validateProviderContracts(contracts, new Date(`${contracts.reviewedAt}T12:00:00.000Z`)), []);
   assert.deepEqual(new Set(contracts.contracts.map((entry) => entry.provider)), new Set(["openai", "anthropic", "google", "cursor", "github"]));
   assert.equal(contracts.contracts.find((entry) => entry.id === "cursor-admin")?.endpoints.includes("POST /teams/filtered-usage-events"), true);
   assert.equal(contracts.contracts.find((entry) => entry.id === "github-copilot")?.endpoints.includes("GET /organizations/{org}/settings/billing/ai_credit/usage"), true);
@@ -22,7 +22,9 @@ test("the public provider contract matrix is structurally complete", async () =>
 
 test("review cadence expires to stale rather than silently retaining current", async () => {
   const contracts = await readProviderContracts();
-  assert.match(validateProviderContracts(contracts, new Date("2026-11-01T00:00:00.000Z")).join("\n"), /review is overdue/);
+  const overdueAt = new Date(Date.parse(`${contracts.reviewedAt}T00:00:00.000Z`)
+    + (contracts.defaultReviewCadenceDays + 1) * 86_400_000);
+  assert.match(validateProviderContracts(contracts, overdueAt).join("\n"), /review is overdue/);
 });
 
 test("review metadata and contract arrays reject implausible future edits", async () => {
