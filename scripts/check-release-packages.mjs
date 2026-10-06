@@ -206,9 +206,9 @@ for (const releasePackage of packages) {
   }
   assert(
     falseTelemetryClaims.length === 0,
-    `${releasePackage.name} ships the CLI, which sends disclosed anonymous command ` +
+    `${releasePackage.name} ships the CLI, which sends disclosed installation-linked command ` +
     `counts, yet would publish a no-telemetry claim in: ${falseTelemetryClaims.join(", ")}. ` +
-    `Use the honest wording (anonymous command counts, disclosed at first run, ` +
+    `Use the honest wording (installation-linked command counts, disclosed at first run, ` +
     `"${requiredTelemetryDisclosure}" turns it off) — see docs/TELEMETRY.md.`
   );
   if (canSendTelemetry) {

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { aibillCommandV0 } from "@agent-finops/core";
 
 /**
- * CLI telemetry — anonymous command counts, notice-before-first-byte.
+ * CLI telemetry — installation-linked command counts, notice-before-first-byte.
  *
  * Consent model (founder decision 2026-08-24, disclosed opt-out):
  * - Run 1 (interactive) prints a three-line notice AFTER the output and
@@ -93,10 +93,10 @@ export type TelemetryEvent = {
  * npx form): npx users have no bare `aibill` on PATH (0.9.2 founder
  * incident — "command not found").
  */
-export const telemetryDisclosureLine = `anonymous command counts shared · ${aibillCommandV0("telemetry off")}`;
+export const telemetryDisclosureLine = `installation-linked command counts shared · ${aibillCommandV0("telemetry off")}`;
 
 export const telemetryNoticeLines = [
-  "aibill counts which commands run — anonymous, never your data or content",
+  "aibill counts commands by random installation ID — no arguments, paths or content",
   `turn off: ${aibillCommandV0("telemetry off")}`,
   `see payloads: ${aibillCommandV0("telemetry")}`
 ] as const;
@@ -405,7 +405,7 @@ export async function openCliTelemetry(options: {
         if (sessionTelemetryKilled) return;
         // `glance` is a machine-invoked poll (the Glance menu-bar app spawns
         // it every ~30s), not a human command — counting it is noise by
-        // definition and would flood the anonymous command counts (~2,880
+        // definition and would flood the installation-linked command counts (~2,880
         // events/day/user). Never emit for it, notice or not; the label
         // still exists in the map so any stray event is at least honest.
         if (telemetryCommandForArgv(input.argv) === "glance") return;

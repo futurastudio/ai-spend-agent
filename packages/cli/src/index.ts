@@ -1130,7 +1130,7 @@ function quickstartNextSteps(
     command: "npx aibill --group-by project",
     description: "see which project has the most observed activity"
   });
-  steps.push("Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com");
+  steps.push("Review AI spend with your team in Tilden Workspace. Invited members can connect this CLI; join the waitlist: https://asktilden.com/?ref=cli-workspace#beta");
   if (mode === "demo") {
     // Static pointer only — sample output is built for recordings and
     // screenshots, so it never prompts (capture design moments map).
@@ -1881,7 +1881,7 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
 }
 
 /**
- * `aibill telemetry [on|off]` — inspect or switch anonymous command-count
+ * `aibill telemetry [on|off]` — inspect or switch installation-linked command-count
  * telemetry. Status shows the EXACT last payload verbatim; state is
  * fail-closed (corrupt/readonly ⇒ off).
  */
@@ -1943,8 +1943,8 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       };
     }
     return ok([
-      "telemetry on · anonymous command counts only",
-      `counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
+      "telemetry on · installation-linked command counts only",
+      `counted: random installation ID, command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp`,
       "never: arguments, paths, file contents, project names, or your email",
       "events start with your next run · see payloads anytime: npx aibill telemetry"
     ].join("\n"));
@@ -1964,13 +1964,13 @@ async function telemetryCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     lines.push(`status: on · noticed ${read.state.noticedAt}`);
   }
   lines.push(
-    "counted: command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp",
+    "counted: random installation ID, command name, version, os, arch, ci flag, duration bucket, ok flag, timestamp",
     "never: arguments, paths, file contents, project names, or your email"
   );
   if (read.kind === "ok" && read.state.lastPayload !== undefined) {
-    lines.push("last payload sent (verbatim):", read.state.lastPayload);
+    lines.push("last attempted payload (verbatim; delivery unconfirmed):", read.state.lastPayload);
   } else {
-    lines.push("last payload sent: none");
+    lines.push("last attempted payload: none");
   }
   lines.push("switch: npx aibill telemetry on · npx aibill telemetry off");
   return ok(lines.join("\n"));
@@ -4326,10 +4326,10 @@ const providerAdminEnvHint: Record<string, string> = {
 
 function providerSyncSetupCommand(provider: string, adminRef: string): string {
   if (provider === "cursor") {
-    return `npx aibill sync-provider --provider cursor --auth-reference ${adminRef} --account-id <team-label>`;
+    return `npx aibill sync-provider --provider cursor --auth-reference ${adminRef} --account-id '<team-label>'`;
   }
   if (provider === "github-copilot") {
-    return `npx aibill sync-provider --provider github-copilot --auth-reference ${adminRef} --org <organization>`;
+    return `npx aibill sync-provider --provider github-copilot --auth-reference ${adminRef} --org '<organization>'`;
   }
   const thirtyDaysAgoUnix = Math.floor(Date.now() / 1_000) - 30 * 24 * 60 * 60;
   return `npx aibill sync-provider --provider ${provider} --auth-reference ${adminRef} --start-time ${thirtyDaysAgoUnix}`;
@@ -8788,7 +8788,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
     "  signup <email> [--ref <token>]  Join the launch list · email only · the exact payload is shown before send",
     "    [--never]             Never ask again (nothing is sent)   [--forget]  Clear local signup state",
-    "  telemetry [on|off]      Show anonymous command-count status + the exact last payload · switch it",
+    "  telemetry [on|off]      Show installation-linked command-count status + the exact last payload · switch it",
     "  doctor [--sources]      Launch diagnostics; --sources shows validation, evidence, freshness, and errors",
     "  reset [--path <dir>]    Clear persisted spend state (so sample state can't mask real logs)",
     "  --ignore-state          On the default/quickstart run, ignore persisted spend.json for this run",

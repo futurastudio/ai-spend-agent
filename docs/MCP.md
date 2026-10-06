@@ -52,7 +52,7 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 > telemetry and does not upload transcript contents. The selected structured
 > result of a tool you invoke is returned to the configured AI client and then
 > follows that client's data-handling policy. Choose the client, account, and
-> project scope accordingly. (The aibill CLI's separate anonymous command
+> project scope accordingly. (The aibill CLI's separate installation-linked command
 > counts are disclosed at first run and end with `npx aibill telemetry off` — see
 > [`TELEMETRY.md`](TELEMETRY.md).)
 
@@ -210,7 +210,7 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 - `draft_improve_command` is read-only: it validates drafted plan sentences
   with the terminal's own shared classifier and composes exactly one
   paste-safe command string. It writes nothing and authorizes nothing; no
-  aibill MCP tool can approve, start, apply, or record anything — approval
+  aibill MCP tool can approve, start, apply, or record a token experiment — approval
   exists only as the word APPROVE typed by the human in their own terminal,
   and the pre-record approval state is not readable over MCP.
 - Project reports and source state are written to `<path>/.ai-spend-agent/`.
@@ -231,8 +231,10 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 - Provider credentials must be inherited environment variables referenced as
   `env:NAME`; raw keys are rejected before any network request.
 - Only the reference name is persisted. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
-- Provider syncs merge with prior provider syncs by provider. Re-syncing one
-  provider replaces only that provider's older records.
+- Provider syncs retain other provider/account slices. Re-syncing the same
+  slice replaces its older records; a new slice accumulates separately.
+  Separate credential references for the same account can duplicate evidence;
+  review the duplicate-slice diagnostic before interpreting totals.
 - Local-log estimates and provider-billed costs use separate active modes to
   avoid silently double-counting the same work.
 

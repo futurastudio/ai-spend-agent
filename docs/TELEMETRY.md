@@ -9,14 +9,14 @@ See [Tilden’s privacy policy](https://asktilden.com/privacy).
 
 ## Consent model (disclosed opt-out, notice before the first byte)
 
-1. Your **first interactive run prints a notice and sends nothing**. The current
-   terminal notice uses the word “anonymous”; the precise scope is the
-   installation-linked payload described above and below:
+1. Your **first interactive run prints a notice and sends nothing**. This
+   checkout uses the following notice; earlier published versions call the
+   same installation-linked payload “anonymous”:
 
    ```
-   aibill counts which commands run — anonymous, never your data or content
-   turn off: aibill telemetry off
-   see payloads: aibill telemetry
+   aibill counts commands by random installation ID — no arguments, paths or content
+   turn off: npx aibill telemetry off
+   see payloads: npx aibill telemetry
    ```
 
 2. Events begin only on runs **after** that notice was shown and recorded.
@@ -24,7 +24,7 @@ See [Tilden’s privacy policy](https://asktilden.com/privacy).
    sends anything — a user who has never seen the notice is never tracked.
 3. `aibill telemetry off` turns it off; `aibill telemetry on` turns it back
    on (and counts as your notice). `aibill telemetry` prints the status and
-   the **exact last payload sent, verbatim**.
+   the **exact last attempted payload, verbatim** (not proof of server acceptance).
 4. Hard kill-switches, honored regardless of saved state: `DO_NOT_TRACK`,
    `CI`, and `AI_SPEND_NO_TELEMETRY` (any non-empty value).
 5. State lives in `~/.aibill/telemetry.json` and **fails closed**: a
@@ -36,7 +36,7 @@ While telemetry is enabled and noticed, every surface that printed
 `nothing uploaded` prints instead:
 
 ```
-anonymous command counts shared · aibill telemetry off
+installation-linked command counts shared · npx aibill telemetry off
 ```
 
 The printed privacy claim always matches what actually leaves the machine,
@@ -51,7 +51,7 @@ in both states.
 - `command` comes from a fixed allowlist (`receipt`, `full`, `group-by`,
   `improve`, `improve-sample`, `index`, `identify`, `accountability`,
   `outcome`, `statusline`, `statusline-expand`, `signup`, `connect`,
-  `sync-provider`, `doctor`, `report`, `report-card`, `apply`, `watch`,
+  `sync-provider`, `doctor`, `glance`, `report`, `report-card`, `apply`, `watch`,
   `init`, `verify`, `drop-slice`, `telemetry`, `other`). Explicit `--sample`
   demo runs count as `other`, so `receipt` stays a count of real receipts.
 - `durationBucket` is one of `lt1s | lt5s | lt30s | gte30s`.

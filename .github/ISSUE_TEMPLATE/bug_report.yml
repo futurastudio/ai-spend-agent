@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve the public beta. Remove credentials, raw transcript content, private paths, and account identifiers before submitting. Security issues must use the private process in SECURITY.md.
+        Thanks for helping improve aibill. Remove credentials, raw transcript content, private paths, and account identifiers before submitting. Security issues must use the private process in SECURITY.md.
   - type: input
     id: version
     attributes:
@@ -22,7 +22,7 @@ body:
       label: Surface
       options:
         - CLI
-        - MCP or plugin
+        - Local MCP or Codex plugin
         - Glance for macOS
         - Provider connector
         - Website or documentation

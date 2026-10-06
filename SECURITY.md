@@ -26,11 +26,15 @@ need a private security contact. Do not include exploit details in that issue.
 
 ## Security boundaries
 
-- CLI and Glance analysis run locally: transcripts, prompts, file names, and
-  dollar amounts are never uploaded. The CLI separately counts which commands
-  run — anonymous, disclosed by a printed first-run notice, and ended by
-  `aibill telemetry off` (or `DO_NOT_TRACK`/`CI`/`AI_SPEND_NO_TELEMETRY`). See
-  [`docs/TELEMETRY.md`](docs/TELEMETRY.md). The MCP server sends none.
+- CLI and Glance transcript analysis runs locally. Optional Workspace pushes
+  share approved session/token facts and supported project labels, not raw
+  transcripts, prompts, full paths or dollar amounts. Pairing and each push
+  require explicit confirmation; see [`docs/WORKSPACE.md`](docs/WORKSPACE.md).
+- The CLI separately sends command-count events with a random installation ID
+  after a printed first-run notice. These events are pseudonymous, not fully
+  anonymous. Disable them with `npx aibill telemetry off` (or
+  `DO_NOT_TRACK`/`CI`/`AI_SPEND_NO_TELEMETRY`). See
+  [`docs/TELEMETRY.md`](docs/TELEMETRY.md). The local MCP server sends none.
 - Explicit MCP results are returned to the AI client that invoked them and then
   follow that client's data policy.
 - Provider credentials must be passed by environment-variable reference. Raw

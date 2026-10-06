@@ -4782,7 +4782,7 @@ describe("minimal CLI vertical slice", () => {
     expect(cursor.exitCode).toBe(0);
     expect(cursor.stdout).toContain("env:CURSOR_ADMIN_KEY");
     expect(cursor.stdout).not.toContain("env:OPENAI_ADMIN_KEY");
-    expect(cursor.stdout).toContain("--account-id <team-label>");
+    expect(cursor.stdout).toContain("--account-id '<team-label>'");
     expect(cursor.stdout).not.toContain("--start-time");
 
     const copilotDir = await mkdtemp(join(tmpdir(), "ai-spend-cli-connect-copilot-"));
@@ -4791,7 +4791,7 @@ describe("minimal CLI vertical slice", () => {
     expect(copilot.stdout).toContain("provider: github-copilot");
     expect(copilot.stdout).toContain("env:GITHUB_TOKEN");
     expect(copilot.stdout).not.toContain("env:OPENAI_ADMIN_KEY");
-    expect(copilot.stdout).toContain("--org <organization>");
+    expect(copilot.stdout).toContain("--org '<organization>'");
     expect(copilot.stdout).not.toContain("--start-time");
   });
 

@@ -2235,7 +2235,7 @@ function defaultNextSteps(
   if (mode === "local-logs") {
     return [
       { command: "npx aibill --group-by project", description: "see which project has the most observed activity" },
-      "Need team reconciliation, allocation, budgets, and approvals? Workspace design partners: https://asktilden.com"
+      "Review AI spend with your team in Tilden Workspace. Invited members can connect this CLI; join the waitlist: https://asktilden.com/?ref=cli-workspace#beta"
     ];
   }
   return [

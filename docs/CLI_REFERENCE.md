@@ -69,28 +69,30 @@ An MCP client can also draft the plan conversationally through the read-only
 who wrote it, Enter-accept re-validates it, and APPROVE is always typed by the
 human.
 
-The advanced commands remain available for inspection and automation:
+The advanced commands remain available for inspection and automation. Replace
+each quoted placeholder with the actual identifier, timestamp or digest; do
+not run the examples with placeholder values:
 
 ```bash
 npx aibill apply
 
 # 1. `apply` prints the current candidate key. Inspect it without changing anything.
-npx aibill verify inspect <candidate-key>
+npx aibill verify inspect '<candidate-key>'
 
 # 2. Freeze the comparable pre-change cohort after you declare its quality held.
-npx aibill verify start <candidate-key> --quality held
+npx aibill verify start '<candidate-key>' --quality held
 
 # 3. After you approve one reversible change and run its canary, record opaque proof.
-npx aibill verify mark-applied <experiment-id> \
-  --approved-at <actual-approval-ISO-8601> \
-  --applied-at <actual-application-ISO-8601> \
+npx aibill verify mark-applied '<experiment-id>' \
+  --approved-at '<actual-approval-ISO-8601>' \
+  --applied-at '<actual-application-ISO-8601>' \
   --canary passed \
-  --change-digest <64-character-sha256> \
-  --rollback-digest <64-character-sha256> \
-  --canary-digest <64-character-sha256>
+  --change-digest '<64-character-sha256>' \
+  --rollback-digest '<64-character-sha256>' \
+  --canary-digest '<64-character-sha256>'
 
 # 4. Use normally, then label the matched post-change work and calculate the result.
-npx aibill verify <experiment-id> --quality held
+npx aibill verify '<experiment-id>' --quality held
 ```
 
 `<experiment-id>` is the stable lineage identifier. Every permitted state
@@ -123,8 +125,8 @@ percentage is calculated. Execute the frozen rollback, then record that
 separate event:
 
 ```bash
-npx aibill verify rollback <experiment-id> \
-  --rollback-digest <the-same-64-character-sha256>
+npx aibill verify rollback '<experiment-id>' \
+  --rollback-digest '<the-same-64-character-sha256>'
 ```
 
 `verify cancel <experiment-id>` is available before an intervention if you

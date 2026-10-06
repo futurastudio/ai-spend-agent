@@ -408,7 +408,7 @@ describe("aibill telemetry command", () => {
 
     const on = await runCli(["telemetry", "on"], { homeDirectory: home });
     expect(on.exitCode).toBe(0);
-    expect(on.stdout).toContain("telemetry on · anonymous command counts only");
+    expect(on.stdout).toContain("telemetry on · installation-linked command counts only");
     expect(on.stdout).toContain("never: arguments, paths, file contents, project names, or your email");
 
     const payload = serializeTelemetryBatch([fixedEvent])!;
@@ -419,7 +419,7 @@ describe("aibill telemetry command", () => {
     const status = await runCli(["telemetry"], { homeDirectory: home });
     expect(status.exitCode).toBe(0);
     expect(status.stdout).toContain("status: on · noticed ");
-    expect(status.stdout).toContain("last payload sent (verbatim):");
+    expect(status.stdout).toContain("last attempted payload (verbatim; delivery unconfirmed):");
     expect(status.stdout).toContain(payload);
 
     const unknown = await runCli(["telemetry", "sideways"], { homeDirectory: home });
@@ -432,7 +432,7 @@ describe("aibill telemetry command", () => {
     const status = await runCli(["telemetry"], { homeDirectory: home });
     expect(status.exitCode).toBe(0);
     expect(status.stdout).toContain("status: not yet noticed · nothing has ever been sent");
-    expect(status.stdout).toContain("last payload sent: none");
+    expect(status.stdout).toContain("last attempted payload: none");
   });
 });
 
@@ -478,7 +478,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const flatten = (text: string) => text.replace(/\s+/gu, " ");
     const off = await runCli(["--path", dir, "--no-color"]);
     expect(off.stdout).toContain("nothing uploaded");
-    expect(off.stdout).not.toContain("anonymous command counts");
+    expect(off.stdout).not.toContain("installation-linked command counts");
 
     const on = await runCli(["--path", dir, "--no-color"], { telemetryDisclosure: true });
     // The receipt wraps at terminal width, so assert on flattened text.
@@ -510,7 +510,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const helpOff = await runCli(["--help"]);
     expect(helpOff.stdout).toContain("Privacy: local analysis and reports upload nothing. Only explicit");
     const helpOn = await runCli(["--help"], { telemetryDisclosure: true });
-    expect(helpOn.stdout).toContain("anonymous command counts shared · npx aibill telemetry off");
+    expect(helpOn.stdout).toContain("installation-linked command counts shared · npx aibill telemetry off");
   });
 
   it("doctor and report surfaces disclose in both states — including the generated md/html files (QA B1)", async () => {
@@ -520,7 +520,7 @@ describe("receipt-line truth (both states pinned)", () => {
     const doctorOff = await runCli(["doctor", "--path", dir]);
     expect(doctorOff.stdout).toContain("local-first mode: enabled (no cloud upload, no telemetry)");
     const doctorOn = await runCli(["doctor", "--path", dir], { telemetryDisclosure: true });
-    expect(doctorOn.stdout).toContain("evidence stays local · anonymous command counts shared · npx aibill telemetry off");
+    expect(doctorOn.stdout).toContain("evidence stays local · installation-linked command counts shared · npx aibill telemetry off");
     expect(doctorOn.stdout).not.toContain("no telemetry)");
 
     const reportOff = await runCli(["report", "--path", dir]);
@@ -532,18 +532,18 @@ describe("receipt-line truth (both states pinned)", () => {
     const htmlOff = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     expect(markdownOff).toContain("Report rendered locally with no aibill telemetry.");
     expect(htmlOff).toContain("No aibill telemetry.");
-    expect(htmlOff).not.toContain("anonymous command counts");
+    expect(htmlOff).not.toContain("installation-linked command counts");
 
     const reportOn = await runCli(["report", "--path", dir], { telemetryDisclosure: true });
     expect(reportOn.exitCode).toBe(0);
-    expect(reportOn.stdout.replace(/\s+/gu, " ")).toContain("Privacy report rendered locally · anonymous command counts shared · npx aibill telemetry off");
+    expect(reportOn.stdout.replace(/\s+/gu, " ")).toContain("Privacy report rendered locally · installation-linked command counts shared · npx aibill telemetry off");
     expect(reportOn.stdout).not.toContain("no aibill telemetry");
     const markdownOn = await readFile(join(dir, ".ai-spend-agent", "report.md"), "utf8");
     const htmlOn = await readFile(join(dir, ".ai-spend-agent", "report.html"), "utf8");
     // Persistent, shareable artifacts must state what their generating run did.
-    expect(markdownOn).toContain("the generating run shared anonymous command counts (npx aibill telemetry off to disable)");
+    expect(markdownOn).toContain("the generating run shared installation-linked command counts (npx aibill telemetry off to disable)");
     expect(markdownOn).not.toContain("no aibill telemetry");
-    expect(htmlOn).toContain("The generating run shared anonymous command counts");
+    expect(htmlOn).toContain("The generating run shared installation-linked command counts");
     expect(htmlOn).not.toContain("No aibill telemetry.");
 
     // The local-logs html variant carries the claim in its terminal-frame
@@ -554,11 +554,11 @@ describe("receipt-line truth (both states pinned)", () => {
     expect(localOff.exitCode).toBe(0);
     const localHtmlOff = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
     expect(localHtmlOff).toContain("no aibill telemetry");
-    expect(localHtmlOff).not.toContain("anonymous command counts");
+    expect(localHtmlOff).not.toContain("installation-linked command counts");
     const localOn = await runCli(["report", "--path", logsDir], { telemetryDisclosure: true });
     expect(localOn.exitCode).toBe(0);
     const localHtmlOn = await readFile(join(logsDir, ".ai-spend-agent", "report.html"), "utf8");
-    expect(localHtmlOn).toContain("anonymous command counts shared · npx aibill telemetry off");
+    expect(localHtmlOn).toContain("installation-linked command counts shared · npx aibill telemetry off");
     expect(localHtmlOn).not.toContain("no aibill telemetry<");
   });
 
@@ -781,12 +781,12 @@ describe("npx-form command strings (0.9.3 — founder hit 'command not found')",
   // surfaces tell a human to RUN must carry the npx form, verbatim.
   it("pins the notice and disclosure lines to the npx form", () => {
     expect(telemetryNoticeLines).toEqual([
-      "aibill counts which commands run — anonymous, never your data or content",
+      "aibill counts commands by random installation ID — no arguments, paths or content",
       "turn off: npx aibill telemetry off",
       "see payloads: npx aibill telemetry"
     ]);
     expect(telemetryDisclosureLine).toBe(
-      "anonymous command counts shared · npx aibill telemetry off"
+      "installation-linked command counts shared · npx aibill telemetry off"
     );
   });
 
