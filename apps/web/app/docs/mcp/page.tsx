@@ -16,7 +16,7 @@ const tools = [
 
 export default function McpDocsPage() {
   return (
-    <DocsPage current="/docs/mcp" title="Ask your AI client about Workspace spend." intro="Workspace MCP gives a supported AI client read-only access to your Tilden reports. It is available through assisted invited onboarding, with explicit owner or admin consent for the requesting app." repoPath="apps/web/app/docs/mcp/page.tsx">
+    <DocsPage updated="October 6, 2026" current="/docs/mcp" title="Ask your AI client about Workspace spend." intro="Workspace MCP gives a supported AI client read-only access to your Tilden reports. It is available through assisted invited onboarding, with explicit owner or admin consent for the requesting app." repoPath="apps/web/app/docs/mcp/page.tsx">
       <DocsSection id="access" label="01 · Access" title="Start with your invited Workspace">
         <p>You need an active invited Workspace, owner or admin access, and MCP enabled for that Workspace. Your onboarding contact helps confirm the client version and connection flow. Joining the <TextLink href="/#beta">waitlist</TextLink> does not immediately enable a Workspace or this endpoint.</p>
         <DocsCallout title="Choose the right MCP connection">This guide covers hosted Workspace reports over HTTP. To read evidence on your own machine without Workspace, use the separate <TextLink href="/docs/mcp/local">local aibill MCP reference</TextLink>.</DocsCallout>
@@ -50,11 +50,12 @@ Do not infer per-person spend, savings or ROI from activity.`}</CodeBlock>
       </DocsSection>
 
       <DocsSection id="consent" label="04 · Manage access" title="Review, expire or remove a connection">
-        <p>Approval grants read-only access for seven days. The app can keep reading without a fresh sign-in until that access expires or is removed. Open <TextLink href="https://app.asktilden.com/settings/apps">Settings → Apps</TextLink> to review connections and remove access. If the page reports an uncertain outcome, check the recorded connection before starting a new request.</p>
+        <p>Approval grants read-only access for seven days. Access-token refresh can keep an authorized connection working, but does not extend the seven-day grant. Once it expires, return through sign-in and consent before another review; do not assume automatic renewal. Open <TextLink href="https://app.asktilden.com/settings/apps">Settings → Apps</TextLink> to review connections and remove access. If the page reports an uncertain outcome, check the recorded connection before starting a new request.</p>
         <p className="mt-4">Removing access stops future authorized reads. It cannot erase results an AI client already received. Those results follow the client&apos;s data policy. A fresh connection after removal may also require resetting that app&apos;s sign-in consent, as explained in Settings.</p>
         <DocsCallout title="What this connection can do">It can read the four report types above. It cannot change budgets, enforce provider limits, manage keys, upload machine activity or refresh provider data. Project ownership, budget evaluations and alert history are not included in these tools.</DocsCallout>
       </DocsSection>
 
+      <p><TextLink href="/docs/access">Read the access and renewal checklist →</TextLink></p>
       <DocsSection id="troubleshooting" label="05 · Troubleshooting" title="Check the connection and the evidence">
         <dl className="border-t border-hairline">
           {[

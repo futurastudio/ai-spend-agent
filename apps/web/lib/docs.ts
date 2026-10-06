@@ -8,6 +8,8 @@ export const ISSUE_URL = `${REPO_URL}/issues/new/choose`;
 
 export const docsNavigation = [
   { href: "/docs", label: "Overview" },
+  { href: "/docs/first-review", label: "First review" },
+  { href: "/docs/access", label: "Access & renewal" },
   { href: "/docs/workspace", label: "Workspace" },
   { href: "/docs/cli", label: "CLI" },
   { href: "/docs/mcp", label: "MCP" },

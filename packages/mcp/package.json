@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@agent-finops/core": "0.9.11",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "fast-uri": "^3.1.8",
     "zod": "^4.1.0"
   },

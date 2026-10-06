@@ -33,6 +33,7 @@ const LANDING_FILES = [
   "components/WaitlistForm.tsx",
   "components/WaitlistThanks.tsx",
   "components/iterations/trace-next/TraceNext.tsx",
+  "components/iterations/trace-next/TraceNavigation.tsx",
   "lib/workspace-entry.ts",
 ] as const;
 
@@ -96,9 +97,9 @@ describe("landing copy gate", () => {
   it("keeps sample data and future coverage explicit on the landing page", () => {
     const page = read("components/iterations/trace-next/TraceNext.tsx");
     expect(page).toContain("Sample data · includes planned sources");
-    expect(page).toContain("invited CLI beta. Workspace coverage is planned");
-    expect(page).toContain("Jev + Kimi.");
-    expect(page).toContain("neither is an available integration");
+    expect(page).toContain("Cursor and Copilot are offered through a guided Workspace beta");
+    expect(page).toContain("AWS Bedrock, Hugging Face, Databricks, DeepSeek, Jev and Kimi");
+    expect(page).toContain("are on the roadmap");
     expect(page).toContain("Use read-only Workspace cost evidence");
     expect(page).toContain("Workspace access is invitation-only.");
     expect(page).toContain("Illustrative example");

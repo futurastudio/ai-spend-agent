@@ -23,7 +23,8 @@ function DocsLinks({ current, mobile = false }: { current: DocsHref; mobile?: bo
   );
 }
 
-export function DocsPage({ current, title, intro, children }: {
+export function DocsPage({ current, title, intro, children, updated = DOCS_UPDATED }: {
+  updated?: string;
   current: DocsHref;
   title: string;
   intro: string;
@@ -47,7 +48,7 @@ export function DocsPage({ current, title, intro, children }: {
             <Link href="/docs" className={s.docsLabel}>Docs</Link>
           </div>
           <nav className={s.headerNav} aria-label="Primary navigation">
-            <Link href="/" className={s.productLink}>Product</Link>
+            <Link href="/solutions" className={s.productLink}>Solutions</Link>
             <a href={REPO_URL} target="_blank" rel="noreferrer" className={s.repositoryLink}>
               GitHub <span aria-hidden="true">↗</span>
             </a>
@@ -85,7 +86,7 @@ export function DocsPage({ current, title, intro, children }: {
               <p className={s.breadcrumb}>Documentation <span aria-hidden="true">/</span> {currentLabel}</p>
               <h1>{title}</h1>
               <p className={s.intro}>{intro}</p>
-              <p className={s.updated}>Updated {DOCS_UPDATED}</p>
+              <p className={s.updated}>Updated {updated}</p>
             </header>
 
             <div className={s.content}>{children}</div>
