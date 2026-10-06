@@ -10,12 +10,22 @@ export const metadata: Metadata = {
 
 export default function SourcesDocsPage() {
   return (
-    <DocsPage
+    <DocsPage updated="October 6, 2026"
       current="/docs/sources"
       title="Know where every number stops."
       intro="Workspace connections and local CLI readers have different setup and availability. For both, source support, reader validation and the evidence behind a number remain separate."
       repoPath="apps/web/app/docs/sources/page.tsx"
     >
+      <DocsSection id="review-scope" label="Before your first review" title="Agree what the report can cover">
+        <p>With your onboarding contact, record the workspace, connected accounts, currency, inclusive UTC dates, source freshness and known missing days. Confirm source-specific administrative permissions before connecting; do not send provider keys in email or chat.</p>
+        <ul className="list-disc legacy-space-y-3 pl-5 mt-5">
+          <li><strong>OpenAI and Anthropic API costs:</strong> invited setup, subject to accessible provider records and retained history. Project detail depends on what those records contain.</li>
+          <li><strong>Historical limits:</strong> missing OpenAI history can prevent a complete-period answer. Overlapping legacy captures must be reconciled before aggregation; adding them or selecting a convenient total is not a valid workaround.</li>
+          <li><strong>Coding activity:</strong> optional Claude Code and Codex sharing needs explicit setup and consent. Sessions and repository labels do not allocate the provider bill.</li>
+          <li><strong>Cursor and Copilot:</strong> separate pilot checks are required. Broad real-account coverage is not established; do not depend on these facets without explicit acceptance for your setup.</li>
+        </ul>
+        <p className="mt-5">If the requested period is incomplete, keep the gap visible. Agree a narrower useful review explicitly or pause that question. An unavailable answer is not zero spend. <TextLink href="/docs/first-review">Prepare the review →</TextLink></p>
+      </DocsSection>
       <DocsSection id="labels" label="01 · Read the labels" title="Three axes, one source row">
         <div className="docs-status-grid" data-columns="3">
           {[

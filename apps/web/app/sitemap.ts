@@ -8,7 +8,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: `${SITE_URL}/privacy`, lastModified: new Date("2026-10-03"), priority: 0.3 },
     { url: `${SITE_URL}/terms`, lastModified: new Date("2026-09-30"), priority: 0.3 },
-    { url: `${SITE_URL}/`, lastModified: new Date("2026-10-03"), priority: 1 },
+    { url: `${SITE_URL}/`, lastModified: new Date("2026-10-06"), priority: 1 },
+    { url: `${SITE_URL}/solutions`, lastModified: new Date("2026-10-06"), priority: 0.9 },
+    { url: `${SITE_URL}/docs/first-review`, lastModified: new Date("2026-10-06"), priority: 0.8 },
+    { url: `${SITE_URL}/docs/access`, lastModified: new Date("2026-10-06"), priority: 0.8 },
     { url: `${SITE_URL}/docs`, lastModified: DOCS_LAST_MODIFIED, priority: 0.9 },
     { url: `${SITE_URL}/docs/workspace`, lastModified: DOCS_LAST_MODIFIED, priority: 0.8 },
     { url: `${SITE_URL}/docs/cli`, lastModified: DOCS_LAST_MODIFIED, priority: 0.8 },

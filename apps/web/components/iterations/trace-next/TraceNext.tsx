@@ -7,6 +7,7 @@ import { activityExamples } from "./activity-example";
 import s from "./TraceNext.module.css";
 import { WaitlistForm } from "../../WaitlistForm";
 import { TerminalDemo } from "../../TerminalDemo";
+import { TraceNavigation } from "./TraceNavigation";
 
 type Project = (typeof projects)[number];
 type Question = "where" | "why" | "attention";
@@ -18,7 +19,7 @@ const questions: { id: Question; label: string; short: string; view: string }[] 
 ];
 const arrow = <span aria-hidden="true">↗</span>;
 const sourceName = (name: string) => name === "Anthropic" ? "Claude" : name === "GitHub Copilot" ? "Copilot" : name;
-const status = (name: string) => ["OpenAI", "Anthropic"].includes(name) ? "Invited Workspace access" : ["Cursor", "GitHub Copilot"].includes(name) ? "Invited CLI beta · Workspace planned" : "Planned coverage";
+const status = (name: string) => ["OpenAI", "Anthropic"].includes(name) ? "Invited Workspace access" : ["Cursor", "GitHub Copilot"].includes(name) ? "Guided Workspace beta" : "Planned coverage";
 
 function Join({ children, className }: { children?: ReactNode; className?: string }) {
   return <a href="#beta" className={className}>{children || <>Join the waitlist {arrow}</>}</a>;
@@ -86,66 +87,9 @@ function BlueField({ children }: { children: ReactNode }) {
 }
 
 function Navigation({ chooseProduct }: { chooseProduct: (product: Product) => void }) {
-  const menu = useRef<HTMLDetailsElement>(null);
-  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [closing, setClosing] = useState(false);
-  function cancelClose() {
-    if (leaveTimer.current) clearTimeout(leaveTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    leaveTimer.current = closeTimer.current = null;
-    setClosing(false);
-  }
-  function closeMenu(immediate = false) {
-    cancelClose();
-    if (!menu.current?.open) return;
-    if (immediate || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      menu.current.open = false;
-      return;
-    }
-    setClosing(true);
-    closeTimer.current = setTimeout(() => {
-      if (menu.current) menu.current.open = false;
-      closeTimer.current = null;
-      setClosing(false);
-    }, 140);
-  }
-  useEffect(() => {
-    const dismissOutside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menu.current?.contains(event.target)) closeMenu();
-    };
-    document.addEventListener("pointerdown", dismissOutside);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOutside);
-      if (leaveTimer.current) clearTimeout(leaveTimer.current);
-      if (closeTimer.current) clearTimeout(closeTimer.current);
-    };
-  }, []);
-  function select(product: Product) { chooseProduct(product); closeMenu(true); }
   return <header className={s.header}>
     <a href="#top" aria-label="Tilden home"><Brand light /></a>
-    <nav aria-label="Main navigation">
-      <details ref={menu} className={s.menu} data-closing={closing}
-        onPointerEnter={cancelClose}
-        onPointerLeave={event => {
-          if (event.pointerType !== "mouse" || !menu.current?.open || menu.current.querySelector(":focus-visible")) return;
-          leaveTimer.current = setTimeout(() => closeMenu(), 80);
-        }}
-        onFocusCapture={cancelClose}
-        onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) closeMenu(); }}
-        onToggle={event => { if (!event.currentTarget.open) cancelClose(); }}
-        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closeMenu(true); menu.current?.querySelector("summary")?.focus(); } }}>
-        <summary>Products <span aria-hidden="true">⌄</span></summary>
-        <div className={s.dropdown}>
-          <div role="group" aria-label="Workspace">
-          <a href="#example" onClick={() => select("workspace")}><strong>Workspace</strong><small>Review AI spending with your team</small></a>
-          <a className={s.mcpMenu} href="#workspace-mcp" onClick={() => select("mcp")}><span><strong>MCP</strong></span><small>Spending context for your AI tools</small></a>
-          </div>
-          <a href="#example" onClick={() => select("cli")}><strong>CLI</strong><small>Inspect cost and activity locally</small></a>
-        </div>
-      </details>
-      <a href="#ambition">Our ambition</a><a className={s.docsNav} href="/docs">Docs</a>
-    </nav>
+    <TraceNavigation chooseProduct={chooseProduct} />
     <Join className={s.navCta} />
   </header>;
 }
@@ -198,7 +142,7 @@ function ActivityContext({ projectId }: { projectId: string }) {
         <div><strong>{row.tool}</strong><span>{row.repository}</span></div>
         <time dateTime={row.day}>Sep {Number(row.day.slice(-2))} · UTC</time>
       </li>)}</ul>
-      <p>Machine-reported repository context, separate from the billing-source filter. Activity alone does not explain the cost.</p>
+      <p>See where coding agents were active. Activity is shown separately from billed costs.</p>
     </> : <p>No repository context linked in this example.</p>}
   </section>;
 }
@@ -249,7 +193,7 @@ function FinancialAnswer({ project, selected, question, chooseQuestion }: { proj
 }
 
 function CLI() {
-  const commands = [{ command: "npx aibill", title: "Read your local evidence", note: "Inspect supported local activity and cost evidence." }, { command: "npx aibill --group-by project", title: "Follow a project", note: "Group supported records by project. Missing attribution stays visible." }, { command: "npx aibill doctor --sources", title: "Check your sources", note: "Review reader validation, freshness and source errors." }];
+  const commands = [{ command: "npx aibill", title: "Read your local evidence", note: "Inspect supported local activity and cost evidence." }, { command: "npx aibill --group-by project", title: "Follow a project", note: "Group supported records by project. Missing attribution stays visible." }, { command: "npx aibill doctor --sources", title: "Check your sources", note: "Check which sources are working and how up to date they are." }];
   const [command, setCommand] = useState(0);
   const [feedback, setFeedback] = useState("");
   async function copy() { try { await navigator.clipboard.writeText(commands[command].command); setFeedback("Copied"); } catch { setFeedback("Select the command to copy it manually."); } }
@@ -275,7 +219,8 @@ function CLI() {
 
 function HostedMCP() {
   return <section id="hosted-mcp-panel" className={s.workspaceMcp} aria-labelledby="workspace-mcp-heading">
-    <div><div className={s.mcpLabel}><span>Workspace / MCP</span></div><h3 id="workspace-mcp-heading">Spending answers,<br />in your AI tools.</h3><p>Use read-only Workspace cost evidence in compatible AI tools, so your team can investigate spending where it already works.</p><p>Workspace access is invitation-only.</p></div>
+    <div><div className={s.mcpLabel}><span>Workspace / MCP</span></div><h3 id="workspace-mcp-heading">Spending answers,<br />in your AI tools.</h3><p>Use read-only Workspace cost evidence in compatible AI tools, so your team can investigate spending where it already works.</p><p>Workspace access is invitation-only.</p>
+    </div>
     <div className={s.mcpConcept}><span>Illustrative example</span><blockquote>Which projects are driving our AI costs?</blockquote><div className={s.mcpFlow}><span>Your AI tool</span><span aria-hidden="true">→</span><span>Tilden Workspace</span></div><p>Read-only cost evidence.<br />No live connection in this preview.</p></div>
   </section>;
 }
@@ -293,7 +238,7 @@ function MoneyStory({ product, setProduct }: { product: Product; setProduct: (pr
   }
   return <section id="example" aria-label="Follow the money, interactive product example" className={s.story}>
     <div className={s.stageHeader}>
-      <div className={s.productSwitch} role="group" aria-label="Choose a Tilden product"><button aria-pressed={product === "workspace"} onClick={() => setProduct("workspace")}>Workspace</button><button aria-pressed={product === "cli"} onClick={() => setProduct("cli")}>CLI</button><button id="workspace-mcp" aria-pressed={product === "mcp"} aria-controls={product === "mcp" ? "hosted-mcp-panel" : undefined} onClick={() => setProduct("mcp")}>MCP</button></div>
+      <div className={s.productSwitch} role="group" aria-label="Choose a Tilden product"><button id="product-workspace" aria-pressed={product === "workspace"} onClick={() => setProduct("workspace")}>Workspace</button><button id="product-cli" aria-pressed={product === "cli"} onClick={() => setProduct("cli")}>CLI</button><button id="workspace-mcp" aria-pressed={product === "mcp"} aria-controls={product === "mcp" ? "hosted-mcp-panel" : undefined} onClick={() => setProduct("mcp")}>MCP</button></div>
       {product === "workspace" ? <div className={s.demoNotice}><span>Sample data · includes planned sources</span><a href="#coverage">See current coverage {arrow}</a></div> : <span>{product === "cli" ? "CLI replay · sample data" : "Spending context for your AI tools"}</span>}
     </div>
     {product === "workspace" ? <>
@@ -302,17 +247,37 @@ function MoneyStory({ product, setProduct }: { product: Product; setProduct: (pr
         <div className={s.flowSide}><label className={s.projectSelect}><span>Choose a project</span><select value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><SourceFlow project={project} selected={source} choose={setSource} paused={paused} setPaused={setPaused} /></div>
         <div id="money-answer" role="tabpanel" aria-labelledby={`question-${question}`} tabIndex={0}><FinancialAnswer project={project} selected={source} question={question} chooseQuestion={setQuestion} /></div>
       </div>
-      <p className={s.disclosure}>Interactive illustration · synthetic USD, rounded. Includes planned sources. <a href="#coverage">Current coverage {arrow}</a></p>
+      <p className={s.disclosure}>Sample data in USD · includes planned sources. <a href="#coverage">Current coverage {arrow}</a></p>
     </> : product === "cli" ? <CLI /> : <HostedMCP />}
   </section>;
 }
 
+const requestedSources = [
+  { name: "AWS Bedrock", logo: "aws-bedrock.svg", wordmark: false },
+  { name: "Hugging Face", logo: "hugging-face.svg", wordmark: false },
+  { name: "Databricks", logo: "databricks.svg", wordmark: false },
+  { name: "DeepSeek", logo: "deepseek.svg", wordmark: true },
+];
+
 function Coverage() {
   return <section id="coverage" className={s.coverage} aria-labelledby="coverage-heading">
-    <div className={s.coverageHeading}><h2 id="coverage-heading">Start with your sources.</h2><p>Available capabilities, we work to onboard all models you use today.</p></div>
-    <div className={s.coverageMarks}>{sources.map(source => <div key={source.name}><img src={source.logo} width="30" height="30" alt={sourceName(source.name)} title={source.name} /><span>{["OpenAI", "Anthropic"].includes(source.name) ? "Invited access" : ["Cursor", "GitHub Copilot"].includes(source.name) ? "Invited access*" : "Planned"}</span></div>)}</div>
-    <p className={s.coverageNote}>* Cursor and Copilot: invited CLI beta. Workspace coverage is planned.</p>
-    <details className={s.coverageDetails}><summary>Coverage and setup details <span aria-hidden="true">+</span></summary><div><p><strong>OpenAI + Anthropic.</strong> Organization API costs for invited partners. Project and model detail depends on provider records. Reported costs may differ from final invoices. Optional Claude Code and Codex activity requires setup, consent and a CLI push. ChatGPT workspace reporting is still in qualification.</p><p><strong>Cursor + Copilot.</strong> Beta CLI connectors require administrator access. Real-account checks remain pending.</p><p><strong>Jev + Kimi.</strong> Planned coverage; neither is an available integration. Activity estimates remain separate from billed costs.</p></div></details>
+    <div className={s.coverageHeading}><h2 id="coverage-heading">Start with your sources.</h2><p>Bring supported AI costs into one view. <a href="mailto:contact@asktilden.com?subject=Tilden%20source%20request&amp;body=Source%20I%27d%20like%20to%20request%3A%0A%0AThe%20AI%20spending%20question%20my%20team%20needs%20to%20answer%3A%0A">Request a source {arrow}</a></p></div>
+    <div className={s.coverageMarks} role="group" aria-label="Sources and availability">
+      <div className={s.coverageTrack}>
+        {[false, true].map(duplicate => <ul key={String(duplicate)} className={s.coverageGroup} aria-hidden={duplicate || undefined}>
+          {sources.map(source => <li key={source.name}><div className={s.coverageLogo}><img src={source.logo} width="30" height="30" alt={sourceName(source.name)} title={source.name} />{["Jev", "Kimi"].includes(source.name) ? <sup aria-label="by partner request">*</sup> : null}</div><span>{["OpenAI", "Anthropic"].includes(source.name) ? "Invited access" : ["Cursor", "GitHub Copilot"].includes(source.name) ? "Workspace beta†" : "Planned"}</span></li>)}
+          {requestedSources.map(source => <li key={source.name}><div className={s.coverageLogo}><img src={`/brand/providers/${source.logo}`} width={source.wordmark ? 64 : 30} height="30" alt={source.name} title={source.name} className={source.wordmark ? s.coverageWordmark : undefined} /><sup aria-label="by partner request">*</sup></div><span>Planned</span></li>)}
+        </ul>)}
+      </div>
+    </div>
+    <details className={s.coverageDetails}>
+      <summary>Coverage and setup details <span aria-hidden="true">+</span></summary>
+      <div>
+        <p><strong>Partner setup · OpenAI, Anthropic, Cursor + Copilot†.</strong> Connect OpenAI and Anthropic API costs with help from our team. † Cursor and Copilot are offered through a guided Workspace beta.</p>
+        <p><strong>Spend in context.</strong> See project and model costs where your sources provide that detail. Choose to add Claude Code and Codex activity for a view of where coding agents are working.</p>
+        <p><strong>* Planned · by partner request.</strong> AWS Bedrock, Hugging Face, Databricks, DeepSeek, Jev and Kimi are on the roadmap. Tell us which source your team needs next.</p>
+      </div>
+    </details>
   </section>;
 }
 
@@ -356,14 +321,18 @@ function FAQ() {
     <details><summary>Why not just use each provider’s dashboard?<span aria-hidden="true">+</span></summary><p>Provider dashboards each show a slice. Tilden brings supported cost reports alongside the agent activity your team chooses to share, so finance and engineering can explain spending together and decide where to investigate. Coverage gaps stay visible.</p></details>
     <details><summary>Can I track AI spend and agent activity across my team?<span aria-hidden="true">+</span></summary><p>Yes. Review supported AI costs by project and model alongside the coding-agent activity your team shares. The detail depends on each source and your setup; activity alone doesn’t establish the billed cost of a person or agent.</p></details>
     <details><summary>Does Tilden measure ROI?<span aria-hidden="true">+</span></summary><p>Tilden starts with the cost side. Measuring return also requires evidence of useful outcomes and a basis for comparison. That is part of our longer-term ambition.</p></details>
-    <details><summary>What happens after I join?<span aria-hidden="true">+</span></summary><p>Our onboarding team will reach out to learn about your AI spend and help with next steps. If there is a fit for an invited pilot, we agree on scope and terms before onboarding, then work together on supported-source setup and a spending review.</p></details>
+    <details><summary>What happens after I join?<span aria-hidden="true">+</span></summary><p>Our onboarding team will reach out to learn about your AI spend and help with next steps. Selected partners get guided setup and a spending review with our team.</p></details>
   </div></section>;
 }
 
 export default function TraceNext() {
   const [product, setProduct] = useState<Product>("workspace");
   useEffect(() => {
-    const selectLinkedProduct = () => { if (window.location.hash === "#workspace-mcp") setProduct("mcp"); };
+    const selectLinkedProduct = () => {
+      const linkedProducts: Record<string, Product> = { "#product-workspace": "workspace", "#product-cli": "cli", "#workspace-mcp": "mcp" };
+      const linkedProduct = linkedProducts[window.location.hash];
+      if (linkedProduct) setProduct(linkedProduct);
+    };
     selectLinkedProduct();
     window.addEventListener("hashchange", selectLinkedProduct);
     return () => window.removeEventListener("hashchange", selectLinkedProduct);
@@ -373,10 +342,16 @@ export default function TraceNext() {
     <main>
       <BlueField><Navigation chooseProduct={setProduct} /><div className={s.hero}>
         <div><p className={s.eyebrow}>Building financial infrastructure for the AI workforce</p><h1>Your agents are doing more.<br /><span>Know where the money goes.</span></h1></div>
-        <div className={s.heroAside}><p>For engineering leaders, founders, and finance teams who need to explain rising AI spend. Bring supported provider costs alongside the agent activity your team chooses to share, so you and finance can decide what needs attention.</p><div className={s.heroActions}><Join className={s.primary} /><a href="#example">Explore an example <span aria-hidden="true">↓</span></a></div><p className={s.offer}>Invited partners get guided setup and a spending review with our team.</p></div>
+        <div className={s.heroAside}><p>For engineering leaders, founders, and finance teams who need to explain rising AI spend. Review supported provider costs and available project detail alongside the agent activity your team chooses to share, so you can see what needs attention.</p><div className={s.heroActions}><Join className={s.primary} /><a href="#example">Explore an example <span aria-hidden="true">↓</span></a></div><p className={s.offer}>Invited partners get guided setup and a spending review with our team.</p></div>
       </div><div className={s.stageWrap}><MoneyStory product={product} setProduct={setProduct} /></div></BlueField>
-      <div className={s.content}><Coverage /><Ambition /><FAQ /><section id="beta" className={s.invitation} aria-labelledby="waitlist-heading"><div><h2 id="waitlist-heading">Make sense of<br />your AI spend.</h2><p>Bring the spending question engineering and finance need to answer. Invited partners get guided setup and a review of supported sources with our team.</p><p className={s.waitlistExpectation}>Join for product updates and access invitations. Workspace access is invitation-only; joining does not grant immediate access.</p></div><div className={s.signup}><WaitlistForm presentation="landing" /></div></section></div>
+      <div className={s.content}><Coverage /><section className={s.solutionsBridge} aria-labelledby="solutions-heading">
+        <div><p className={s.eyebrow}>Assisted services · invited partners</p><h2 id="solutions-heading">Which AI investments<br />deserve more budget?</h2><p>Start with costs you can explain. Then establish what a useful outcome would look like.</p></div>
+        <div className={s.solutionLinks}>
+          <a href="/solutions#spend-assessment"><span><strong>AI Spend Assessment</strong><small>Understand your AI costs and decide what to investigate next.</small></span>{arrow}</a>
+          <a href="/solutions#value-pilot"><span><strong>AI Value Pilot</strong><small>Work with our team to define useful outcomes and a baseline for one workflow.</small></span>{arrow}</a>
+        </div>
+      </section><Ambition /><FAQ /><section id="beta" className={s.invitation} aria-labelledby="waitlist-heading"><div><h2 id="waitlist-heading">Make sense of<br />your AI spend.</h2><p>Bring the spending question engineering and finance need to answer. Invited partners get guided setup and a review of supported sources with our team.</p><p className={s.waitlistExpectation}>Join for product updates and access invitations. Workspace access is invitation-only; joining does not grant immediate access.</p></div><div className={s.signup}><WaitlistForm presentation="landing" /></div></section></div>
     </main>
-    <footer className={s.footer}><a href="#top" aria-label="Tilden home"><Brand /></a><p>Financial infrastructure for the AI workforce.</p><nav aria-label="Footer navigation"><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:contact@asktilden.com">Contact</a></nav><span>© 2026 Tilden</span></footer>
+    <footer className={s.footer}><a href="#top" aria-label="Tilden home"><Brand /></a><p>Financial infrastructure for the AI workforce.</p><nav aria-label="Footer navigation"><a href="/solutions">Solutions</a><a href="#ambition">Our ambition</a><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:contact@asktilden.com">Contact</a></nav><span>© 2026 Tilden</span></footer>
   </div>;
 }

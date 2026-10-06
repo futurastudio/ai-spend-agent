@@ -15,7 +15,10 @@ const surfaces = [
 
 export default function DocsOverviewPage() {
   return (
-    <DocsPage current="/docs" title="Know where your AI spend goes." intro="Tilden gives you a shared Workspace, a local CLI and a read-only MCP connection for supported AI clients. Start with the guide for your job, then check the sources and coverage behind the answer." repoPath="apps/web/app/docs/page.tsx">
+    <DocsPage updated="October 6, 2026" current="/docs" title="Know where your AI spend goes." intro="Tilden gives you a shared Workspace, a local CLI and a read-only MCP connection for supported AI clients. Start with the guide for your job, then check the sources and coverage behind the answer." repoPath="apps/web/app/docs/page.tsx">
+      <DocsCallout title="Preparing an invited spending review?">
+        Begin with the <TextLink href="/docs/first-review">first-review checklist</TextLink>, confirm <TextLink href="/docs/sources#review-scope">source and date coverage</TextLink>, then read <TextLink href="/docs/access">access, expiry and renewal</TextLink>. For hands-on help, explore the <TextLink href="/solutions">assisted assessment and value pilot</TextLink>.
+      </DocsCallout>
       <DocsSection id="start" label="01 · Start here" title="Choose how you want to work">
         <div className="docs-status-grid" data-columns="3">
           {surfaces.map((surface) => (
