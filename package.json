@@ -30,6 +30,7 @@
     "benchmark:statusline": "npm run build --workspace ai-spend-agent && node scripts/benchmark-statusline.mjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9"
@@ -46,7 +47,7 @@
     "nanoid": "3.3.18",
     "next": {
       "postcss": "8.5.24",
-      "sharp": "0.35.4"
+      "sharp": "0.35.5"
     }
   },
   "engines": {
