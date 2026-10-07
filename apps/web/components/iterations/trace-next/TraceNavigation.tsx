@@ -70,6 +70,7 @@ export function TraceNavigation({ chooseProduct, solutionsPage = false }: { choo
       <div role="group" aria-label="Workspace">
         <a href={productLink("#product-workspace")} onClick={() => chooseProduct?.("workspace")}><strong>Workspace</strong><small>Review AI spending with your team</small></a>
         <a className={s.mcpMenu} href={productLink("#workspace-mcp")} onClick={() => chooseProduct?.("mcp")}><span><strong>MCP</strong></span><small>Spending context for your AI tools</small></a>
+        <a className={s.mcpMenu} href="/docs/plugin"><span><strong>Plugin</strong></span><small>ChatGPT Pilot</small></a>
       </div>
       <a href={productLink("#product-cli")} onClick={() => chooseProduct?.("cli")}><strong>CLI</strong><small>Inspect cost and activity locally</small></a>
     </Dropdown>

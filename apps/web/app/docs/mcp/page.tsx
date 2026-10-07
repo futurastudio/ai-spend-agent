@@ -16,9 +16,10 @@ const tools = [
 
 export default function McpDocsPage() {
   return (
-    <DocsPage updated="October 6, 2026" current="/docs/mcp" title="Ask your AI client about Workspace spend." intro="Workspace MCP gives a supported AI client read-only access to your Tilden reports. It is available through assisted invited onboarding, with explicit owner or admin consent for the requesting app." repoPath="apps/web/app/docs/mcp/page.tsx">
+    <DocsPage updated="October 7, 2026" current="/docs/mcp" title="Ask your AI client about Workspace spend." intro="Workspace MCP gives a supported AI client read-only access to your Tilden reports. It is available through assisted invited onboarding, with explicit owner or admin consent for the requesting app." repoPath="apps/web/app/docs/mcp/page.tsx">
       <DocsSection id="access" label="01 · Access" title="Start with your invited Workspace">
         <p>You need an active invited Workspace, owner or admin access, and MCP enabled for that Workspace. Your onboarding contact helps confirm the client version and connection flow. Joining the <TextLink href="/#beta">waitlist</TextLink> does not immediately enable a Workspace or this endpoint.</p>
+        <p className="mt-4">Using ChatGPT? The <TextLink href="/docs/plugin">Plugin · ChatGPT Pilot guide</TextLink> introduces our planned ChatGPT experience for Workspace spending reviews.</p>
         <DocsCallout title="Choose the right MCP connection">This guide covers hosted Workspace reports over HTTP. To read evidence on your own machine without Workspace, use the separate <TextLink href="/docs/mcp/local">local aibill MCP reference</TextLink>.</DocsCallout>
       </DocsSection>
 

@@ -220,6 +220,12 @@ function CLI() {
 function HostedMCP() {
   return <section id="hosted-mcp-panel" className={s.workspaceMcp} aria-labelledby="workspace-mcp-heading">
     <div><div className={s.mcpLabel}><span>Workspace / MCP</span></div><h3 id="workspace-mcp-heading">Spending answers,<br />in your AI tools.</h3><p>Use read-only Workspace cost evidence in compatible AI tools, so your team can investigate spending where it already works.</p><p>Workspace access is invitation-only.</p>
+      <div className={s.pluginPilot}>
+        <div className={s.mcpLabel}><span>Plugin</span><span>ChatGPT Pilot</span></div>
+        <h4>Bring your spending review into ChatGPT.</h4>
+        <p>We’re building a ChatGPT plugin to review supported Workspace spend, projects and budget settings, with coverage in view. Public availability is planned.</p>
+        <div className={s.pluginLinks}><a href="/docs/plugin">Explore the Plugin {arrow}</a><a href="/?ref=chatgpt-pilot#beta">Join the waitlist {arrow}</a></div>
+      </div>
     </div>
     <div className={s.mcpConcept}><span>Illustrative example</span><blockquote>Which projects are driving our AI costs?</blockquote><div className={s.mcpFlow}><span>Your AI tool</span><span aria-hidden="true">→</span><span>Tilden Workspace</span></div><p>Read-only cost evidence.<br />No live connection in this preview.</p></div>
   </section>;

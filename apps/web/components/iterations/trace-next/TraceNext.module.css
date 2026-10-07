@@ -139,6 +139,11 @@
 .mcpLabel b { border:1px solid var(--tn-line); border-radius:var(--tn-radius); padding:var(--tn-space-1) var(--tn-space-2); font-weight:400; white-space:nowrap; }
 .workspaceMcp h3 { margin-top:var(--tn-space-6); font-size:38px; }
 .workspaceMcp p { font-size:13px; color:var(--tn-muted); max-width:48ch; margin-top:var(--tn-space-5); }
+.pluginPilot { margin-top:var(--tn-space-8); padding-top:var(--tn-space-6); border-top:1px solid var(--tn-line); }
+.pluginPilot h4 { margin-top:var(--tn-space-3); font-size:20px; line-height:1.3; letter-spacing:-.025em; }
+.pluginPilot p { margin-top:var(--tn-space-3); }
+.pluginLinks { display:flex; flex-wrap:wrap; gap:0 var(--tn-space-5); margin-top:var(--tn-space-3); }
+.pluginLinks a { display:inline-flex; align-items:center; gap:var(--tn-space-2); min-height:44px; color:var(--tn-accent); font-size:12px; }
 .mcpConcept { border-left:1px solid var(--tn-line); padding-left:var(--tn-space-10); }
 .mcpConcept > span { font:10px/1.5 var(--tn-mono); color:var(--tn-muted); }
 .mcpConcept blockquote { margin:var(--tn-space-5) 0 var(--tn-space-8); font-size:25px; line-height:1.25; letter-spacing:-.035em; color:var(--tn-accent); }

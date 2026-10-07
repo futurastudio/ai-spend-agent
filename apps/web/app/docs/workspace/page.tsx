@@ -18,7 +18,10 @@ const views = [
 
 export default function WorkspaceDocsPage() {
   return (
-    <DocsPage current="/docs/workspace" title="A shared view of supported AI spend." intro="Use Workspace to review provider costs and coverage with your team, investigate project and model changes, and bring explicitly shared coding-agent activity into the conversation." repoPath="apps/web/app/docs/workspace/page.tsx">
+    <DocsPage updated="October 7, 2026" current="/docs/workspace" title="A shared view of supported AI spend." intro="Use Workspace to review provider costs and coverage with your team, investigate project and model changes, and bring explicitly shared coding-agent activity into the conversation." repoPath="apps/web/app/docs/workspace/page.tsx">
+      <DocsCallout title="Announcement · ChatGPT Pilot">
+        We’re bringing Tilden Workspace to ChatGPT. The planned plugin will give you read-only access to supported spend, projects, briefings and budget settings, with coverage alongside the answer. Public availability is planned. <TextLink href="/docs/plugin">Explore the ChatGPT Pilot →</TextLink>
+      </DocsCallout>
       <DocsSection id="access" label="01 · Access" title="Begin with invited onboarding">
         <p>Workspace is invitation-only. <TextLink href="/#beta">Join the waitlist</TextLink> to express interest; selected partners receive an invitation and help setting up supported sources. A waitlist submission does not provide immediate access. Existing invited members can <TextLink href="https://app.asktilden.com/sign-in">sign in to Workspace</TextLink>.</p>
         <ol className="mt-6 list-decimal legacy-space-y-3 pl-5 marker:text-faint">

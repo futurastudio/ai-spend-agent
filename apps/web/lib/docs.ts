@@ -13,6 +13,7 @@ export const docsNavigation = [
   { href: "/docs/workspace", label: "Workspace" },
   { href: "/docs/cli", label: "CLI" },
   { href: "/docs/mcp", label: "MCP" },
+  { href: "/docs/plugin", label: "Plugin" },
   { href: "/docs/mcp/local", label: "Local MCP" },
   { href: "/docs/sources", label: "Sources" },
   { href: "/docs/glance", label: "Glance" },
