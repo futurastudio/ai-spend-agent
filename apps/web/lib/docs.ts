@@ -1,6 +1,6 @@
 export const DOCS_UPDATED = "October 3, 2026";
 // Verified against each package's public npm registry latest endpoint on this date.
-export const NPM_STABLE_VERSION = "0.9.11";
+export const NPM_STABLE_VERSION = "0.9.12";
 export const NPM_VERSION_CHECKED = "October 3, 2026";
 
 export const REPO_URL = "https://github.com/futurastudio/ai-spend-agent";
