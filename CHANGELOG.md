@@ -5,6 +5,17 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## 0.9.12 (unreleased)
+
+Corrects the Opus 5.5 estimates shipped in 0.9.11: input and output were
+25% too high, and cache reads were 2.5 times the published rate. Opus 5
+keeps its own rates. Adds exact GPT-6 Astra, GPT-6 Sol, GPT-6.1 Sol and
+GPT-6 Luna standard API prices, including the full-request tier above
+272,000 prompt tokens. These are API-equivalent estimates, not bills.
+
+Receipts distinguish usage with no published model price from absent usage,
+show excluded record counts beside totals, and retain unknown models as unpriced.
+
 ## 0.9.11 (published on npm)
 
 `workspace disconnect --retry` recovers an uncertain disconnect after fresh

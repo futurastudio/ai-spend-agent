@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-08-25";
+export const PRICING_TABLE_AS_OF = "2026-10-07";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -60,6 +60,40 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
+  // Standard API-equivalent prices reviewed 2026-10-07. Evidence and scope:
+  // provider-contracts/model-pricing-2026-10-07.json. Exact IDs only.
+  {
+    match: /^gpt-6-astra$/i,
+    inputPerM: 10, outputPerM: 50, cacheReadPerM: 1,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 20, outputPerM: 75, cacheReadPerM: 2
+    }
+  },
+  {
+    match: /^gpt-6\.1-sol$/i,
+    inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 4, outputPerM: 15, cacheReadPerM: 0.2
+    }
+  },
+  {
+    match: /^gpt-6-sol$/i,
+    inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 4, outputPerM: 15, cacheReadPerM: 0.4
+    }
+  },
+  {
+    match: /^gpt-6-luna$/i,
+    inputPerM: 0.1, outputPerM: 0.5, cacheReadPerM: 0.01,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 0.2, outputPerM: 0.75, cacheReadPerM: 0.02
+    }
+  },
   // OpenAI (newer and more specific families must precede the GPT-5 fallback).
   // Rates from developers.openai.com/api/docs/pricing cross-checked against each
   // model's own doc page, both fetched 2026-08-25.

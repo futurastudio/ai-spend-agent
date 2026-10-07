@@ -1,0 +1,82 @@
+{
+  "retrievedAt": "2026-10-07",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard API-equivalent estimates, not subscription charges or invoices. No Batch/Flex/Fast, regional or negotiated adjustments. Unknown model IDs remain unpriced. OpenAI cacheWrite and aboveCacheWrite fields record the existing generic estimator fallback, not published OpenAI cache-write prices. Codex reports no cache-write tokens; no OpenAI cache-write price claim.",
+  "sources": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://platform.claude.com/docs/en/about-claude/pricing"
+  ],
+  "models": [
+    {
+      "id": "gpt-6-astra",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 1,
+      "cacheWrite": 12.5,
+      "abovePromptTokens": 272000,
+      "aboveInput": 20,
+      "aboveOutput": 75.0,
+      "aboveCacheRead": 2,
+      "aboveCacheWrite": 25.0
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 15.0,
+      "aboveCacheRead": 0.2,
+      "aboveCacheWrite": 5.0
+    },
+    {
+      "id": "gpt-6-sol",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite": 2.5,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 15.0,
+      "aboveCacheRead": 0.4,
+      "aboveCacheWrite": 5.0
+    },
+    {
+      "id": "gpt-6-luna",
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "input": 0.1,
+      "output": 0.5,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "abovePromptTokens": 272000,
+      "aboveInput": 0.2,
+      "aboveOutput": 0.75,
+      "aboveCacheRead": 0.02,
+      "aboveCacheWrite": 0.25
+    },
+    {
+      "id": "claude-opus-5-5",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "input": 4,
+      "output": 20,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 5,
+      "cacheWrite1h": 8
+    },
+    {
+      "id": "claude-opus-5",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10
+    }
+  ]
+}

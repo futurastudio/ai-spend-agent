@@ -21,7 +21,7 @@ backfill onboarding emails. Record capture context before any later campaign.
 
 The current README and npm README CTAs promise product updates and access
 invitations, without immediate Workspace access. The terminal Workspace link
-uses `cli-workspace`; npm pages use `npm-aibill` and `npm-cli`; the roadmap
+uses `aibill-workspace`; npm pages use `npm-aibill` and `npm-cli`; the roadmap
 and setup guide use `github-roadmap` and `github-workspace-guide`. These are links
 to the site form, not sends or automatic enrollment. Record the actual form
 copy and capture context before any later campaign.
@@ -29,7 +29,7 @@ copy and capture context before any later campaign.
 | Referral | Current promise | Future audience use |
 | --- | --- | --- |
 | `github-readme` | Product updates and access invitations | Use this promise only for captures known to come from the updated form; older records retain their original scope below. |
-| `npm-aibill`, `npm-cli`, `cli-workspace`, `github-roadmap`, `github-workspace-guide` | Product updates and access invitations | Only the promise recorded at capture; no immediate access, assessment or pilot purchase is implied. |
+| `npm-aibill`, `npm-cli`, `aibill-workspace`, `github-roadmap`, `github-workspace-guide` | Product updates and access invitations | Only the promise recorded at capture; no immediate access, assessment or pilot purchase is implied. |
 
 The Glance source-build and study pages use `glance-study`; treat that
 referral as study-interest registration with the same limited study logistics

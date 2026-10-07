@@ -1130,7 +1130,7 @@ function quickstartNextSteps(
     command: "npx aibill --group-by project",
     description: "see which project has the most observed activity"
   });
-  steps.push("Review AI spend with your team in Tilden Workspace. Invited members can connect this CLI; join the waitlist: https://asktilden.com/?ref=cli-workspace#beta");
+  steps.push("Review supported AI spend in Tilden Workspace with our team’s help. The pilot has one owner seat. CLI sharing is optional and explicit; register interest: https://asktilden.com/?ref=aibill-workspace#beta");
   if (mode === "demo") {
     // Static pointer only — sample output is built for recordings and
     // screenshots, so it never prompts (capture design moments map).

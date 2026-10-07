@@ -11,6 +11,7 @@ import {
   formatBilledUsdExact,
   formatCommittedPerMonth,
   formatTokenCount,
+  findPricingRule,
   generateCutList,
   buildRecommendedPlan,
   largestRemainderPercents,
@@ -334,7 +335,7 @@ function renderPlainEnglishSummary(
   if (useCardHero) {
     // Evidence rides the --full card too (QA finding M2): with mixed bases,
     // the detected-unverified disclosure must exist somewhere on this screen.
-    lines.push(...renderResultCardBlocks(fullResultCard, width, c, { includeEvidence: true }));
+    lines.push(...renderResultCardBlocks(fullResultCard, width, c, { includeEvidence: true, records: options.records }));
   } else {
   lines.push(
     `  ${c.bold(headlineMetricLabel(fullPresentationBasis))}  ${c.dim("evidence-labeled financial view")}`
@@ -355,6 +356,10 @@ function renderPlainEnglishSummary(
     ? formatBigUsd(fullSummary.totalUsd, fullRawTotalUsd)
     : "Unavailable";
   lines.push(`  ${c.bold(evidenceAmount(headlineAmount, fullSummary.confidence, c))}  ${c.dim(totalDescription)}`);
+  if (priceExclusion(options.records ?? [])) {
+    lines.push(`  ${c.dim(priceExclusion(options.records ?? [])!)}`);
+    lines.push(...missingEvidenceNotes(options.records ?? []).map((note) => `  ${c.dim(note)}`));
+  }
   lines.push(
     `  ${confidenceBadge(summary.confidence, c)}  ${c.dim(`· evidence mix: ${coverageLine(summary, options.records)}`)}`
   );
@@ -808,11 +813,14 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
     ""
   ];
   if (hasSubscriptionCard) {
-    lines.push(...renderResultCardBlocks(resultCard, width, c, { includeEvidence: true }));
+    lines.push(...renderResultCardBlocks(resultCard, width, c, { includeEvidence: true, records: options.records }));
   } else {
     lines.push(
       `  ${c.bold(evidenceAmount(headline.amount, summary.confidence, c))}`,
       `  ${c.dim(headline.label)}`,
+      ...(priceExclusion(options.records ?? [])
+        ? [priceExclusion(options.records ?? [])!, ...missingEvidenceNotes(options.records ?? [])]
+          .map((note) => `  ${c.dim(note)}`) : []),
       ""
     );
   }
@@ -1190,6 +1198,30 @@ function bareValueCell(row: ResultCardSubscriptionRow): string {
   return row.agentId !== null ? `API-equivalent ${nr}` : `billed ${nr}`;
 }
 
+/** Missing prices are present evidence, and must never disappear behind a zero total. */
+function unpricedLocalRecords(records: readonly UsageRecord[]): UsageRecord[] {
+  return records.filter((record) => record.providerCostType === "local_agent_logs" &&
+    record.amountUsd == null && findPricingRule(record.model) === undefined);
+}
+
+function priceExclusion(records: readonly UsageRecord[]): string | undefined {
+  const count = unpricedLocalRecords(records).length;
+  return count > 0 ? `excludes ${count} unpriced record${count === 1 ? "" : "s"}` : undefined;
+}
+
+function missingEvidenceNotes(records: readonly UsageRecord[]): string[] {
+  const unpriced = unpricedLocalRecords(records);
+  if (unpriced.length > 0) {
+    const models = [...new Set(unpriced.map((record) => record.model))].slice(0, 3).join(", ");
+    return [`n/r = not priced — ${unpriced.length} record${unpriced.length === 1 ? " uses" : "s use"} ` +
+      `models missing from the price table (e.g. ${models}); excluded from the total`,
+      "Other n/r values: no reported amount for that row or basis."];
+  }
+  return [records.length === 0
+    ? `${resultCardVocabulary.notReportedLegend} — no usage evidence in this window yet`
+    : `${resultCardVocabulary.notReportedLegend} — no reported amount for that row or basis`];
+}
+
 type ResultCardTotalStack = {
   parts: string[];
   amountKinds: number;
@@ -1201,7 +1233,7 @@ type ResultCardTotalStack = {
  * kinds. A basis prints `n/r` when a source for it exists but reported
  * nothing; a basis with no verified-capable source is omitted (cursor beta).
  */
-function resultCardTotalStack(card: ResultCard): ResultCardTotalStack {
+function resultCardTotalStack(card: ResultCard, records: readonly UsageRecord[]): ResultCardTotalStack {
   const parts: string[] = [];
   let amountKinds = 0;
   const committed = card.totals.subscriptionCommitted;
@@ -1221,6 +1253,8 @@ function resultCardTotalStack(card: ResultCard): ResultCardTotalStack {
   } else if (hasAgentRows) {
     parts.push(`API-equivalent ${nr}`);
   }
+  const exclusion = priceExclusion(records);
+  if (exclusion) parts.push(exclusion);
   if (card.totals.providerBilled.amountUsd !== null) {
     amountKinds += 1;
     parts.push(`billed ${formatBilledUsdExact(card.totals.providerBilled.amountUsd)}`);
@@ -1257,7 +1291,7 @@ function resultCardTotalGapNotes(card: ResultCard, narrow: boolean): string[] {
   return notes;
 }
 
-function resultCardTotalNotes(card: ResultCard, stack: ResultCardTotalStack, anyNr: boolean): string[] {
+function resultCardTotalNotes(card: ResultCard, stack: ResultCardTotalStack, anyNr: boolean, records: readonly UsageRecord[]): string[] {
   // The gap note leads: it directly explains the Total arithmetic (M1).
   const notes: string[] = [...resultCardTotalGapNotes(card, false)];
   // No stack theater for one row (§1.4 single-sub variant).
@@ -1270,15 +1304,13 @@ function resultCardTotalNotes(card: ResultCard, stack: ResultCardTotalStack, any
       notes.push(`${row.id} beta: billed unlocks after live verification`);
     }
   }
-  if (anyNr) {
-    const agentRows = card.subscriptions.filter((row) => row.agentId !== null);
-    const zeroUsage = agentRows.length > 0 &&
-      agentRows.every((row) => row.apiEquivalentUsd === null) &&
-      card.totals.apiEquivalent.amountUsd === null;
-    notes.push(zeroUsage
-      ? `${resultCardVocabulary.notReportedLegend} — no usage evidence in this window yet`
-      : `${resultCardVocabulary.notReportedLegend} — no evidence in this window`);
+  if (anyNr || unpricedLocalRecords(records).length > 0) {
+    notes.push(...missingEvidenceNotes(records));
   }
+  if (card.subscriptions.some((row) => row.committedUsdPerMonth === null)) {
+    notes.push("n/r in committed = plan price unknown");
+  }
+
   return notes;
 }
 
@@ -1349,10 +1381,11 @@ function renderResultCardBlocks(
   card: ResultCard,
   width: number,
   c: Colors,
-  options: { includeEvidence: boolean }
+  options: { includeEvidence: boolean; records?: readonly UsageRecord[] }
 ): string[] {
   if (card.subscriptions.length === 0) return [];
-  const stack = resultCardTotalStack(card);
+  const records = options.records ?? [];
+  const stack = resultCardTotalStack(card, records);
   const projects = resultCardProjectSegments(card);
   const evidenceLines = options.includeEvidence ? resultCardEvidenceLines(card) : [];
   const lines: string[] = [];
@@ -1375,8 +1408,9 @@ function renderResultCardBlocks(
     lines.push(...stack.parts.map((part) => `  ${part}`));
     lines.push(...resultCardTotalGapNotes(card, true).map((note) => `  ${c.dim(note)}`));
     const legendParts = [
+      ...(card.subscriptions.some((row) => row.committedUsdPerMonth === null) ? ["n/r in committed = plan price unknown"] : []),
       ...(anyApprox ? [resultCardVocabulary.estimatedMarkerLegend] : []),
-      ...(anyNr ? [resultCardVocabulary.notReportedLegend] : [])
+      ...((anyNr || unpricedLocalRecords(records).length > 0) ? (unpricedLocalRecords(records).length > 0 ? missingEvidenceNotes(records) : [resultCardVocabulary.notReportedLegend]) : [])
     ];
     if (legendParts.length > 0) {
       const joinedLegend = legendParts.join(" · ");
@@ -1414,7 +1448,7 @@ function renderResultCardBlocks(
   lines.push(...subRows);
   lines.push(`  ${c.bold("Total")}   ${stack.parts.join(" · ")}`);
   const anyNr = [...subRows, ...stack.parts].some((line) => line.includes(nr));
-  for (const note of resultCardTotalNotes(card, stack, anyNr)) {
+  for (const note of resultCardTotalNotes(card, stack, anyNr, records)) {
     lines.push(`          ${c.dim(note)}`);
   }
   if (projects) {
@@ -2235,7 +2269,7 @@ function defaultNextSteps(
   if (mode === "local-logs") {
     return [
       { command: "npx aibill --group-by project", description: "see which project has the most observed activity" },
-      "Review AI spend with your team in Tilden Workspace. Invited members can connect this CLI; join the waitlist: https://asktilden.com/?ref=cli-workspace#beta"
+      "Review supported AI spend in Tilden Workspace with our team’s help. The pilot has one owner seat. CLI sharing is optional and explicit; register interest: https://asktilden.com/?ref=aibill-workspace#beta"
     ];
   }
   return [

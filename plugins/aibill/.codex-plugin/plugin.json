@@ -1,6 +1,6 @@
 {
   "name": "aibill",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "description": "Local Codex plugin for Tilden\u2019s free aibill CLI. Ask about coding-agent usage, cost evidence and Context Health; provider sync is explicit.",
   "author": {
     "name": "Futura Studio",
