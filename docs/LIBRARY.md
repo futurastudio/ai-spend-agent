@@ -57,8 +57,10 @@ deprecation window described below.
 The source tree also exports `receiptShareCardV0Schema`,
 `receiptEmailRequestV0Schema`, `buildReceiptShareCardV0`, and
 `decideReceiptEmailDeliveryV0` as post-launch transport groundwork. They are
-pure contracts only: there is no `push` command, email route, mail provider,
-upload, authentication flow, or persistence implementation.
+pure contracts only: this receipt-share feature has no CLI command, email
+route, mail provider, upload, authentication flow or persistence implementation.
+The separate `workspace push` command shares supported machine activity, not
+these receipt cards; see [Workspace sharing](WORKSPACE.md).
 
 The card contract carries numeric aggregates only. Subscription commitment,
 API-equivalent value, and provider-billed cost remain three labeled bases with
@@ -72,8 +74,9 @@ durable counters to be below one send per email and ten per IP in 24 hours.
 This does **not** make an email route safe or shipped. A real route still needs
 server-side rendering, shared durable limits, waitlist lookup, minimal and
 documented provider retention, an explicit no-card-persistence test, and
-production abuse testing. Until those exist, aibill remains local-only unless
-the user invokes an already documented explicit provider sync.
+production abuse testing. These receipt-share contracts do not send email. The CLI’s existing optional
+provider reads, Workspace sharing, telemetry, signup and MCP-client data
+boundaries are documented in the [main guide](../README.md#privacy--trust).
 
 ### `@agent-finops/report`
 

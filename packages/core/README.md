@@ -1,6 +1,6 @@
 # @agent-finops/core
 
-The canonical local-first evidence and decision engine for
+The shared local evidence and decision engine for Tilden’s free CLI,
 [aibill](https://github.com/futurastudio/ai-spend-agent): Claude Code/Codex
 activity ingestion, experimental Gemini CLI financial ingestion, provider cost
 semantics, attribution, provenance, runway, Context Health, and the shared
@@ -41,7 +41,7 @@ keep provenance and confidence labels truthful: reserve `verified` for
 official provider-reported financial evidence, keep modeled/local value
 `estimated` or `missing`, and leave unvalidated adapters `untested`.
 
-This is the open foundation for aibill's financial-accountability mission. This
+This is an open foundation for Tilden’s work on financial infrastructure for the AI workforce. This
 package includes contracts for locally confirmed ownership, local
 self-attested approvals, and opt-in accepted GitHub outcomes. Those are
 not company-wide identity, RBAC, approval routing, invoice reconciliation, or

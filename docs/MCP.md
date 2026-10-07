@@ -1,5 +1,13 @@
 # aibill MCP Server
 
+This is **aibill’s local MCP server**, part of Tilden’s free CLI offering. It
+runs on your machine and returns selected evidence to your configured AI
+client. It is separate from [hosted Workspace MCP](https://asktilden.com/docs/mcp),
+which reads reports already held in an invited Tilden Workspace, and from the
+private **Plugin / ChatGPT Pilot**. Installing this npm package grants neither
+Workspace access nor access to that private pilot.
+
+
 > **Version boundary:** the published npm `latest` reads supported Claude Code,
 > Codex, and experimental Gemini CLI financial evidence. Gemini remains
 > `fixture_verified`, financial-only, and excluded from statusline, Glance,
@@ -44,7 +52,7 @@ Package: `@agent-finops/mcp` · Binary: `ai-spend-mcp` · Transport: stdio
 > telemetry and does not upload transcript contents. The selected structured
 > result of a tool you invoke is returned to the configured AI client and then
 > follows that client's data-handling policy. Choose the client, account, and
-> project scope accordingly. (The aibill CLI's separate anonymous command
+> project scope accordingly. (The aibill CLI's separate installation-linked command
 > counts are disclosed at first run and end with `npx aibill telemetry off` — see
 > [`TELEMETRY.md`](TELEMETRY.md).)
 
@@ -57,9 +65,8 @@ codex mcp add aibill -- npx --yes --package @agent-finops/mcp@latest ai-spend-mc
 codex mcp list
 ```
 
-Codex stores user-level MCP configuration in `~/.codex/config.toml`. The
-ChatGPT desktop app, Codex CLI, and Codex IDE extension share that
-configuration on the same host. For a trusted project-only setup, place the
+Codex stores user-level MCP configuration in `~/.codex/config.toml`. Use the setup instructions for your chosen client; this local configuration
+does not install the private Tilden Plugin / ChatGPT Pilot. For a trusted project-only setup, place the
 same table in `.codex/config.toml` at the project root:
 
 ```toml
@@ -203,7 +210,7 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 - `draft_improve_command` is read-only: it validates drafted plan sentences
   with the terminal's own shared classifier and composes exactly one
   paste-safe command string. It writes nothing and authorizes nothing; no
-  aibill MCP tool can approve, start, apply, or record anything — approval
+  aibill MCP tool can approve, start, apply, or record a token experiment — approval
   exists only as the word APPROVE typed by the human in their own terminal,
   and the pre-record approval state is not readable over MCP.
 - Project reports and source state are written to `<path>/.ai-spend-agent/`.
@@ -216,7 +223,7 @@ The executable starts only when `dist/server.js` is invoked as the main module.
   source-status truth axes trusted. Reset, sample, and local-log syncs
   invalidate the receipt.
 - This MCP server does not upload local transcript contents or send
-  telemetry; the aibill CLI's separate anonymous command counts are disclosed
+  telemetry; the aibill CLI's separate command counts are disclosed
   at first run and end with `npx aibill telemetry off`. An MCP tool's selected
   structured result is returned to the invoking AI client and follows that
   client's data-handling policy.
@@ -224,8 +231,10 @@ The executable starts only when `dist/server.js` is invoked as the main module.
 - Provider credentials must be inherited environment variables referenced as
   `env:NAME`; raw keys are rejected before any network request.
 - Only the reference name is persisted. aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
-- Provider syncs merge with prior provider syncs by provider. Re-syncing one
-  provider replaces only that provider's older records.
+- Provider syncs retain other provider/account slices. Re-syncing the same
+  slice replaces its older records; a new slice accumulates separately.
+  Separate credential references for the same account can duplicate evidence;
+  review the duplicate-slice diagnostic before interpreting totals.
 - Local-log estimates and provider-billed costs use separate active modes to
   avoid silently double-counting the same work.
 

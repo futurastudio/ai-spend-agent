@@ -1,6 +1,6 @@
 # @agent-finops/report
 
-Terminal, Markdown, HTML, and redacted receipt renderers for
+Terminal, Markdown, HTML, and redacted receipt renderers for Tilden’s free CLI,
 [aibill](https://github.com/futurastudio/ai-spend-agent).
 
 The package renders contracts from `@agent-finops/core`; it does not parse

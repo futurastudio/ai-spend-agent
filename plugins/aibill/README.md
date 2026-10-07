@@ -1,4 +1,8 @@
-# aibill plugin
+# aibill local Codex plugin
+
+Part of Tilden’s free local CLI offering. This repository’s Codex plugin is
+separate from hosted Workspace MCP and the private Plugin / ChatGPT Pilot.
+It does not grant Workspace or private-pilot access.
 
 The optional aibill plugin exposes the existing local MCP server and three
 explicit-only skills. It adds no lifecycle hooks and injects no always-on
@@ -13,7 +17,7 @@ instructions.
 - Ten MCP tools, including `get_usage_glance`, `get_context_health`, and the
   read-only `draft_improve_command` improve-plan drafting tool.
 
-The plugin launches `@agent-finops/mcp@0.9.11` with `npx` when the AI client
+The plugin launches `@agent-finops/mcp@0.9.12` with `npx` when the AI client
 starts the MCP server. Node.js 22 or newer is required.
 
 ## Install from this repository

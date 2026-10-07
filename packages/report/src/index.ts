@@ -974,7 +974,7 @@ function generateSanitizedMarkdownReport(input: SpendReportInput): string {
     `Generated: ${generatedAt}`,
     "",
     input.telemetryDisclosure === true
-      ? "> Report rendered locally; the generating run shared anonymous command counts (npx aibill telemetry off to disable). Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled."
+      ? "> Report rendered locally; the generating run shared installation-linked command counts (npx aibill telemetry off to disable). Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled."
       : "> Report rendered locally with no aibill telemetry. Only an explicit provider sync contacts the selected provider; credentials are referenced by environment-variable name and are not printed or persisted. Cost/value evidence is confidence-labeled.",
     "",
     ...dataModeBannerLines(input.dataMode),
@@ -2510,7 +2510,7 @@ export function generateHtmlReport(input: SpendReportInput): string {
       </div>
       <aside class="privacy-banner" aria-label="Privacy posture">
         <span class="privacy-dot" aria-hidden="true"></span>
-        <strong>${input.telemetryDisclosure === true ? "Report rendered locally. The generating run shared anonymous command counts (npx aibill telemetry off to disable)." : "Report rendered locally. No aibill telemetry."}</strong>
+        <strong>${input.telemetryDisclosure === true ? "Report rendered locally. The generating run shared installation-linked command counts (npx aibill telemetry off to disable)." : "Report rendered locally. No aibill telemetry."}</strong>
         <span>Only an explicit provider sync contacts the selected provider; credentials are referenced, not printed or persisted.</span>
       </aside>
       ${isSample ? `<aside class="privacy-banner" aria-label="Sample data notice" style="border-color: rgba(234,179,8,0.35); background: rgba(234,179,8,0.08);"><strong>DEMO / SAMPLE DATA</strong><span>Illustrative mixed cost/value evidence—not your logs, account, bill, margin, savings, or ROI. No local logs or provider account data were used.</span></aside>` : ""}
@@ -3610,7 +3610,7 @@ function generateLocalLogHtmlReport(input: SpendReportInput): string {
     <div class="term">
       <div class="term-bar"><span class="term-title">npx aibill — AI Receipt</span></div>
       <div class="term-body">
-        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · ${escapeHtml(sessionDatingNote)} · report rendered locally · ${input.telemetryDisclosure === true ? "anonymous command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
+        <p class="prompt"><span class="g-accent">$</span> npx aibill <span class="dim">· ${escapeHtml(generatedAt.slice(0, 10))} · ${escapeHtml(dataDaysPhrase(records))} · ${escapeHtml(sessionDatingNote)} · report rendered locally · ${input.telemetryDisclosure === true ? "installation-linked command counts shared · npx aibill telemetry off" : "no aibill telemetry"}</span></p>
         ${qualitativeNotice ? `<p class="dim note-line"><strong>${formatProse(qualitativeNotice)}</strong></p>` : ""}
         ${tokenExperiment ? `<p class="dim note-line"><strong>CANONICAL TOKEN TEST ${escapeHtml(tokenExperiment.lifecycle.toUpperCase())} · ${escapeHtml(tokenExperiment.id)}</strong> · ${escapeHtml(tokenExperimentEvidenceSummary(tokenExperiment))} · matched-session token evidence only, not provider-billed savings, accepted-outcome proof, or ROI · continue with <span class="g-accent">${escapeHtml(tokenExperiment.nextCommand)}</span></p>` : ""}
 

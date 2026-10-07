@@ -27,7 +27,7 @@ export default function WorkspaceDocsPage() {
           <li>Ask the appropriate provider organization owner or admin to connect supported cost sources.</li>
           <li>Review the first report together, including missing coverage, before drawing conclusions.</li>
         </ol>
-        <DocsCallout title="Start with supported sources">OpenAI and Anthropic provider connections are the core cost sources. Cursor and GitHub Copilot are not generally enabled. Ask about pilot availability; separate setup and live partner validation are required. Confirm scope during onboarding; a provider logo is not a promise of complete history. <TextLink href="/docs/sources#workspace">See Workspace source coverage →</TextLink></DocsCallout>
+        <DocsCallout title="Start with supported sources">OpenAI and Anthropic provider connections are the core cost sources. Cursor Admin and GitHub Copilot are guided beta connections; ask about assisted setup. Real-account acceptance is still pending. Confirm scope during onboarding; a provider logo is not a promise of complete history. <TextLink href="/docs/sources#workspace">See Workspace source coverage →</TextLink></DocsCallout>
       </DocsSection>
 
       <DocsSection id="views" label="02 · Find your answer" title="Where to look in Workspace">

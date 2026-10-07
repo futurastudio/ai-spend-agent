@@ -6,7 +6,8 @@ then a stationary liquid-glass `aibill` wordmark appears immediately left of
 the camera and reveals the panel on hover. It is a rendering surface over the
 same transcript-derived evidence contract used by the CLI and MCP server:
 current work, cost meaning, reported runway, freshness, and one next action.
-Company accountability and ROI remain Workspace milestones, not Glance claims.
+Glance does not measure business outcomes or prove ROI. For shared spend
+review, see the separate [Workspace offering](../../docs/WORKSPACE.md).
 Source/connector validation and a number's financial-evidence status are
 separate axes; Glance never upgrades an estimate because its local reader has
 been tested.
@@ -27,6 +28,7 @@ shared engine and app from the checkout root:
 ```bash
 git clone https://github.com/futurastudio/ai-spend-agent.git
 cd ai-spend-agent
+npm ci
 npm run build --workspace ai-spend-agent
 ./apps/glance-macos/scripts/build-app.sh
 ```
@@ -186,7 +188,7 @@ For a different UI stack, treat the output of `aibill glance` as the stable
 integration boundary. A menu-bar app, Raycast extension, desktop widget, or
 editor extension can all render that contract without duplicating spend logic.
 
-## Public distribution
+## Planned public distribution
 
 Users should not have to clone the repo or ask an AI to install Glance.
 

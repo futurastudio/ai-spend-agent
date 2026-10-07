@@ -144,7 +144,7 @@ describe("compact card — canonical fixture (§1.4)", () => {
     expect([...totalLine].length).toBe(50);
     expect(output).toContain("two kinds of money — never added into one number");
     expect(output).toContain("cursor beta: billed unlocks after live verification");
-    expect(output).toContain("n/r = not reported — no evidence in this window");
+    expect(output).toContain("n/r = not reported — no reported amount for that row or basis");
     // No blended figure exists anywhere near a total.
     expect(output).not.toContain("$814");
     expect(output).not.toContain("$502");
@@ -537,5 +537,38 @@ describe("compact card — connected billing + local evidence (founder mixed sta
     expect(output).toContain("API-equivalent n/r");
     expect(output).toContain("billed $8.66");
     expect(output).toContain("n/r = not reported");
+  });
+});
+
+describe("unpriced records are present evidence", () => {
+  const unknown = (): UsageRecord => ({ ...localRecord({ agent: "codex", amountUsd: 1 }), model: "gpt-6-preview", amountUsd: null, costConfidence: "missing" });
+  for (const view of ["compact", "full"] as const) {
+    for (const width of [45, 72]) {
+      for (const subscriptions of [true, false]) {
+        it(`${view}/${width}/subscriptions=${subscriptions}: partial total discloses excluded models`, () => {
+          const output = render([localRecord({ agent: "codex", amountUsd: 3 }), unknown()], { view, width, detectedPlans: subscriptions ? [codexPlan] : [] });
+          const normalized = output.replace(/\s+/g, " ");
+          expect(normalized).toContain("excludes 1 unpriced record");
+          expect(normalized).toContain("n/r = not priced");
+          expect(normalized).toContain("gpt-6-preview");
+          expect(normalized).not.toContain("no evidence in this window");
+          expect(normalized).not.toContain("no usage evidence");
+        });
+      }
+    }
+  }
+  it("all-unpriced usage is not absent usage", () => {
+    const output = render([unknown(), unknown()], { detectedPlans: [codexPlan] }).replace(/\s+/g, " ");
+    expect(output).toContain("excludes 2 unpriced records");
+    expect(output).toContain("2 records use models missing from the price table");
+    expect(output).not.toContain("no usage evidence");
+  });
+  it("only a genuinely empty source uses the no-usage-evidence legend", () => {
+    expect(render([])).toContain("no usage evidence in this window yet");
+    const incomplete: UsageRecord = { ...localRecord({ agent: "codex", amountUsd: 1 }), amountUsd: null, costConfidence: "missing" };
+    const output = render([incomplete]);
+    expect(output).not.toContain("no usage evidence");
+    expect(output).not.toContain("models missing from the price table");
+    expect(output).toContain("no reported amount for that row or basis");
   });
 });

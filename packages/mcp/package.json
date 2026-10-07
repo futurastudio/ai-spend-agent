@@ -1,8 +1,8 @@
 {
   "name": "@agent-finops/mcp",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "funding": "https://asktilden.com",
-  "description": "aibill MCP server: Claude Code/Codex attribution, runway, and Context Health, plus experimental Gemini CLI financial evidence.",
+  "description": "Local MCP server for Tilden\u2019s aibill CLI: inspect coding-agent usage, cost evidence and Context Health from a compatible AI client.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -51,7 +51,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@agent-finops/core": "0.9.11",
+    "@agent-finops/core": "0.9.12",
     "@modelcontextprotocol/sdk": "1.32.1",
     "fast-uri": "^3.1.8",
     "zod": "^4.1.0"

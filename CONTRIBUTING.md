@@ -1,9 +1,10 @@
 # Contributing to aibill
 
-Thank you for helping build the open evidence layer for financial
-accountability across the AI-agent workforce.
+Help improve aibill, Tilden’s free CLI for reviewing local coding-agent usage
+and supported provider cost evidence.
 Bug reports, source-format fixtures, pricing updates, documentation, and small
-focused pull requests are especially useful during the public beta.
+focused pull requests are especially useful. Source-specific experimental and
+beta boundaries are documented in the README.
 
 ## Development setup
 
