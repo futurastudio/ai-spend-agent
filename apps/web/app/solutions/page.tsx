@@ -37,7 +37,7 @@ export default function SolutionsPage() {
     </header>
     <main id="content">
       <section className={s.hero}>
-        <p className={s.label}>Assisted services · invited partners</p>
+        <p className={s.label}>Professional Services · invited partners</p>
         <h1>Which AI investments<br /><span>deserve more budget?</span></h1>
         <p className={s.intro}>Start with costs you can explain. Tilden helps engineering and finance review supported spend, identify coverage gaps and scope the evidence needed for one investment decision.</p>
         <div className={s.actions}><a className={s.button} href="#spend-assessment">Start with spend</a><a href="#value-pilot">Explore an outcome baseline <span aria-hidden="true">↓</span></a></div>
