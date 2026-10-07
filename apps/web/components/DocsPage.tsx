@@ -13,7 +13,7 @@ function DocsLinks({ current, mobile = false }: { current: DocsHref; mobile?: bo
           key={item.href}
           href={item.href}
           aria-current={item.href === current ? "page" : undefined}
-          data-nested={item.href.startsWith("/docs/mcp/") || undefined}
+          data-nested={item.href.startsWith("/docs/mcp/") || item.href === "/docs/plugin" || undefined}
           className={s.sectionLink}
         >
           {item.label}

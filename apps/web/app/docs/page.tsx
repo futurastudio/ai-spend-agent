@@ -15,7 +15,7 @@ const surfaces = [
 
 export default function DocsOverviewPage() {
   return (
-    <DocsPage updated="October 6, 2026" current="/docs" title="Know where your AI spend goes." intro="Tilden gives you a shared Workspace, a local CLI and a read-only MCP connection for supported AI clients. Start with the guide for your job, then check the sources and coverage behind the answer." repoPath="apps/web/app/docs/page.tsx">
+    <DocsPage updated="October 7, 2026" current="/docs" title="Know where your AI spend goes." intro="Tilden gives you a shared Workspace, a local CLI and a read-only MCP connection for supported AI clients. Start with the guide for your job, then check the sources and coverage behind the answer." repoPath="apps/web/app/docs/page.tsx">
       <DocsCallout title="Preparing an invited spending review?">
         Begin with the <TextLink href="/docs/first-review">first-review checklist</TextLink>, confirm <TextLink href="/docs/sources#review-scope">source and date coverage</TextLink>, then read <TextLink href="/docs/access">access, expiry and renewal</TextLink>. For hands-on help, explore the <TextLink href="/solutions">assisted assessment and value pilot</TextLink>.
       </DocsCallout>
@@ -27,6 +27,7 @@ export default function DocsOverviewPage() {
               <h3 className="mt-3 text-lg font-medium text-ink">{surface.name}</h3>
               <p className="mt-2 text-sm leading-6 text-muted">{surface.copy}</p>
               <p className="mt-4 text-sm"><TextLink href={surface.href}>Open guide →</TextLink></p>
+              {surface.href === "/docs/workspace" && <p className="mt-4 text-sm leading-6"><TextLink href="/docs/plugin">Announcement · ChatGPT Pilot →</TextLink><br /><span className="text-muted">We’re building a ChatGPT plugin for read-only Workspace spending reviews. Public availability is planned.</span></p>}
             </article>
           ))}
         </div>

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { DocsCallout, DocsPage, DocsSection, TextLink } from "@/components/DocsPage";
 export const metadata: Metadata = { title: "Access, consent and renewal | Tilden docs", description: "Understand invited Workspace access, read-only MCP consent, token refresh, seven-day grant expiry and removing a connection.", alternates: { canonical: "/docs/access" } };
 export default function AccessPage() {
-  return <DocsPage current="/docs/access" updated="October 6, 2026" title="Know who can read your reports, and for how long." intro="Workspace admission, provider setup and an AI client's read access are separate decisions. Confirm each during assisted onboarding. These instructions describe the current invited hosted MCP flow, not every local CLI connection." repoPath="apps/web/app/docs/access/page.tsx">
+  return <DocsPage current="/docs/access" updated="October 7, 2026" title="Know who can read your reports, and for how long." intro="Workspace admission, provider setup and an AI client's read access are separate decisions. Confirm each during assisted onboarding. These instructions describe the current invited hosted MCP flow, not every local CLI connection." repoPath="apps/web/app/docs/access/page.tsx">
     <DocsSection id="authorize" label="01 · Authorize" title="Check the app, workspace and scope">
       <p>An invited owner or administrator approves the requesting client on Tilden's consent screen. Check the app name, intended workspace and read-only scope before allowing access. Only connect the workspace and sources agreed during onboarding.</p>
       <p className="mt-4">MCP returns four report types: spend, projects, briefing and budget settings. It does not change budgets, enforce provider limits, refresh provider records or upload machine activity. Source credentials and browser cookies are not MCP login credentials.</p>
@@ -15,7 +15,7 @@ export default function AccessPage() {
     </DocsSection>
     <DocsSection id="remove" label="03 · Remove access" title="Check the recorded result">
       <p>Use <TextLink href="https://app.asktilden.com/settings/apps">Settings → Apps</TextLink> to review connections and remove the selected app's access. If the result is uncertain, inspect the recorded connection and ask your onboarding contact to confirm removal before reconnecting. A new connection may also require resetting the client's saved sign-in consent.</p>
-      <p className="mt-4">Removal is intended to stop future authorized reads. It cannot erase reports the client already received. Test removal and denied future reads for the partner's setup during onboarding rather than assuming a founder demonstration validates every client.</p>
+      <p className="mt-4">Removal is intended to stop future authorized reads. It cannot erase reports the client already received. Confirm removal and denied future reads for your client during onboarding.</p>
     </DocsSection>
     <DocsSection id="data" label="04 · Data boundaries" title="An AI client receives the report it requests">
       <p>Hosted Workspace retains the supported records you connect or explicitly share. MCP sends requested report results to the authorized client; those results then follow that client's data policy. A local-first statement about the CLI does not describe hosted Workspace.</p>

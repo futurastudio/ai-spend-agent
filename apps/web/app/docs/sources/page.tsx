@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function SourcesDocsPage() {
   return (
-    <DocsPage updated="October 6, 2026"
+    <DocsPage updated="October 7, 2026"
       current="/docs/sources"
       title="Know where every number stops."
       intro="Workspace connections and local CLI readers have different setup and availability. For both, source support, reader validation and the evidence behind a number remain separate."
@@ -20,7 +20,7 @@ export default function SourcesDocsPage() {
         <p>With your onboarding contact, record the workspace, connected accounts, currency, inclusive UTC dates, source freshness and known missing days. Confirm source-specific administrative permissions before connecting; do not send provider keys in email or chat.</p>
         <ul className="list-disc legacy-space-y-3 pl-5 mt-5">
           <li><strong>OpenAI and Anthropic API costs:</strong> invited setup, subject to accessible provider records and retained history. Project detail depends on what those records contain.</li>
-          <li><strong>Historical limits:</strong> missing OpenAI history can prevent a complete-period answer. Overlapping legacy captures must be reconciled before aggregation; adding them or selecting a convenient total is not a valid workaround.</li>
+          <li><strong>Historical limits:</strong> available history varies by connected source. Check coverage before treating a subtotal as a complete-period answer, and do not add overlapping records.</li>
           <li><strong>Coding activity:</strong> optional Claude Code and Codex sharing needs explicit setup and consent. Sessions and repository labels do not allocate the provider bill.</li>
           <li><strong>Cursor and Copilot:</strong> separate pilot checks are required. Broad real-account coverage is not established; do not depend on these facets without explicit acceptance for your setup.</li>
         </ul>
