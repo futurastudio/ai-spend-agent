@@ -351,7 +351,7 @@ export default function TraceNext() {
         <div className={s.heroAside}><p>For engineering leaders, founders, and finance teams who need to explain rising AI spend. Review supported provider costs and available project detail alongside the agent activity your team chooses to share, so you can see what needs attention.</p><div className={s.heroActions}><Join className={s.primary} /><a href="#example">Explore an example <span aria-hidden="true">↓</span></a></div><p className={s.offer}>Invited partners get guided setup and a spending review with our team.</p></div>
       </div><div className={s.stageWrap}><MoneyStory product={product} setProduct={setProduct} /></div></BlueField>
       <div className={s.content}><Coverage /><section className={s.solutionsBridge} aria-labelledby="solutions-heading">
-        <div><p className={s.eyebrow}>Assisted services · invited partners</p><h2 id="solutions-heading">Which AI investments<br />deserve more budget?</h2><p>Start with costs you can explain. Then establish what a useful outcome would look like.</p></div>
+        <div><p className={s.eyebrow}>Professional Services · invited partners</p><h2 id="solutions-heading">Which AI investments<br />deserve more budget?</h2><p>Start with costs you can explain. Then establish what a useful outcome would look like.</p></div>
         <div className={s.solutionLinks}>
           <a href="/solutions#spend-assessment"><span><strong>AI Spend Assessment</strong><small>Understand your AI costs and decide what to investigate next.</small></span>{arrow}</a>
           <a href="/solutions#value-pilot"><span><strong>AI Value Pilot</strong><small>Work with our team to define useful outcomes and a baseline for one workflow.</small></span>{arrow}</a>
