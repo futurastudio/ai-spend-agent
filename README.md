@@ -21,12 +21,12 @@ local workflow. `aibill` is the short command for the same `ai-spend-agent` CLI.
 Built by [Tilden](https://asktilden.com): **Building financial infrastructure for
 the AI workforce.** Your agents are doing more. Know where the money goes.
 This repository is the free local starting point; Workspace is the separate,
-invitation-only product for reviewing supported AI spend with your team.
+invitation-only product for reviewing supported AI spend. The pilot has one owner seat.
 
 **Use aibill on its own or with Workspace.** Start with a free local review,
 without an account. If you already use Tilden Workspace, keep working locally
-and connect your CLI to share supported coding activity into your team’s
-spending review. [Connect your CLI to Workspace](docs/WORKSPACE.md).
+and, as the Workspace owner, connect your CLI to explicitly share supported
+coding activity into your spending review. [Connect your CLI to Workspace](docs/WORKSPACE.md).
 
 ## Get started
 

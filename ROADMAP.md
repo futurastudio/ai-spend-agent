@@ -20,8 +20,9 @@ describes availability by surface.
 - **Local MCP and Codex plugin:** selected evidence on demand in a compatible
   AI client. This is separate from hosted Workspace MCP.
 - **Explicit Workspace machine commands:** pairing and consented uploads of
-  eligible Claude Code/Codex session facts for invited members. This is not a
-  complete ledger upload, background sync or provider-billing connection.
+  eligible Claude Code/Codex session facts for the invited Workspace owner. The
+  pilot has one owner seat. This is not a complete ledger upload, background sync
+  or provider-billing connection.
 - **Developer packages:** shared evidence contracts, source readers and report
   renderers; see the [supported library preview](docs/LIBRARY.md).
 

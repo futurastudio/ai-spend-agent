@@ -1,9 +1,9 @@
 # Connect aibill to Tilden Workspace
 
-**Keep working locally and bring supported activity into your team’s spending
+**Keep working locally and bring supported activity into your spending
 review.** aibill works both as a free standalone CLI and as a connected local
-tool for members of an invited
-[Tilden Workspace](https://asktilden.com/docs/workspace).
+tool for the owner of an invited
+[Tilden Workspace](https://asktilden.com/docs/workspace). The pilot has one owner seat.
 
 For standalone use, run `npx aibill@latest init` and continue using the local
 commands without an account. For connected use, pair your machine with your
