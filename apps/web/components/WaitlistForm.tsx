@@ -61,7 +61,7 @@ export function WaitlistForm({ presentation = "legacy" }: { presentation?: "lega
   }
 
   if (status === "success") {
-    if (presentation === "landing") return <p className={styles.success} role="status">Your interest is registered. Opening your confirmation…</p>;
+    if (presentation === "landing") return <p className={styles.success} role="status">Your request has been received. Opening your confirmation…</p>;
     return (
       <div
         role="status"
@@ -101,15 +101,15 @@ export function WaitlistForm({ presentation = "legacy" }: { presentation?: "lega
   }
 
   if (presentation === "landing") return <form onSubmit={onSubmit} className={styles.form} aria-busy={status === "loading"}>
-    <label htmlFor="waitlist-email">Email address</label>
+    <label htmlFor="waitlist-email">Work email</label>
     <div className={styles.fields}>
       <input id="waitlist-email" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254} required placeholder="you@company.com" value={email}
         onChange={event => { setEmail(event.target.value); if (status === "error") { setStatus("idle"); setMessage(""); } }}
         aria-invalid={status === "error"} aria-describedby={status === "error" ? "waitlist-error waitlist-note" : "waitlist-note"} />
-      <button type="submit" disabled={status === "loading"}>{status === "loading" ? "Joining…" : "Join the waitlist"}<span aria-hidden="true">↗</span></button>
+      <button type="submit" disabled={status === "loading"}>{status === "loading" ? "Sending…" : "Request access"}<span aria-hidden="true">↗</span></button>
     </div>
     {status === "error" && <p id="waitlist-error" className={styles.error} role="alert">{message}</p>}
-    <p id="waitlist-note" className={styles.note}>By joining, you agree to receive Tilden updates and access invitations. <a href="/privacy">Privacy policy</a>. You can opt out by <a href="mailto:contact@asktilden.com?subject=Tilden%20updates">contacting us</a>.</p>
+    <p id="waitlist-note" className={styles.note}>By requesting access, you agree to receive Tilden updates and access invitations. <a href="/privacy">Privacy policy</a>. You can opt out by <a href="mailto:contact@asktilden.com?subject=Tilden%20updates">contacting us</a>.</p>
   </form>;
 
   return (

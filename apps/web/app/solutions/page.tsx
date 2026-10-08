@@ -33,7 +33,7 @@ export default function SolutionsPage() {
     <header className={s.header}>
       <Link href="/" aria-label="Tilden home"><img src="/brand/lockup/tilden-lockup-horizontal-ink.svg" alt="Tilden" width="120" height="32" /></Link>
       <TraceNavigation solutionsPage />
-      <Link href="/#beta" className={s.button}>Join waitlist</Link>
+      <Link href="/#beta" className={s.button}>Request access</Link>
     </header>
     <main id="content">
       <section className={s.hero}>

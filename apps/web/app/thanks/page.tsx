@@ -7,7 +7,7 @@ import { WaitlistThanks } from "@/components/WaitlistThanks";
 export const metadata: Metadata = {
   title: "Thanks · Tilden",
   description:
-    "Your interest in Tilden is registered. Workspace access is invitation-only.",
+    "Your Tilden access request has been received. Our team will follow up to discuss your AI spending needs and partner onboarding.",
   robots: { index: false, follow: true },
 };
 
