@@ -28,6 +28,42 @@ describe("model pricing coverage", () => {
     expect(estimateTokenCostUsd("claude-mythos-preview", usage)).toBeUndefined();
   });
 
+  // Official Anthropic pricing reviewed 2026-10-08:
+  // https://platform.claude.com/docs/en/about-claude/pricing
+  // The dated ID is synthetic: it exercises snapshot matching, not availability.
+  it.each(["claude-sonnet-5-5", "claude-sonnet-5-5-20261001", "CLAUDE-SONNET-5-5"])(
+    "%s uses Sonnet 5.5 cache reads without changing base or write prices",
+    (model) => {
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(0.1);
+      expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 0 })).toBe(2);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(10);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000 })).toBe(2.5);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000 })).toBe(4);
+      expect(estimateTokenCostUsd(model, {
+        inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000,
+        cacheWrite5mTokens: 1_000_000, cacheWrite1hTokens: 1_000_000
+      })).toBe(18.6);
+    }
+  );
+
+  it.each([
+    ["claude-sonnet-5", 0.2],
+    ["claude-sonnet-5-20261001", 0.2],
+    ["claude-sonnet-4-6", 0.3],
+    ["claude-opus-5", 0.5],
+    ["claude-opus-5-5", 0.2]
+  ])("%s retains its cache-read price", (model, expected) => {
+    expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(expected);
+  });
+
+  it.each(["claude-sonnet-5-50", "claude-sonnet-5-5-preview", "claude-sonnet-5-5-20261001-extra"])(
+    "%s does not inherit the Sonnet 5.5 discount",
+    (model) => {
+      // Preserve the existing fallback; do not broaden the new version-specific rule.
+      expect(findPricingRule(model)).toBe(findPricingRule("claude-sonnet-5"));
+    }
+  );
+
   it("prices the major non-Anthropic/OpenAI model families", () => {
     // Gemini Pro: the 1M-token prompt selects the >200k rate for all tokens.
     expect(estimateTokenCostUsd("gemini-2.5-pro", usage)).toBeCloseTo(4, 2);
