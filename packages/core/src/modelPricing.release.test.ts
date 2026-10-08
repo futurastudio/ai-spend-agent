@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { canPriceTokenUsageAtScope, estimateTokenCostUsd, estimateTokenCostsUsd, findPricingRule } from "./modelPricing.js";
+import { PRICING_TABLE_AS_OF, canPriceTokenUsageAtScope, estimateTokenCostUsd, estimateTokenCostsUsd, findPricingRule } from "./modelPricing.js";
 
 const evidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-07.json", import.meta.url), "utf8"));
+const sonnetEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-08.json", import.meta.url), "utf8"));
+
+describe("0.9.13 reviewed Sonnet 5.5 prices", () => {
+  it("matches the retained official-price evidence and review date", () => {
+    const model = sonnetEvidence.models[0];
+    expect(PRICING_TABLE_AS_OF).toBe(sonnetEvidence.retrievedAt);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 1_000_000, outputTokens: 0 })).toBe(model.input);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(model.output);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(model.cacheRead);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000 })).toBe(model.cacheWrite5m);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000 })).toBe(model.cacheWrite1h);
+  });
+});
 
 describe("0.9.12 reviewed standard-price fixtures", () => {
   for (const model of evidence.models) {

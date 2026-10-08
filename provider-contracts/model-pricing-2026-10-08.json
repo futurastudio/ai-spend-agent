@@ -1,0 +1,20 @@
+{
+  "retrievedAt": "2026-10-08",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard first-party API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No batch, regional or negotiated adjustments. This additive evidence records the Sonnet 5.5 correction; historical October 7 evidence is retained unchanged.",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/pricing"
+  ],
+  "models": [
+    {
+      "id": "claude-sonnet-5-5",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite5m": 2.5,
+      "cacheWrite1h": 4
+    }
+  ]
+}
