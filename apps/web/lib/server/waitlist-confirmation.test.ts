@@ -46,7 +46,8 @@ describe("waitlist confirmation transport", () => {
     expect(init).toMatchObject({ method: "POST", cache: "no-store", signal: expect.any(AbortSignal) });
     const payload = JSON.parse(String(init.body));
     expect(payload).toMatchObject({ from: "Tilden <team@example.test>", reply_to: "support@example.test", to: ["person@example.test"] });
-    expect(payload.text).toContain("Our onboarding team will reach out");
+    expect(payload.subject).toBe("We’ve received your Tilden access request");
+    expect(payload.text).toContain("Our team will follow up to discuss your AI spending needs and partner onboarding.");
     expect(payload.html).toContain("invitation-only");
     expect(payload.text).toContain("does not create an account or grant access");
     expect(payload.html).not.toContain("person@example.test");
