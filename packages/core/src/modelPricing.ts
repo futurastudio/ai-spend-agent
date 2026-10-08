@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-10-07";
+export const PRICING_TABLE_AS_OF = "2026-10-08";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -53,6 +53,10 @@ const pricingRules: PricingRule[] = [
   // Opus 5.5 has lower base/write rates and a 5% cache-read rate.
   { match: /^claude-opus-5-5$/i, inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 },
   { match: /^claude-opus-5/i, inputPerM: 5, outputPerM: 25 },
+  // Reviewed 2026-10-08: https://platform.claude.com/docs/en/about-claude/pricing.
+  // Retained evidence: provider-contracts/model-pricing-2026-10-08.json.
+  // Sonnet 5.5 keeps base/write rates; exact and dated IDs use 5% cache reads.
+  { match: /^claude-sonnet-5-5(?:-\d{8})?$/i, inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1 },
   { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
   { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },

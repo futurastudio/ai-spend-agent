@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-10-06",
+  "reviewedAt": "2026-10-08",
   "defaultReviewCadenceDays": 14,
   "statusVocabulary": [
     "current",
@@ -48,7 +48,7 @@
             "GET /organization/costs"
           ],
           "semanticSha256": "57f3e493e666e8d3789c77651033d418875196605bfc85054ca66446ae7f9dcf",
-          "contentSha256": "1559bc28f1ade471bb9b16043046840432f8565f659e94895e77fd97dadf8806"
+          "contentSha256": "b5da16c6de018c72f1edeafd3b8772f39e5b260b01875982fc5085916c6bb670"
         },
         {
           "kind": "pricing",
@@ -60,7 +60,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52",
-          "contentSha256": "76118481a0c8fe041fb52d7944e6083e73c55e5588f12b64711ea91d8b56b91c"
+          "contentSha256": "9636189eeee10eb3f6dc1d81c6a912a45276e2375928e0b9983ff61081c2f166"
         },
         {
           "kind": "pricing",
@@ -72,7 +72,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463",
-          "contentSha256": "896f7a6d146966da777e9b906408c8346d57238874984b3a4a0ea6c751c700ff"
+          "contentSha256": "92b79ef7064c7d14ea532de945555ee8c7e0de00b1e058a32e9eea5851edf5e3"
         },
         {
           "kind": "pricing",
@@ -84,7 +84,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a",
-          "contentSha256": "ad977a30129b8c2b6191234b665dc5cb25f9e01a57de3860e66604574cda361d"
+          "contentSha256": "7be1dfb6080329152600896541364a79838d07454b9b57dffe53b17cd1b6d99b"
         }
       ]
     },
@@ -148,10 +148,11 @@
             "Claude Fable 5.1",
             "Claude Mythos 5.1",
             "On Claude Fable 5.1 and Claude Mythos 5.1, a cache hit costs 2.5% of the standard input price ($0.25 USD per million tokens).",
-            "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok"
+            "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
+            "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok"
           ],
-          "semanticSha256": "3a6f0ecae4215f6cf74effd2e2dc13424b1a0082ee6551e7669b958b5aa8e212",
-          "contentSha256": "08f61709d12ec8b58ffd5874391f6ba879b2d648df3024be5e52f9e5cb3f2e97"
+          "semanticSha256": "ae61d07171b29101de6655f2175b554aa261d2930530bd6961619400930e2359",
+          "contentSha256": "7ad81addf41e1b0846df318042228602bc95127deaa9dbeeb91e0499547f87fa"
         }
       ]
     },
@@ -200,7 +201,7 @@
             "until about 7 days after the end of the calendar month"
           ],
           "semanticSha256": "739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55",
-          "contentSha256": "862512c81884b2c86d78ecfe80771a00a017a568960413e0ae324a6a726f9990"
+          "contentSha256": "7ac62ca04d2ae09128fdf8d8fade137d917527877590af6562e6f9a6117e856b"
         }
       ]
     },
@@ -258,7 +259,7 @@
             "Paid Tier"
           ],
           "semanticSha256": "27d92d537ccf670fcb195749c2dba8cde61d80bbfbf75af57307b4d1b92e369b",
-          "contentSha256": "368cea3a92766632aa2e06b0a98a99edbabbda01f8151d1bf5010e72e9627919"
+          "contentSha256": "fe5e686724d28767cc1c3e22ba9a3125593fe0a1ff864894fd39496c24ca0df8"
         },
         {
           "kind": "reconciliation",
@@ -270,7 +271,7 @@
             "Pricing data"
           ],
           "semanticSha256": "e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e",
-          "contentSha256": "2e7a78295e6cf9b41652b11b84e6c597c7c881e06718e88a0dee9d43c91142b0"
+          "contentSha256": "6fc81eda7787aab6ad3f45d713b8a3b84af704066d3572679cd936e586a6b109"
         }
       ]
     },
@@ -316,7 +317,7 @@
             "reconcile event-level costs"
           ],
           "semanticSha256": "04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59",
-          "contentSha256": "c463e688238e4fe8f699f4235dd9aa0a5ab1dc2fc591959e34eb7cefea93d869"
+          "contentSha256": "c50a88b183598e620bfe984b5cc8214e2a2bdd7d690cd85dbfd602724afa0ba4"
         },
         {
           "kind": "pricing",
@@ -326,8 +327,8 @@
             "Usage pools",
             "Token"
           ],
-          "semanticSha256": "f7b2ffdf52786bc7e255cabbacfa0cdc42e05d0393d5a2fb40ae8a069976cbf0",
-          "contentSha256": "94e58dab1aaf1627fad26e90296f0d91367f69a67080552f915fd6609ba6e20f"
+          "semanticSha256": "f6b78cdf82a4e0720a1bc16e3ef464d4f5f99e44d20abeff94b55a7ee4b9fadf",
+          "contentSha256": "c234652029ed636ceb26f208a7383b255c880989558a5e111df7c0dee02aa8bd"
         }
       ]
     },
@@ -375,7 +376,7 @@
             "netAmount"
           ],
           "semanticSha256": "6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c",
-          "contentSha256": "69bf2b78464ff61db36533866fb8921ff0172791a37b28da7ab663ca8532be0f"
+          "contentSha256": "8c2f623a52429fa221feeb5eab613c56c598c1dda7be5c0d20501ed326c0fc5c"
         },
         {
           "kind": "pricing",
@@ -386,7 +387,7 @@
             "input tokens"
           ],
           "semanticSha256": "6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815",
-          "contentSha256": "f87160ecb1b4521a2dd6f850f408dc7587ea85b2cf19223416f44ebc53867abb"
+          "contentSha256": "57cad4c3f5125be47157d353950bfab8caf684ce2c840255c6fd1ae423697a48"
         }
       ]
     }

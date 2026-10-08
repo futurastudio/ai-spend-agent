@@ -5,7 +5,16 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.12 (unreleased)
+## 0.9.13 (unreleased)
+
+Corrects Sonnet 5.5 cache-read API-equivalent estimates from $0.20 to $0.10
+per million tokens. Versions through 0.9.12 used the broader Sonnet 5 rate,
+overstating this component by 2×; this does not mean the entire estimate was
+doubled. Exact and dated Sonnet 5.5 identifiers now use the corrected rate.
+Input, output, cache-write rates, and provider-reported spending are unchanged.
+These are API-equivalent estimates, not subscription charges or invoices.
+
+## 0.9.12 (published on npm)
 
 Corrects the Opus 5.5 estimates shipped in 0.9.11: input and output were
 25% too high, and cache reads were 2.5 times the published rate. Opus 5
