@@ -52,7 +52,7 @@ export function DocsPage({ current, title, intro, children, updated = DOCS_UPDAT
             <a href={REPO_URL} target="_blank" rel="noreferrer" className={s.repositoryLink}>
               GitHub <span aria-hidden="true">↗</span>
             </a>
-            <Link href="/#beta" className={s.waitlistLink}>Join waitlist</Link>
+            <Link href="/#beta" className={s.waitlistLink}>Request access</Link>
           </nav>
         </div>
       </header>

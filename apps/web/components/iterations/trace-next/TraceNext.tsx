@@ -22,7 +22,7 @@ const sourceName = (name: string) => name === "Anthropic" ? "Claude" : name === 
 const status = (name: string) => ["OpenAI", "Anthropic"].includes(name) ? "Invited Workspace access" : ["Cursor", "GitHub Copilot"].includes(name) ? "Guided Workspace beta" : "Planned coverage";
 
 function Join({ children, className }: { children?: ReactNode; className?: string }) {
-  return <a href="#beta" className={className}>{children || <>Join the waitlist {arrow}</>}</a>;
+  return <a href="#beta" className={className}>{children || <>Request access {arrow}</>}</a>;
 }
 
 function Brand({ light = false }: { light?: boolean }) {
@@ -224,7 +224,7 @@ function HostedMCP() {
         <div className={s.mcpLabel}><span>Plugin</span><span>ChatGPT Pilot</span></div>
         <h4>Bring your spending review into ChatGPT.</h4>
         <p>We’re building a ChatGPT plugin to review supported Workspace spend, projects and budget settings, with coverage in view. Public availability is planned.</p>
-        <div className={s.pluginLinks}><a href="/docs/plugin">Explore the Plugin {arrow}</a><a href="/?ref=chatgpt-pilot#beta">Join the waitlist {arrow}</a></div>
+        <div className={s.pluginLinks}><a href="/docs/plugin">Explore the Plugin {arrow}</a><a href="/?ref=chatgpt-pilot#beta">Request access {arrow}</a></div>
       </div>
     </div>
     <div className={s.mcpConcept}><span>Illustrative example</span><blockquote>Which projects are driving our AI costs?</blockquote><div className={s.mcpFlow}><span>Your AI tool</span><span aria-hidden="true">→</span><span>Tilden Workspace</span></div><p>Read-only cost evidence.<br />No live connection in this preview.</p></div>
@@ -322,12 +322,12 @@ function Ambition() {
 }
 
 function FAQ() {
-  return <section className={s.faq} aria-labelledby="faq-title"><h2 id="faq-title">Before you join.</h2><div>
+  return <section className={s.faq} aria-labelledby="faq-title"><h2 id="faq-title">Before you get started.</h2><div>
     <details><summary>Who is Tilden for?<span aria-hidden="true">+</span></summary><p>Engineering leaders and founders responsible for explaining AI costs, together with finance teams and CFOs who need to understand spending and decide what deserves closer review.</p></details>
     <details><summary>Why not just use each provider’s dashboard?<span aria-hidden="true">+</span></summary><p>Provider dashboards each show a slice. Tilden brings supported cost reports alongside the agent activity your team chooses to share, so finance and engineering can explain spending together and decide where to investigate. Coverage gaps stay visible.</p></details>
     <details><summary>Can I track AI spend and agent activity across my team?<span aria-hidden="true">+</span></summary><p>Yes. Review supported AI costs by project and model alongside the coding-agent activity your team shares. The detail depends on each source and your setup; activity alone doesn’t establish the billed cost of a person or agent.</p></details>
     <details><summary>Does Tilden measure ROI?<span aria-hidden="true">+</span></summary><p>Tilden starts with the cost side. Measuring return also requires evidence of useful outcomes and a basis for comparison. That is part of our longer-term ambition.</p></details>
-    <details><summary>What happens after I join?<span aria-hidden="true">+</span></summary><p>Our onboarding team will reach out to learn about your AI spend and help with next steps. Selected partners get guided setup and a spending review with our team.</p></details>
+    <details><summary>What happens after I request access?<span aria-hidden="true">+</span></summary><p>Our team will follow up to discuss your AI spending needs and partner onboarding. Selected partners get guided setup and a spending review with our team.</p></details>
   </div></section>;
 }
 
@@ -348,7 +348,7 @@ export default function TraceNext() {
     <main>
       <BlueField><Navigation chooseProduct={setProduct} /><div className={s.hero}>
         <div><p className={s.eyebrow}>Building financial infrastructure for the AI workforce</p><h1>Your agents are doing more.<br /><span>Know where the money goes.</span></h1></div>
-        <div className={s.heroAside}><p>For engineering leaders, founders, and finance teams who need to explain rising AI spend. Review supported provider costs and available project detail alongside the agent activity your team chooses to share, so you can see what needs attention.</p><div className={s.heroActions}><Join className={s.primary} /><a href="#example">Explore an example <span aria-hidden="true">↓</span></a></div><p className={s.offer}>Invited partners get guided setup and a spending review with our team.</p></div>
+        <div className={s.heroAside}><p>Bring AI spend and agent activity into one view, so engineering and finance can explain costs and decide where to act.</p><div className={s.heroActions}><Join className={s.primary} /><a href="#example">Explore an example <span aria-hidden="true">↓</span></a></div></div>
       </div><div className={s.stageWrap}><MoneyStory product={product} setProduct={setProduct} /></div></BlueField>
       <div className={s.content}><Coverage /><section className={s.solutionsBridge} aria-labelledby="solutions-heading">
         <div><p className={s.eyebrow}>Professional Services · invited partners</p><h2 id="solutions-heading">Which AI investments<br />deserve more budget?</h2><p>Start with costs you can explain. Then establish what a useful outcome would look like.</p></div>
@@ -356,7 +356,7 @@ export default function TraceNext() {
           <a href="/solutions#spend-assessment"><span><strong>AI Spend Assessment</strong><small>Understand your AI costs and decide what to investigate next.</small></span>{arrow}</a>
           <a href="/solutions#value-pilot"><span><strong>AI Value Pilot</strong><small>Work with our team to define useful outcomes and a baseline for one workflow.</small></span>{arrow}</a>
         </div>
-      </section><Ambition /><FAQ /><section id="beta" className={s.invitation} aria-labelledby="waitlist-heading"><div><h2 id="waitlist-heading">Make sense of<br />your AI spend.</h2><p>Bring the spending question engineering and finance need to answer. Invited partners get guided setup and a review of supported sources with our team.</p><p className={s.waitlistExpectation}>Join for product updates and access invitations. Workspace access is invitation-only; joining does not grant immediate access.</p></div><div className={s.signup}><WaitlistForm presentation="landing" /></div></section></div>
+      </section><Ambition /><FAQ /><section id="beta" className={s.invitation} aria-labelledby="waitlist-heading"><div><h2 id="waitlist-heading">Request access<br />to Tilden.</h2><p>Tell us where to reach you. Our team will follow up to discuss your AI spending needs and partner onboarding.</p><p className={s.waitlistExpectation}>Workspace access is invitation-only.</p></div><div className={s.signup}><WaitlistForm presentation="landing" /></div></section></div>
     </main>
     <footer className={s.footer}><a href="#top" aria-label="Tilden home"><Brand /></a><p>Financial infrastructure for the AI workforce.</p><nav aria-label="Footer navigation"><a href="/solutions">Solutions</a><a href="#ambition">Our ambition</a><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="mailto:contact@asktilden.com">Contact</a></nav><span>© 2026 Tilden</span></footer>
   </div>;
