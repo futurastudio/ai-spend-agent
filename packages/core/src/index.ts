@@ -61,7 +61,6 @@ export * from "./planDetection.js";
 export * from "./planMath.js";
 export * from "./projectEconomics.js";
 export * from "./resultCard.js";
-export * from "./receiptShare.js";
 export * from "./projectEconomicsBuilder.js";
 export * from "./qualitativeIndexCache.js";
 export * from "./projectIndexStore.js";

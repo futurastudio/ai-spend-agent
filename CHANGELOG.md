@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Scope this repository to the free CLI, shared libraries, and Glance. Website,
+  email delivery groundwork, MCP server, plugins, and company roadmap sources
+  are no longer maintained here. Earlier entries describe their release-time scope.
+- Keep four npm packages in build and packed-install checks; retain CLI canary
+  coverage without hosted-service probes.
+
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the

@@ -16,12 +16,9 @@ npx aibill@latest init
 Free and MIT-licensed. Node.js 22+. No account or provider key is needed for the
 local workflow. `aibill` is the short command for the same `ai-spend-agent` CLI.
 
-[CLI guide](https://asktilden.com/docs/cli) · [Source coverage](https://asktilden.com/docs/sources) · [Local MCP](docs/MCP.md) · [Workspace sharing](docs/WORKSPACE.md)
+[CLI guide](https://asktilden.com/docs/cli) · [Source coverage](https://asktilden.com/docs/sources) · [Workspace sharing](docs/WORKSPACE.md)
 
-Built by [Tilden](https://asktilden.com): **Building financial infrastructure for
-the AI workforce.** Your agents are doing more. Know where the money goes.
-This repository is the free local starting point; Workspace is the separate,
-invitation-only product for reviewing supported AI spend. The pilot has one owner seat.
+This public repository contains the free CLI, its shared libraries, and Glance for macOS.
 
 **Use aibill on its own or with Workspace.** Start with a free local review,
 without an account. If you already use Tilden Workspace, keep working locally
@@ -67,9 +64,6 @@ Optional sharing paths are explained in [Privacy & trust](#privacy--trust).
 | Developer: investigate context and test one bounded change | `npx aibill@latest context`, then `npx aibill@latest improve` | Context evidence and a guided comparison of matched completed sessions. A token change requires user-declared quality; it is not cash savings or ROI. |
 | Agency or team with provider admin access: prepare a cost discussion | `npx aibill@latest connect openai` or `connect anthropic` | Setup for a separate, explicit provider sync. Grouping by client, user or workspace works only where the source or confirmed mapping supplies that dimension. |
 
-For a shared engineering-and-finance review, [explore Workspace](#open-core-optional-workspace).
-You can keep using the local CLI without joining.
-
 ## Why use this alongside provider dashboards?
 
 Provider reports answer what that source recorded. Local transcripts help
@@ -102,7 +96,7 @@ of its contents.
 | Local CLI source | Current boundary |
 | --- | --- |
 | Claude Code and Codex | Supported local readers; `live_verified`. Usage with a supported price basis is `estimated`, otherwise `missing`. Reported plan windows appear only when present. |
-| Gemini CLI | Experimental, `fixture_verified` reader for supported chats JSON/JSONL. Financial CLI/report/local MCP only; excluded from statusline, Glance, Context Health, Apply, recommendations and plan/runway. `logs.json` is detection-only. |
+| Gemini CLI | Experimental, `fixture_verified` reader for supported chats JSON/JSONL. Financial CLI/report only; excluded from statusline, Glance, Context Health, Apply, recommendations and plan/runway. `logs.json` is detection-only. |
 | OpenAI Costs/Usage APIs | Optional admin-gated connector with non-empty live verification. Evidence depends on endpoint; invoice adjustments and source coverage remain separate. |
 | Anthropic Cost Report / Claude Code Analytics | Optional admin-gated connector with non-empty live verification. Evidence and available dimensions depend on the returned rows. |
 | Cursor Admin / GitHub Copilot organization APIs | Optional, fixture-verified **beta** connectors requiring appropriate admin access. Real-account acceptance remains pending. |
@@ -152,7 +146,6 @@ Workspace. Local estimates do not become invoice line items after connecting.
 | Keep a compact view in Claude Code | `npx aibill@latest statusline install`; uninstall with `statusline uninstall`. Installation is optional; the runner only rereads a private cache. |
 | Save a local report | `npx aibill@latest report --no-open` |
 | Prepare a redacted receipt for sharing | `npx aibill@latest report-card`; inspect the output before sharing. |
-| Ask an AI client about local evidence | [Local MCP setup](docs/MCP.md) or the [local Codex plugin](plugins/aibill/README.md). Selected results go to that client. |
 | Explore a native monitor | [Glance for macOS](apps/glance-macos/README.md), a source-built preview; no signed public download yet. |
 
 [Full command reference and experiment limits](docs/CLI_REFERENCE.md).
@@ -162,29 +155,9 @@ requests, certify outcomes or prove ROI. Ownership and GitHub outcome commands
 record explicitly supplied or narrowly checked evidence, not company approval
 routing or automated business-value measurement.
 
-## Open core, optional Workspace
+## Optional Workspace connection
 
-**Work locally. Bring supported activity into your Workspace review.**
-
-Use aibill as a standalone free CLI, or connect it to your invited Tilden
-Workspace and continue using the same local tools. Connected members can share
-eligible coding activity alongside the provider costs their team reviews.
-
-Workspace is invitation-only, with assisted source setup. Teams can review
-supported provider costs, project/model groups, briefings, coverage and budget
-settings alongside the coding activity members explicitly share. A budget
-setting is not a provider spending limit. Available history and detail depend
-on each source; a known subtotal can exclude missing days.
-
-The product order is:
-
-- **Free CLI:** inspect local evidence; optionally read provider reports.
-- **Workspace:** review supported AI spend together through invited onboarding.
-- **Workspace MCP:** read hosted reports from a compatible AI client through
-  assisted, read-only access. This is separate from the local npm MCP server.
-- **Plugin / ChatGPT Pilot:** a private Workspace experience using hosted MCP;
-  access must be confirmed during onboarding. It is not publicly listed or a
-  replacement for the local Codex plugin in this repository.
+The CLI includes an optional client for an existing invited Workspace.
 
 To connect, run `npx aibill@latest workspace connect`, complete enrollment and
 sharing consent in Workspace Settings → Machines, then use
@@ -197,19 +170,6 @@ and project labels where available. Raw transcripts and dollar amounts stay out
 of that upload; provider billing is connected separately. See the
 [setup and sharing guide](docs/WORKSPACE.md) for the supported dates, data fields
 and recovery steps.
-
-**[Join the Tilden waitlist →](https://asktilden.com/?ref=github-readme#beta)**
-
-Bring the spending question your team needs to answer. Joining records interest
-in product updates and access invitations; it does not create a Workspace or
-grant immediate access. [Already invited? Sign in](https://app.asktilden.com/sign-in).
-
-Need help defining the review? Explore the assisted
-[AI Spend Assessment](https://asktilden.com/solutions#spend-assessment) for a
-scoped cost-and-coverage readout, or the
-[AI Value Pilot](https://asktilden.com/solutions#value-pilot) to define one
-workflow’s outcome baseline. Scope, access and terms are agreed before starting;
-these are assisted engagements, not automated ROI features.
 
 ## Privacy & trust
 
@@ -230,9 +190,6 @@ these are assisted engagements, not automated ROI features.
   the outgoing facts. Project labels may be shared. Device credentials stay
   in private local pairing state. Disconnect revokes future machine access;
   previously accepted records follow hosted retention rules.
-- **AI clients:** local MCP/plugin results and hosted Workspace MCP results go
-  to the client you authorize and then follow its data policy. The local MCP
-  process does not emit the CLI’s telemetry.
 - **Other explicit network actions:** `outcome github` asks the installed `gh`
   CLI for merged-PR evidence. The optional signup command sends the displayed
   email/ref payload only after confirmation. Normal HTTP metadata accompanies
@@ -252,7 +209,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for checks and synthetic-fixture rules.
 Report a [bug or source request](https://github.com/futurastudio/ai-spend-agent/issues/new/choose)
 without private transcripts or credentials. Developers integrating the evidence
 engine can use the [supported library preview](docs/LIBRARY.md).
-See [ROADMAP.md](ROADMAP.md) for direction and explicit limits.
 
 ## License
 

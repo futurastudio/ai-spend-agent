@@ -14,13 +14,11 @@ const expectedVersion = JSON.parse(
 const packages = [
   { directory: "packages/core", name: "@agent-finops/core" },
   { directory: "packages/report", name: "@agent-finops/report" },
-  { directory: "packages/mcp", name: "@agent-finops/mcp" },
   { directory: "packages/cli", name: "ai-spend-agent" },
   { directory: "packages/aibill", name: "aibill" }
 ];
 const requiredReleaseDependencies = new Map([
   ["@agent-finops/report", { "@agent-finops/core": expectedVersion }],
-  ["@agent-finops/mcp", { "@agent-finops/core": expectedVersion }],
   ["ai-spend-agent", {
     "@agent-finops/core": expectedVersion,
     "@agent-finops/report": expectedVersion
@@ -50,8 +48,7 @@ const forbiddenPackedContentPatterns = [
  * matters: at the tarball boundary, over the exact bytes npm would publish.
  *
  * The packages that CAN send telemetry are the two that ship the CLI. A
- * package with no telemetry code may keep its scoped claim (the MCP server
- * genuinely sends none; importing @agent-finops/core genuinely sends none) —
+ * package with no telemetry code may keep its scoped claim (importing @agent-finops/core genuinely sends none) —
  * so the ban is applied per package, from what that package actually does.
  */
 const telemetryCapablePackages = new Set(["ai-spend-agent", "aibill"]);

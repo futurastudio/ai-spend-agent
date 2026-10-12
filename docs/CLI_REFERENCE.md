@@ -20,7 +20,7 @@ Command details for [aibill, Tilden’s free CLI](../README.md). Start with the
 | `context [--project <name>] [--since-days N]` | Human-readable hook-aware Context Health (`--json` emits the canonical contract) |
 | `glance [--project <name>] [--plan <id>] [--since-days N]` | Emit the local machine-readable Glance snapshot |
 | `apply [--sample] [--since-days N]` | Print a paste-ready, evidence-constrained inspection and approval prompt and save its local artifact bundle under the selected project's `.ai-spend-agent/`; explicit `--sample` is a non-executable, share-safe demo path that does not read live transcripts, account metadata, credentials, or persisted spend state |
-| `improve [--sample] [--draft <token>]` | Reuse one guided command to start the best supported reversible token test, persist its pre-change local self-attested approval before printing any agent handoff, record the later application/canary against the same opaque references, show matched-session progress, and calculate a quality-gated result; `--sample` is a labeled guided demo that writes nothing, `--draft` accepts the one paste-safe command an MCP client composed via `draft_improve_command` (APPROVE is always typed by the human), and non-interactive calls do not mutate experiment/accountability state, though the private local evidence cache may refresh |
+| `improve [--sample] [--draft <token>]` | Reuse one guided command to start the best supported reversible token test, persist its pre-change local self-attested approval before printing any agent handoff, record the later application/canary against the same opaque references, show matched-session progress, and calculate a quality-gated result; `--sample` is a labeled guided demo that writes nothing, `--draft` accepts an encoded plan composed by a compatible client (APPROVE is always typed by the human), and non-interactive calls do not mutate experiment/accountability state, though the private local evidence cache may refresh |
 | `index` | Read very large agent histories to completion with resumable, privacy-stripped checkpoints so results stop saying "indexing" |
 | `identify --person … --team … --role …` | Explicitly confirm the accountable human, team, approval role, and optional client/cost center in private project state; none are inferred |
 | `outcome github [--pr N] [--business-outcome …]` | **Opt-in network:** ask the installed `gh` CLI for one merged PR with exact commit evidence whose observed status checks all passed, then retain only opaque references and optional user-declared business meaning; branch-protection requirements are not inspected |
@@ -63,11 +63,9 @@ npx aibill outcome github --pr 123
 npx aibill accountability
 ```
 
-An MCP client can also draft the plan conversationally through the read-only
-`draft_improve_command` tool and hand you one paste-safe
-`npx aibill improve --draft …` command; every prefilled sentence is labeled by
-who wrote it, Enter-accept re-validates it, and APPROVE is always typed by the
-human.
+The optional `--draft` argument accepts an encoded plan. Prefilled sentences
+retain their authorship labels, Enter-accept re-validates the plan, and APPROVE
+is always typed by the human.
 
 The advanced commands remain available for inspection and automation. Replace
 each quoted placeholder with the actual identifier, timestamp or digest; do

@@ -27,7 +27,6 @@ Before opening a pull request, also run:
 
 ```bash
 npm run check:public-boundary
-npm run check:adapters
 npm run check:source-fixtures
 npm run check:source-docs
 npm run check:provider-contracts
@@ -45,8 +44,8 @@ is green.
 
 ## Product and data rules
 
-1. Keep calculations and shared contracts in `@agent-finops/core`. CLI, MCP,
-   Glance, reports, and future hosted adapters must not invent separate usage,
+1. Keep calculations and shared contracts in `@agent-finops/core`. CLI,
+   Glance, and reports must not invent separate usage,
    billing, provenance, or recommendation logic.
 2. Keep billed cost, credits/overage, subscription capacity, and
    API-equivalent value distinct.
@@ -106,7 +105,7 @@ as project names. Attribute only from usable session-carried project/cwd
 evidence, otherwise use a privacy-safe alias or leave the record unattributed.
 
 Keep full and optimized financial readers behavior-compatible and preserve all
-existing CLI/JSON, MCP, report, statusline, cache, and Glance output. Adding a
+existing CLI/JSON, report, statusline, cache, and Glance output. Adding a
 future parser must stay inside the parser-registry boundary plus fixtures. Any
 new shared engine capability must be source-neutral and descriptor-gated; do
 not add parser-specific logic to Glance, statusline, Context Health, or Apply.
@@ -133,6 +132,5 @@ deterministic files under `docs/sources/`. Do not edit those pages by hand.
 - Confirm that no internal/private files appear in `git status`, the diff, or
   packed npm artifacts.
 
-See [ROADMAP.md](ROADMAP.md) for current priorities and explicit non-goals.
 Security issues belong in the private process described in
 [SECURITY.md](SECURITY.md), not in a public pull request.

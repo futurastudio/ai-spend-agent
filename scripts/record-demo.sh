@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates the landing-page terminal demo from the real CLI. The checked-in
+# Regenerates the CLI documentation demo from the real CLI. The checked-in
 # media are release snapshots, not self-updating assets: rerun this script after
 # any user-visible terminal-copy or sample-output change.
 # Requires: vhs (brew install vhs), ffmpeg.
@@ -7,9 +7,6 @@
 # Usage: npm run build && bash scripts/record-demo.sh
 #
 # Outputs:
-#   apps/web/public/demo.webm        hero video (webm)
-#   apps/web/public/demo.mp4         hero video (safari/fallback)
-#   apps/web/public/demo-poster.png  poster frame shown before playback
 #   docs/assets/demo.gif             README / social embed
 set -euo pipefail
 
@@ -31,7 +28,7 @@ trap 'rm -rf "$AIBILL_DEMO_TMP"' EXIT
 
 # 1. Capture the CLI's explicit deterministic full sample. `--sample`
 #    intentionally skips local plan and credential discovery, while `--full`
-#    preserves the complete interactive terminal walkthrough used on the site.
+#    preserves the complete interactive terminal walkthrough used in the documentation.
 mkdir -p "$AIBILL_DEMO_TMP/cwd"
 (cd "$AIBILL_DEMO_TMP/cwd" && env -u NO_COLOR FORCE_COLOR=1 node "$CLI" --sample --full --path "$AIBILL_DEMO_TMP/cwd" > "$AIBILL_DEMO_TMP/demo.raw" 2>&1)
 grep -q "DATA MODE: demo sample" "$AIBILL_DEMO_TMP/demo.raw" || { echo "captured output missing sample banner — aborting" >&2; exit 1; }
@@ -129,7 +126,6 @@ ffmpeg -y -loglevel error -i "$AIBILL_DEMO_TMP/demo.mp4" \
   -vf "fps=10,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer" \
   "$AIBILL_DEMO_TMP/demo.gif"
 
-mkdir -p "$REPO_ROOT/apps/web/public" "$REPO_ROOT/docs/assets"
-cp "$AIBILL_DEMO_TMP/demo.webm" "$AIBILL_DEMO_TMP/demo.mp4" "$AIBILL_DEMO_TMP/demo-poster.png" "$REPO_ROOT/apps/web/public/"
+mkdir -p "$REPO_ROOT/docs/assets"
 cp "$AIBILL_DEMO_TMP/demo.gif" "$REPO_ROOT/docs/assets/demo.gif"
-ls -lh "$REPO_ROOT/apps/web/public/demo."* "$REPO_ROOT/docs/assets/demo.gif"
+ls -lh "$REPO_ROOT/docs/assets/demo.gif"

@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
  * Design: the CLI capture design + its dated placement addendum
  * (2026-08-24). The QA verdict's B/M fixes are mandatory and are encoded
  * in the rules below — the verdict tags (B1, B2, M1…) cite it. The email
- * promise each ref makes is anchored publicly in docs/EMAIL_SEND_POLICY.md.
+ * promise each ref makes is shown in the CLI confirmation.
  *
  * Placement (founder decision 2026-08-24): the ONE ask runs PRE-RECEIPT,
  * DURING the first evidence scan — it fills the first-run wait instead of
@@ -42,7 +42,7 @@ export type WaitlistPayload = { email: string; ref: string };
 
 export type WaitlistRefSurface = "receipt" | "signup";
 
-// Server-parity email rules (apps/web/app/api/waitlist/route.ts): trim,
+// Email validation rules: trim,
 // lowercase, <=254 chars, pragmatic shape check. The CLI additionally rejects
 // control bytes (terminal-escape injection into the echoed consent line).
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -228,8 +228,8 @@ export async function assessEmailDeliverability(
 
 // ---------------------------------------------------------------------------
 // Copy — declarative, ·-separated, promising ONLY what exists for the cli-*
-// refs: the launch email + product updates (docs/EMAIL_SEND_POLICY.md
-// anchors the promise per ref; verdict M1/M2). No savings claims, no
+// refs: the launch email + product updates, as displayed in the consent.
+// No savings claims, no
 // urgency, no confirm-shaming, no beta/Workspace/weekly language.
 // ---------------------------------------------------------------------------
 

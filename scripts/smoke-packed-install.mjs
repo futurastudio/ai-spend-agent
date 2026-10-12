@@ -17,7 +17,6 @@ const root = resolve(import.meta.dirname, "..");
 const releasePackages = [
   { directory: "packages/core", name: "@agent-finops/core" },
   { directory: "packages/report", name: "@agent-finops/report" },
-  { directory: "packages/mcp", name: "@agent-finops/mcp" },
   { directory: "packages/cli", name: "ai-spend-agent" },
   { directory: "packages/aibill", name: "aibill" }
 ];
@@ -77,7 +76,6 @@ try {
 
   const cliPath = join(installDir, "node_modules", "ai-spend-agent", "dist", "index.js");
   const aliasPath = join(installDir, "node_modules", "aibill", "run.js");
-  const mcpPath = join(installDir, "node_modules", "@agent-finops", "mcp", "dist", "server.js");
   const packedRuntimePath = join(
     installDir,
     "node_modules",
@@ -108,22 +106,6 @@ try {
   ) {
     throw new Error("Packed CLI or alias did not produce the expected clean-install output.");
   }
-  const mcpHelp = execFileSync(process.execPath, [mcpPath, "--help"], {
-    cwd: installDir,
-    encoding: "utf8"
-  });
-  const mcpVersion = execFileSync(process.execPath, [mcpPath, "--version"], {
-    cwd: installDir,
-    encoding: "utf8"
-  });
-  if (
-    !mcpHelp.includes("Start the local stdio MCP server") ||
-    !mcpHelp.includes("invoking AI client") ||
-    mcpVersion.trim() !== expectedVersion
-  ) {
-    throw new Error("Packed MCP help/version did not exit with the expected clean-install output.");
-  }
-
   // Exercise the exact standalone runtime copied out of the installed npm
   // tarball. This catches missing dist assets and repository-path assumptions
   // that source-level installer tests cannot see.
@@ -208,21 +190,15 @@ try {
   if (backupEntries.length !== 0) {
     throw new Error("Packed statusline uninstall left owned recovery backups behind.");
   }
-  execFileSync(process.execPath, [resolve(root, "scripts/smoke-mcp.mjs"), mcpPath], {
-    cwd: root,
-    stdio: ["ignore", "pipe", "inherit"]
-  });
 
   console.log(JSON.stringify({
     status: "pass",
-    install: "five local tarballs into an empty consumer project",
+    install: "four local tarballs into an empty consumer project",
     expectedVersion,
     installed,
     cliHelp: "pass",
     aliasSample: "pass",
-    mcpHelpVersion: "pass",
-    statuslineInstallRenderUninstall: "pass",
-    mcpProtocol: "pass"
+    statuslineInstallRenderUninstall: "pass"
   }));
 } finally {
   await rm(scratch, { recursive: true, force: true });

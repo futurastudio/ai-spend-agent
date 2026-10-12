@@ -116,15 +116,3 @@ requires confirmation to repeat the identical retained request. Abandoning an
 unused request removes its local key and does not claim remote revocation.
 Disconnect does not promise deletion of previously accepted data; see the
 [hosted privacy policy](https://asktilden.com/privacy).
-
-## Ask about your hosted reports
-
-[Workspace MCP](https://asktilden.com/docs/mcp) provides assisted read-only access
-to hosted spend, projects, briefing and budget settings. The **Plugin / ChatGPT
-Pilot** uses that hosted connection and requires confirmed private access. It is
-not publicly listed. Neither is the [local npm MCP server](MCP.md) or the
-[local Codex plugin](../plugins/aibill/README.md).
-
-[Join the waitlist](https://asktilden.com/?ref=github-workspace-guide#beta) for
-updates and access invitations. Joining does not create a Workspace or activate
-a provider, machine or AI-client connection.

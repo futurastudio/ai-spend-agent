@@ -64,7 +64,7 @@ describe("waitlist payload contract (CI creep guard)", () => {
     ];
     expect(refs).toEqual(["cli-receipt", "cli-signup", "cli-signup-starfund", "cli-receipt-starfund"]);
     for (const ref of refs) {
-      // The deployed route (apps/web/app/api/waitlist/route.ts) rewrites any
+      // The signup service rewrites any
       // ref failing this regex — dots included — to "direct" (verdict B1).
       expect(ref, creepGuardHint).toMatch(deployedRefPattern);
       expect(ref, creepGuardHint).toMatch(/^cli-(receipt|signup)(-[a-z0-9-]{1,24})?$/);
