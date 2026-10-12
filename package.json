@@ -4,15 +4,16 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "apps/*"
+    "packages/core",
+    "packages/report",
+    "packages/cli",
+    "packages/aibill"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run typecheck",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
-    "check:adapters": "node scripts/check-plugin-adapters.mjs",
     "check:public-boundary": "node --test scripts/public-boundary-rules.test.mjs && node scripts/check-public-boundary.mjs",
     "check:release-packages": "node scripts/check-release-packages.mjs",
     "check:source-fixtures": "node scripts/check-local-agent-format-fixtures.mjs",
@@ -24,31 +25,17 @@
     "check:source-docs": "npm run build --workspace @agent-finops/core && node scripts/generate-local-agent-source-docs.mjs --check",
     "smoke:packed-install": "node scripts/smoke-packed-install.mjs",
     "smoke:library": "node scripts/smoke-library-consumer.mjs",
-    "audit:mcp-fixtures": "node scripts/audit-mcp-fixture-matrix.mjs",
     "benchmark:context": "npm run build && node scripts/benchmark-context-health.mjs",
     "benchmark:init": "npm run build && node scripts/benchmark-init.mjs",
     "benchmark:statusline": "npm run build --workspace ai-spend-agent && node scripts/benchmark-statusline.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9"
   },
   "dependencies": {
     "zod": "^4.1.0"
-  },
-  "overrides": {
-    "@hono/node-server": "2.0.12",
-    "body-parser": "2.3.0",
-    "browserslist": "4.29.0",
-    "fast-uri": "3.1.8",
-    "hono": "4.12.34",
-    "nanoid": "3.3.18",
-    "next": {
-      "postcss": "8.5.24",
-      "sharp": "0.35.5"
-    }
   },
   "engines": {
     "node": ">=22"

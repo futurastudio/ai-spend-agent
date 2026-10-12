@@ -17,7 +17,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run check:adapters
       - run: npm run check:public-boundary
       - run: npm run check:source-fixtures
       - run: npm run check:source-docs
@@ -34,37 +33,15 @@ jobs:
       - run: node packages/cli/dist/index.js --sample --no-color
       # Alias bin must run the exact same CLI.
       - run: node packages/aibill/run.js --help
-      # Spawn the built MCP server, negotiate the protocol, list all tools,
-      # and verify the broad-root safety guard. Unit coverage separately
-      # exercises npm-style bin symlink resolution.
-      - run: node scripts/smoke-mcp.mjs
-      # Exercise all nine tools over the built stdio protocol against an
-      # isolated empty environment plus an explicitly labeled sample state.
-      - run: npm run audit:mcp-fixtures
       # The workspace build above refreshes dist; now dry-pack every
       # publishable package and inspect its public manifest.
       - run: npm run check:release-packages
-      # Install all five real tarballs into an empty consumer project, then
-      # exercise the CLI alias and MCP protocol from the installed graph.
+      # Install all four real tarballs into an empty consumer project, then
+      # exercise the CLI alias and statusline lifecycle from the installed graph.
       - run: npm run smoke:packed-install
       # Exercise the documented Node/TypeScript library contract from packed
       # core/report tarballs and prove unsupported deep imports stay closed.
       - run: npm run smoke:library
-
-  web:
-    name: Waitlist app typecheck + build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx tsc --noEmit
-        working-directory: apps/web
-      - run: npx next build
-        working-directory: apps/web
 
   glance-macos:
     name: Glance macOS tests + ad-hoc bundle

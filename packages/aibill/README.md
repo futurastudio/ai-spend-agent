@@ -18,7 +18,7 @@ Workspace. Missing evidence stays missing; `--sample` explicitly selects a demo.
 
 Local values are API-equivalent estimates, not subscription charges or invoices.
 Claude Code/Codex readers are live-verified; Gemini CLI is experimental and
-fixture-verified, supported only in financial CLI/report/local MCP surfaces.
+fixture-verified, supported only in financial CLI/report surfaces.
 Gemini does not feed statusline, Glance, Context Health, Apply or plan/runway.
 `npx aibill@latest doctor --sources` shows reader validation separately from
 each number’s financial label and coverage.
@@ -58,8 +58,7 @@ for updates and access invitations; joining does not grant immediate access.
 ## Privacy
 
 Default transcript analysis runs locally. Reports remain local until shared.
-Explicit Workspace pushes send only the approved facts. Local MCP results go
-to the AI client you configure and follow its data policy. Explicit provider
+Explicit Workspace pushes send only the approved facts. Explicit provider
 sync uses the referenced credential only with that provider’s read-only API;
 aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 Workspace pairing uses separate private local device credentials.

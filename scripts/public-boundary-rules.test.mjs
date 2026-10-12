@@ -8,6 +8,23 @@ import {
 
 describe("public-boundary path rules", () => {
   const privatePaths = [
+    "ROADMAP.md",
+    "docs/product/ROADMAP.md",
+    "apps/web/package.json",
+    "apps/api/.gitkeep",
+    "packages/mcp/src/server.ts",
+    "packages/connectors/src/.gitkeep",
+    "packages/db/.gitkeep",
+    "plugins/aibill/README.md",
+    ".agents/plugins/marketplace.json",
+    "scripts/waitlist-acceptance.mjs",
+    "scripts/audit-mcp-stdio.mjs",
+    "scripts/preview-waitlist-email.mjs",
+    ".github/workflows/launch-alerts.yml",
+    "packages/core/src/receiptShare.ts",
+    "docs/MCP.md",
+    "docs/EMAIL_SEND_POLICY.md",
+    "docs/RUNBOOK.md",
     "docs/MONETIZATION.md",
     "docs/monetization/tier-strategy.md",
     "planning/PRICING_STRATEGY.md",
@@ -44,8 +61,11 @@ describe("public-boundary path rules", () => {
   }
 
   const publicPaths = [
-    "ROADMAP.md",
-    "docs/product/ROADMAP.md",
+    "packages/core/src/contextHealth.ts",
+    "packages/cli/src/workspace.ts",
+    "apps/glance-macos/Package.swift",
+    "docs/TELEMETRY.md",
+    "docs/WORKSPACE.md",
     "docs/blog/investor-audience.md",
     "docs/api/specs/receipt-contract.md",
     "docs/product/SPECIFICATION.md",

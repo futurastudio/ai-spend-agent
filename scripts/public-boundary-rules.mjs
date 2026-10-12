@@ -8,6 +8,8 @@ const namedPrivateDocuments = [
   /(^|\/)(?:PRICING[-_]?(?:STRATEGY|MODEL|PLAN)|REVENUE[-_]?(?:STRATEGY|MODEL|PLAN)|TEAM[-_]?TIERS?|UNIT[-_]?ECONOMICS)(?:_[^/]*)?(?:\.[^/]*)?$/i,
   /(^|\/)(?:(?:[a-z0-9][a-z0-9_-]*[-_])?(?:BUILD|CLOUD)[-_]?SPEC|(?:INTERNAL|PRIVATE)[-_]?(?:BUILD[-_]?)?SPEC)(?:_[^/]*)?(?:\.[^/]*)?$/i,
   /(^|\/)(?:INTERNAL|PRIVATE)[-_]?ROADMAP(?:_[^/]*)?(?:\.[^/]*)?$/i,
+  /(^|\/)ROADMAP(?:\.[^/]*)?$/i,
+  /(^|\/)(?:EMAIL_SEND_POLICY|RUNBOOK|MCP)(?:\.[^/]*)?$/i,
   /(^|\/)ROADMAP[-_]?(?:INTERNAL|PRIVATE)(?:_[^/]*)?(?:\.[^/]*)?$/i
 ];
 
@@ -15,7 +17,8 @@ const privateDirectoryPatterns = [
   /(^|\/)(?:research|gtm|internal|private)(?:\/|$)/i,
   /(^|\/)monetization(?:\/|$)/i,
   /(^|\/)(?:build[-_]?specs?|internal[-_]?specs?|private[-_]?specs?)(?:\/|$)/i,
-  /(^|\/)\.(?:codex|claude)(?:\/|$)/i,
+  /(^|\/)plugins(?:\/|$)/i,
+  /(^|\/)\.(?:codex|claude|agents)(?:\/|$)/i,
   /(^|\/)(?:investors?|investor[-_]?materials?|fundrais(?:e|ing)|pitch[-_]?deck)(?:\/|$)/i
 ];
 
@@ -28,6 +31,10 @@ export const forbiddenPathPatterns = [
   ...namedPrivateDocuments,
   ...privateDirectoryPatterns,
   ...investorMaterialPatterns,
+  /^(?:apps\/(?:web|api)|packages\/(?:mcp|connectors|db))(?:\/|$)/i,
+  /^scripts\/(?:audit-mcp-[^/]+|smoke-mcp|check-plugin-adapters|preview-waitlist-email|waitlist-[^/]+)\.mjs$/i,
+  /^packages\/core\/src\/receiptShare(?:\.test)?\.ts$/i,
+  /^\.github\/workflows\/launch-alerts\.yml$/i,
   /(^|\/)\.npmrc$/i
 ];
 

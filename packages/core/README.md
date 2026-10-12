@@ -8,7 +8,7 @@ Glance contract. Gemini support is fixture-verified and does not enter the
 Glance/status-line or Context Health contracts.
 
 Most users should run `npx aibill`. This package is for integrations that
-need the same evidence-labeled calculations as the CLI and MCP server.
+need the same evidence-labeled calculations as the CLI and Glance.
 
 ## Supported library preview
 
@@ -41,8 +41,7 @@ keep provenance and confidence labels truthful: reserve `verified` for
 official provider-reported financial evidence, keep modeled/local value
 `estimated` or `missing`, and leave unvalidated adapters `untested`.
 
-This is an open foundation for Tilden’s work on financial infrastructure for the AI workforce. This
-package includes contracts for locally confirmed ownership, local
+This package includes contracts for locally confirmed ownership, local
 self-attested approvals, and opt-in accepted GitHub outcomes. Those are
 not company-wide identity, RBAC, approval routing, invoice reconciliation, or
 verified business ROI.
@@ -57,5 +56,4 @@ Source-boundary approval is a third, permission-only field: approving a folder
 for read-only scanning never verifies any financial number inside it.
 
 MIT licensed. See the repository
-[README](https://github.com/futurastudio/ai-spend-agent#readme) and
-[public roadmap](https://github.com/futurastudio/ai-spend-agent/blob/main/ROADMAP.md).
+[README](https://github.com/futurastudio/ai-spend-agent#readme).

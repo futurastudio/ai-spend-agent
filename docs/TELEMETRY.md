@@ -78,4 +78,4 @@ as the source IP is shared at the network layer; the no-join claim stops
 at the payload.)
 
 **Embedding:** telemetry is wired only in the `aibill` bin entrypoint.
-Library consumers of `runCli` and the MCP server never emit events.
+Library consumers of `runCli` never emit events.

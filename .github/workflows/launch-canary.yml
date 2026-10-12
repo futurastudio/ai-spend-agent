@@ -1,27 +1,15 @@
-name: Launch canary
+name: CLI canary
 
-# Synthetic launch-week canary: proves the PUBLISHED package installs and the
-# public endpoints answer, from a machine we do not control. Telemetry only
-# reports from machines where the CLI actually runs — a broken publish, a dead
-# endpoint, or a downed site produces silence, not signal. This closes that
-# gap with zero new infrastructure: a scheduled failure here emails repo
-# watchers via GitHub's native workflow-failure notifications.
-#
-# Every probe is read-only or intentionally invalid — nothing is stored by any
-# request this workflow makes, and telemetry is hard-disabled three ways
-# (DO_NOT_TRACK, AI_SPEND_NO_TELEMETRY, and the CI env GitHub always sets —
-# packages/cli/src/telemetry.ts treats each as a kill-switch).
+# Verify the published CLI installs and renders receipts with telemetry disabled.
 
 on:
   schedule:
-    # Every 30 minutes during launch week. Relax to hourly or a few times a
-    # day once launch week is over — edit this cron, nothing else.
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
   canary:
-    name: Publish + endpoints canary
+    name: Published CLI canary
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -168,45 +156,3 @@ jobs:
           if grep -l '`' "$H"/*.html 2>/dev/null | grep -q .; then
             echo "FAIL: literal backtick rendered in an HTML artifact"; exit 1
           fi
-
-      - name: telemetry endpoint alive
-        if: always()  # production monitoring must never be switched off by an upstream fixture failure
-        run: |
-          # An intentionally INVALID body: {} fails the exactly-one-"events"-
-          # key envelope check (apps/web/app/api/telemetry/route.ts) and is
-          # rejected with 422 before anything could be stored. 422 = endpoint
-          # alive and enforcing its schema; 5xx or a timeout = down.
-          code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
-            -X POST -H 'content-type: application/json' -d '{}' \
-            https://asktilden.com/api/telemetry)"
-          echo "POST {} /api/telemetry -> $code (expected 422)"
-          test "$code" = "422"
-
-      - name: waitlist endpoint alive
-        if: always()  # production monitoring must never be switched off by an upstream fixture failure
-        run: |
-          # {} is valid JSON with no usable email, so the route rejects it
-          # with 422 (apps/web/app/api/waitlist/route.ts; 400 is reserved for
-          # malformed JSON). Nothing is stored, and no real-looking email is
-          # ever sent. One POST per run stays far under the 5/min rate limit.
-          #
-          # SCOPE — READ THIS BEFORE TRUSTING IT: 422 is returned at email
-          # validation, BEFORE storeInSupabase() is called. This step proves
-          # the route is alive and enforcing its schema. It proves NOTHING
-          # about whether a signup can actually be stored — a rotated
-          # service-role key would 503 every real signup while this stayed
-          # green. The storage path is proven by the `waitlist-storage` job
-          # in .github/workflows/launch-alerts.yml, which does a real
-          # insert+delete round trip. Do not delete that job believing this
-          # one covers it.
-          code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 \
-            -X POST -H 'content-type: application/json' -d '{}' \
-            https://asktilden.com/api/waitlist)"
-          echo "POST {} /api/waitlist -> $code (expected 422)"
-          test "$code" = "422"
-
-      - name: site up
-        if: always()  # production monitoring must never be switched off by an upstream fixture failure
-        run: |
-          curl -sfS -o /dev/null -m 15 https://asktilden.com
-          curl -s -m 15 https://asktilden.com | grep -qi "Tilden"
