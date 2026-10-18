@@ -8,6 +8,7 @@ import {
   readProviderContracts,
   renderProviderContractDoc,
   renderProviderContractRuntime,
+  resourceAlertClass,
   semanticFingerprint,
   validateProviderContracts
 } from "./provider-contract-lib.mjs";
@@ -50,7 +51,9 @@ test("a declared stale contract blocks release and reaches generated runtime sta
 });
 
 test("semantic drift fails closed while recording a non-secret content hash", async () => {
-  const baselineBody = "<main>inclusive total and final invoice</main>";
+  // The padding keeps the claim added below outside every marker's semantic window.
+  const padding = "unchanged ".repeat(100);
+  const baselineBody = `<main>inclusive total and final invoice ${padding}</main>`;
   const baselineNormalized = normalizeDocument(baselineBody);
   const contracts = {
     schemaVersion: 1,
@@ -76,11 +79,46 @@ test("semantic drift fails closed while recording a non-secret content hash", as
 
   const distantClaimDrift = await inspectRemoteContracts(
     contracts,
-    async () => new Response(`<main>inclusive total and final invoice ${"unchanged ".repeat(100)}credits are final cash settlement</main>`)
+    async () => new Response(`<main>inclusive total and final invoice ${padding}credits are final cash settlement</main>`)
   );
   assert.equal(distantClaimDrift[0].state, "stale_contract");
   assert.deepEqual(distantClaimDrift[0].missingMarkers, []);
+  assert.equal(distantClaimDrift[0].semanticSha256, distantClaimDrift[0].expectedSemanticSha256);
   assert.equal(distantClaimDrift[0].error, "reviewed official page content changed");
+});
+
+test("a changed semantic fingerprint is reported even when the whole page changed too", async () => {
+  const markers = ["inclusive total", "final invoice"];
+  const baselineNormalized = normalizeDocument("<main>inclusive total and final invoice</main>");
+  const contracts = {
+    contracts: [{
+      id: "fixture",
+      provider: "fixture",
+      resources: [{
+        kind: "contract",
+        url: "https://developers.openai.com/fixture",
+        requiredMarkers: markers,
+        semanticSha256: semanticFingerprint(baselineNormalized, markers),
+        contentSha256: createHash("sha256").update(baselineNormalized).digest("hex")
+      }]
+    }]
+  };
+  const [observation] = await inspectRemoteContracts(contracts, async () => new Response("<main>inclusive total, api_source and final invoice</main>"));
+  assert.equal(observation.state, "stale_contract");
+  assert.notEqual(observation.contentSha256, observation.expectedContentSha256);
+  assert.equal(observation.error, "reviewed semantic fingerprint changed");
+});
+
+test("alert classes default from the resource kind and are rendered when declared", async () => {
+  const contracts = await readProviderContracts();
+  assert.equal(resourceAlertClass({ kind: "contract" }), "api_contract");
+  assert.equal(resourceAlertClass({ kind: "pricing" }), "pricing");
+  assert.equal(resourceAlertClass({ kind: "reconciliation" }), "reconciliation");
+  assert.equal(resourceAlertClass({ kind: "contract", alertClass: "financial_schema" }), "financial_schema");
+  const output = renderProviderContractDoc(contracts);
+  assert.match(output, /\[contract\]\(https:\/\/developers\.openai\.com\/api\/reference\/resources\/admin\/subresources\/organization\/subresources\/usage\) — alert class `financial_schema`;/);
+  assert.match(output, /Each drifted official page gets its own GitHub issue/);
+  assert.match(output, /\| `financial_schema` .* \| P0 \| P1 \| P1 \|/);
 });
 
 test("network failure becomes stale_contract and still yields a reportable observation", async () => {

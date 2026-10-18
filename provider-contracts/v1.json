@@ -40,6 +40,7 @@
       "resources": [
         {
           "kind": "contract",
+          "alertClass": "financial_schema",
           "url": "https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage",
           "requiredMarkers": [
             "GET /organization/usage/completions",

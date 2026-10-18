@@ -4,10 +4,20 @@ on:
   schedule:
     - cron: "17 11 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview the alert issue writes in the run summary without changing any issue
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   issues: write
+
+# Two overlapping runs could both open an issue for the same drifted page.
+concurrency:
+  group: provider-contract-drift
+  cancel-in-progress: false
 
 jobs:
   contracts:
@@ -39,40 +49,24 @@ jobs:
           name: provider-contract-drift-report
           path: provider-contract-drift.json
           if-no-files-found: error
-      - name: Open or update drift issue
-        if: always() && (steps.static.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.fixtures.outcome == 'failure')
+      # One issue per drifted official page, keyed by contract ID, resource kind
+      # and URL: opened when the page drifts, updated while it stays drifted,
+      # closed once it matches its reviewed baseline again. Runs on every
+      # outcome except cancellation, so resolved pages close. Writes only on the
+      # default branch; other refs and dry_run dispatches preview the plan in
+      # the run summary.
+      - name: Sync per-page drift issues
+        if: ${{ !cancelled() }}
         uses: actions/github-script@v7
+        env:
+          STATIC_OUTCOME: ${{ steps.static.outcome }}
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+          FIXTURES_OUTCOME: ${{ steps.fixtures.outcome }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
         with:
           script: |
-            const fs = require('fs');
-            const title = 'Provider contract drift requires review';
-            const report = fs.existsSync('provider-contract-drift.json')
-              ? fs.readFileSync('provider-contract-drift.json', 'utf8')
-              : JSON.stringify({ status: 'stale_contract', failures: ['Static provider contract validation failed before a remote report was written.'] }, null, 2);
-            const body = [
-              'The daily read-only provider contract monitor detected a documentation or semantic fingerprint change.',
-              '',
-              'No pricing or financial behavior was changed automatically. Treat the affected contract as `stale_contract` until a human reviews the official source and lands an explicit update.',
-              `Checks: declarations=${{ steps.static.outcome }}, remote=${{ steps.drift.outcome }}, fixtures=${{ steps.fixtures.outcome }}.`,
-              '',
-              '```json',
-              report.slice(0, 50000),
-              '```',
-              '',
-              `Workflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            ].join('\n');
-            const { data } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              per_page: 100
-            });
-            const existing = data.find((issue) => issue.title === title && !issue.pull_request);
-            if (existing) {
-              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
-            } else {
-              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
-            }
+            const { runProviderContractAlerts } = await import('${{ github.workspace }}/scripts/provider-contract-alerts.mjs');
+            await runProviderContractAlerts({ github, context, core });
       - name: Fail unresolved drift
         if: always() && (steps.static.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.fixtures.outcome == 'failure')
         run: exit 1

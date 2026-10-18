@@ -38,7 +38,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Prepaid credit application, tax, refunds, discounts and final cash settlement
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
-  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — semantic `57f3e493e666e8d3789c77651033d418875196605bfc85054ca66446ae7f9dcf`; reviewed content `b5da16c6de018c72f1edeafd3b8772f39e5b260b01875982fc5085916c6bb670`
+  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `57f3e493e666e8d3789c77651033d418875196605bfc85054ca66446ae7f9dcf`; reviewed content `b5da16c6de018c72f1edeafd3b8772f39e5b260b01875982fc5085916c6bb670`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52`; reviewed content `9636189eeee10eb3f6dc1d81c6a912a45276e2375928e0b9983ff61081c2f166`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463`; reviewed content `92b79ef7064c7d14ea532de945555ee8c7e0de00b1e058a32e9eea5851edf5e3`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a`; reviewed content `7be1dfb6080329152600896541364a79838d07454b9b57dffe53b17cd1b6d99b`
@@ -189,4 +189,14 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 
 ## Drift behavior
 
-The daily workflow checks required semantics and reviewed normalized-page fingerprints, records the current page hashes, runs provider structural fixtures, and opens or updates a GitHub issue if a contract drifts. Any official-page change is intentionally triaged by a human; the monitor never changes pricing or financial behavior automatically. Until review lands, the contract is `stale_contract` and the affected source cannot be promoted as financially verified in a new release.
+The daily workflow checks required semantics and reviewed normalized-page fingerprints, records the current page hashes and runs provider structural fixtures. Each drifted official page gets its own GitHub issue, keyed by contract ID, resource kind and URL. The monitor updates that issue while the page stays drifted and closes it on the first run where the page matches its reviewed baseline again. Any official-page change is intentionally triaged by a human; the monitor never changes pricing or financial behavior automatically. Until review lands, the contract is `stale_contract` and the affected source cannot be promoted as financially verified in a new release.
+
+Alert priority follows the resource's alert class and the strength of the change:
+
+| Alert class | Required semantics changed or missing | Only other page content changed | Page could not be checked |
+| --- | --- | --- | --- |
+| `financial_schema` (result fields of a cost or usage API that a connector validates strictly) | P0 | P1 | P1 |
+| `api_contract` (default for `contract` resources) | P1 | P3 digest | P2 |
+| `pricing`, `reconciliation` (defaults for those kinds) | P2 | P3 digest | P2 |
+
+P3 changes share one digest issue instead of opening an issue per page, because documentation sites redeploy often and full-page fingerprints change far more often than reviewed claims. Every P3 page must still be reviewed and re-pinned before a release; the release gate stays red until then.
