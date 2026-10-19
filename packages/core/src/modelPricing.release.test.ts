@@ -31,6 +31,30 @@ describe("2026-10-18 reviewed Haiku 5.5 prices", () => {
   });
 });
 
+describe("2026-10-18 reviewed Gemini 4 Argon prices", () => {
+  type Rates = { from?: string; input: number; output: number; cacheRead: number };
+  const model = reviewedEvidence.models.find((entry: { id: string }) => entry.id === "gemini-4-argon");
+  const [change] = model.scheduledRates as Rates[];
+  // The last UTC millisecond before the published change.
+  const lastBefore = new Date(Date.parse(`${change!.from}T00:00:00.000Z`) - 1).toISOString();
+
+  it.each([
+    ["before", lastBefore, model as Rates],
+    ["from", `${change!.from}T00:00:00.000Z`, change!]
+  ])("matches the retained official-price evidence %s its published change", (_side, usageAt, rates) => {
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 1_000_000, outputTokens: 0 }, usageAt)).toBe(rates.input);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 1_000_000 }, usageAt)).toBe(rates.output);
+    expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 }, usageAt)).toBe(rates.cacheRead);
+  });
+
+  it("carries exactly the retained schedule", () => {
+    const rule = findPricingRule(model.id)!;
+    expect(rule.scheduledRates?.map(({ from, inputPerM, outputPerM, cacheReadPerM }) =>
+      ({ from, input: inputPerM, output: outputPerM, cacheRead: cacheReadPerM }))).toEqual(model.scheduledRates);
+    expect(rule.abovePromptTokens).toBeUndefined();
+  });
+});
+
 describe("0.9.13 reviewed Sonnet 5.5 prices", () => {
   it("matches the retained official-price evidence", () => {
     const model = sonnetEvidence.models[0];

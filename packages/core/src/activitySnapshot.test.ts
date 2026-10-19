@@ -196,6 +196,26 @@ describe("buildActivitySnapshot", () => {
     expect(aggregateCalls(calls)[0]?.amountUsd).toBe(16);
   });
 
+  it("allocates dated-rate models at the rates of each call's UTC day", () => {
+    // Codex routed to Gemini 4 Argon: $2 per million input tokens through
+    // 2026-11-30, $4 from 2026-12-01.
+    const argon = (timestamp: string) => call("codex", {
+      model: "gemini-4-argon",
+      timestamp,
+      usageScope: "turn",
+      usage: { inputTokens: 1_000_000, outputTokens: 0 }
+    });
+    const calls = [argon("2026-11-30T20:00:00.000Z"), argon("2026-12-01T10:00:00.000Z")];
+    const snapshot = meteredSnapshotFromCalls(calls, "2026-12-01T12:00:00.000Z");
+
+    expect(aggregateCalls(calls).map((record) => record.amountUsd)).toEqual([2, 4]);
+    expect(snapshot.metered?.apiEquivalent.oneDay).toMatchObject({
+      amountUsd: 6,
+      recordCount: 2,
+      coverage: "complete"
+    });
+  });
+
   it("deduplicates cumulative calls before splitting local daily aggregates", () => {
     const calls = [
       call("codex", {

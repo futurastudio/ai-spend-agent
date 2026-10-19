@@ -1170,15 +1170,16 @@ function apiEquivalentObservations(
 
 /**
  * One call's API-equivalent cost with its tier taken from the largest single
- * request it contains, matching the report's aggregation. Weighting a
- * session-cumulative slice at its own cache-inflated prompt would put it on the
- * wrong tier and skew the allocation.
+ * request it contains and its dated rates from its UTC day, matching the
+ * report's aggregation. Weighting a session-cumulative slice at its own
+ * cache-inflated prompt would put it on the wrong tier and skew the allocation.
  */
 function callAmountUsd(call: LocalAgentCall): number | undefined {
   return estimateTokenCostsUsd(
     call.model,
     [call.usage],
-    [call.maxRequestPromptTokens]
+    [call.maxRequestPromptTokens],
+    call.timestamp
   );
 }
 

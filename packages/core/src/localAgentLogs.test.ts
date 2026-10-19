@@ -1711,6 +1711,48 @@ describe("aggregateCalls", () => {
     })]);
   });
 
+  it("prices Gemini 4 Argon at the rates in force on each call's UTC day", () => {
+    const argonCall = (timestamp: string) => ({
+      agent: "gemini-cli" as const,
+      callId: `argon-${timestamp}`,
+      sessionId: "argon-session",
+      model: "gemini-4-argon",
+      timestamp,
+      project: "gemini-project-test",
+      usageScope: "turn" as const,
+      usageSupport: "complete" as const,
+      reportedTotalTokens: 167_000,
+      // promptTokenCount 150K includes 50K cached tokens.
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 10_000,
+        cacheReadTokens: 50_000,
+        thoughtTokens: 5_000,
+        toolTokens: 2_000
+      },
+      geminiTokenEvidence: {
+        input: 150_000,
+        output: 10_000,
+        cached: 50_000,
+        thoughts: 5_000,
+        tool: 2_000,
+        total: 167_000,
+        cacheAccounting: "included" as const
+      }
+    });
+
+    const records = aggregateCalls([
+      argonCall("2026-11-30T23:59:59.999Z"),
+      argonCall("2026-12-01T00:00:00.000Z")
+    ]);
+
+    // 100K*2 + 10K*10 + 50K*0.10 + 5K*10 + 2K*2 per million, doubled from December.
+    expect(records).toEqual([
+      expect.objectContaining({ timestamp: "2026-11-30T00:00:00.000Z", amountUsd: 0.359, costConfidence: "estimated" }),
+      expect.objectContaining({ timestamp: "2026-12-01T00:00:00.000Z", amountUsd: 0.718, costConfidence: "estimated" })
+    ]);
+  });
+
   it("fails Gemini 2.5 Pro pricing closed when request-level prompt evidence is ambiguous", () => {
     const records = aggregateCalls([{
       agent: "gemini-cli",

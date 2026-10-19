@@ -14,6 +14,12 @@
   writes, pays $0.50, $2.50, $0.625, $1 and $0.05 for the whole request.
   Haiku 5.5 usage was previously unpriced and excluded from totals; it now
   adds an API-equivalent estimate. No other model's estimate changes.
+- Price Gemini 4 Argon (`gemini-4-argon`) at Google's published paid-tier
+  rates per million tokens, by the UTC day of each call: $2 input, $10 output
+  (thinking included) and $0.10 cached input through 2026-11-30, then $4, $20
+  and $0.20 from 2026-12-01. Argon usage was previously unpriced and excluded
+  from totals. Usage keeps the rate in force on its day, and a model with a
+  dated price change is never priced without a usage date.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public

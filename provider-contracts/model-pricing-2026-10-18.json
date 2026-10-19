@@ -3,12 +3,14 @@
   "fetchedAt": "2026-10-19T02:42:56Z",
   "currency": "USD",
   "unit": "per million tokens",
-  "basis": "Standard first-party API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No batch, data-residency, regional or negotiated adjustments. Claude Haiku 5.5 is priced per request: a request whose prompt, counting input, cache read and cache write tokens, is over 100,000 tokens pays the above rates for the whole request, output included; a prompt of exactly 100,000 tokens pays the base rates. Earlier evidence files are retained unchanged.",
+  "basis": "Standard first-party API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No batch, flex, priority, contributor-tier, data-residency, regional or negotiated adjustments. Claude Haiku 5.5 is priced per request: a request whose prompt, counting input, cache read and cache write tokens, is over 100,000 tokens pays the above rates for the whole request, output included; a prompt of exactly 100,000 tokens pays the base rates. Gemini 4 Argon is paid-tier only, has no prompt-size tier and one input rate for every modality; output includes thinking tokens, and cacheRead is the context caching price (implicit caching only, so no cache-write or storage price). Its base rates apply through 2026-11-30 and each scheduledRates entry from its date; the page names no time zone, so the change applies by the usage's UTC day. Earlier evidence files are retained unchanged.",
   "sources": [
-    "https://platform.claude.com/docs/en/about-claude/pricing"
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://ai.google.dev/gemini-api/docs/pricing"
   ],
   "pageContentSha256": {
-    "https://platform.claude.com/docs/en/about-claude/pricing": "f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66"
+    "https://platform.claude.com/docs/en/about-claude/pricing": "f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66",
+    "https://ai.google.dev/gemini-api/docs/pricing": "6e96f6645302d088c08a494f067f8c15d3eec065a1dc99b2b8fc5f9666a7ae03"
   },
   "models": [
     {
@@ -25,6 +27,21 @@
       "aboveCacheRead": 0.05,
       "aboveCacheWrite5m": 0.625,
       "aboveCacheWrite1h": 1
+    },
+    {
+      "id": "gemini-4-argon",
+      "source": "https://ai.google.dev/gemini-api/docs/pricing",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "scheduledRates": [
+        {
+          "from": "2026-12-01",
+          "input": 4,
+          "output": 20,
+          "cacheRead": 0.2
+        }
+      ]
     }
   ]
 }

@@ -199,6 +199,63 @@ describe("model pricing coverage", () => {
     })).toBe(1.05);
   });
 
+  // Official Gemini API pricing reviewed 2026-10-18:
+  // https://ai.google.dev/gemini-api/docs/pricing
+  // "$2.00 through November 30, 2026. $4.00 starting December 1, 2026."
+  describe("Gemini 4 Argon dated rates", () => {
+    // 100K fresh input, 50K cached, 2K tool prompt, 10K output, 5K thinking.
+    const request = {
+      inputTokens: 100_000,
+      cacheReadTokens: 50_000,
+      toolTokens: 2_000,
+      outputTokens: 10_000,
+      thoughtTokens: 5_000
+    };
+
+    it("uses $2 / $10 / $0.10 through 2026-11-30 and $4 / $20 / $0.20 from 2026-12-01 (UTC)", () => {
+      // 100K*2 + 50K*0.10 + 2K*2 + 10K*10 + 5K*10, per million; doubled from December.
+      expect(estimateTokenCostUsd("gemini-4-argon", request, "2026-10-14T09:00:00.000Z")).toBe(0.359);
+      expect(estimateTokenCostUsd("gemini-4-argon", request, "2026-11-30T23:59:59.999Z")).toBe(0.359);
+      expect(estimateTokenCostUsd("gemini-4-argon", request, "2026-12-01T00:00:00.000Z")).toBe(0.718);
+      expect(estimateTokenCostUsd("gemini-4-argon", request, "2026-12-01")).toBe(0.718);
+      expect(estimateTokenCostUsd("GEMINI-4-ARGON", request, "2027-06-01T12:00:00.000Z")).toBe(0.718);
+      expect(estimateTokenCostsUsd("gemini-4-argon", [request, request], undefined, "2026-11-30")).toBe(0.718);
+    });
+
+    it("bills thinking tokens as output and tool prompt tokens as input, with no prompt-size tier", () => {
+      expect(estimateTokenCostUsd("gemini-4-argon", { inputTokens: 0, outputTokens: 0, thoughtTokens: 1_000_000 }, "2026-11-30")).toBe(10);
+      expect(estimateTokenCostUsd("gemini-4-argon", { inputTokens: 0, outputTokens: 0, toolTokens: 1_000_000 }, "2026-11-30")).toBe(2);
+      expect(usesPromptTieredPricing("gemini-4-argon")).toBe(false);
+      expect(estimateTokenCostUsd("gemini-4-argon", { inputTokens: 1_000_000, outputTokens: 0 }, "2026-11-30")).toBe(2);
+    });
+
+    it.each([undefined, "", "not-a-date", "11/30/2026"])("never guesses a rate for usage dated %j", (usageAt) => {
+      expect(estimateTokenCostUsd("gemini-4-argon", request, usageAt)).toBeUndefined();
+      expect(estimateTokenCostsUsd("gemini-4-argon", [request], undefined, usageAt)).toBeUndefined();
+      // The model is still known, so it is not reported as missing from the price table.
+      expect(findPricingRule("gemini-4-argon")).toBeDefined();
+    });
+
+    it.each(["gemini-4", "gemini-4-argon-preview", "gemini-4-argon-001", "gemini-4.1-argon", "models/gemini-4-argon"])(
+      "%s stays unpriced",
+      (model) => {
+        expect(findPricingRule(model)).toBeUndefined();
+        expect(estimateTokenCostUsd(model, request, "2026-11-30")).toBeUndefined();
+      }
+    );
+
+    it.each(["gemini-2.5-pro", "claude-haiku-5-5", "gpt-5.6-sol"])(
+      "%s keeps the same price whatever the usage date",
+      (model) => {
+        const undated = estimateTokenCostUsd(model, usage);
+        expect(undated).toBeDefined();
+        expect(estimateTokenCostUsd(model, usage, "2026-11-30")).toBe(undated);
+        expect(estimateTokenCostUsd(model, usage, "2026-12-01")).toBe(undated);
+        expect(estimateTokenCostUsd(model, usage, "not-a-date")).toBe(undated);
+      }
+    );
+  });
+
   it("kimi-k2.7-code no longer falls through to the old K2 rule (0.9.3 mispricing bug)", () => {
     // 0.9.3's `^kimi-k2` prefix swallowed the k2.7/k2.6 dot families and
     // priced them ~40% low ($0.60/$2.50 vs the real $0.95/$4.00) — wrong
