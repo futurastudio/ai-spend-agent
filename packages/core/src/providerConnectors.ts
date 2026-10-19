@@ -415,6 +415,7 @@ type OpenAiUsageResult = {
   input_tokens?: number;
   input_uncached_tokens?: number;
   input_cache_write_tokens?: number;
+  input_cache_write_12h_tokens?: number;
   output_tokens?: number;
   input_cached_tokens?: number;
   input_text_tokens?: number;
@@ -532,11 +533,20 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
           ? component
           : undefined;
       };
+      // OpenAI reports 30-minute and 12-hour cache writes as separate parts of the
+      // inclusive input total. The record's cache-write total is their sum, and is
+      // omitted rather than understated when either supplied part is invalid.
       const inputAccountingValid = componentFamilyWithinParent([
         result.input_uncached_tokens,
         result.input_cache_write_tokens,
+        result.input_cache_write_12h_tokens,
         result.input_cached_tokens
       ], inputTokens);
+      const cacheWriteParts = [result.input_cache_write_tokens, result.input_cache_write_12h_tokens]
+        .filter((value) => value !== undefined).map(inputComponent);
+      const inputCacheWriteTokens = cacheWriteParts.length > 0 && cacheWriteParts.every((value): value is number => value !== undefined)
+        ? cacheWriteParts.reduce((sum, value) => sum + value, 0)
+        : undefined;
       const inputModalitiesValid = componentFamilyWithinParent([
         result.input_text_tokens,
         result.input_image_tokens,
@@ -567,8 +577,8 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
         ...(inputAccountingValid && inputComponent(result.input_uncached_tokens) !== undefined
           ? { inputUncachedTokens: inputComponent(result.input_uncached_tokens) }
           : {}),
-        ...(inputAccountingValid && inputComponent(result.input_cache_write_tokens) !== undefined
-          ? { inputCacheWriteTokens: inputComponent(result.input_cache_write_tokens) }
+        ...(inputAccountingValid && inputCacheWriteTokens !== undefined
+          ? { inputCacheWriteTokens }
           : {}),
         ...(inputAccountingValid && cacheReadTokens !== undefined
           ? { cacheReadTokens }
@@ -2183,6 +2193,7 @@ function markMalformedUsageRows(
             "input_tokens",
             "input_uncached_tokens",
             "input_cache_write_tokens",
+            "input_cache_write_12h_tokens",
             "input_cached_tokens",
             "input_text_tokens",
             "input_image_tokens",
@@ -2211,6 +2222,7 @@ function markMalformedUsageRows(
           for (const field of [
             "input_uncached_tokens",
             "input_cache_write_tokens",
+            "input_cache_write_12h_tokens",
             "input_cached_tokens",
             "input_text_tokens",
             "input_image_tokens",
@@ -2255,7 +2267,7 @@ function markMalformedUsageRows(
               report(`${resultPath}.${fields.join("+")}`, `component family exceeds ${parentField}; the contradictory component family was excluded`);
             }
           };
-          reportFamilyOverflow(["input_uncached_tokens", "input_cache_write_tokens", "input_cached_tokens"], inputTotal, "input_tokens");
+          reportFamilyOverflow(["input_uncached_tokens", "input_cache_write_tokens", "input_cache_write_12h_tokens", "input_cached_tokens"], inputTotal, "input_tokens");
           reportFamilyOverflow(["input_text_tokens", "input_image_tokens", "input_audio_tokens"], inputTotal, "input_tokens");
           reportFamilyOverflow(["input_cached_text_tokens", "input_cached_image_tokens", "input_cached_audio_tokens"], cachedTotal, "input_cached_tokens");
           reportFamilyOverflow(["output_text_tokens", "output_image_tokens", "output_audio_tokens"], outputTotal, "output_tokens");
@@ -2384,7 +2396,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].amount", "data[].results[].amount.value", "data[].results[].amount.currency", "data[].results[].line_item", "data[].results[].organization_id", "data[].results[].organization_name", "data[].results[].project_id", "data[].results[].project_name", "data[].results[].user_id", "data[].results[].user_email", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].quantity", "data[].results[].quantity_unit"]);
   }
   if (provider === "openai" && label.includes("usage")) {
-    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
+    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cache_write_12h_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("cost")) {
     return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo"]);

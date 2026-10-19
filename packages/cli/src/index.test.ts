@@ -5445,7 +5445,7 @@ describe("minimal CLI vertical slice", () => {
       new URL(`../../core/src/fixtures/providers/${name}`, import.meta.url),
       "utf8"
     ));
-    const usagePage = { object: "page", data: [], has_more: false, next_page: null };
+    const usagePage = await fixture("openai-usage-documented-keys.json");
     const syncThenDoctor = async (costsPage: unknown) => {
       const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-openai-live-keys-"));
       vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
@@ -5470,7 +5470,7 @@ describe("minimal CLI vertical slice", () => {
 
     expect(healthy.sync.exitCode).toBe(0);
     expect(healthy.sync.stdout).toContain("coverage: complete");
-    expect(healthy.sync.stdout).toContain("records fetched: 4");
+    expect(healthy.sync.stdout).toContain("records fetched: 7");
     expect(healthy.doctor.exitCode).toBe(0);
     expect(healthy.openAi).toContain("validation coverage: live_verified");
     expect(healthy.openAi).toContain("last error: none recorded");
