@@ -242,7 +242,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.13$/);
+    expect(result.stdout).toMatch(/^0\.9\.14$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -3400,6 +3400,8 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("FIRST RECEIPT");
     expect(result.stdout).toContain("statusline installed in Claude user settings");
+    expect(result.stdout).toContain("team access: npx aibill signup <email> · optional");
+    expect(result.stdout).not.toContain("launch updates");
     expect(JSON.parse(await readFile(join(homeDirectory, ".claude", "settings.json"), "utf8")))
       .toHaveProperty("statusLine.command", "node ~/.aibill/bin/statusline.mjs");
   });

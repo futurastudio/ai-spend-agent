@@ -50,8 +50,8 @@ async function tempStateFile(): Promise<string> {
 
 describe("waitlist payload contract (CI creep guard)", () => {
   it("pins the serialized payload byte shape to exactly {email, ref}", () => {
-    const body = serializeWaitlistPayload({ email: "you@work.com", ref: buildWaitlistRef("receipt") });
-    expect(body, creepGuardHint).toBe('{"email":"you@work.com","ref":"cli-receipt"}');
+    const body = serializeWaitlistPayload({ email: "you@work.com", ref: buildWaitlistRef("team-receipt") });
+    expect(body, creepGuardHint).toBe('{"email":"you@work.com","ref":"cli-team-receipt"}');
     expect(Object.keys(JSON.parse(body) as object), creepGuardHint).toEqual(["email", "ref"]);
   });
 
@@ -60,21 +60,28 @@ describe("waitlist payload contract (CI creep guard)", () => {
       buildWaitlistRef("receipt"),
       buildWaitlistRef("signup"),
       buildWaitlistRef("signup", "starfund"),
-      buildWaitlistRef("receipt", "starfund")
+      buildWaitlistRef("receipt", "starfund"),
+      buildWaitlistRef("team-receipt"),
+      buildWaitlistRef("team-signup"),
+      buildWaitlistRef("team-signup", "starfund"),
+      buildWaitlistRef("team-signup", "a".repeat(24))
     ];
-    expect(refs).toEqual(["cli-receipt", "cli-signup", "cli-signup-starfund", "cli-receipt-starfund"]);
+    expect(refs).toEqual([
+      "cli-receipt", "cli-signup", "cli-signup-starfund", "cli-receipt-starfund",
+      "cli-team-receipt", "cli-team-signup", "cli-team-signup-starfund", `cli-team-signup-${"a".repeat(24)}`
+    ]);
     for (const ref of refs) {
       // The signup service rewrites any
       // ref failing this regex — dots included — to "direct" (verdict B1).
       expect(ref, creepGuardHint).toMatch(deployedRefPattern);
-      expect(ref, creepGuardHint).toMatch(/^cli-(receipt|signup)(-[a-z0-9-]{1,24})?$/);
+      expect(ref, creepGuardHint).toMatch(/^cli-(receipt|signup|team-receipt|team-signup)(-[a-z0-9-]{1,24})?$/);
       expect(ref).not.toContain(".");
     }
   });
 
   it("sends exactly one POST with the pinned url, headers, and body — and nothing else", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(201));
-    const payload = { email: "you@work.com", ref: buildWaitlistRef("signup", "starfund") };
+    const payload = { email: "you@work.com", ref: buildWaitlistRef("team-signup", "starfund") };
     const outcome = await postWaitlistSignup(payload, { fetchImpl: fetchImpl as unknown as typeof fetch });
 
     expect(outcome).toBe("sent");
@@ -85,7 +92,7 @@ describe("waitlist payload contract (CI creep guard)", () => {
     expect(init.method).toBe("POST");
     // The FULL explicit header set — header creep fails here (verdict m1).
     expect(init.headers).toEqual({ "content-type": "application/json", "user-agent": "aibill-cli" });
-    expect(init.body, creepGuardHint).toBe('{"email":"you@work.com","ref":"cli-signup-starfund"}');
+    expect(init.body, creepGuardHint).toBe('{"email":"you@work.com","ref":"cli-team-signup-starfund"}');
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -260,24 +267,54 @@ describe("signup state (fail closed)", () => {
   });
 });
 
-describe("ask block copy (launch window + evergreen fallback)", () => {
-  it("pins the launch-week block and its post-launch fallback exactly", () => {
-    const launch = signupAskBlockLines(new Date("2026-08-24T12:00:00Z"), 72);
-    expect(launch).toEqual([
-      "─".repeat(72),
-      "  aibill launches Friday with Star.fun.",
-      "  Get the launch email + what ships next:",
-      "  type your email, or press Enter to skip"
-    ]);
-    const evergreen = signupAskBlockLines(new Date("2026-08-29T00:00:00Z"), 72);
-    expect(evergreen).toEqual([
-      "─".repeat(72),
-      "  Get product updates:",
-      "  type your email, or press Enter to skip"
-    ]);
-    // Boundary: the Friday line survives through launch day, not past it.
-    expect(signupAskBlockLines(new Date("2026-08-28T23:59:59Z"), 72)[1]).toContain("launches Friday");
-    expect(signupAskBlockLines(new Date("2026-08-29T00:00:01Z"), 72).join("\n")).not.toContain("Friday");
+// The two founder-approved team-ask headlines (work order 2026-10-18, G1):
+// A ships only once Workspace launch acceptance has passed; B is the default.
+const teamAskHeadlines = {
+  A: ["Want this for your whole team?", "Tilden shows team AI spend by project, model and owner.", "Request access:"],
+  B: ["Want this for your whole team?", "Request access to Tilden:"]
+} as const;
+
+describe("ask block copy (team access headline)", () => {
+  it("pins the block to one approved headline variant exactly, on every date", () => {
+    const shipped = Object.values(teamAskHeadlines)
+      .find((variant) => JSON.stringify(variant) === JSON.stringify(signupCopy.askHeadlineFallback));
+    expect(shipped, "askHeadlineFallback must be variant A or B verbatim").toBeDefined();
+    for (const now of [new Date("2026-08-24T12:00:00Z"), new Date("2026-10-18T12:00:00Z")]) {
+      expect(signupAskBlockLines(now, 72)).toEqual([
+        "─".repeat(72),
+        ...shipped!.map((line) => `  ${line}`),
+        "  type your email, or press Enter to skip"
+      ]);
+    }
+  });
+
+  it("fits every ask line in the 72-column receipt with its two-space indent, for variants A and B", () => {
+    for (const headline of Object.values(teamAskHeadlines)) {
+      const lines = [
+        ...headline.map((line) => `  ${line}`),
+        `  ${signupCopy.askFooter}`,
+        `  ${signupCopy.skipNudgeLine}`,
+        `  ${signupCopy.receiptReadyLine}`,
+        signupCopy.scopeLine,
+        `  ${signupCopy.receiptPointer}`
+      ];
+      for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(72);
+    }
+    for (const line of signupAskBlockLines(new Date("2026-10-18T12:00:00Z"), 72)) {
+      expect(line.length, line).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it("keeps the team-ask copy honest: no launch, urgency, savings, or instant-access language", () => {
+    const flatten = (value: unknown): string[] =>
+      typeof value === "function"
+        ? [(value as (json: string) => string)('{"email":"a@b.co","ref":"cli-team-receipt"}')]
+        : Array.isArray(value)
+          ? value as string[]
+          : [value as string];
+    for (const line of [...Object.values(signupCopy).flatMap(flatten), ...Object.values(teamAskHeadlines).flat()]) {
+      expect(line).not.toMatch(/launch|friday|star\.fun|save|savings|free trial|instant access/i);
+    }
   });
 
   it("adapts the rule to the receipt width convention", () => {
@@ -354,7 +391,7 @@ describe("during-scan pre-receipt ask", () => {
     const scripted = scriptedIo(["", "you@work.com"]);
     const session = await openAsk(file, scripted);
     const outcome = await session!.outcome;
-    expect(outcome).toMatchObject({ kind: "email", payload: { email: "you@work.com", ref: "cli-receipt" } });
+    expect(outcome).toMatchObject({ kind: "email", payload: { email: "you@work.com", ref: "cli-team-receipt" } });
     // The half-completed double-Enter consumed no skip.
     expect(await readSignupState(file)).toMatchObject({ kind: "ok", state: { askCount: 0 } });
   });
@@ -530,11 +567,11 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
 
-    expect(scripted.questions[1]).toBe('send {"email":"you@work.com","ref":"cli-receipt"} → asktilden.com/api/waitlist? [y/N] ');
+    expect(scripted.questions[1]).toBe('send {"email":"you@work.com","ref":"cli-team-receipt"} → asktilden.com/api/waitlist? [y/N] ');
     expect(scripted.written.slice(expectedBlock.length)).toEqual(["", signupCopy.scopeLine, signupCopy.sentLine]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
-      .toBe('{"email":"you@work.com","ref":"cli-receipt"}');
+      .toBe('{"email":"you@work.com","ref":"cli-team-receipt"}');
     expect(await readSignupState(file)).toMatchObject({
       kind: "ok",
       state: { status: "subscribed", email: "you@work.com" }
@@ -615,7 +652,7 @@ describe("consent after the receipt", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(freshQuestions).toHaveLength(1);
-    expect(freshQuestions[0]).toContain('send {"email":"you@work.com","ref":"cli-receipt"}');
+    expect(freshQuestions[0]).toContain('send {"email":"you@work.com","ref":"cli-team-receipt"}');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(scripted.written.at(-1)).toBe(signupCopy.sentLine);
   });
@@ -821,10 +858,10 @@ describe("aibill signup command", () => {
     expect(result.stdout).toBe(signupCopy.sentLine);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(signupCopy.scopeLine);
-    expect(prompts[0]).toContain('send {"email":"you@work.com","ref":"cli-signup-starfund"} → asktilden.com/api/waitlist? [y/N]');
+    expect(prompts[0]).toContain('send {"email":"you@work.com","ref":"cli-team-signup-starfund"} → asktilden.com/api/waitlist? [y/N]');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)
-      .toBe('{"email":"you@work.com","ref":"cli-signup-starfund"}');
+      .toBe('{"email":"you@work.com","ref":"cli-team-signup-starfund"}');
     expect(await readSignupState(signupStateFilePath(home)))
       .toMatchObject({ kind: "ok", state: { status: "subscribed", email: "you@work.com" } });
   });
@@ -998,7 +1035,7 @@ describe("surface contracts (QA 11-12)", () => {
     expect(result.stdout).toContain("aibill · LOCAL ESTIMATE");
     expect(result.stdout).not.toContain("type your email");
     expect(result.stdout).not.toContain(signupCopy.scopeLine);
-    expect(result.stdout).not.toContain("launches Friday");
+    expect(result.stdout).not.toContain("launch updates");
     expect(result.stdout).not.toContain("[y/N]");
   });
 
@@ -1008,6 +1045,8 @@ describe("surface contracts (QA 11-12)", () => {
       const result = await runCli(argv);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(signupCopy.samplePointer);
+      expect(signupCopy.samplePointer).toBe("team access: npx aibill signup <email> · optional · email only");
+      expect(result.stdout).not.toContain("launch updates");
       expect(result.stdout).not.toContain("type your email");
       expect(result.stdout).not.toContain("[y/N]");
     }
@@ -1018,6 +1057,8 @@ describe("surface contracts (QA 11-12)", () => {
     const result = await runCli(["--path", dir]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(signupCopy.receiptPointer);
+    expect(signupCopy.receiptPointer).toBe("npx aibill signup <email>         team access · optional · email only");
+    expect(result.stdout).not.toContain("launch updates");
     expect(result.stdout).not.toContain("type your email");
   });
 
@@ -1029,6 +1070,8 @@ describe("surface contracts (QA 11-12)", () => {
     expect(lines.filter((line) => line.startsWith("next:"))).toEqual(["next: npx aibill doctor --sources"]);
     const nextIndex = lines.indexOf("next: npx aibill doctor --sources");
     expect(lines[nextIndex - 1]).toBe(signupCopy.initPointer);
+    expect(signupCopy.initPointer).toBe("team access (optional): npx aibill signup <email>");
+    expect(result.stdout).not.toContain("launch updates");
   });
 
   it("improve exits carry no signup surface at all (one-command exit contract)", async () => {
@@ -1042,7 +1085,7 @@ describe("surface contracts (QA 11-12)", () => {
   it("keeps the copy kill-list: no urgency, savings, confirm-shaming, or Workspace-as-shipped", () => {
     const flatten = (value: unknown): string[] =>
       typeof value === "function"
-        ? [(value as (json: string) => string)('{"email":"a@b.co","ref":"cli-signup"}')]
+        ? [(value as (json: string) => string)('{"email":"a@b.co","ref":"cli-team-signup"}')]
         : Array.isArray(value)
           ? value as string[]
           : [value as string];
@@ -1096,7 +1139,7 @@ describe("signup command consent is consent-grade (adversary SF1)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(signupCopy.nothingSentLine);
     expect(reads).toHaveLength(1);
-    expect(reads[0]).toContain('send {"email":"a@b.co","ref":"cli-signup"}');
+    expect(reads[0]).toContain('send {"email":"a@b.co","ref":"cli-team-signup"}');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

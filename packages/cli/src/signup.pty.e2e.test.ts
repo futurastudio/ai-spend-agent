@@ -135,7 +135,7 @@ async function startCli(argv: string[] = []): Promise<PtyRun> {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const email = "founder@gmail.com";
-const expectedPayload = `{"email":"${email}","ref":"cli-receipt"}`;
+const expectedPayload = `{"email":"${email}","ref":"cli-team-receipt"}`;
 const consentLine = signupCopy.consentQuestion(expectedPayload);
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -388,7 +388,7 @@ describe("founder's repro: `npx aibill report-card` from the home directory", ()
 
 describe("explicit `signup <email>` consent (adversary SF1)", () => {
   const signupEmail = "founder@gmail.com";
-  const signupPayload = `{"email":"${signupEmail}","ref":"cli-signup"}`;
+  const signupPayload = `{"email":"${signupEmail}","ref":"cli-team-signup"}`;
 
   it(
     "type-ahead y before the question renders never auto-consents; a fresh y sends once",

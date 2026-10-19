@@ -1839,7 +1839,7 @@ async function signupCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Prom
     return ok(signupCopy.alreadyLine);
   }
 
-  const payload = { email, ref: buildWaitlistRef("signup", args.signupRef) };
+  const payload = { email, ref: buildWaitlistRef("team-signup", args.signupRef) };
   const consentQuery =
     `${signupCopy.scopeLine}\n${signupCopy.consentQuestion(serializeWaitlistPayload(payload))}`;
   // Adversary SF1: the consent question must never be answered by a
