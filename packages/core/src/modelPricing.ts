@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-10-08";
+export const PRICING_TABLE_AS_OF = "2026-10-18";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -22,8 +22,7 @@ export type TokenUsage = {
   toolTokens?: number;
 };
 
-type PricingRule = {
-  match: RegExp;
+type PricingRates = {
   /** USD per million tokens. */
   inputPerM: number;
   outputPerM: number;
@@ -31,16 +30,21 @@ type PricingRule = {
   cacheReadPerM?: number;
   cacheWrite5mPerM?: number;
   cacheWrite1hPerM?: number;
-  /** Some providers select one rate for the whole request from prompt size. */
-  abovePromptTokens?: {
-    threshold: number;
-    inputPerM: number;
-    outputPerM: number;
-    cacheReadPerM?: number;
-    cacheWrite5mPerM?: number;
-    cacheWrite1hPerM?: number;
-  };
 };
+
+type PricingRule = PricingRates & { match: RegExp } & ({
+  /** Some providers select one rate for the whole request from prompt size. */
+  abovePromptTokens?: PricingRates & { threshold: number };
+  scheduledRates?: never;
+} | {
+  abovePromptTokens?: never;
+  /**
+   * Published price changes, oldest first. Each replaces the rule's own rates
+   * for usage on or after its UTC date (`YYYY-MM-DD`). Usage with no date is
+   * never priced under such a rule.
+   */
+  scheduledRates: readonly (PricingRates & { from: string })[];
+});
 
 const pricingRules: PricingRule[] = [
   // Anthropic
@@ -58,6 +62,21 @@ const pricingRules: PricingRule[] = [
   // Sonnet 5.5 keeps base/write rates; exact and dated IDs use 5% cache reads.
   { match: /^claude-sonnet-5-5(?:-\d{8})?$/i, inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1 },
   { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
+  // Reviewed 2026-10-18: https://platform.claude.com/docs/en/about-claude/pricing.
+  // Retained evidence: provider-contracts/model-pricing-2026-10-18.json.
+  // Haiku 5.5 is priced per request by prompt length: a prompt over 100,000
+  // tokens, counting cache reads and writes, moves the whole request to the
+  // higher rates. Exact and dated IDs only; other Haiku 5 IDs stay unpriced.
+  {
+    match: /^claude-haiku-5-5(?:-\d{8})?$/i,
+    inputPerM: 0.1, outputPerM: 0.5,
+    cacheReadPerM: 0.01, cacheWrite5mPerM: 0.125, cacheWrite1hPerM: 0.2,
+    abovePromptTokens: {
+      threshold: 100_000,
+      inputPerM: 0.5, outputPerM: 2.5,
+      cacheReadPerM: 0.05, cacheWrite5mPerM: 0.625, cacheWrite1hPerM: 1
+    }
+  },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
   { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },
   { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },
@@ -205,6 +224,19 @@ const pricingRules: PricingRule[] = [
   { match: /^o3$/i, inputPerM: 2, outputPerM: 8 },
   { match: /^o4-mini/i, inputPerM: 1.1, outputPerM: 4.4 },
   // Google (Gemini API list prices)
+  // Reviewed 2026-10-18: https://ai.google.dev/gemini-api/docs/pricing.
+  // Retained evidence: provider-contracts/model-pricing-2026-10-18.json.
+  // Gemini 4 Argon is paid-tier only, with one input rate for every modality
+  // and no prompt-size tier. Thinking tokens bill as output; caching is
+  // implicit only. Google doubles every rate from 2026-12-01 without naming
+  // a time zone, so the change applies from that UTC day, as usage is bucketed.
+  {
+    match: /^gemini-4-argon$/i,
+    inputPerM: 2,
+    outputPerM: 10,
+    cacheReadPerM: 0.1,
+    scheduledRates: [{ from: "2026-12-01", inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 }]
+  },
   {
     match: /^gemini-2\.5-pro$/i,
     inputPerM: 1.25,
@@ -279,9 +311,16 @@ export function findPricingRule(model: string): PricingRule | undefined {
 /**
  * API-equivalent USD for a usage slice, or undefined when the model has no
  * published price we recognize.
+ *
+ * @param usageAt ISO timestamp or UTC date of the usage. A model whose
+ *   published rates change on a date is priced only when this is given.
  */
-export function estimateTokenCostUsd(model: string, usage: TokenUsage): number | undefined {
-  const usd = rawTokenCostUsd(model, usage);
+export function estimateTokenCostUsd(
+  model: string,
+  usage: TokenUsage,
+  usageAt?: string
+): number | undefined {
+  const usd = rawTokenCostUsd(model, usage, undefined, usageAt);
   return usd === undefined ? undefined : roundUsd(usd);
 }
 
@@ -299,15 +338,20 @@ export function estimateTokenCostUsd(model: string, usage: TokenUsage): number |
  * a slice on the base tier (and pricing it there is exact, since the base rate
  * distributes over the sum). Omitting the array preserves single-request
  * behaviour: each slice's own prompt selects its tier.
+ *
+ * `usageAt`, the ISO timestamp or UTC date shared by every slice, selects the
+ * rates in force that day for a model whose published prices change on a
+ * date; such a model is unpriced without it.
  */
 export function estimateTokenCostsUsd(
   model: string,
   usages: readonly TokenUsage[],
-  tierPromptTokens?: readonly (number | undefined)[]
+  tierPromptTokens?: readonly (number | undefined)[],
+  usageAt?: string
 ): number | undefined {
   let total = 0;
   for (let index = 0; index < usages.length; index += 1) {
-    const usd = rawTokenCostUsd(model, usages[index], tierPromptTokens?.[index]);
+    const usd = rawTokenCostUsd(model, usages[index], tierPromptTokens?.[index], usageAt);
     if (usd === undefined) return undefined;
     total += usd;
   }
@@ -353,21 +397,27 @@ export function canPriceTokenUsageAtScope(
  *   session-cumulative slice whose tier is fixed by its largest single
  *   request). Component pricing always uses `usage`; defaults to the slice's
  *   own effective prompt so single-request callers are unchanged.
+ * @param usageAt ISO timestamp or UTC date of the usage; selects scheduled rates.
  */
 function rawTokenCostUsd(
   model: string,
   usage: TokenUsage,
-  tierPromptTokens?: number
+  tierPromptTokens?: number,
+  usageAt?: string
 ): number | undefined {
   const rule = findPricingRule(model);
   if (!rule) {
+    return undefined;
+  }
+  const dated = ratesOn(rule, usageAt);
+  if (!dated) {
     return undefined;
   }
   const promptTokens = tierPromptTokens ?? effectivePromptTokens(usage);
   const rates = rule.abovePromptTokens &&
       promptTokens > rule.abovePromptTokens.threshold
     ? rule.abovePromptTokens
-    : rule;
+    : dated;
   const cacheRead = rates.cacheReadPerM ?? rates.inputPerM * 0.1;
   const write5m = rates.cacheWrite5mPerM ?? rates.inputPerM * 1.25;
   const write1h = rates.cacheWrite1hPerM ?? rates.inputPerM * 2;
@@ -381,6 +431,23 @@ function rawTokenCostUsd(
       (usage.toolTokens ?? 0) * rates.inputPerM) /
     1_000_000;
   return usd;
+}
+
+/**
+ * The rule's rates in force on the usage's UTC date. A rule with scheduled
+ * price changes returns undefined without a usable date, so a rate is never
+ * guessed across a published change.
+ */
+function ratesOn(rule: PricingRule, usageAt: string | undefined): PricingRates | undefined {
+  if (!rule.scheduledRates) return rule;
+  // ISO timestamps here are UTC; this is the same day the report buckets by.
+  const day = usageAt?.slice(0, 10);
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined;
+  let rates: PricingRates = rule;
+  for (const change of rule.scheduledRates) {
+    if (day >= change.from) rates = change;
+  }
+  return rates;
 }
 
 function effectivePromptTokens(usage: TokenUsage): number {

@@ -1678,6 +1678,81 @@ describe("aggregateCalls", () => {
     expect(mixedTiers[0]?.amountUsd).toBe(1.0625);
   });
 
+  it("prices Claude Haiku 5.5 transcript requests per request, counting cache reads and writes", () => {
+    const haikuLine = (id: string, cacheReadTokens: number) => claudeLine(
+      {
+        requestId: `req-${id}`,
+        message: {
+          id: `msg-${id}`,
+          model: "claude-haiku-5-5",
+          usage: {
+            input_tokens: 20_000,
+            output_tokens: 20_000,
+            cache_read_input_tokens: cacheReadTokens,
+            cache_creation_input_tokens: 30_000,
+            cache_creation: { ephemeral_5m_input_tokens: 20_000, ephemeral_1h_input_tokens: 10_000 }
+          }
+        }
+      }
+    );
+    // Same session and day: a 100,000-token prompt, then a 100,001-token prompt.
+    const calls = parseClaudeCodeTranscript([
+      haikuLine("at-threshold", 50_000),
+      haikuLine("over-threshold", 50_001)
+    ].join("\n"));
+
+    expect(calls).toHaveLength(2);
+    expect(aggregateCalls(calls)).toEqual([expect.objectContaining({
+      model: "claude-haiku-5-5",
+      quantity: 2,
+      // 0.017 at the base rates plus 0.08500005 at the higher rates.
+      amountUsd: 0.102,
+      costConfidence: "estimated"
+    })]);
+  });
+
+  it("prices Gemini 4 Argon at the rates in force on each call's UTC day", () => {
+    const argonCall = (timestamp: string) => ({
+      agent: "gemini-cli" as const,
+      callId: `argon-${timestamp}`,
+      sessionId: "argon-session",
+      model: "gemini-4-argon",
+      timestamp,
+      project: "gemini-project-test",
+      usageScope: "turn" as const,
+      usageSupport: "complete" as const,
+      reportedTotalTokens: 167_000,
+      // promptTokenCount 150K includes 50K cached tokens.
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 10_000,
+        cacheReadTokens: 50_000,
+        thoughtTokens: 5_000,
+        toolTokens: 2_000
+      },
+      geminiTokenEvidence: {
+        input: 150_000,
+        output: 10_000,
+        cached: 50_000,
+        thoughts: 5_000,
+        tool: 2_000,
+        total: 167_000,
+        cacheAccounting: "included" as const
+      }
+    });
+
+    const records = aggregateCalls([
+      argonCall("2026-11-30T23:59:59.999Z"),
+      argonCall("2026-12-01T00:00:00.000Z")
+    ]);
+
+    // 100K*2 + 10K*10 + 50K*0.10 + 5K*10 + 2K*2 per million, doubled from December.
+    expect(records).toEqual([
+      expect.objectContaining({ timestamp: "2026-11-30T00:00:00.000Z", amountUsd: 0.359, costConfidence: "estimated" }),
+      expect.objectContaining({ timestamp: "2026-12-01T00:00:00.000Z", amountUsd: 0.718, costConfidence: "estimated" })
+    ]);
+  });
+
   it("fails Gemini 2.5 Pro pricing closed when request-level prompt evidence is ambiguous", () => {
     const records = aggregateCalls([{
       agent: "gemini-cli",

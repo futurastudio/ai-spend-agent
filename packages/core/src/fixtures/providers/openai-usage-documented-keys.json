@@ -1,0 +1,103 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1761955200,
+      "end_time": 1762041600,
+      "start_time_iso": "2025-11-01T00:00:00Z",
+      "end_time_iso": "2025-11-02T00:00:00Z",
+      "results": [
+        {
+          "object": "organization.usage.completions.result",
+          "input_tokens": 1000,
+          "input_uncached_tokens": 500,
+          "input_cache_write_tokens": 100,
+          "input_cache_write_12h_tokens": 150,
+          "input_cached_tokens": 250,
+          "input_text_tokens": 800,
+          "input_image_tokens": 150,
+          "input_audio_tokens": 50,
+          "input_cached_text_tokens": 200,
+          "input_cached_image_tokens": 40,
+          "input_cached_audio_tokens": 10,
+          "output_tokens": 400,
+          "output_text_tokens": 300,
+          "output_image_tokens": 50,
+          "output_audio_tokens": 50,
+          "num_model_requests": 6,
+          "project_id": "proj_fixture_a",
+          "user_id": "user_fixture_a",
+          "api_key_id": "key_fixture_a",
+          "api_source": null,
+          "model": "gpt-5",
+          "batch": false,
+          "service_tier": "default"
+        },
+        {
+          "object": "organization.usage.completions.result",
+          "input_tokens": 300,
+          "input_uncached_tokens": 250,
+          "input_cache_write_tokens": 50,
+          "input_cache_write_12h_tokens": 0,
+          "input_cached_tokens": 0,
+          "input_text_tokens": 300,
+          "input_image_tokens": 0,
+          "input_audio_tokens": 0,
+          "input_cached_text_tokens": 0,
+          "input_cached_image_tokens": 0,
+          "input_cached_audio_tokens": 0,
+          "output_tokens": 100,
+          "output_text_tokens": 100,
+          "output_image_tokens": 0,
+          "output_audio_tokens": 0,
+          "num_model_requests": 2,
+          "project_id": "proj_fixture_a",
+          "user_id": "user_fixture_b",
+          "api_key_id": "key_fixture_a",
+          "api_source": null,
+          "model": "gpt-5-mini",
+          "batch": false,
+          "service_tier": "default"
+        }
+      ]
+    },
+    {
+      "object": "bucket",
+      "start_time": 1762041600,
+      "end_time": 1762128000,
+      "start_time_iso": "2025-11-02T00:00:00Z",
+      "end_time_iso": "2025-11-03T00:00:00Z",
+      "results": [
+        {
+          "object": "organization.usage.completions.result",
+          "input_tokens": 200,
+          "input_uncached_tokens": 200,
+          "input_cache_write_tokens": 0,
+          "input_cache_write_12h_tokens": 0,
+          "input_cached_tokens": 0,
+          "input_text_tokens": 200,
+          "input_image_tokens": 0,
+          "input_audio_tokens": 0,
+          "input_cached_text_tokens": 0,
+          "input_cached_image_tokens": 0,
+          "input_cached_audio_tokens": 0,
+          "output_tokens": 50,
+          "output_text_tokens": 50,
+          "output_image_tokens": 0,
+          "output_audio_tokens": 0,
+          "num_model_requests": 1,
+          "project_id": "proj_fixture_b",
+          "user_id": "user_fixture_a",
+          "api_key_id": "key_fixture_b",
+          "api_source": null,
+          "model": "gpt-5",
+          "batch": true,
+          "service_tier": "default"
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}

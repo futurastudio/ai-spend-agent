@@ -4678,6 +4678,7 @@ export function aggregateCallsForFormats(
           call.maxRequestPromptTokens
         ) && (agent !== "gemini-cli" || hasCompleteGeminiPromptEvidence(call))
       );
+    // Every call in the group shares this UTC day, which selects dated rates.
     const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
       ? usesPromptTieredPricing(model)
         ? estimateTokenCostsUsd(
@@ -4686,9 +4687,10 @@ export function aggregateCallsForFormats(
             // Fix each cumulative slice's tier from its largest single request
             // rather than its cache-inflated sum. Turn-scoped slices carry no
             // such evidence and keep selecting their tier from their own prompt.
-            groupCalls.map((call) => call.maxRequestPromptTokens)
+            groupCalls.map((call) => call.maxRequestPromptTokens),
+            day
           )
-        : estimateTokenCostUsd(model, usage)
+        : estimateTokenCostUsd(model, usage, day)
       : undefined;
     const priced = usageSupported && typeof amountUsd === "number";
     records.push({

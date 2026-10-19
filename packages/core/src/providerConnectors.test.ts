@@ -998,6 +998,180 @@ describe("real provider connector implementations", () => {
     expect(JSON.stringify(result.qa)).not.toContain(fakeToken);
   });
 
+  // One-bucket OpenAI Costs and Usage pages whose result rows override a
+  // documented base row. OpenAI documents api_source on every result object.
+  const syncOpenAiResultRows = (
+    costRows: Array<Record<string, unknown>>,
+    usageRows: Array<Record<string, unknown>>
+  ) => fetchProviderUsageRecords({
+    provider: "openai",
+    sourceId: "openai-provider-api",
+    authReference: "env:OPENAI_ADMIN_KEY",
+    tokenResolver: () => fakeToken,
+    startTime: 1761955200,
+    endTime: 1762041600,
+    fetcher: async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        object: "page",
+        has_more: false,
+        next_page: null,
+        data: [{
+          object: "bucket",
+          start_time: 1761955200,
+          end_time: 1762041600,
+          results: url.includes("/organization/costs")
+            ? costRows.map((row) => ({
+              object: "organization.costs.result", amount: { value: "0.50", currency: "usd" },
+              line_item: "gpt-5, input", project_id: "proj_a", api_key_id: "key_a", ...row
+            }))
+            : usageRows.map((row) => ({
+              object: "organization.usage.completions.result", input_tokens: 1000, output_tokens: 200, num_model_requests: 4,
+              project_id: "proj_a", user_id: "user_a", api_key_id: "key_a", model: "gpt-5", batch: false, service_tier: "default", ...row
+            }))
+        }]
+      })
+    })
+  });
+
+  it("accepts OpenAI's documented null api_source on Costs and Usage results without drift", async () => {
+    const sync = (fields: Record<string, unknown>) => syncOpenAiResultRows(
+      [fields, { ...fields, line_item: "gpt-5, output", amount: { value: "1.25", currency: "usd" } }],
+      [fields, { ...fields, user_id: "user_b", input_tokens: 500, output_tokens: 50, num_model_requests: 1 }]
+    );
+    const withoutField = await sync({});
+    const withNullField = await sync({ api_source: null });
+
+    expect(withNullField.qa.responseDrift).toEqual([]);
+    expect(withNullField.qa.coverage).toBe("complete");
+    expect(withNullField.coverage).toBe("complete");
+    expect(withNullField.records).toHaveLength(4);
+    expect(withNullField.records).toEqual(withoutField.records);
+  });
+
+  it("still reports a different unknown OpenAI result field beside api_source as drift", async () => {
+    const fields = { api_source: null, undocumented_dimension: null };
+    const result = await syncOpenAiResultRows(
+      [fields, { ...fields, line_item: "gpt-5, output" }],
+      [fields, { ...fields, user_id: "user_b" }]
+    );
+
+    expect(result.qa.responseDrift).toEqual(["OpenAI costs API", "OpenAI usage API"].flatMap((label) => [0, 1].map((index) => ({
+      label,
+      field: `data[0].results[${index}].undocumented_dimension`,
+      issue: "unknown field observed in provider response"
+    }))));
+    // Unknown-field drift is QA evidence; on its own it does not mark coverage partial.
+    expect(result.coverage).toBe("complete");
+    expect(result.records).toHaveLength(4);
+  });
+
+  it("fails closed when a populated api_source splits one grouped OpenAI row", async () => {
+    const result = await syncOpenAiResultRows(
+      [{ api_source: "agents_api" }, { api_source: "unlabeled", amount: { value: "0.25", currency: "usd" } }],
+      [{ api_source: "agents_api" }, { api_source: "unlabeled", input_tokens: 500, output_tokens: 50 }]
+    );
+
+    expect(result.records).toEqual([]);
+    expect(result.coverage).toBe("partial");
+    expect(result.qa.responseDrift).toEqual(["OpenAI costs API", "OpenAI usage API"].map((label) => ({
+      label,
+      field: "normalized records[].id",
+      issue: "conflicting provider records shared one stable identity; all conflicting rows were excluded"
+    })));
+  });
+
+  it("accepts every result key of live OpenAI Costs rows and documented Usage rows without drift", async () => {
+    // Costs rows carry exactly the result keys of a live Costs capture (with
+    // synthetic values), including a documented unit and a null unit. Usage
+    // rows carry every documented completions key.
+    const costsPage = providerFixtureJson("openai-costs-live-keys.json") as {
+      data: Array<{ results: Array<Record<string, unknown>> }>;
+    };
+    const sync = () => fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762128000,
+      fetcher: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? structuredClone(costsPage)
+          : providerFixtureJson("openai-usage-documented-keys.json")
+      })
+    });
+
+    const result = await sync();
+
+    expect(costsPage.data.flatMap((bucket) => bucket.results.map((row) => row.quantity_unit)))
+      .toEqual(["tokens", "tokens", "tokens", null]);
+    expect(result.qa.responseDrift).toEqual([]);
+    expect(result.coverage).toBe("complete");
+    expect(result.records.filter((record) => record.providerCostType === "openai_cost").map((record) => record.amountUsd))
+      .toEqual([0.42, 1.08, 0.05, 0.3]);
+    expect(result.records.filter((record) => record.providerCostType === "openai_usage_evidence").map((record) => record.inputCacheWriteTokens))
+      .toEqual([250, 50, 0]);
+
+    costsPage.data[0].results[0].undocumented_dimension = "populated";
+    const drifted = await sync();
+
+    expect(drifted.qa.responseDrift).toEqual([{
+      label: "OpenAI costs API",
+      field: "data[0].results[0].undocumented_dimension",
+      issue: "unknown field observed in provider response"
+    }]);
+    expect(drifted.coverage).toBe("complete");
+    expect(drifted.records).toEqual(result.records);
+  });
+
+  it("sums OpenAI 30-minute and 12-hour cache writes into the record's cache-write total", () => {
+    const row = (userId: string, cacheWrites: Record<string, number>) => ({
+      object: "organization.usage.completions.result", input_tokens: 1000, output_tokens: 10, num_model_requests: 1,
+      project_id: "proj_a", user_id: userId, api_key_id: "key_a", model: "gpt-5", batch: false, service_tier: "default", ...cacheWrites
+    });
+    const records = normalizeOpenAiUsageResponse({
+      data: [{
+        start_time: 1761955200,
+        results: [
+          row("user_both", { input_cache_write_tokens: 100, input_cache_write_12h_tokens: 150 }),
+          row("user_30m", { input_cache_write_tokens: 100 }),
+          row("user_12h", { input_cache_write_12h_tokens: 150 }),
+          row("user_none", {})
+        ]
+      }]
+    }, { sourceId: "openai-provider-api", observedFrom: "OpenAI organization usage API" });
+
+    expect(records.map((record) => [record.userId, record.inputCacheWriteTokens])).toEqual([
+      ["user_both", 250],
+      ["user_30m", 100],
+      ["user_12h", 150],
+      ["user_none", undefined]
+    ]);
+  });
+
+  it("fails invalid OpenAI 12-hour cache writes closed and omits the cache-write total", async () => {
+    for (const fields of [
+      { input_tokens: 100, input_uncached_tokens: 60, input_cache_write_tokens: 20, input_cache_write_12h_tokens: 30 },
+      { input_cache_write_tokens: 20, input_cache_write_12h_tokens: -5 },
+      { input_cache_write_tokens: 20, input_cache_write_12h_tokens: 1.5 },
+      { input_tokens: 100, input_cache_write_12h_tokens: 150 }
+    ]) {
+      const result = await syncOpenAiResultRows([], [fields]);
+      const usage = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
+
+      expect(result.coverage).toBe("partial");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]).not.toHaveProperty("inputCacheWriteTokens");
+      expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: "OpenAI usage API", field: expect.stringContaining("input_cache_write_12h_tokens") })
+      ]));
+    }
+  });
+
   it("returns actionable missing-scope prompts on provider permission failures without leaking the token", async () => {
     const openAiFailure = await fetchProviderUsageRecords({
       provider: "openai",
