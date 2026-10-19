@@ -109,6 +109,58 @@ test("a changed semantic fingerprint is reported even when the whole page change
   assert.equal(observation.error, "reviewed semantic fingerprint changed");
 });
 
+test("financial-schema markers catch one added OpenAI Costs result field", async () => {
+  const contracts = await readProviderContracts();
+  const resource = contracts.contracts.find((entry) => entry.id === "openai-platform")
+    .resources.find((entry) => resourceAlertClass(entry) === "financial_schema");
+  const endpointMarkers = [
+    "GET /organization/usage/completions",
+    "including cached and cache-write tokens",
+    "across text, audio, and image outputs",
+    "GET /organization/costs"
+  ];
+  for (const marker of [...endpointMarkers, "OrganizationCostsResult object {", "OrganizationUsageCompletionsResult object {"]) {
+    assert.ok(resource.requiredMarkers.includes(marker), `missing required marker: ${marker}`);
+  }
+  // The reference page summarizes each result object as `{ first three fields, N more }`
+  // before documenting its fields. The padding keeps each result object outside the
+  // endpoint-list windows, as on the real page.
+  const padding = "unchanged ".repeat(40);
+  const costFields = ["object", "amount", "api_key_id", "api_source", "line_item", "project_id", "quantity", "quantity_unit", "user_id"];
+  const page = (fields) => [
+    "<nav><li>Completions GET /organization/usage/completions</li><li>Costs GET /organization/costs</li><li>Embeddings GET /organization/usage/embeddings</li></nav>",
+    `<main>${padding}`,
+    "<h4>OrganizationUsageCompletionsResult object { input_tokens, num_model_requests, object, 21 more }</h4>",
+    "<p>input_tokens: number, including cached and cache-write tokens.</p>",
+    "<p>output_tokens: number, across text, audio, and image outputs.</p>",
+    padding,
+    `<h4>OrganizationCostsResult object { ${fields.slice(0, 3).join(", ")}, ${fields.length - 3} more }</h4>`,
+    ...fields.map((field) => `<p>${field}: documented field of the grouped costs result.</p>`),
+    "</main>"
+  ].join("\n");
+  const reviewed = normalizeDocument(page(costFields));
+  const oneMoreField = normalizeDocument(page([...costFields, "region"]));
+  assert.notEqual(semanticFingerprint(oneMoreField, resource.requiredMarkers), semanticFingerprint(reviewed, resource.requiredMarkers));
+  // The endpoint-list markers alone never see a new result field.
+  assert.equal(semanticFingerprint(oneMoreField, endpointMarkers), semanticFingerprint(reviewed, endpointMarkers));
+
+  const fixture = {
+    contracts: [{
+      id: "openai-platform",
+      provider: "openai",
+      resources: [{
+        ...resource,
+        semanticSha256: semanticFingerprint(reviewed, resource.requiredMarkers),
+        contentSha256: createHash("sha256").update(reviewed).digest("hex")
+      }]
+    }]
+  };
+  const [observation] = await inspectRemoteContracts(fixture, async () => new Response(page([...costFields, "region"])));
+  assert.equal(observation.state, "stale_contract");
+  assert.deepEqual(observation.missingMarkers, []);
+  assert.equal(observation.error, "reviewed semantic fingerprint changed");
+});
+
 test("alert classes default from the resource kind and are rendered when declared", async () => {
   const contracts = await readProviderContracts();
   assert.equal(resourceAlertClass({ kind: "contract" }), "api_contract");
