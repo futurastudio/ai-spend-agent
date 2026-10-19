@@ -70,7 +70,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Claude Platform on AWS, which does not expose the named Usage and Cost APIs
 - Official sources:
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08`; reviewed content `fd1bb575815270b04449346a0daffab7475a7c716a139f8ac7a01d990963d3f9`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `e6edc63ff33ae889c5e185ccc503b7d6dabd01ce4d7761a72aeb3b1dbf2f24bd`; reviewed content `f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `beb3c5c46786eb5af94eb3a72f048002009f970d19bf4dbbb88bf9fd803452fa`; reviewed content `f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66`
 
 ## Claude Enterprise Analytics
 
@@ -129,7 +129,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Local session value is not a Google invoice
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `6b5ef480a198018651c45495c1f53a6f79a1ab06dc965fb785d1a3611246d0f2`
-  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `f0c5b7c6789f73037b371e5a92a8d8d248ef866a021881b4d580ebcae6c529ae`; reviewed content `6e96f6645302d088c08a494f067f8c15d3eec065a1dc99b2b8fc5f9666a7ae03`
+  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `0b3ebc0e6361ce5ced791ef95ca11d88b478fe2ce89630f9e0b6596dcf326615`; reviewed content `6e96f6645302d088c08a494f067f8c15d3eec065a1dc99b2b8fc5f9666a7ae03`
   - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `6796f67019367fa9d95d37c929abd682289b3021600bfdf014b227c7e99cce7d`
 
 ## Cursor Admin API spending and usage events
@@ -140,8 +140,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - API/version: Current Cursor Admin API reference; no date-version header
 - Window: Team spend is the current subscription cycle; filtered events use inclusive epoch-millisecond bounds and hourly aggregation
 - Pagination/completeness: One-indexed page/pageSize; complete all reported pages and prove member/event coverage for the requested scope
-- Units: Use spendCents/overallSpendCents aggregates and chargedCents event details as provider fields; preserve model, kind, usage pool, Cursor Token Rate context, Max mode and token/cache splits without repricing
-- Currency/basis: Provider cents divided by 100; the implemented spend aggregate remains estimated until a separate same-cycle dashboard/invoice check. Event-detail reconciliation is a separate target, and Cursor Models, Other Models, included, on-demand and BYOK bases remain distinct
+- Units: Use spendCents/overallSpendCents aggregates and chargedCents event details as provider fields; preserve model, kind, usage pool, Cursor Token Rate context, Max mode and token/cache splits without repricing. Paid plans in the X subscription include one weekly pool of usage for Cursor models, shared with Grok; the two monthly pools, Cursor Models and Other Models, belong only to legacy Cursor plans (Pro, Pro+, Ultra, Start and Teams Standard/Premium seats)
+- Currency/basis: Provider cents divided by 100; the implemented spend aggregate remains estimated until a separate same-cycle dashboard/invoice check. Event-detail reconciliation is a separate target, and bases remain distinct: included usage (the weekly pool, or a legacy plan's Cursor Models and Other Models pools), additional usage (prepaid credit, or on-demand usage on legacy plans) and BYOK
 - Freshness/revisions: Polling guidance is hourly; incomplete pagination or event/aggregate residual remains partial/missing
 - Reconciliation: Sum filtered usage-event chargedCents and reconcile to /teams/spend for the identical current cycle, then compare with invoice/export
 - Endpoints/evidence surfaces:
@@ -152,12 +152,12 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Exclusions:
   - Undocumented local IDE/CLI stores are not financial evidence
   - Included usage is not silently treated as incremental cash
-  - Usage-pool and Cursor Token Rate terms are pricing context, not a license to reconstruct billed cost from token counts
+  - Usage-pool, API list price and Cursor Token Rate terms are pricing context, not a license to reconstruct billed cost from token counts. In the X subscription, third-party models cost API list price from prepaid credit on Premium and up, and Teams and Enterprise also pay the Cursor Token Rate on third-party requests
   - A fixture-only connector is not live or invoice reconciliation
-  - Seat contracts, tax, credits and final invoice adjustments
+  - Subscription and seat fees (X subscription: Free $0, Plus $8, Premium $30, Super $100 and Ultra $200 a month; Teams $30, $100 or $200 per seat a month; Enterprise custom), legacy seat contracts, prepaid-credit purchases, tax, credits and final invoice adjustments
 - Official sources:
   - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `0c99e0907557df2f74c210ba9e1a455533a46c24af75e44c2b3bbb9c48e5efbd`
-  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `8c6aa163840c8aab2b01fbd037d9a1c96295188a5516afb0947bd4292907efee`; reviewed content `91793acee832cdc2cd938c5ef2239add73aab18b8dc8b074791c2a2cbabfb158`
+  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `0aa3fa2bfb7876a0f35b49909d8f4231a3a2b930b9f4007fb620901389161e07`; reviewed content `91793acee832cdc2cd938c5ef2239add73aab18b8dc8b074791c2a2cbabfb158`
 
 ## GitHub Copilot AI-credit billing
 
