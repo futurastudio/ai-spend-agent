@@ -1,10 +1,26 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+
+// Every test gets its own throwaway HOME: the demo is run "from the home
+// directory", and that must never be a developer's real home.
+beforeEach(async () => {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "aibill-demo-home-")));
+  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  cleanups.push(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(home, { recursive: true, force: true });
+  });
+});
 
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();
