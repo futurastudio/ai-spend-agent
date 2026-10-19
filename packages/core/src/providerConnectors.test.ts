@@ -1082,6 +1082,48 @@ describe("real provider connector implementations", () => {
     })));
   });
 
+  it("accepts every result key of live OpenAI Costs rows without drift", async () => {
+    // Costs rows carry exactly the result keys of a live Costs capture (with
+    // synthetic values), including a documented unit and a null unit.
+    const costsPage = providerFixtureJson("openai-costs-live-keys.json") as {
+      data: Array<{ results: Array<Record<string, unknown>> }>;
+    };
+    const sync = () => fetchProviderUsageRecords({
+      provider: "openai",
+      sourceId: "openai-provider-api",
+      authReference: "env:OPENAI_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: 1761955200,
+      endTime: 1762128000,
+      fetcher: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/organization/costs")
+          ? structuredClone(costsPage)
+          : { object: "page", data: [], has_more: false, next_page: null }
+      })
+    });
+
+    const result = await sync();
+
+    expect(costsPage.data.flatMap((bucket) => bucket.results.map((row) => row.quantity_unit)))
+      .toEqual(["tokens", "tokens", "tokens", null]);
+    expect(result.qa.responseDrift).toEqual([]);
+    expect(result.coverage).toBe("complete");
+    expect(result.records.map((record) => record.amountUsd)).toEqual([0.42, 1.08, 0.05, 0.3]);
+
+    costsPage.data[0].results[0].undocumented_dimension = "populated";
+    const drifted = await sync();
+
+    expect(drifted.qa.responseDrift).toEqual([{
+      label: "OpenAI costs API",
+      field: "data[0].results[0].undocumented_dimension",
+      issue: "unknown field observed in provider response"
+    }]);
+    expect(drifted.coverage).toBe("complete");
+    expect(drifted.records).toEqual(result.records);
+  });
+
   it("returns actionable missing-scope prompts on provider permission failures without leaking the token", async () => {
     const openAiFailure = await fetchProviderUsageRecords({
       provider: "openai",

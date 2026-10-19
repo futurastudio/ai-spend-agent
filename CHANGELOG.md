@@ -7,11 +7,12 @@
   are no longer maintained here. Earlier entries describe their release-time scope.
 - Keep four npm packages in build and packed-install checks; retain CLI canary
   coverage without hosted-service probes.
-- Accept the `api_source` field that OpenAI now documents on Costs and Usage
-  results. Earlier versions logged it as response drift, so
-  `npx aibill doctor --sources` showed OpenAI validation coverage as failed and
-  the report listed it under Response drift. Billed amounts, records, and
-  coverage were unchanged. Re-run `sync-provider` to clear the recorded drift.
+- Accept OpenAI Costs and Usage result fields that earlier versions did not
+  recognize: `api_source` on both and `quantity_unit` on Costs. Earlier
+  versions logged them as response drift, so `npx aibill doctor --sources`
+  showed OpenAI validation coverage as failed and the report listed them under
+  Response drift. Billed amounts, records, and coverage were unchanged. Re-run
+  `sync-provider` to clear the recorded drift.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
