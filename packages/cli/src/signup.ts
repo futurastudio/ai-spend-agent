@@ -40,7 +40,7 @@ export const waitlistUrl = "https://asktilden.com/api/waitlist";
 /** Closed payload type — adding a field here must fail the creep-guard test. */
 export type WaitlistPayload = { email: string; ref: string };
 
-export type WaitlistRefSurface = "receipt" | "signup";
+export type WaitlistRefSurface = "receipt" | "signup" | "team-receipt" | "team-signup";
 
 // Email validation rules: trim,
 // lowercase, <=254 chars, pragmatic shape check. The CLI additionally rejects
@@ -227,31 +227,21 @@ export async function assessEmailDeliverability(
 }
 
 // ---------------------------------------------------------------------------
-// Copy — declarative, ·-separated, promising ONLY what exists for the cli-*
-// refs: the launch email + product updates, as displayed in the consent.
-// No savings claims, no
-// urgency, no confirm-shaming, no beta/Workspace/weekly language.
+// Copy — declarative, ·-separated, promising ONLY team access news + product
+// updates for cli-team-* refs (docs/EMAIL_SEND_POLICY.md); no savings claims,
+// no urgency, no confirm-shaming, no implied immediate access.
 // ---------------------------------------------------------------------------
 
 export const signupCopy = {
-  /**
-   * Launch-week headline — TRUE only through launch day (Fri Aug 28); the
-   * date gate in signupAskBlockLines swaps in the evergreen fallback after
-   * signupLaunchWindowEndsAt so this copy can never go stale.
-   */
-  askHeadlineLaunch: [
-    "aibill launches Friday with Star.fun.",
-    "Get the launch email + what ships next:"
-  ],
-  askHeadlineFallback: ["Get product updates:"],
+  askHeadlineFallback: ["Want this for your whole team?", "Request access to Tilden:"],
   askFooter: "type your email, or press Enter to skip",
   askPrompt: "  > ",
   waitLine: "reading your local AI evidence…",
   /** Printed once if the scan finishes while the ask is still open. */
   receiptReadyLine: "your receipt is ready — type your email, or press Enter to see it",
   /** Printed after the FIRST empty Enter; the second empty Enter skips. */
-  skipNudgeLine: "one launch email · Enter again to skip, or type your email",
-  scopeLine: "used only for updates · never shared",
+  skipNudgeLine: "one team-access email · Enter again to skip, or type your email",
+  scopeLine: "used for team access news and product updates · never shared",
   /** Printed on the first Ctrl-C at the ask (the scan continues; M2). */
   interruptLine: "ok — skipped the ask · your receipt is still being read (Ctrl-C again to quit)",
   /** Printed when ^C lands after the ask settled but before the receipt. */
@@ -272,31 +262,22 @@ export const signupCopy = {
   forgetLine: "local signup state cleared · to leave the list, reply to any email or write hello@asktilden.com",
   // Static pointer lines (never interactive; see the capture design's
   // moments map).
-  receiptPointer: "npx aibill signup <email>         launch updates · optional · email only",
-  samplePointer: "launch updates: npx aibill signup <email> · optional · email only",
-  initPointer: "launch updates (optional): npx aibill signup <email>",
-  statuslinePointer: "launch updates: npx aibill signup <email> · optional"
+  receiptPointer: "npx aibill signup <email>         team access · optional · email only",
+  samplePointer: "team access: npx aibill signup <email> · optional · email only",
+  initPointer: "team access (optional): npx aibill signup <email>",
+  statuslinePointer: "team access: npx aibill signup <email> · optional"
 } as const;
 
 /**
- * End of the launch-week headline window (the Friday line is true only
- * through launch day, Fri 2026-08-28). After this instant the ask block
- * automatically uses the evergreen fallback headline.
- */
-export const signupLaunchWindowEndsAt = "2026-08-29T00:00:00Z";
-
-/**
  * The standout ask block: full-width rule (the receipt's own rule
- * convention), then the headline for the current window, then the skip
- * footer. Text lines carry the receipt's two-space indent.
+ * convention), then the headline, then the skip footer. Text lines carry
+ * the receipt's two-space indent. `now` is unused since the launch-week
+ * headline was retired; it stays so call sites keep their shape.
  */
 export function signupAskBlockLines(now: Date, width: number): string[] {
-  const headline = now.getTime() < Date.parse(signupLaunchWindowEndsAt)
-    ? signupCopy.askHeadlineLaunch
-    : signupCopy.askHeadlineFallback;
   return [
     "─".repeat(Math.max(8, width)),
-    ...headline.map((line) => `  ${line}`),
+    ...signupCopy.askHeadlineFallback.map((line) => `  ${line}`),
     `  ${signupCopy.askFooter}`
   ];
 }
@@ -579,7 +560,7 @@ export async function openPreReceiptSignupAsk(options: {
         write(`  ${signupCopy.disposableLine}`);
         continue;
       }
-      return { kind: "email", payload: { email, ref: buildWaitlistRef("receipt") }, stamped };
+      return { kind: "email", payload: { email, ref: buildWaitlistRef("team-receipt") }, stamped };
     }
     // Re-prompt budget exhausted: close the surface honestly instead of a
     // silent dead prompt (QA m2). No skip is consumed.

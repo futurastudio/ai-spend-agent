@@ -37,7 +37,21 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.13 (unreleased)
+## 0.9.14 (unreleased)
+
+The CLI email ask now offers team access. The during-scan ask reads "Want
+this for your whole team? Request access to Tilden:", and its scope line
+promises team access news and product updates; it no longer says product
+updates only. New captures use the refs `cli-team-receipt` (during-scan ask)
+and `cli-team-signup[-<tag>]` (`npx aibill signup <email> [--ref <tag>]`).
+Signups from earlier versions (`cli-receipt`, `cli-signup*`) keep their
+original product-updates promise. The sample, receipt, `init` and statusline
+pointers now read "team access". The payload is still exactly `{email, ref}`,
+and the consent flow, ask frequency and decline handling are unchanged.
+Requesting access does not grant immediate Workspace access. The retired
+launch-week headline is removed.
+
+## 0.9.13 (published on npm)
 
 Corrects Sonnet 5.5 cache-read API-equivalent estimates from $0.20 to $0.10
 per million tokens. Versions through 0.9.12 used the broader Sonnet 5 rate,

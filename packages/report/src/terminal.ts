@@ -867,7 +867,7 @@ function renderCompactDecisionReceipt(input: CompactDecisionReceiptInput): strin
     // Static signup pointer on the sample exit only — never a prompt, safe
     // to record (capture design moments map). Keep byte-identical to the
     // CLI's signupCopy.samplePointer (pinned by cli signup tests).
-    lines.push(`  ${c.dim("launch updates: npx aibill signup <email> · optional · email only")}`);
+    lines.push(`  ${c.dim("team access: npx aibill signup <email> · optional · email only")}`);
     lines.push("");
   }
 
