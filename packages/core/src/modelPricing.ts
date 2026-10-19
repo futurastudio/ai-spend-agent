@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-10-08";
+export const PRICING_TABLE_AS_OF = "2026-10-18";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -58,6 +58,21 @@ const pricingRules: PricingRule[] = [
   // Sonnet 5.5 keeps base/write rates; exact and dated IDs use 5% cache reads.
   { match: /^claude-sonnet-5-5(?:-\d{8})?$/i, inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1 },
   { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
+  // Reviewed 2026-10-18: https://platform.claude.com/docs/en/about-claude/pricing.
+  // Retained evidence: provider-contracts/model-pricing-2026-10-18.json.
+  // Haiku 5.5 is priced per request by prompt length: a prompt over 100,000
+  // tokens, counting cache reads and writes, moves the whole request to the
+  // higher rates. Exact and dated IDs only; other Haiku 5 IDs stay unpriced.
+  {
+    match: /^claude-haiku-5-5(?:-\d{8})?$/i,
+    inputPerM: 0.1, outputPerM: 0.5,
+    cacheReadPerM: 0.01, cacheWrite5mPerM: 0.125, cacheWrite1hPerM: 0.2,
+    abovePromptTokens: {
+      threshold: 100_000,
+      inputPerM: 0.5, outputPerM: 2.5,
+      cacheReadPerM: 0.05, cacheWrite5mPerM: 0.625, cacheWrite1hPerM: 1
+    }
+  },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
   { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },
   { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },

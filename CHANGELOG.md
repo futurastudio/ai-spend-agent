@@ -7,6 +7,13 @@
   are no longer maintained here. Earlier entries describe their release-time scope.
 - Keep four npm packages in build and packed-install checks; retain CLI canary
   coverage without hosted-service probes.
+- Price Claude Haiku 5.5 (`claude-haiku-5-5` and dated IDs) at Anthropic's
+  published rates per million tokens: $0.10 input, $0.50 output, $0.125 and
+  $0.20 for 5-minute and 1-hour cache writes, and $0.01 for cache reads. A
+  request whose prompt is over 100,000 tokens, counting cache reads and
+  writes, pays $0.50, $2.50, $0.625, $1 and $0.05 for the whole request.
+  Haiku 5.5 usage was previously unpriced and excluded from totals; it now
+  adds an API-equivalent estimate. No other model's estimate changes.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public

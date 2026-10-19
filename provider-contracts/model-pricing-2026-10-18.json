@@ -1,0 +1,30 @@
+{
+  "retrievedAt": "2026-10-18",
+  "fetchedAt": "2026-10-19T02:42:56Z",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard first-party API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No batch, data-residency, regional or negotiated adjustments. Claude Haiku 5.5 is priced per request: a request whose prompt, counting input, cache read and cache write tokens, is over 100,000 tokens pays the above rates for the whole request, output included; a prompt of exactly 100,000 tokens pays the base rates. Earlier evidence files are retained unchanged.",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/pricing"
+  ],
+  "pageContentSha256": {
+    "https://platform.claude.com/docs/en/about-claude/pricing": "f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66"
+  },
+  "models": [
+    {
+      "id": "claude-haiku-5-5",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "input": 0.1,
+      "output": 0.5,
+      "cacheRead": 0.01,
+      "cacheWrite5m": 0.125,
+      "cacheWrite1h": 0.2,
+      "abovePromptTokens": 100000,
+      "aboveInput": 0.5,
+      "aboveOutput": 2.5,
+      "aboveCacheRead": 0.05,
+      "aboveCacheWrite5m": 0.625,
+      "aboveCacheWrite1h": 1
+    }
+  ]
+}

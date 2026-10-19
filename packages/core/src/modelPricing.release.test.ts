@@ -1,14 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { PRICING_TABLE_AS_OF, canPriceTokenUsageAtScope, estimateTokenCostUsd, estimateTokenCostsUsd, findPricingRule } from "./modelPricing.js";
+import { PRICING_TABLE_AS_OF, canPriceTokenUsageAtScope, estimateTokenCostUsd, estimateTokenCostsUsd, findPricingRule, promptTierThreshold, type TokenUsage } from "./modelPricing.js";
 
 const evidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-07.json", import.meta.url), "utf8"));
 const sonnetEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-08.json", import.meta.url), "utf8"));
+const reviewedEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-18.json", import.meta.url), "utf8"));
+
+describe("2026-10-18 reviewed Haiku 5.5 prices", () => {
+  const model = reviewedEvidence.models.find((entry: { id: string }) => entry.id === "claude-haiku-5-5");
+  // One million tokens of one component, with the request tier fixed by a
+  // prompt exactly at, or one token over, the published threshold.
+  const price = (component: Partial<TokenUsage>, tierPromptTokens: number) =>
+    estimateTokenCostsUsd(model.id, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens]);
+
+  it("matches the retained official-price evidence and review date", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(reviewedEvidence.retrievedAt);
+    expect(promptTierThreshold(model.id)).toBe(model.abovePromptTokens);
+    const base = model.abovePromptTokens;
+    const above = model.abovePromptTokens + 1;
+    expect(price({ inputTokens: 1_000_000 }, base)).toBe(model.input);
+    expect(price({ outputTokens: 1_000_000 }, base)).toBe(model.output);
+    expect(price({ cacheReadTokens: 1_000_000 }, base)).toBe(model.cacheRead);
+    expect(price({ cacheWrite5mTokens: 1_000_000 }, base)).toBe(model.cacheWrite5m);
+    expect(price({ cacheWrite1hTokens: 1_000_000 }, base)).toBe(model.cacheWrite1h);
+    expect(price({ inputTokens: 1_000_000 }, above)).toBe(model.aboveInput);
+    expect(price({ outputTokens: 1_000_000 }, above)).toBe(model.aboveOutput);
+    expect(price({ cacheReadTokens: 1_000_000 }, above)).toBe(model.aboveCacheRead);
+    expect(price({ cacheWrite5mTokens: 1_000_000 }, above)).toBe(model.aboveCacheWrite5m);
+    expect(price({ cacheWrite1hTokens: 1_000_000 }, above)).toBe(model.aboveCacheWrite1h);
+  });
+});
 
 describe("0.9.13 reviewed Sonnet 5.5 prices", () => {
-  it("matches the retained official-price evidence and review date", () => {
+  it("matches the retained official-price evidence", () => {
     const model = sonnetEvidence.models[0];
-    expect(PRICING_TABLE_AS_OF).toBe(sonnetEvidence.retrievedAt);
     expect(estimateTokenCostUsd(model.id, { inputTokens: 1_000_000, outputTokens: 0 })).toBe(model.input);
     expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(model.output);
     expect(estimateTokenCostUsd(model.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(model.cacheRead);

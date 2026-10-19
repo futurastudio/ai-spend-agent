@@ -64,6 +64,89 @@ describe("model pricing coverage", () => {
     }
   );
 
+  // Official Anthropic pricing reviewed 2026-10-18:
+  // https://platform.claude.com/docs/en/about-claude/pricing
+  // "A request's prompt length counts all of its input tokens, including cache
+  // reads and cache writes. Each request is priced on its own."
+  // The dated ID is synthetic: it exercises snapshot matching, not availability.
+  describe("Claude Haiku 5.5 prompt-length pricing", () => {
+    // Exactly 100,000 prompt tokens: 20K input + 50K cache read + 20K 5m write + 10K 1h write.
+    const atThreshold = {
+      inputTokens: 20_000,
+      outputTokens: 20_000,
+      cacheReadTokens: 50_000,
+      cacheWrite5mTokens: 20_000,
+      cacheWrite1hTokens: 10_000
+    };
+
+    it.each(["claude-haiku-5-5", "claude-haiku-5-5-20261001", "CLAUDE-HAIKU-5-5"])(
+      "%s uses the published rates for prompts up to 100,000 tokens",
+      (model) => {
+        expect(usesPromptTieredPricing(model)).toBe(true);
+        expect(estimateTokenCostUsd(model, { inputTokens: 100_000, outputTokens: 0 })).toBe(0.01);
+        expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(0.5);
+        expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 100_000 })).toBe(0.001);
+        expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 100_000 })).toBe(0.0125);
+        expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 100_000 })).toBe(0.02);
+        // 20K*0.10 + 20K*0.50 + 50K*0.01 + 20K*0.125 + 10K*0.20, per million.
+        expect(estimateTokenCostUsd(model, atThreshold)).toBe(0.017);
+      }
+    );
+
+    it("uses the published rates for prompts over 100,000 tokens", () => {
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 1_000_000, outputTokens: 0 })).toBe(0.5);
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(0.05);
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000 })).toBe(0.625);
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000 })).toBe(1);
+      // Output is repriced with the rest of the request: 1M*0.50 + 1M*2.50.
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(3);
+    });
+
+    it.each([
+      ["input", { inputTokens: 20_001 }],
+      ["cache read", { cacheReadTokens: 50_001 }],
+      ["5-minute cache write", { cacheWrite5mTokens: 20_001 }],
+      ["1-hour cache write", { cacheWrite1hTokens: 10_001 }]
+    ])("one more %s token moves the whole request over the 100,000-token threshold", (_component, extra) => {
+      // 20K*0.50 + 20K*2.50 + 50K*0.05 + 20K*0.625 + 10K*1, plus one token, per million.
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { ...atThreshold, ...extra })).toBe(0.085);
+    });
+
+    it("never counts output tokens toward the prompt", () => {
+      // 100K*0.10 + 50K*0.50; counting output would select the higher rates.
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 100_000, outputTokens: 50_000 })).toBe(0.035);
+    });
+
+    it("prices each request on its own, and fails closed for an ambiguous aggregate", () => {
+      const request = { inputTokens: 60_000, outputTokens: 10_000 };
+      // Two base-rate requests, not one 120K request at the higher rates (0.11).
+      expect(estimateTokenCostsUsd("claude-haiku-5-5", [request, request])).toBe(0.022);
+      expect(estimateTokenCostUsd("claude-haiku-5-5", { inputTokens: 120_000, outputTokens: 20_000 })).toBe(0.11);
+      expect(canPriceTokenUsageAtScope("claude-haiku-5-5", { inputTokens: 120_000, outputTokens: 20_000 }, "aggregate")).toBe(false);
+      expect(canPriceTokenUsageAtScope("claude-haiku-5-5", { inputTokens: 100_000, outputTokens: 20_000 }, "aggregate")).toBe(true);
+      expect(canPriceTokenUsageAtScope("claude-haiku-5-5", { inputTokens: 120_000, outputTokens: 20_000 }, "request")).toBe(true);
+    });
+
+    it("keeps an earlier request's rates when a later, mostly cached request crosses the threshold", () => {
+      const earlier = { inputTokens: 10_000, outputTokens: 1_000, cacheReadTokens: 80_000 };
+      const later = { inputTokens: 10_000, outputTokens: 1_000, cacheReadTokens: 100_000 };
+      // Earlier (90K): 10K*0.10 + 1K*0.50 + 80K*0.01.
+      // Later (110K): 10K*0.50 + 1K*2.50 + 100K*0.05.
+      expect(estimateTokenCostsUsd("claude-haiku-5-5", [earlier, later])).toBe(0.0148);
+    });
+
+    it.each([
+      "claude-haiku-5",
+      "claude-haiku-5-50",
+      "claude-haiku-5-6",
+      "claude-haiku-5-5-preview",
+      "claude-haiku-5-5-20261001-extra"
+    ])("%s stays unpriced instead of inheriting Haiku 5.5 rates", (model) => {
+      expect(findPricingRule(model)).toBeUndefined();
+      expect(estimateTokenCostUsd(model, usage)).toBeUndefined();
+    });
+  });
+
   it("prices the major non-Anthropic/OpenAI model families", () => {
     // Gemini Pro: the 1M-token prompt selects the >200k rate for all tokens.
     expect(estimateTokenCostUsd("gemini-2.5-pro", usage)).toBeCloseTo(4, 2);

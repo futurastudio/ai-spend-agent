@@ -1678,6 +1678,39 @@ describe("aggregateCalls", () => {
     expect(mixedTiers[0]?.amountUsd).toBe(1.0625);
   });
 
+  it("prices Claude Haiku 5.5 transcript requests per request, counting cache reads and writes", () => {
+    const haikuLine = (id: string, cacheReadTokens: number) => claudeLine(
+      {
+        requestId: `req-${id}`,
+        message: {
+          id: `msg-${id}`,
+          model: "claude-haiku-5-5",
+          usage: {
+            input_tokens: 20_000,
+            output_tokens: 20_000,
+            cache_read_input_tokens: cacheReadTokens,
+            cache_creation_input_tokens: 30_000,
+            cache_creation: { ephemeral_5m_input_tokens: 20_000, ephemeral_1h_input_tokens: 10_000 }
+          }
+        }
+      }
+    );
+    // Same session and day: a 100,000-token prompt, then a 100,001-token prompt.
+    const calls = parseClaudeCodeTranscript([
+      haikuLine("at-threshold", 50_000),
+      haikuLine("over-threshold", 50_001)
+    ].join("\n"));
+
+    expect(calls).toHaveLength(2);
+    expect(aggregateCalls(calls)).toEqual([expect.objectContaining({
+      model: "claude-haiku-5-5",
+      quantity: 2,
+      // 0.017 at the base rates plus 0.08500005 at the higher rates.
+      amountUsd: 0.102,
+      costConfidence: "estimated"
+    })]);
+  });
+
   it("fails Gemini 2.5 Pro pricing closed when request-level prompt evidence is ambiguous", () => {
     const records = aggregateCalls([{
       agent: "gemini-cli",
