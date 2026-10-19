@@ -1,10 +1,28 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./index.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+
+// Every test gets its own throwaway HOME. `identify` persists owner, team and
+// role labels under ~/.aibill/private-state (os.homedir(), no injected home),
+// and these two tests wrote that state into a developer's real home on
+// 2026-10-18. The broad-root cases resolve homedir() against the same HOME.
+beforeEach(async () => {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "aibill-root-guard-home-")));
+  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  cleanups.push(async () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(home, { recursive: true, force: true });
+  });
+});
 
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()!();

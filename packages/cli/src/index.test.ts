@@ -242,7 +242,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.13$/);
+    expect(result.stdout).toMatch(/^0\.9\.14$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -3400,6 +3400,8 @@ describe("minimal CLI vertical slice", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("FIRST RECEIPT");
     expect(result.stdout).toContain("statusline installed in Claude user settings");
+    expect(result.stdout).toContain("team access: npx aibill signup <email> · optional");
+    expect(result.stdout).not.toContain("launch updates");
     expect(JSON.parse(await readFile(join(homeDirectory, ".claude", "settings.json"), "utf8")))
       .toHaveProperty("statusLine.command", "node ~/.aibill/bin/statusline.mjs");
   });
@@ -5437,6 +5439,55 @@ describe("minimal CLI vertical slice", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps doctor --sources healthy for live OpenAI result keys and fails an undocumented populated field", async () => {
+    process.env.OPENAI_ADMIN_KEY = "sk-" + "live-keys-admin-fake-token-do-not-store";
+    const fixture = async (name: string) => JSON.parse(await readFile(
+      new URL(`../../core/src/fixtures/providers/${name}`, import.meta.url),
+      "utf8"
+    ));
+    const usagePage = await fixture("openai-usage-documented-keys.json");
+    const syncThenDoctor = async (costsPage: unknown) => {
+      const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-openai-live-keys-"));
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => String(url).includes("/organization/costs") ? costsPage : usagePage
+      })));
+      await runCli(["init", "--path", dir]);
+      const sync = await runCli([
+        "sync-provider", "--path", dir, "--provider", "openai",
+        "--auth-reference", "env:OPENAI_ADMIN_KEY", "--start-time", "1761955200", "--end-time", "1762128000"
+      ]);
+      const doctor = await runCli(["doctor", "--sources", "--path", dir]);
+      const start = doctor.stdout.indexOf("OpenAI Costs and Usage API (openai)");
+      const end = doctor.stdout.indexOf("\n\n", start);
+      return { dir, sync, doctor, openAi: doctor.stdout.slice(start, end < 0 ? undefined : end) };
+    };
+
+    const healthy = await syncThenDoctor(await fixture("openai-costs-live-keys.json"));
+    const report = await runCli(["report", "--path", healthy.dir, "--out", "openai-live-keys"]);
+    const markdown = await readFile(join(healthy.dir, "openai-live-keys.md"), "utf8");
+
+    expect(healthy.sync.exitCode).toBe(0);
+    expect(healthy.sync.stdout).toContain("coverage: complete");
+    expect(healthy.sync.stdout).toContain("records fetched: 7");
+    expect(healthy.doctor.exitCode).toBe(0);
+    expect(healthy.openAi).toContain("validation coverage: live_verified");
+    expect(healthy.openAi).toContain("last error: none recorded");
+    expect(report.exitCode).toBe(0);
+    expect(markdown).toContain("Response drift: no unknown fields or pagination anomalies observed");
+
+    const costsWithUndocumentedField = await fixture("openai-costs-live-keys.json");
+    costsWithUndocumentedField.data[0].results[0].undocumented_dimension = "populated";
+    const drifted = await syncThenDoctor(costsWithUndocumentedField);
+
+    expect(drifted.sync.exitCode).toBe(0);
+    expect(drifted.openAi).toContain("validation coverage: failed");
+    expect(drifted.openAi).toContain(
+      "last error: OpenAI costs API: data[0].results[0].undocumented_dimension unknown field observed in provider response"
+    );
   });
 
   it("does not launder attacker-authored prior provider rows through a successful CLI sync", async () => {

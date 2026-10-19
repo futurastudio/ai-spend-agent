@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildUsageGlance } from "./glance.js";
 import { PRICING_TABLE_AS_OF } from "./modelPricing.js";
 import type { ActionVerificationProjectionV0 } from "./actionPlanner.js";
-import type { LocalAgentActivity, LocalAgentCall } from "./localAgentLogs.js";
+import { aggregateCalls, type LocalAgentActivity, type LocalAgentCall } from "./localAgentLogs.js";
 
 const usage = (inputTokens: number, outputTokens: number) => ({
   inputTokens,
@@ -1146,5 +1146,35 @@ describe("Glance prices Codex sessions exactly as the report does", () => {
       detectedAgents: ["codex"]
     });
     expect(snapshot.currentSession?.apiEquivalentUsd).toBeNull();
+  });
+});
+
+describe("Glance prices dated-rate models on the same day as the report", () => {
+  // A Codex session routed to Gemini 4 Argon through a custom provider. The
+  // report buckets it by its last activity's UTC day; Glance must use that day.
+  const argonSession = (timestamp: string) => ({
+    agent: "codex",
+    model: "gemini-4-argon",
+    timestamp,
+    startedAt: "2026-11-30T10:00:00.000Z",
+    sessionId: `argon-${timestamp}`,
+    project: "agent-finops",
+    usageScope: "session_cumulative",
+    usageSupport: "complete",
+    usage: { inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 0 }
+  } as unknown as LocalAgentCall);
+
+  it.each([
+    ["2026-11-30T23:59:59.999Z", 3],
+    ["2026-12-01T00:00:00.000Z", 6]
+  ])("prices a session last active at %s like the receipt", (timestamp, expected) => {
+    const call = argonSession(timestamp);
+    const snapshot = buildUsageGlance([call], {
+      filesParsed: 1,
+      detectedAgents: ["codex"]
+    });
+    // 1M*2 + 100K*10 per million through November; doubled from December.
+    expect(snapshot.currentSession?.apiEquivalentUsd).toBe(expected);
+    expect(aggregateCalls([call])[0]?.amountUsd).toBe(expected);
   });
 });

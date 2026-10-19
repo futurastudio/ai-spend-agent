@@ -7,13 +7,51 @@
   are no longer maintained here. Earlier entries describe their release-time scope.
 - Keep four npm packages in build and packed-install checks; retain CLI canary
   coverage without hosted-service probes.
+- Accept OpenAI Costs and Usage result fields that earlier versions did not
+  recognize: `api_source` on both, `quantity_unit` on Costs, and
+  `input_cache_write_12h_tokens` on Usage. Earlier versions logged them as
+  response drift, so `npx aibill doctor --sources` showed OpenAI validation
+  coverage as failed and the report listed them under Response drift. Billed
+  amounts and coverage were unchanged. Re-run `sync-provider` to clear the
+  recorded drift.
+- Count OpenAI's 12-hour cache writes in each usage record's cache-write
+  tokens, alongside the 30-minute writes. An invalid value makes the sync
+  partial rather than understating the total. This is token evidence only; no
+  dollar figure reads it.
+- Price Claude Haiku 5.5 (`claude-haiku-5-5` and dated IDs) at Anthropic's
+  published rates per million tokens: $0.10 input, $0.50 output, $0.125 and
+  $0.20 for 5-minute and 1-hour cache writes, and $0.01 for cache reads. A
+  request whose prompt is over 100,000 tokens, counting cache reads and
+  writes, pays $0.50, $2.50, $0.625, $1 and $0.05 for the whole request.
+  Haiku 5.5 usage was previously unpriced and excluded from totals; it now
+  adds an API-equivalent estimate. No other model's estimate changes.
+- Price Gemini 4 Argon (`gemini-4-argon`) at Google's published paid-tier
+  rates per million tokens, by the UTC day of each call: $2 input, $10 output
+  (thinking included) and $0.10 cached input through 2026-11-30, then $4, $20
+  and $0.20 from 2026-12-01. Argon usage was previously unpriced and excluded
+  from totals. Usage keeps the rate in force on its day, and a model with a
+  dated price change is never priced without a usage date.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.13 (unreleased)
+## 0.9.14 (unreleased)
+
+The CLI email ask now offers team access. The during-scan ask reads "Want
+this for your whole team? Request access to Tilden:", and its scope line
+promises team access news and product updates; it no longer says product
+updates only. New captures use the refs `cli-team-receipt` (during-scan ask)
+and `cli-team-signup[-<tag>]` (`npx aibill signup <email> [--ref <tag>]`).
+Signups from earlier versions (`cli-receipt`, `cli-signup*`) keep their
+original product-updates promise. The sample, receipt, `init` and statusline
+pointers now read "team access". The payload is still exactly `{email, ref}`,
+and the consent flow, ask frequency and decline handling are unchanged.
+Requesting access does not grant immediate Workspace access. The retired
+launch-week headline is removed.
+
+## 0.9.13 (published on npm)
 
 Corrects Sonnet 5.5 cache-read API-equivalent estimates from $0.20 to $0.10
 per million tokens. Versions through 0.9.12 used the broader Sonnet 5 rate,
