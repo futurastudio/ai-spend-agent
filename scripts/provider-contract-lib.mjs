@@ -29,6 +29,21 @@ const officialHosts = new Set([
   "docs.github.com"
 ]);
 
+// Alert classes rank how urgently a drifted official page needs human review.
+// `financial_schema` marks a page that documents the result fields of a cost or
+// usage API a connector validates strictly; it outranks every other class.
+// A resource may declare `alertClass`; otherwise its kind decides.
+export const alertClasses = ["financial_schema", "api_contract", "pricing", "reconciliation"];
+const defaultAlertClassByKind = new Map([
+  ["contract", "api_contract"],
+  ["pricing", "pricing"],
+  ["reconciliation", "reconciliation"]
+]);
+
+export function resourceAlertClass(resource) {
+  return resource?.alertClass ?? defaultAlertClassByKind.get(resource?.kind) ?? "api_contract";
+}
+
 export async function readProviderContracts() {
   return JSON.parse(await readFile(contractPath, "utf8"));
 }
@@ -91,6 +106,13 @@ export function validateProviderContracts(value, now = new Date()) {
     for (const [resourceIndex, resource] of resources.entries()) {
       const resourcePrefix = `${prefix}.resources[${resourceIndex}]`;
       if (!isObject(resource) || !nonEmpty(resource.kind)) failures.push(`${resourcePrefix}.kind must be non-empty`);
+      if (resource?.alertClass !== undefined) {
+        if (!alertClasses.includes(resource.alertClass)) {
+          failures.push(`${resourcePrefix}.alertClass must be one of ${alertClasses.join(", ")}`);
+        } else if (resource.alertClass === "financial_schema" && resource.kind !== "contract") {
+          failures.push(`${resourcePrefix}.alertClass financial_schema is reserved for contract resources`);
+        }
+      }
       let parsed;
       try {
         parsed = new URL(resource?.url);
@@ -203,10 +225,12 @@ export async function inspectRemoteContracts(contracts, fetcher = fetch, timeout
         expectedSemanticSha256: resource.semanticSha256,
         expectedContentSha256: resource.contentSha256,
         missingMarkers,
-        ...(baselineMissing ? { error: "reviewed semantic fingerprint is not pinned" } : {}),
-        ...(contentHashMissing ? { error: "reviewed full-content fingerprint is not pinned" } : {}),
+        // Later entries win, so the most severe reason is the one reported: a
+        // content-only change must never mask a changed semantic fingerprint.
+        ...(contentChanged ? { error: "reviewed official page content changed" } : {}),
         ...(fingerprintChanged ? { error: "reviewed semantic fingerprint changed" } : {}),
-        ...(contentChanged ? { error: "reviewed official page content changed" } : {})
+        ...(contentHashMissing ? { error: "reviewed full-content fingerprint is not pinned" } : {}),
+        ...(baselineMissing ? { error: "reviewed semantic fingerprint is not pinned" } : {})
       });
     }
   }
@@ -287,13 +311,26 @@ export function renderProviderContractDoc(contracts) {
     lines.push("- Exclusions:");
     for (const exclusion of contract.exclusions) lines.push(`  - ${exclusion}`);
     lines.push("- Official sources:");
-    for (const resource of contract.resources) lines.push(`  - [${resource.kind}](${resource.url}) — semantic \`${resource.semanticSha256}\`; reviewed content \`${resource.contentSha256}\``);
+    for (const resource of contract.resources) {
+      const alertClass = resource.alertClass ? `alert class \`${resource.alertClass}\`; ` : "";
+      lines.push(`  - [${resource.kind}](${resource.url}) — ${alertClass}semantic \`${resource.semanticSha256}\`; reviewed content \`${resource.contentSha256}\``);
+    }
   }
   lines.push(
     "",
     "## Drift behavior",
     "",
-    "The daily workflow checks required semantics and reviewed normalized-page fingerprints, records the current page hashes, runs provider structural fixtures, and opens or updates a GitHub issue if a contract drifts. Any official-page change is intentionally triaged by a human; the monitor never changes pricing or financial behavior automatically. Until review lands, the contract is `stale_contract` and the affected source cannot be promoted as financially verified in a new release.",
+    "The daily workflow checks required semantics and reviewed normalized-page fingerprints, records the current page hashes and runs provider structural fixtures. Each drifted official page gets its own GitHub issue, keyed by contract ID, resource kind and URL. The monitor updates that issue while the page stays drifted and closes it on the first run where the page matches its reviewed baseline again. Any official-page change is intentionally triaged by a human; the monitor never changes pricing or financial behavior automatically. Until review lands, the contract is `stale_contract` and the affected source cannot be promoted as financially verified in a new release.",
+    "",
+    "Alert priority follows the resource's alert class and the strength of the change:",
+    "",
+    "| Alert class | Required semantics changed or missing | Only other page content changed | Page could not be checked |",
+    "| --- | --- | --- | --- |",
+    "| `financial_schema` (result fields of a cost or usage API that a connector validates strictly) | P0 | P1 | P1 |",
+    "| `api_contract` (default for `contract` resources) | P1 | P3 digest | P2 |",
+    "| `pricing`, `reconciliation` (defaults for those kinds) | P2 | P3 digest | P2 |",
+    "",
+    "P3 changes share one digest issue instead of opening an issue per page, because documentation sites redeploy often and full-page fingerprints change far more often than reviewed claims. Every P3 page must still be reviewed and re-pinned before a release; the release gate stays red until then.",
     ""
   );
   return lines.join("\n");

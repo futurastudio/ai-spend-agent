@@ -17,7 +17,7 @@
     "check:public-boundary": "node --test scripts/public-boundary-rules.test.mjs && node scripts/check-public-boundary.mjs",
     "check:release-packages": "node scripts/check-release-packages.mjs",
     "check:source-fixtures": "node scripts/check-local-agent-format-fixtures.mjs",
-    "check:provider-contracts": "node --test scripts/provider-contracts.test.mjs && node scripts/check-provider-contracts.mjs && node scripts/generate-provider-contract-docs.mjs --check",
+    "check:provider-contracts": "node --test scripts/provider-contracts.test.mjs scripts/provider-contract-alerts.test.mjs && node scripts/check-provider-contracts.mjs && node scripts/generate-provider-contract-docs.mjs --check",
     "check:provider-contract-drift": "node scripts/check-provider-contracts.mjs --fetch --report provider-contract-drift.json",
     "check:release-provider-contracts": "npm run check:provider-contracts && npm run check:provider-contract-drift",
     "generate:provider-docs": "node scripts/generate-provider-contract-docs.mjs",

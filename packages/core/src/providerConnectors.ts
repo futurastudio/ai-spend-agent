@@ -2471,7 +2471,7 @@ function providerInstructions(provider: string): string[] {
   if (provider === "cursor") {
     return [
       "Use a Cursor team admin API key reference, or fall back to Browser Account UI/manual export when API access is unavailable.",
-      "Cursor's 2026 docs list the Admin API under Enterprise teams; individual Pro/Ultra plans expose no billing API. Standard Admin API endpoints are rate-limited to 20 requests/minute per team.",
+      "Cursor's 2026 docs list the Admin API under Enterprise teams; individual plans (Free, Plus, Premium, Super and Ultra, or legacy plans such as Pro) expose no billing API. Standard Admin API endpoints are rate-limited to 20 requests/minute per team.",
       "spendCents is on-demand spend for the current billing cycle; seat fees and included-pool usage are not in this total.",
       "Validate user-level spend against invoices before treating the source as finance-grade; set AI_SPEND_CURSOR_RECONCILE_EXPECTED_USD and AI_SPEND_CURSOR_RECONCILE_CYCLE_START to run an in-sync reconciliation."
     ];
