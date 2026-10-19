@@ -7,6 +7,17 @@
   are no longer maintained here. Earlier entries describe their release-time scope.
 - Keep four npm packages in build and packed-install checks; retain CLI canary
   coverage without hosted-service probes.
+- Accept OpenAI Costs and Usage result fields that earlier versions did not
+  recognize: `api_source` on both, `quantity_unit` on Costs, and
+  `input_cache_write_12h_tokens` on Usage. Earlier versions logged them as
+  response drift, so `npx aibill doctor --sources` showed OpenAI validation
+  coverage as failed and the report listed them under Response drift. Billed
+  amounts and coverage were unchanged. Re-run `sync-provider` to clear the
+  recorded drift.
+- Count OpenAI's 12-hour cache writes in each usage record's cache-write
+  tokens, alongside the 30-minute writes. An invalid value makes the sync
+  partial rather than understating the total. This is token evidence only; no
+  dollar figure reads it.
 - Price Claude Haiku 5.5 (`claude-haiku-5-5` and dated IDs) at Anthropic's
   published rates per million tokens: $0.10 input, $0.50 output, $0.125 and
   $0.20 for 5-minute and 1-hour cache writes, and $0.01 for cache reads. A
