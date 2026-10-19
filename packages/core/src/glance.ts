@@ -1168,14 +1168,15 @@ function callCost(call: LocalAgentCall): number | undefined {
     call.usageScope === "turn" ? "request" : "aggregate",
     call.maxRequestPromptTokens
   )) return undefined;
-  // Tier must come from the largest single request, exactly as the report's
-  // aggregation does — otherwise the statusline and the receipt disagree on
-  // the same session (a cache-heavy Codex session voided here while the
-  // receipt prices it, or priced here at 2x).
+  // Tier must come from the largest single request, and dated rates from the
+  // call's UTC day, exactly as the report's aggregation does — otherwise the
+  // statusline and the receipt disagree on the same session (a cache-heavy
+  // Codex session voided here while the receipt prices it, or priced here at 2x).
   return estimateTokenCostsUsd(
     call.model,
     [call.usage],
-    [call.maxRequestPromptTokens]
+    [call.maxRequestPromptTokens],
+    call.timestamp
   );
 }
 

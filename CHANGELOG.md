@@ -18,6 +18,19 @@
   tokens, alongside the 30-minute writes. An invalid value makes the sync
   partial rather than understating the total. This is token evidence only; no
   dollar figure reads it.
+- Price Claude Haiku 5.5 (`claude-haiku-5-5` and dated IDs) at Anthropic's
+  published rates per million tokens: $0.10 input, $0.50 output, $0.125 and
+  $0.20 for 5-minute and 1-hour cache writes, and $0.01 for cache reads. A
+  request whose prompt is over 100,000 tokens, counting cache reads and
+  writes, pays $0.50, $2.50, $0.625, $1 and $0.05 for the whole request.
+  Haiku 5.5 usage was previously unpriced and excluded from totals; it now
+  adds an API-equivalent estimate. No other model's estimate changes.
+- Price Gemini 4 Argon (`gemini-4-argon`) at Google's published paid-tier
+  rates per million tokens, by the UTC day of each call: $2 input, $10 output
+  (thinking included) and $0.10 cached input through 2026-11-30, then $4, $20
+  and $0.20 from 2026-12-01. Argon usage was previously unpriced and excluded
+  from totals. Usage keeps the rate in force on its day, and a model with a
+  dated price change is never priced without a usage date.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
