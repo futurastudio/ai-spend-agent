@@ -29,10 +29,14 @@ jobs:
       - run: node scripts/benchmark-statusline.mjs
       # Smoke test the built bin exactly as npm ships it — guards the
       # stale-dist / broken-bin class of bug that already shipped once.
-      - run: node packages/cli/dist/index.js --help
-      - run: node packages/cli/dist/index.js --sample --no-color
+      # Each line arms the telemetry kill-switches and a throwaway HOME
+      # itself rather than leaning on CI=true, so copying it into a local
+      # shell can never report to production telemetry or touch a real
+      # ~/.aibill (2026-10-18: local re-runs of these lines sent real events).
+      - run: HOME="$(mktemp -d)" AI_SPEND_NO_TELEMETRY=1 DO_NOT_TRACK=1 node packages/cli/dist/index.js --help
+      - run: HOME="$(mktemp -d)" AI_SPEND_NO_TELEMETRY=1 DO_NOT_TRACK=1 node packages/cli/dist/index.js --sample --no-color
       # Alias bin must run the exact same CLI.
-      - run: node packages/aibill/run.js --help
+      - run: HOME="$(mktemp -d)" AI_SPEND_NO_TELEMETRY=1 DO_NOT_TRACK=1 node packages/aibill/run.js --help
       # The workspace build above refreshes dist; now dry-pack every
       # publishable package and inspect its public manifest.
       - run: npm run check:release-packages
