@@ -407,6 +407,7 @@ type AnthropicCostBucket = {
     model?: string | null;
     workspace_id?: string | null;
     token_type?: string | null;
+    speed?: string | null;
   }>;
 };
 
@@ -744,8 +745,13 @@ export function normalizeAnthropicCostResponse(response: unknown, options: Norma
       const model = stringValue(resultValue.model) ?? description;
       const workspaceId = stringValue(resultValue.workspace_id);
       const tokenType = stringValue(resultValue.token_type);
+      // Anthropic documents `speed` on cost results ("standard" or "fast"). A standard
+      // row keeps the id it always had; any other speed gets its own segment so a
+      // fast-mode row never collides with the standard row for the same model and type.
+      const speed = stringValue(resultValue.speed)?.trim().toLowerCase();
       records.push({
-        id: slugifySourceId(["anthropic-costs", timestamp, workspaceId, model, tokenType ?? costType].filter(Boolean).join("-")),
+        id: slugifySourceId(["anthropic-costs", timestamp, workspaceId, model, tokenType ?? costType,
+          speed && speed !== "standard" ? `speed-${speed}` : undefined].filter(Boolean).join("-")),
         timestamp: new Date(timestamp).toISOString(),
         source: {
           id: options.sourceId,
@@ -2399,7 +2405,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cache_write_12h_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("cost")) {
-    return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo"]);
+    return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo", "data[].results[].speed"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("claude code")) {
     return new Set([...common, "data[].date", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
