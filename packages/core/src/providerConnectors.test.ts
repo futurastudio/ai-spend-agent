@@ -1527,6 +1527,50 @@ describe("real provider connector implementations", () => {
     ]);
   });
 
+  it("keeps standard-speed Anthropic cost ids unchanged and gives fast-mode rows their own id", () => {
+    const options = { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Admin Cost Report" };
+    const row = (speed?: string | null) => ({ amount: "1000", currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens",
+      model: "claude-opus-5-5", workspace_id: "wrk_eng", token_type: "uncached_input_tokens", ...(speed === undefined ? {} : { speed }) });
+    const [legacy, standard, nullSpeed, fast] = normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-10-19T00:00:00Z",
+      ending_at: "2026-10-20T00:00:00Z", results: [row(), row("standard"), row(null), row("fast")] }] }, options);
+    expect(standard.id).toBe(legacy.id);
+    expect(nullSpeed.id).toBe(legacy.id);
+    expect(fast.id).toBe(`${legacy.id}-speed-fast`);
+    expect([legacy, standard, fast].map((record) => record.amountUsd)).toEqual([10, 10, 10]);
+  });
+
+  it("reads Anthropic cost rows that carry the documented speed field without response drift", async () => {
+    const read = (extra: Record<string, unknown>) => fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: Date.parse("2026-10-19T00:00:00.000Z") / 1_000,
+      endTime: Date.parse("2026-10-20T00:00:00.000Z") / 1_000,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("cost_report")
+          ? { data: [{ starting_at: "2026-10-19T00:00:00Z", ending_at: "2026-10-20T00:00:00Z", results: [
+              { amount: "123.78912", currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens", model: "claude-opus-5-5",
+                workspace_id: null, token_type: "cache_creation.ephemeral_1h_input_tokens", service_tier: "standard", context_window: "0-200k",
+                inference_geo: "global", speed: "standard", ...extra },
+              { amount: "50", currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens", model: "claude-opus-5-5",
+                workspace_id: null, token_type: "cache_creation.ephemeral_1h_input_tokens", service_tier: "standard", context_window: "0-200k",
+                inference_geo: "global", speed: "fast", ...extra }
+            ] }], has_more: false }
+          : { data: [], has_more: false }
+      })
+    });
+    const documented = await read({});
+    expect(documented.qa.responseDrift.filter((drift) => drift.field.includes("results"))).toEqual([]);
+    const costs = documented.records.filter((record) => record.id.startsWith("anthropic-costs"));
+    expect(costs.map((record) => record.amountUsd).sort()).toEqual([0.5, 1.2378912]);
+    expect(new Set(costs.map((record) => record.id)).size).toBe(2);
+    const undocumented = await read({ billing_region: "us" });
+    expect(undocumented.qa.responseDrift).toEqual(expect.arrayContaining([expect.objectContaining({ field: expect.stringContaining("billing_region") })]));
+  });
+
   it("fetches Anthropic Admin cost report with x-api-key reference auth", async () => {
     const calls: Array<{ url: string; headers: Record<string, string> }> = [];
     const fetcher = async (url: string, init?: { headers?: Record<string, string> }) => {

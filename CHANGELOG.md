@@ -31,6 +31,10 @@
   and $0.20 from 2026-12-01. Argon usage was previously unpriced and excluded
   from totals. Usage keeps the rate in force on its day, and a model with a
   dated price change is never priced without a usage date.
+- Accept Anthropic's documented `speed` field ("standard" or "fast") on cost
+  report results. Earlier versions would log it as response drift and mark the
+  Anthropic source incomplete. Standard-speed rows keep their record ids;
+  fast-mode rows get their own, so they never merge with standard rows.
 
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
