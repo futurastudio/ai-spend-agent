@@ -1128,7 +1128,11 @@ describe("real provider connector implementations", () => {
     expect(drifted.records).toEqual(result.records);
   });
 
-  it("sums OpenAI 30-minute and 12-hour cache writes into the record's cache-write total", () => {
+  // OpenAI documents input_cache_write_tokens as the cache-write total across
+  // 30-minute and 12-hour retention (spec clarified 2026-10-19), with
+  // input_cache_write_30m_tokens (absent or null on older rows) and
+  // input_cache_write_12h_tokens as its parts.
+  it("takes OpenAI's cache-write total as reported and never adds its retention parts to it", () => {
     const row = (userId: string, cacheWrites: Record<string, number>) => ({
       object: "organization.usage.completions.result", input_tokens: 1000, output_tokens: 10, num_model_requests: 1,
       project_id: "proj_a", user_id: userId, api_key_id: "key_a", model: "gpt-5", batch: false, service_tier: "default", ...cacheWrites
@@ -1137,29 +1141,63 @@ describe("real provider connector implementations", () => {
       data: [{
         start_time: 1761955200,
         results: [
-          row("user_both", { input_cache_write_tokens: 100, input_cache_write_12h_tokens: 150 }),
-          row("user_30m", { input_cache_write_tokens: 100 }),
+          row("user_documented", { input_cache_write_tokens: 200, input_cache_write_30m_tokens: 150, input_cache_write_12h_tokens: 50 }),
+          row("user_older", { input_cache_write_tokens: 250, input_cache_write_12h_tokens: 150 }),
+          row("user_total", { input_cache_write_tokens: 100 }),
+          row("user_30m", { input_cache_write_30m_tokens: 100 }),
           row("user_12h", { input_cache_write_12h_tokens: 150 }),
+          row("user_parts", { input_cache_write_30m_tokens: 100, input_cache_write_12h_tokens: 150 }),
           row("user_none", {})
         ]
       }]
     }, { sourceId: "openai-provider-api", observedFrom: "OpenAI organization usage API" });
 
     expect(records.map((record) => [record.userId, record.inputCacheWriteTokens])).toEqual([
-      ["user_both", 250],
+      ["user_documented", 200],
+      ["user_older", 250],
+      ["user_total", 100],
       ["user_30m", 100],
       ["user_12h", 150],
+      ["user_parts", 250],
       ["user_none", undefined]
     ]);
   });
 
-  it("fails invalid OpenAI 12-hour cache writes closed and omits the cache-write total", async () => {
-    for (const fields of [
-      { input_tokens: 100, input_uncached_tokens: 60, input_cache_write_tokens: 20, input_cache_write_12h_tokens: 30 },
-      { input_cache_write_tokens: 20, input_cache_write_12h_tokens: -5 },
-      { input_cache_write_tokens: 20, input_cache_write_12h_tokens: 1.5 },
-      { input_tokens: 100, input_cache_write_12h_tokens: 150 }
-    ]) {
+  it("reads OpenAI's 30-minute cache-write part without drift, including a null one", async () => {
+    for (const [fields, cacheWrite] of [
+      [{ input_uncached_tokens: 3000, input_cache_write_tokens: 200, input_cache_write_30m_tokens: 150, input_cache_write_12h_tokens: 50, input_cached_tokens: 1800, input_tokens: 5000 }, 200],
+      [{ input_uncached_tokens: 900, input_cache_write_30m_tokens: 100 }, 100],
+      [{ input_uncached_tokens: 900, input_cache_write_tokens: 100, input_cache_write_30m_tokens: 100, input_cache_write_12h_tokens: 0 }, 100],
+      [{ input_uncached_tokens: 750, input_cache_write_tokens: 250, input_cache_write_30m_tokens: null, input_cache_write_12h_tokens: 150 }, 250]
+    ] as const) {
+      const result = await syncOpenAiResultRows([], [fields]);
+      const usage = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
+
+      expect(result.qa.responseDrift).toEqual([]);
+      expect(result.coverage).toBe("complete");
+      expect(usage).toEqual([expect.objectContaining({ inputCacheWriteTokens: cacheWrite })]);
+    }
+
+    const older = { input_uncached_tokens: 750, input_cache_write_tokens: 250, input_cache_write_12h_tokens: 150, input_cached_tokens: 0 };
+    const absent = await syncOpenAiResultRows([], [older]);
+    const asNull = await syncOpenAiResultRows([], [{ ...older, input_cache_write_30m_tokens: null }]);
+    expect(asNull.records).toEqual(absent.records);
+    expect(asNull.qa).toEqual(absent.qa);
+  });
+
+  it("fails invalid or contradictory OpenAI cache-write parts closed and omits the cache-write total", async () => {
+    for (const [fields, part] of [
+      [{ input_tokens: 100, input_uncached_tokens: 60, input_cache_write_tokens: 20, input_cache_write_12h_tokens: 30 }, "12h"],
+      [{ input_cache_write_tokens: 20, input_cache_write_12h_tokens: -5 }, "12h"],
+      [{ input_cache_write_tokens: 20, input_cache_write_12h_tokens: 1.5 }, "12h"],
+      [{ input_tokens: 100, input_cache_write_12h_tokens: 150 }, "12h"],
+      [{ input_cache_write_tokens: 100, input_cache_write_30m_tokens: 150 }, "30m"],
+      [{ input_cache_write_tokens: 100, input_cache_write_30m_tokens: 100, input_cache_write_12h_tokens: 150 }, "30m"],
+      [{ input_cache_write_tokens: 20, input_cache_write_30m_tokens: -5 }, "30m"],
+      [{ input_cache_write_tokens: 20, input_cache_write_30m_tokens: 1.5 }, "30m"],
+      [{ input_cache_write_tokens: 20, input_cache_write_30m_tokens: "20" }, "30m"],
+      [{ input_tokens: 100, input_cache_write_30m_tokens: 150 }, "30m"]
+    ] as const) {
       const result = await syncOpenAiResultRows([], [fields]);
       const usage = result.records.filter((record) => record.providerCostType === "openai_usage_evidence");
 
@@ -1167,7 +1205,7 @@ describe("real provider connector implementations", () => {
       expect(usage).toHaveLength(1);
       expect(usage[0]).not.toHaveProperty("inputCacheWriteTokens");
       expect(result.qa.responseDrift).toEqual(expect.arrayContaining([
-        expect.objectContaining({ label: "OpenAI usage API", field: expect.stringContaining("input_cache_write_12h_tokens") })
+        expect.objectContaining({ label: "OpenAI usage API", field: expect.stringContaining(`input_cache_write_${part}_tokens`) })
       ]));
     }
   });
