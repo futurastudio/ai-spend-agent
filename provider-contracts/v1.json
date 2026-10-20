@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-10-18",
+  "reviewedAt": "2026-10-20",
   "defaultReviewCadenceDays": 14,
   "statusVocabulary": [
     "current",
@@ -50,8 +50,8 @@
             "OrganizationCostsResult object {",
             "OrganizationUsageCompletionsResult object {"
           ],
-          "semanticSha256": "15d96946db0605781d0be981f31c34fb904c85e5c5dca93ed36e03701a0bfc0b",
-          "contentSha256": "030662b22d81b29d59ed9ddbe844b1bdf9dd7fe187008b3941f87e0936e2469a"
+          "semanticSha256": "cb69c99fff51463a21ba96da6faf8902aa68ed450d4fc13dd999a26d05d251d6",
+          "contentSha256": "4f434806dc5bf6563b004132ce5e2d29053d6755b81819d39c00817a23844990"
         },
         {
           "kind": "pricing",
@@ -63,7 +63,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52",
-          "contentSha256": "a8603f1c5da0148cda3c121d491e7231f70da0448ce977d218b1bc74c27f4c36"
+          "contentSha256": "d78dad5a48fcf557122beccfa0650dc8778e68078127a0797758d3ea0ba75e82"
         },
         {
           "kind": "pricing",
@@ -75,7 +75,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463",
-          "contentSha256": "9ecb864f9d89d32e30f0360237968deebea4f1f1fc85e514c665058a3d14730a"
+          "contentSha256": "7286b385dbfb78f0bc927b1613b51088a022071b9b9915163285e7bfe93502cb"
         },
         {
           "kind": "pricing",
@@ -87,7 +87,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a",
-          "contentSha256": "7b97598321dbd3184bc9da8a6d72687209ae07169d3ead0d69ca05473f39c73f"
+          "contentSha256": "674f726bb6aa9e6175b99c14a44b92eea7341a18afa00e223f3240e20ffa50cb"
         }
       ]
     },
@@ -134,8 +134,8 @@
             "Priority Tier costs",
             "next_page"
           ],
-          "semanticSha256": "51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08",
-          "contentSha256": "fd1bb575815270b04449346a0daffab7475a7c716a139f8ac7a01d990963d3f9"
+          "semanticSha256": "69f873533e8b9bd593cbe2f80deeb2ada7d9b973a5a3acbf7fb5e591e295fa5a",
+          "contentSha256": "20ea1010a646792a2587fb33002145defdd1a11947571a413c3ea046c940ba71"
         },
         {
           "kind": "pricing",
@@ -204,7 +204,7 @@
             "until about 7 days after the end of the calendar month"
           ],
           "semanticSha256": "739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55",
-          "contentSha256": "042ca0fb1a62b8cc65d96417bbe618f81463fd050766045152a187ae238555cf"
+          "contentSha256": "19cfa42e638a30c398046c478e22fd110a2764f7281a5e51005260fe8172ce7a"
         }
       ]
     },
@@ -269,7 +269,7 @@
             "$0.25, prompts > 200k"
           ],
           "semanticSha256": "0b3ebc0e6361ce5ced791ef95ca11d88b478fe2ce89630f9e0b6596dcf326615",
-          "contentSha256": "6e96f6645302d088c08a494f067f8c15d3eec065a1dc99b2b8fc5f9666a7ae03"
+          "contentSha256": "58a08f179e6ba8334aa74920dc01f70317cf017b1ae682961578e4ea72780121"
         },
         {
           "kind": "reconciliation",
@@ -327,7 +327,7 @@
             "reconcile event-level costs"
           ],
           "semanticSha256": "04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59",
-          "contentSha256": "0c99e0907557df2f74c210ba9e1a455533a46c24af75e44c2b3bbb9c48e5efbd"
+          "contentSha256": "822d923d130e49fe4f08400e20363e01ab818bcbcd313f49722736d26ff73b6f"
         },
         {
           "kind": "pricing",
@@ -341,7 +341,7 @@
             "Legacy Cursor plans Hobby, Start, Pro, Pro+, Ultra, and Teams Standard and Premium seats continue for existing customers"
           ],
           "semanticSha256": "0aa3fa2bfb7876a0f35b49909d8f4231a3a2b930b9f4007fb620901389161e07",
-          "contentSha256": "91793acee832cdc2cd938c5ef2239add73aab18b8dc8b074791c2a2cbabfb158"
+          "contentSha256": "5ea890f972195089a3ea758facaafc0e881acbf5fc7d53d31c7776cf367c604c"
         }
       ]
     },
@@ -400,7 +400,7 @@
             "input tokens"
           ],
           "semanticSha256": "6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815",
-          "contentSha256": "12ebcd62e3e6fc2e0e4b310e717b25f490457d5872effba89809e32478d9cc4d"
+          "contentSha256": "0b0c8f3844703200b5418a9739dfa54e52c006c3d46ee9458e5adeacae58d20e"
         }
       ]
     }
