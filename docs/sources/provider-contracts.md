@@ -2,7 +2,7 @@
 
 # Provider financial contracts
 
-Contract schema v1; reviewed 2026-10-18.
+Contract schema v1; reviewed 2026-10-20.
 
 These contracts are the reviewed financial rulebook for each provider source. They do not imply that every declared surface is implemented, that a user's account was connected, or that an invoice reconciled. Implemented connector coverage is listed separately. Provider-reported cost, API-equivalent value, plan context, credits and final invoices remain separate.
 
@@ -38,10 +38,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Prepaid credit application, tax, refunds, discounts and final cash settlement
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
-  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `15d96946db0605781d0be981f31c34fb904c85e5c5dca93ed36e03701a0bfc0b`; reviewed content `030662b22d81b29d59ed9ddbe844b1bdf9dd7fe187008b3941f87e0936e2469a`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52`; reviewed content `a8603f1c5da0148cda3c121d491e7231f70da0448ce977d218b1bc74c27f4c36`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463`; reviewed content `9ecb864f9d89d32e30f0360237968deebea4f1f1fc85e514c665058a3d14730a`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a`; reviewed content `7b97598321dbd3184bc9da8a6d72687209ae07169d3ead0d69ca05473f39c73f`
+  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `cb69c99fff51463a21ba96da6faf8902aa68ed450d4fc13dd999a26d05d251d6`; reviewed content `4f434806dc5bf6563b004132ce5e2d29053d6755b81819d39c00817a23844990`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `30ebb2574c07ec2fc9877cb95122b764fdf36ccf9a1a64c1e552eb10c72fdb52`; reviewed content `d78dad5a48fcf557122beccfa0650dc8778e68078127a0797758d3ea0ba75e82`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `e93a7426453e5aae16c9876b1bacb547fe3cc864265d6bca01aa95fec9fff463`; reviewed content `7286b385dbfb78f0bc927b1613b51088a022071b9b9915163285e7bfe93502cb`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `5c98bb3e22ec732b55e7ec46d09fc2e43d0774e2c9b57302af0912b367a7800a`; reviewed content `674f726bb6aa9e6175b99c14a44b92eea7341a18afa00e223f3240e20ffa50cb`
 
 ## Anthropic Platform Usage and Cost Admin API
 
@@ -69,7 +69,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Bedrock, Vertex and Foundry activity not returned by the named endpoints
   - Claude Platform on AWS, which does not expose the named Usage and Cost APIs
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `51a404084676e98e65ac24f4357e7c78382b2aa70ecec90d5ca989b91fe4cc08`; reviewed content `fd1bb575815270b04449346a0daffab7475a7c716a139f8ac7a01d990963d3f9`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `69f873533e8b9bd593cbe2f80deeb2ada7d9b973a5a3acbf7fb5e591e295fa5a`; reviewed content `20ea1010a646792a2587fb33002145defdd1a11947571a413c3ea046c940ba71`
   - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `beb3c5c46786eb5af94eb3a72f048002009f970d19bf4dbbb88bf9fd803452fa`; reviewed content `f2de318aba520e2d665b100858da64c196002e576f14871093e5a0610ffd8f66`
 
 ## Claude Enterprise Analytics
@@ -101,7 +101,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Grouped cost buckets include only the top 100 groups without a remainder; their sum need not equal the organization total
   - Claude Code through Amazon Bedrock
 - Official sources:
-  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55`; reviewed content `042ca0fb1a62b8cc65d96417bbe618f81463fd050766045152a187ae238555cf`
+  - [contract](https://platform.claude.com/docs/en/manage-claude/analytics-api) — semantic `739b30738e2c60a1d2392ab5d7aeaaa9ccb1dbe03feb088a04764d6c87fd3b55`; reviewed content `19cfa42e638a30c398046c478e22fd110a2764f7281a5e51005260fe8172ce7a`
 
 ## Gemini CLI and Google billing evidence
 
@@ -129,7 +129,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Local session value is not a Google invoice
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `6b5ef480a198018651c45495c1f53a6f79a1ab06dc965fb785d1a3611246d0f2`
-  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `0b3ebc0e6361ce5ced791ef95ca11d88b478fe2ce89630f9e0b6596dcf326615`; reviewed content `6e96f6645302d088c08a494f067f8c15d3eec065a1dc99b2b8fc5f9666a7ae03`
+  - [pricing](https://ai.google.dev/gemini-api/docs/pricing) — semantic `0b3ebc0e6361ce5ced791ef95ca11d88b478fe2ce89630f9e0b6596dcf326615`; reviewed content `58a08f179e6ba8334aa74920dc01f70317cf017b1ae682961578e4ea72780121`
   - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `6796f67019367fa9d95d37c929abd682289b3021600bfdf014b227c7e99cce7d`
 
 ## Cursor Admin API spending and usage events
@@ -156,8 +156,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - A fixture-only connector is not live or invoice reconciliation
   - Subscription and seat fees (X subscription: Free $0, Plus $8, Premium $30, Super $100 and Ultra $200 a month; Teams $30, $100 or $200 per seat a month; Enterprise custom), legacy seat contracts, prepaid-credit purchases, tax, credits and final invoice adjustments
 - Official sources:
-  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `0c99e0907557df2f74c210ba9e1a455533a46c24af75e44c2b3bbb9c48e5efbd`
-  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `0aa3fa2bfb7876a0f35b49909d8f4231a3a2b930b9f4007fb620901389161e07`; reviewed content `91793acee832cdc2cd938c5ef2239add73aab18b8dc8b074791c2a2cbabfb158`
+  - [contract](https://cursor.com/docs/account/teams/admin-api) — semantic `04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59`; reviewed content `822d923d130e49fe4f08400e20363e01ab818bcbcd313f49722736d26ff73b6f`
+  - [pricing](https://cursor.com/docs/models-and-pricing) — semantic `0aa3fa2bfb7876a0f35b49909d8f4231a3a2b930b9f4007fb620901389161e07`; reviewed content `5ea890f972195089a3ea758facaafc0e881acbf5fc7d53d31c7776cf367c604c`
 
 ## GitHub Copilot AI-credit billing
 
@@ -185,7 +185,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Tax, contract true-ups, credits and invoice payment settlement
 - Official sources:
   - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `3080b9a8352b1b41b5b41eb71a3f42fcfa9da5fc3557254d04225734cb74e341`
-  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `12ebcd62e3e6fc2e0e4b310e717b25f490457d5872effba89809e32478d9cc4d`
+  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `6f510de807fcbcf35a0314d350aabec6e744a91f0506d95fa29c399556998815`; reviewed content `0b0c8f3844703200b5418a9739dfa54e52c006c3d46ee9458e5adeacae58d20e`
 
 ## Drift behavior
 
