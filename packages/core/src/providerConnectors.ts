@@ -416,6 +416,7 @@ type OpenAiUsageResult = {
   input_tokens?: number;
   input_uncached_tokens?: number;
   input_cache_write_tokens?: number;
+  input_cache_write_30m_tokens?: number | null;
   input_cache_write_12h_tokens?: number;
   output_tokens?: number;
   input_cached_tokens?: number;
@@ -534,20 +535,16 @@ export function normalizeOpenAiUsageResponse(response: unknown, options: Normali
           ? component
           : undefined;
       };
-      // OpenAI reports 30-minute and 12-hour cache writes as separate parts of the
-      // inclusive input total. The record's cache-write total is their sum, and is
-      // omitted rather than understated when either supplied part is invalid.
+      // The cache-write total stands for its 30-minute and 12-hour parts inside the
+      // inclusive input total; the parts join the family only when it is absent.
       const inputAccountingValid = componentFamilyWithinParent([
         result.input_uncached_tokens,
-        result.input_cache_write_tokens,
-        result.input_cache_write_12h_tokens,
+        ...(result.input_cache_write_tokens === undefined
+          ? [result.input_cache_write_30m_tokens, result.input_cache_write_12h_tokens]
+          : [result.input_cache_write_tokens]),
         result.input_cached_tokens
       ], inputTokens);
-      const cacheWriteParts = [result.input_cache_write_tokens, result.input_cache_write_12h_tokens]
-        .filter((value) => value !== undefined).map(inputComponent);
-      const inputCacheWriteTokens = cacheWriteParts.length > 0 && cacheWriteParts.every((value): value is number => value !== undefined)
-        ? cacheWriteParts.reduce((sum, value) => sum + value, 0)
-        : undefined;
+      const inputCacheWriteTokens = openAiCacheWriteTokens(result, inputComponent);
       const inputModalitiesValid = componentFamilyWithinParent([
         result.input_text_tokens,
         result.input_image_tokens,
@@ -639,6 +636,26 @@ function componentFamilyWithinParent(values: unknown[], parent: number): boolean
     .map(nonNegativeIntegerValue)
     .filter((value): value is number => typeof value === "number");
   return components.reduce((sum, value) => sum + value, 0) <= parent;
+}
+
+/**
+ * OpenAI documents `input_cache_write_tokens` as the cache-write total across
+ * 30-minute and 12-hour retention (spec clarified 2026-10-19), with
+ * `input_cache_write_30m_tokens` (absent or null on older rows) and
+ * `input_cache_write_12h_tokens` as its parts. The total is never added to its
+ * parts. It is omitted rather than picked when a supplied part is invalid or the
+ * parts exceed it; without a total, the supplied parts are summed.
+ */
+function openAiCacheWriteTokens(result: OpenAiUsageResult, component: (value: unknown) => number | undefined): number | undefined {
+  const supplied = [result.input_cache_write_30m_tokens ?? undefined, result.input_cache_write_12h_tokens]
+    .filter((value) => value !== undefined);
+  const parts = supplied.map(component).filter((value): value is number => value !== undefined);
+  if (parts.length !== supplied.length) return undefined;
+  if (result.input_cache_write_tokens === undefined) {
+    return parts.length > 0 ? parts.reduce((sum, value) => sum + value, 0) : undefined;
+  }
+  const total = component(result.input_cache_write_tokens);
+  return total !== undefined && componentFamilyWithinParent(parts, total) ? total : undefined;
 }
 
 export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
@@ -2214,6 +2231,10 @@ function markMalformedUsageRows(
           ] as const) {
             checkInteger(resultValue[field], `${resultPath}.${field}`, "token count");
           }
+          // Documented as absent or null on older rows, so only a supplied value is checked.
+          if (resultValue.input_cache_write_30m_tokens !== null) {
+            checkInteger(resultValue.input_cache_write_30m_tokens, `${resultPath}.input_cache_write_30m_tokens`, "token count");
+          }
           checkInteger(resultValue.num_model_requests, `${resultPath}.num_model_requests`, "quantity");
 
           const inputTotal = nonNegativeIntegerValue(resultValue.input_tokens);
@@ -2228,6 +2249,7 @@ function markMalformedUsageRows(
           for (const field of [
             "input_uncached_tokens",
             "input_cache_write_tokens",
+            "input_cache_write_30m_tokens",
             "input_cache_write_12h_tokens",
             "input_cached_tokens",
             "input_text_tokens",
@@ -2273,7 +2295,13 @@ function markMalformedUsageRows(
               report(`${resultPath}.${fields.join("+")}`, `component family exceeds ${parentField}; the contradictory component family was excluded`);
             }
           };
-          reportFamilyOverflow(["input_uncached_tokens", "input_cache_write_tokens", "input_cache_write_12h_tokens", "input_cached_tokens"], inputTotal, "input_tokens");
+          // input_cache_write_tokens is the cache-write total across retention: it stands
+          // for its 30-minute and 12-hour parts in the input family, and they must fit in it.
+          reportFamilyOverflow(["input_uncached_tokens", ...(resultValue.input_cache_write_tokens === undefined
+            ? ["input_cache_write_30m_tokens", "input_cache_write_12h_tokens"]
+            : ["input_cache_write_tokens"]), "input_cached_tokens"], inputTotal, "input_tokens");
+          reportFamilyOverflow(["input_cache_write_30m_tokens", "input_cache_write_12h_tokens"],
+            nonNegativeIntegerValue(resultValue.input_cache_write_tokens), "input_cache_write_tokens");
           reportFamilyOverflow(["input_text_tokens", "input_image_tokens", "input_audio_tokens"], inputTotal, "input_tokens");
           reportFamilyOverflow(["input_cached_text_tokens", "input_cached_image_tokens", "input_cached_audio_tokens"], cachedTotal, "input_cached_tokens");
           reportFamilyOverflow(["output_text_tokens", "output_image_tokens", "output_audio_tokens"], outputTotal, "output_tokens");
@@ -2402,7 +2430,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].amount", "data[].results[].amount.value", "data[].results[].amount.currency", "data[].results[].line_item", "data[].results[].organization_id", "data[].results[].organization_name", "data[].results[].project_id", "data[].results[].project_name", "data[].results[].user_id", "data[].results[].user_email", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].quantity", "data[].results[].quantity_unit"]);
   }
   if (provider === "openai" && label.includes("usage")) {
-    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cache_write_12h_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
+    return new Set([...common, "data[].object", "data[].start_time", "data[].start_time_iso", "data[].end_time", "data[].end_time_iso", "data[].results", "data[].results[]", "data[].results[].object", "data[].results[].input_tokens", "data[].results[].input_uncached_tokens", "data[].results[].input_cache_write_tokens", "data[].results[].input_cache_write_30m_tokens", "data[].results[].input_cache_write_12h_tokens", "data[].results[].input_cached_tokens", "data[].results[].input_text_tokens", "data[].results[].input_image_tokens", "data[].results[].input_audio_tokens", "data[].results[].input_cached_text_tokens", "data[].results[].input_cached_image_tokens", "data[].results[].input_cached_audio_tokens", "data[].results[].output_tokens", "data[].results[].output_text_tokens", "data[].results[].output_image_tokens", "data[].results[].output_audio_tokens", "data[].results[].num_model_requests", "data[].results[].project_id", "data[].results[].user_id", "data[].results[].api_key_id", "data[].results[].api_source", "data[].results[].model", "data[].results[].batch", "data[].results[].service_tier"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("cost")) {
     return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo", "data[].results[].speed"]);
