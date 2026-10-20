@@ -5,7 +5,7 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## 0.9.14 (unreleased)
+## 0.9.14 (published on npm)
 
 The CLI email ask now offers team access. The during-scan ask reads "Want
 this for your whole team? Request access to Tilden:", and its scope line
