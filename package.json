@@ -32,12 +32,15 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "zod": "^4.1.0"
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "vite": "~8.1.6"
   }
 }
