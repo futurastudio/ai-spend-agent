@@ -259,7 +259,7 @@ export const signupCopy = {
   alreadyLine: "already on the list · nothing sent twice",
   nothingSentLine: "nothing sent",
   nonInteractiveLine: "signup needs an interactive terminal — or join at https://asktilden.com",
-  forgetLine: "local signup state cleared · to leave the list, reply to any email or write hello@asktilden.com",
+  forgetLine: "local signup state cleared · to leave the list, reply to any email or write contact@asktilden.com",
   // Static pointer lines (never interactive; see the capture design's
   // moments map).
   receiptPointer: "npx aibill signup <email>         team access · optional · email only",
