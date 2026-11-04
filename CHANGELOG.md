@@ -59,11 +59,14 @@ historical untagged exception.
   malformed token or an unexpected shape yields no fact and no error, and an
   API-key Codex sign-in has no tier. The push preview names the tiers
   included; plan facts never travel without session facts and are not
-  counted against the retained fact keys. `AIBILL_NO_PLAN_TIER=1` leaves them
-  out. Core gains `readAgentPlanFacts`, the tier normalizers and two gated
-  synthetic fixtures (`claude-code-plan-v1`, `codex-plan-v1`); the fixture
-  check now verifies, claim by claim, that the one synthetic id token is
-  unsigned and names no one.
+  counted against the retained fact keys. A Workspace that refuses a batch
+  carrying plan facts as invalid gets the same session facts once more,
+  re-signed without them, and the CLI says so. `AIBILL_NO_PLAN_TIER=1` leaves
+  them out. Core gains `readAgentPlanFacts`, the tier normalizers and two
+  gated synthetic fixtures (`claude-code-plan-v1`, `codex-plan-v1`); the
+  Codex fixture keeps its synthetic id token as decoded parts that tests
+  assemble, so no token-shaped string is committed, and the fixture check
+  pins those parts claim by claim.
 
 ## 0.9.15 (unreleased)
 

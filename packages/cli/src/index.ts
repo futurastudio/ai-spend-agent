@@ -1808,9 +1808,13 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (prepared.state === "cancelled") return ok("Not sent.");
     if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
-    return sent.state === "accepted" ? ok(`Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`)
-      : sent.state === "refused" ? fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.")
-        : fail("Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.");
+    const withheld = (outcome: string) => sent.planFactsWithheld ? [`Subscription tier facts were not accepted by this Workspace; ${outcome}`] : [];
+    return sent.state === "accepted" ? ok([...withheld("sent without them."),
+      `Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`].join("\n"))
+      : sent.state === "refused" ? fail([...withheld("the batch without them was refused too."),
+        "Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created."].join("\n"))
+        : fail([...withheld("the retry without them has an unknown outcome."),
+          "Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch."].join("\n"));
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
     if (error instanceof WorkspaceEnrollmentRefusal) return fail(error.reason === "connected"

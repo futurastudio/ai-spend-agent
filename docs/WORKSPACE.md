@@ -90,8 +90,11 @@ locally without any network call), the instant it was read, and the
 subscription end when the agent recorded one. Nothing else from those files is
 read into the fact: no token, email, name, account id, organization name or
 uuid. A missing or unreadable file yields no fact. The preview names the tiers
-included. Set `AIBILL_NO_PLAN_TIER=1` to leave plan tiers out of every push;
-Workspace then costs those sessions at a tier the owner types by hand.
+included. If the Workspace refuses a batch that carries tier facts as invalid
+(a deployment that does not accept them yet), the CLI re-signs the same
+session facts without the tier facts, sends them once more and says so. Set
+`AIBILL_NO_PLAN_TIER=1` to leave plan tiers out of every push; Workspace then
+costs those sessions at a tier the owner types by hand.
 
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local

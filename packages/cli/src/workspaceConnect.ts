@@ -502,42 +502,63 @@ export async function prepareWorkspacePush(options: {
   });
 }
 
-/** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */
-export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
+export type WorkspaceSendResult = {
+  state: "accepted" | "refused" | "unconfirmed"; factCount?: number;
+  /** True when the Workspace refused the batch as invalid and the same session facts were sent once more without the plan facts. */
+  planFactsWithheld: boolean;
+};
+/**
+ * One attempt, plus one fallback: a Workspace that does not accept `agent_plan`
+ * facts yet refuses the whole batch as `invalid`, so the identical session facts
+ * are re-signed without the plan facts and sent once more under the same
+ * sequence. Uncertain/refused batches remain retained and cannot silently be resubmitted.
+ */
+export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<WorkspaceSendResult> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state?.pending) throw Error("No prepared Workspace batch exists.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending.state !== "ready") throw Error("This batch already has a result or an uncertain outcome; reconcile it before another push.");
-    const envelope = state.pending.envelope;
-    const dispatched: WorkspaceState = { ...state, pending: { ...state.pending, state: "uncertain" } };
-    await save(dispatched);
-    let result: WorkspaceTransportResult;
-    try { result = await (options.transport ?? workspaceTransport)(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
-    catch { return { state: "unconfirmed" }; }
-    try {
-      const receipt = result.body;
-      if (result.status === 200) {
-        exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"]);
-        if (receipt.state !== "accepted" || receipt.batchId !== envelope.batchId || receipt.manifestHash !== envelope.manifestHash
-          || receipt.factCount !== envelope.facts.length || typeof receipt.acceptedAt !== "string") throw Error("receipt_mismatch");
-        utcDay(receipt.acceptedAt);
-        const counts = [receipt.introduced, receipt.replaced, receipt.unchanged];
-        if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
-          || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
-        const facts = { ...state.facts };
-        for (const fact of envelope.facts)
-          if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
-        await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt });
-        return { state: "accepted", factCount: envelope.facts.length };
-      }
-      if (result.status === 409) {
-        exactKeys(receipt, ["state", "reason"]);
-        if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
-        await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
-        return { state: "refused" };
-      }
-    } catch { return { state: "unconfirmed" }; }
-    return { state: "unconfirmed" };
+    const transport = options.transport ?? workspaceTransport;
+    let envelope = state.pending.envelope, planFactsWithheld = false;
+    for (;;) {
+      const dispatched: WorkspaceState = { ...state, pending: { envelope, state: "uncertain", refusal: null } };
+      await save(dispatched);
+      let result: WorkspaceTransportResult;
+      try { result = await transport(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
+      catch { return { state: "unconfirmed", planFactsWithheld }; }
+      try {
+        const receipt = result.body;
+        if (result.status === 200) {
+          exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"]);
+          if (receipt.state !== "accepted" || receipt.batchId !== envelope.batchId || receipt.manifestHash !== envelope.manifestHash
+            || receipt.factCount !== envelope.facts.length || typeof receipt.acceptedAt !== "string") throw Error("receipt_mismatch");
+          utcDay(receipt.acceptedAt);
+          const counts = [receipt.introduced, receipt.replaced, receipt.unchanged];
+          if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
+            || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
+          const facts = { ...state.facts };
+          for (const fact of envelope.facts)
+            if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+          await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt });
+          return { state: "accepted", factCount: envelope.facts.length, planFactsWithheld };
+        }
+        if (result.status === 409) {
+          exactKeys(receipt, ["state", "reason"]);
+          if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
+          if (receipt.reason === "invalid" && !planFactsWithheld && envelope.facts.some(isWorkspaceAgentPlanFact)) {
+            // The refusal names no field, so an invalid batch that carried plan facts is
+            // taken as a Workspace that does not accept them: the same session facts go
+            // once more, re-signed, with a fresh nonce and batch identity and no plan facts.
+            envelope = buildWorkspaceEnvelope(state.device, envelope.facts.filter(isWorkspaceSessionFact), envelope.generatedAt);
+            planFactsWithheld = true;
+            continue;
+          }
+          await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
+          return { state: "refused", planFactsWithheld };
+        }
+      } catch { return { state: "unconfirmed", planFactsWithheld }; }
+      return { state: "unconfirmed", planFactsWithheld };
+    }
   });
 }
 

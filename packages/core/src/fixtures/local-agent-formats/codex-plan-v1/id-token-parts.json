@@ -1,0 +1,24 @@
+{
+  "header": {
+    "alg": "none",
+    "typ": "JWT"
+  },
+  "payload": {
+    "aud": [
+      "fixture-audience"
+    ],
+    "email": "fixture-codex-mailbox",
+    "email_verified": true,
+    "exp": 1793000000,
+    "https://api.openai.com/auth": {
+      "chatgpt_account_id": "fixture-chatgpt-account",
+      "chatgpt_plan_type": "pro",
+      "chatgpt_subscription_active_until": "2026-12-01T00:00:00+00:00",
+      "chatgpt_user_id": "fixture-chatgpt-user"
+    },
+    "iat": 1762000000,
+    "iss": "fixture-issuer",
+    "sub": "fixture-subject"
+  },
+  "signature": "fixture-signature"
+}

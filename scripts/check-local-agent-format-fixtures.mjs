@@ -59,14 +59,16 @@ const allowedMalformedSentinels = new Set([
 ]);
 const claudePlanFixturePath = "claude-code-plan-v1/claude.json";
 const codexPlanFixturePath = "codex-plan-v1/auth.json";
-// The one fixture allowed to hold a JWT-shaped string: an unsigned synthetic
-// id_token whose decoded payload checkCodexPlanFixture inspects claim by claim.
-const syntheticJwtFixtures = new Set([codexPlanFixturePath]);
+// The synthetic id_token is never stored assembled: auth.json carries this
+// placeholder and tests build header.payload.signature from the parts file.
+const codexPlanTokenPlaceholder = "fixture-id-token-assembled-at-test-time";
+const codexPlanTokenPartsPath = "codex-plan-v1/id-token-parts.json";
 const requiredFiles = new Set([
   "claude-code-v1/transcript.jsonl",
   "codex-v1/rollout-synthetic.jsonl",
   claudePlanFixturePath,
   codexPlanFixturePath,
+  codexPlanTokenPartsPath,
   ...requiredGeminiFiles
 ]);
 
@@ -254,7 +256,6 @@ function assertSafeFixtureText(raw, file) {
     [/\/private\//i, "private local path"]
   ];
   for (const [pattern, label] of forbidden) {
-    if (label === "JWT-shaped token" && syntheticJwtFixtures.has(file)) continue;
     assert(!pattern.test(raw), `Fixture contains ${label}: ${file}`);
   }
 }
@@ -593,10 +594,11 @@ function checkClaudePlanFixture(parsedByFile) {
 }
 
 /**
- * The Codex plan fixture mirrors `~/.codex/auth.json` with an unsigned
- * synthetic id_token. Its header must declare no algorithm, its signature must
- * be the literal fixture marker, and every identity claim in the decoded
- * payload must be obviously synthetic; the plan claims are pinned.
+ * The Codex plan fixture mirrors `~/.codex/auth.json`, with the id_token held
+ * as a placeholder so no JWT-shaped string enters the repository. Its decoded
+ * parts live beside it: the header must declare no algorithm, the signature
+ * must be the literal fixture marker, every identity claim must be obviously
+ * synthetic, and the plan claims are pinned.
  */
 function checkCodexPlanFixture(parsedByFile) {
   const auth = singleJsonDocument(parsedByFile, codexPlanFixturePath);
@@ -611,31 +613,30 @@ function checkCodexPlanFixture(parsedByFile) {
       `Codex plan fixture ${key} is not obviously synthetic.`
     );
   }
-  assert(typeof tokens.id_token === "string", "Codex plan fixture must hold one id_token string.");
-  const segments = tokens.id_token.split(".");
   assert(
-    segments.length === 3 && segments[2] === "fixture-signature",
-    "Codex plan fixture id_token must be an unsigned synthetic token."
+    tokens.id_token === codexPlanTokenPlaceholder,
+    "Codex plan fixture must hold the id_token placeholder, never an assembled token."
   );
-  let header;
-  let payload;
-  try {
-    header = JSON.parse(Buffer.from(segments[0], "base64url").toString("utf8"));
-    payload = JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8"));
-  } catch {
-    throw new Error("Codex plan fixture id_token segments must decode to JSON.");
-  }
-  assert(isRecord(header) && header.alg === "none", "Codex plan fixture id_token must declare alg none.");
-  assert(isRecord(payload), "Codex plan fixture id_token payload must be an object.");
-  const decodedLabel = `${codexPlanFixturePath} (decoded id_token payload)`;
-  assertSafeFixtureText(JSON.stringify(payload), decodedLabel);
-  assert(!JSON.stringify(payload).includes("@"), "Codex plan fixture payload must not contain an address.");
+  assert(
+    !Object.values(tokens).some((value) => String(value).includes(".")),
+    "Codex plan fixture token values must not contain segment separators."
+  );
+
+  const parts = singleJsonDocument(parsedByFile, codexPlanTokenPartsPath);
+  assert(
+    isRecord(parts) && isRecord(parts.header) && isRecord(parts.payload) && typeof parts.signature === "string",
+    "Codex plan token parts must hold header, payload and signature."
+  );
+  assert(parts.header.alg === "none", "Codex plan token header must declare alg none.");
+  assert(parts.signature === "fixture-signature", "Codex plan token signature must be the fixture marker.");
+  const payload = parts.payload;
+  assert(!JSON.stringify(payload).includes("@"), "Codex plan token payload must not contain an address.");
   const authClaims = payload["https://api.openai.com/auth"];
   assert(
     isRecord(authClaims) &&
       authClaims.chatgpt_plan_type === "pro" &&
       authClaims.chatgpt_subscription_active_until === "2026-12-01T00:00:00+00:00",
-    "Codex plan fixture plan claims changed unexpectedly."
+    "Codex plan token plan claims changed unexpectedly."
   );
   const pinnedClaims = new Set(["chatgpt_plan_type", "chatgpt_subscription_active_until"]);
   for (const [key, value] of [...Object.entries(payload), ...Object.entries(authClaims)]) {
@@ -643,7 +644,7 @@ function checkCodexPlanFixture(parsedByFile) {
     const strings = Array.isArray(value) ? value : [value];
     for (const item of strings) {
       if (typeof item !== "string") continue;
-      assert(item.startsWith("fixture-"), `Codex plan fixture claim ${key} is not obviously synthetic.`);
+      assert(item.startsWith("fixture-"), `Codex plan token claim ${key} is not obviously synthetic.`);
     }
   }
 }

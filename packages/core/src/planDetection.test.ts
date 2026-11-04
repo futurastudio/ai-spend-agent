@@ -144,31 +144,44 @@ describe("local plan detection", () => {
 const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "fixtures/local-agent-formats");
 const claudePlanFixture = join(fixtureRoot, "claude-code-plan-v1/claude.json");
 const codexPlanFixture = join(fixtureRoot, "codex-plan-v1/auth.json");
+const codexPlanTokenParts = join(fixtureRoot, "codex-plan-v1/id-token-parts.json");
 const now = "2026-11-04T12:00:00.000Z";
+
+type TokenParts = { header: Record<string, unknown>; payload: Record<string, unknown>; signature: string };
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+/** The fixture keeps the id token as decoded parts; the token itself exists only in a throwaway home. */
+async function assembledCodexAuth(): Promise<{ auth: { tokens: Record<string, string> }; token: string; parts: TokenParts }> {
+  const auth = JSON.parse(await readFile(codexPlanFixture, "utf8")) as { tokens: Record<string, string> };
+  const parts = JSON.parse(await readFile(codexPlanTokenParts, "utf8")) as TokenParts;
+  const token = `${encode(parts.header)}.${encode(parts.payload)}.${parts.signature}`;
+  auth.tokens.id_token = token;
+  return { auth, token, parts };
+}
 
 /** A throwaway home laid out the way the agents leave it: ~/.claude.json and ~/.codex/auth.json. */
 async function fixtureHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "aibill-plan-facts-home-"));
   await cp(claudePlanFixture, join(home, ".claude.json"));
   await mkdir(join(home, ".codex"));
-  await cp(codexPlanFixture, join(home, ".codex", "auth.json"));
+  await writeFile(join(home, ".codex", "auth.json"), JSON.stringify((await assembledCodexAuth()).auth, null, 2));
   return home;
 }
 
 /** Every identity or credential string the fixtures carry; none may reach a serialized fact. */
 async function fixtureSecrets(): Promise<{ keys: string[]; values: string[] }> {
   const claude = JSON.parse(await readFile(claudePlanFixture, "utf8")) as { oauthAccount: Record<string, unknown> };
-  const codex = JSON.parse(await readFile(codexPlanFixture, "utf8")) as { tokens: Record<string, string> };
-  const payload = JSON.parse(Buffer.from(codex.tokens.id_token!.split(".")[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+  const { auth: codex, token, parts } = await assembledCodexAuth();
+  const payload = parts.payload;
   const authClaims = payload["https://api.openai.com/auth"] as Record<string, unknown>;
   const keys = ["accountUuid", "emailAddress", "organizationUuid", "displayName", "organizationRole", "seatTier",
-    "id_token", "access_token", "refresh_token", "email", "sub", "chatgpt_account_id", "chatgpt_user_id", "user_id"];
+    "id_token", "access_token", "refresh_token", "email", "sub", "chatgpt_account_id", "chatgpt_user_id"];
   const values = [
     ...["accountUuid", "emailAddress", "organizationUuid", "displayName"].map(key => claude.oauthAccount[key] as string),
     ...Object.values(codex.tokens),
-    ...codex.tokens.id_token!.split("."),
+    ...token.split("."),
     payload.email as string, payload.sub as string, payload.iss as string,
-    ...["chatgpt_account_id", "chatgpt_user_id", "user_id"].map(key => authClaims[key] as string)
+    ...["chatgpt_account_id", "chatgpt_user_id"].map(key => authClaims[key] as string)
   ];
   expect(values.every(value => typeof value === "string" && value.length > 0)).toBe(true);
   return { keys, values };
@@ -307,7 +320,12 @@ describe("agent plan facts for Workspace", () => {
 
   it("honours explicit file paths the way doctor does", async () => {
     const dir = await mkdtemp(join(tmpdir(), "aibill-plan-facts-paths-"));
-    const facts = await readAgentPlanFacts({ now, home: dir, env: {}, claudeConfigPath: claudePlanFixture, codexAuthPath: codexPlanFixture });
+    const codexAuthPath = join(dir, "codex-auth.json");
+    await writeFile(codexAuthPath, JSON.stringify((await assembledCodexAuth()).auth));
+    const facts = await readAgentPlanFacts({ now, home: dir, env: {}, claudeConfigPath: claudePlanFixture, codexAuthPath });
     expect(facts.map(fact => fact.tier)).toEqual(["claude_max_20x", "chatgpt_pro"]);
+    // The committed fixture holds a placeholder, never a token: read as-is it yields no Codex fact.
+    expect((await readAgentPlanFacts({ now, home: dir, env: {}, claudeConfigPath: claudePlanFixture, codexAuthPath: codexPlanFixture }))
+      .map(fact => fact.agent)).toEqual(["claude_code"]);
   });
 });
