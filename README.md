@@ -189,7 +189,12 @@ start in and commit what it writes. Two files change:
   `node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"`. It runs
   `aibill guard check` from the `ai-spend-agent` package the checkout declares
   in its `package.json` (`npm install --save-dev aibill`), else from a global
-  install, without `npx` or any network.
+  install it can find: the npm prefix from `npm_config_prefix` or `~/.npmrc`,
+  Volta's package images, the running Node's prefix, or `%APPDATA%\npm` on
+  Windows, with `npm i -g aibill` (which nests `ai-spend-agent`) covered. No
+  `npx`, no network. When none is found it warns, names the roots it looked
+  in, and lets the prompt through; `guard status` shows which package the
+  hook would run.
 
 In a linked worktree, install writes into the worktree, because that is where
 Claude Code reads the shared settings from; the policy and the day's figures
@@ -217,8 +222,9 @@ transcript rewritten in place is detected and read again from the start. A
 line whose token shape the parser does not support counts its present
 components only, so every figure is a lower bound. A warm run reads only the
 bytes transcripts gained since the last run, and a run whose verdict cannot
-have changed exits before loading anything: about a tenth of a second per
-prompt, and per tool call when opted in.
+have changed exits before loading anything: about 0.05 s when nothing
+changed, 0.1 s on a recompute, and up to about a second the first time of the
+day, per prompt (and per tool call when opted in).
 
 `npx aibill@latest guard status` prints the policy in force, today's figures
 against it, what is installed where (including which `ai-spend-agent` the

@@ -18,7 +18,7 @@ Command details for [aibill, Tilden’s free CLI](../README.md). Start with the
 | `guard install --managed` | Print the same policy as a managed-settings document (adds `deniedModels`) for organizations that enforce centrally; writes nothing |
 | `guard install --uninstall` | Remove exactly the settings and launcher that install added; an edited `availableModels` and the policy file stay |
 | `guard check` | The hook: read today's Claude Code usage for this repository from local transcripts and exit 2 with the policy message when a daily budget (tokens, output tokens or sessions) is spent; a missing policy, unreadable evidence, unreadable hook input or an index still catching up exits 0 with one warning (fail open) |
-| `guard status` | Show the policy in force, today's usage against it, what is installed where (and which `ai-spend-agent` the hook runs), and whether managed settings override; never a person. Run it before choosing budgets |
+| `guard status` | Show the policy in force, today's usage against it, what is installed where (and which `ai-spend-agent` the hook runs: the one `package.json` declares, else a global install found through the npm prefix, `~/.npmrc`, Volta or the running Node), and whether managed settings override; never a person. Run it before choosing budgets |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Register an admin-gated local connector stub and print the required `sync-provider` command; does not fetch billing data |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
@@ -186,8 +186,11 @@ npx aibill guard install --uninstall
 transcripts gained since its last run from a private cache under
 `~/.aibill/cache/guard-usage-v1-r<N>/` (`N` is the Claude Code reader
 version, so an older reader's cache is never reused), detects a transcript
-rewritten in place, and blocks only when the figure is certain. A run whose
-verdict cannot have changed (same day, policy, transcripts and session) exits
-before loading the evidence engine. Project settings are a convention a
+rewritten in place (same size with a newer mtime, or changed head, tail or
+sampled bytes of the consumed prefix), and blocks only when the figure is
+certain. A run whose verdict cannot have changed (same day, policy,
+transcripts and session) exits before loading the evidence engine: about
+0.05 s then, 0.1 s on a recompute, up to about a second the first time of the
+day. Project settings are a convention a
 developer can edit, and Claude Code runs project hooks after the folder is
 trusted; managed settings are the enforced form.

@@ -32,7 +32,12 @@ historical untagged exception.
   never counted against itself however large the prompt or tool input in the
   hook's stdin. A warm run reads only the bytes transcripts gained since the
   last run, and a run whose verdict cannot have changed exits before loading
-  the evidence engine. `guard status` prints the policy in force, today's
+  the evidence engine (about 0.05 s, 0.1 s on a recompute, up to about a
+  second the first time of the day). The launcher runs the `ai-spend-agent`
+  the checkout declares, else a global install found through the npm prefix
+  (`npm_config_prefix`, `~/.npmrc`), Volta, the running Node's prefix or
+  `%APPDATA%\npm`, including `npm i -g aibill`, and names the roots it tried
+  when none is found. `guard status` prints the policy in force, today's
   figures, what is installed where, which `ai-spend-agent` the hook would run
   and whether managed settings override, never a person. Core gains the
   policy schema and an incremental transcript tally that keeps the same lines
