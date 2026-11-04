@@ -59,12 +59,24 @@ export const aibillPolicySchema = z.object({
     perDay: z.object({
       /** Distinct Claude Code sessions with a call in the repository, per UTC day. */
       sessions: positiveCountSchema.optional(),
-      /** Input + output + cache read + cache write tokens of those sessions, per UTC day. */
-      tokens: positiveCountSchema.optional()
+      /**
+       * Every token component of those sessions per UTC day: input, output,
+       * cache read and cache write. Cache reads dominate, so a busy repository
+       * measures hundreds of millions a day; run `aibill guard status` first.
+       */
+      tokens: positiveCountSchema.optional(),
+      /** Output tokens only, per UTC day: a few million for a busy repository. */
+      outputTokens: positiveCountSchema.optional()
     }).strict().optional()
   }).strict().optional(),
   /** Shown first when the guard blocks. */
   message: messageSchema.optional(),
+  /**
+   * Also run the hook before every tool call (about a tenth of a second
+   * each). Off by default: the prompt-time hook alone bounds a session's
+   * budget at every turn boundary.
+   */
+  perToolCall: z.boolean().optional(),
   /** Codex policy is reported, not enforced, in this version. */
   codex: z.object({
     model: modelEntrySchema.optional()
@@ -113,10 +125,14 @@ export function validateAibillPolicy(value: unknown): AibillPolicyParseResult {
   };
 }
 
-/** Whether the policy carries anything the guard can enforce or report. */
+/** The budget dimensions the hook can evaluate. */
+export const AIBILL_POLICY_BUDGET_DIMENSIONS = ["tokens", "outputTokens", "sessions"] as const;
+export type AibillPolicyBudgetDimension = typeof AIBILL_POLICY_BUDGET_DIMENSIONS[number];
+
+/** Whether the policy carries a daily budget the guard can enforce. */
 export function aibillPolicyHasBudget(policy: AibillPolicy): boolean {
   const perDay = policy.budget?.perDay;
-  return perDay !== undefined && (perDay.sessions !== undefined || perDay.tokens !== undefined);
+  return perDay !== undefined && AIBILL_POLICY_BUDGET_DIMENSIONS.some((dimension) => perDay[dimension] !== undefined);
 }
 
 /**

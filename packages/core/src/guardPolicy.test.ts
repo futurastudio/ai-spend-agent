@@ -11,8 +11,9 @@ import {
 const validPolicy = {
   version: 1 as const,
   models: { allow: ["sonnet", "haiku"], deny: ["claude-opus-5-5"] },
-  budget: { perDay: { sessions: 20, tokens: 1_500_000 } },
+  budget: { perDay: { sessions: 20, tokens: 400_000_000, outputTokens: 4_000_000 } },
   message: "Daily agent budget for this repository is spent. Ask in #platform for an exception.",
+  perToolCall: true,
   codex: { model: "gpt-5.6" }
 };
 
@@ -34,6 +35,8 @@ describe("aibill policy schema", () => {
     expect(result.ok).toBe(true);
     expect(aibillPolicyHasBudget({ version: 1 })).toBe(false);
     expect(aibillPolicyHasBudget({ version: 1, budget: { perDay: {} } })).toBe(false);
+    expect(aibillPolicyHasBudget({ version: 1, budget: { perDay: { outputTokens: 5 } } })).toBe(true);
+    expect(validateAibillPolicy({ version: 1, perToolCall: "yes" }).ok).toBe(false);
   });
 
   it("refuses an unknown version and unknown keys instead of ignoring them", () => {
@@ -54,6 +57,7 @@ describe("aibill policy schema", () => {
     expect(issuesOf({ version: 1, budget: { perDay: { sessions: -3 } } })[0]).toContain("budget.perDay.sessions");
     expect(issuesOf({ version: 1, budget: { perDay: { tokens: 1.5 } } })[0]).toContain("whole number");
     expect(issuesOf({ version: 1, budget: { perDay: { tokens: "1M" } } })[0]).toContain("budget.perDay.tokens");
+    expect(issuesOf({ version: 1, budget: { perDay: { outputTokens: 0 } } })[0]).toContain("budget.perDay.outputTokens");
   });
 
   it("refuses model entries that are not aliases or ids, and empty lists", () => {
