@@ -42,7 +42,7 @@ const descriptors = [
       format: "JSON Lines under ~/.claude/projects/**/*.jsonl",
       howRead: [
         "Read one JSON object per line and keep assistant records with message.usage.",
-        "Ignore <synthetic> placeholder models and deduplicate streaming/retry rewrites by message and request identity.",
+        "Ignore <synthetic> placeholder models; a message streamed on several lines (same message and request identity, one content block per line) counts once, from the line carrying its final state, with the tool_use blocks of every line.",
         "Treat each retained assistant usage record as turn-scoped evidence."
       ],
       fieldsRead: [
@@ -72,7 +72,7 @@ const descriptors = [
         "A system/turn_duration marker proves only that the latest observed turn completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts."
       ]
     },
-    fixtures: ["claude-code-v1"]
+    fixtures: ["claude-code-v1", "claude-code-streaming-v1"]
   },
   {
     schemaVersion: 1,
