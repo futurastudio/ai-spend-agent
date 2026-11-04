@@ -5,6 +5,23 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- Treat two copies of one Claude Code response that carry the same evidence
+  as one call. A sub-agent transcript opens with the parent turn it was forked
+  from, written seconds later; earlier versions compared timestamps too and
+  marked the pair `conflicting-local-evidence`, and that one pair made
+  `workspace push` refuse to send anything. The copy from the originating
+  transcript is kept, then the earliest. Copies whose evidence differs still
+  fail closed.
+- Read `usage.iterations` on a Claude Code message that took several API
+  requests (a model fallback after a failed attempt). The top-level counts
+  describe the served request while the top-level cache-write split can sum
+  every attempt, so earlier versions marked the line `unsupported_token_shape`
+  and `workspace push` represented it as unknown tokens. The served request's
+  own split is read instead, and the line prices as that request. A line whose
+  top level does not match its served request stays unsupported.
+
 ## 0.9.14 (published on npm)
 
 The CLI email ask now offers team access. The during-scan ask reads "Want

@@ -737,6 +737,12 @@ export function dedupeCumulativeSessionCalls(
           stableTurnEvidenceFingerprint(call) !== stableTurnEvidenceFingerprint(prior)) {
         stableTurns.set(key, conflictingStableTurn(prior, call));
         onStableTurnConflict?.(call.agent);
+      } else if (isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
+        // The same complete evidence written twice is one call: a sub-agent
+        // transcript opens with the parent turn it was forked from, written
+        // seconds later. Keep the originating copy (the one outside a
+        // sub-agent transcript), then the earliest, whichever file came first.
+        if (preferredStableTurnCopy(prior, call) === call) stableTurns.set(key, call);
       } else if (!isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
         // JSONL/checkpoint copies can preserve an early tokenless snapshot
         // beside its later complete update. Complete evidence supersedes only
@@ -767,8 +773,9 @@ function isCompleteStableTurn(call: LocalAgentCall): boolean {
 }
 
 function stableTurnEvidenceFingerprint(call: LocalAgentCall): string {
+  // The timestamp is left out: copies of one response can be written seconds
+  // apart, and only the evidence decides whether they conflict.
   return JSON.stringify({
-    timestamp: call.timestamp,
     model: call.model,
     project: call.project ?? null,
     workingDirectoryRef: stableWorkingDirectoryRef(call),
@@ -814,6 +821,11 @@ function isStableTurnConflict(call: LocalAgentCall): boolean {
     call.usageSupport === "unsupported_token_shape";
 }
 
+function preferredStableTurnCopy(prior: LocalAgentCall, candidate: LocalAgentCall): LocalAgentCall {
+  if (Boolean(prior.subagentId) !== Boolean(candidate.subagentId)) return prior.subagentId ? candidate : prior;
+  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+}
+
 function conflictingStableTurn(
   left: LocalAgentCall,
   right: LocalAgentCall
@@ -857,8 +869,20 @@ type ParsedClaudeFinancialUsage = {
 
 function parseClaudeFinancialUsage(
   value: Record<string, unknown>,
-  onDiagnostic?: TranscriptParseDiagnosticHandler
+  onDiagnostic?: TranscriptParseDiagnosticHandler,
+  messageModel?: string
 ): ParsedClaudeFinancialUsage {
+  // Claude Code copies the API's `usage.iterations` when one assistant message
+  // took several requests (a model fallback after a failed attempt). The
+  // top-level counts describe the served request, but the top-level
+  // cache_creation split can sum every attempt, so the two disagree. The
+  // served request is what is billed: when the top level matches the last
+  // served iteration, that iteration's own split is the one to read. Any other
+  // list is left to the top-level rules below.
+  const served = lastServedIteration(value.iterations);
+  if (served && servedIterationMatches(value, served, messageModel) && isRecord(served.cache_creation)) {
+    value = { ...value, cache_creation: served.cache_creation };
+  }
   const inputTokens = tokenComponentOf(value.input_tokens);
   const outputTokens = tokenComponentOf(value.output_tokens);
   const cacheReadField = optionalTokenComponent(value, "cache_read_input_tokens");
@@ -947,6 +971,43 @@ function parseClaudeFinancialUsage(
     usageSupport: "unsupported_token_shape",
     ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {})
   };
+}
+
+/**
+ * The last iteration that answered the request: a `message` or a
+ * `fallback_message`. Server-side side calls (`advisor_message`, `compaction`)
+ * are skipped; any other kind, or an iteration of unknown shape, ends the
+ * search so an unfamiliar list falls to the top-level rules.
+ */
+function lastServedIteration(iterations: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(iterations)) return undefined;
+  for (let index = iterations.length - 1; index >= 0; index -= 1) {
+    const iteration: unknown = iterations[index];
+    if (!isRecord(iteration)) return undefined;
+    const type = stringOf(iteration.type);
+    if (type === "message" || type === "fallback_message") return iteration;
+    if (type !== "advisor_message" && type !== "compaction") return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The four top-level counts are present and equal the served iteration's own,
+ * and a served iteration that names its model names the message's model, so
+ * a request is never priced at another model's rate.
+ */
+function servedIterationMatches(
+  value: Record<string, unknown>,
+  served: Record<string, unknown>,
+  messageModel: string | undefined
+): boolean {
+  const servedModel = stringOf(served.model);
+  if (servedModel !== undefined && servedModel !== messageModel) return false;
+  return (["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const)
+    .every((key) => {
+      const top = tokenComponentOf(value[key]);
+      return top !== undefined && top === tokenComponentOf(served[key]);
+    });
 }
 
 type OptionalTokenComponent = {
@@ -1254,7 +1315,7 @@ export function parseClaudeCodeTranscript(
       pendingPrompts.length = 0;
       continue;
     }
-    const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
+    const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic, stringOf(message.model));
     const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
     const project = projectFromCwd(workingDirectory) ?? projectFromTranscriptPath(filePath);
     const sessionId = stringOf(entry.sessionId);
@@ -4490,7 +4551,7 @@ function parseClaudeFinancialEntry(
   if (nativeResponse) seen.add(nativeResponse.localDedupeKey);
   const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
   if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) return undefined;
-  const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
+  const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic, stringOf(message.model));
   const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
   return {
     agent: "claude-code",
