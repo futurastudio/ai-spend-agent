@@ -14,9 +14,11 @@ export * from "./discovery.js";
 export * from "./glance.js";
 export * from "./toolInvocations.js";
 export * from "./insights.js";
+export * from "./guardPolicy.js";
 export {
   aggregateCalls,
   codexHeaderProbesPerScan,
+  createClaudeCodeUsageTally,
   dedupeCumulativeSessionCalls,
   defaultStreamedBytesPerRun,
   hasCompleteQualitativeCoverage,
@@ -29,9 +31,12 @@ export {
   parseClaudeCodeTranscript,
   parseCodexRollout,
   SAFE_QUALITATIVE_SCAN_POLICY,
-  sanitizeLocalActivityText
+  sanitizeLocalActivityText,
+  tallyClaudeCodeTranscriptLines
 } from "./localAgentLogs.js";
 export type {
+  ClaudeCodeUsageTally,
+  ClaudeCodeUsageTallyLine,
   LocalAgentActivity,
   LocalAgentCall,
   LocalAgentCompletionEvidence,

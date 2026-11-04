@@ -5617,3 +5617,98 @@ function jsonRecord(value: string | undefined): Record<string, unknown> | undefi
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
 }
+
+/**
+ * One kept Claude Code response line in an incremental usage tally. `tokens`
+ * is the disjoint total the financial parser forms (input + output + cache
+ * read + cache writes); when `complete` is false the token shape was
+ * unsupported and `tokens` holds only the components that were present, so it
+ * is a lower bound, never an overstatement.
+ */
+export type ClaudeCodeUsageTallyLine = {
+  tokens: number;
+  /** The line carries the response's final state (iterations or a stop reason). */
+  final: boolean;
+  outputTokens: number;
+  timestamp: string;
+  sessionId?: string;
+  /** Absolute cwd recorded on the kept line; consumers may drop it before persisting. */
+  workingDirectory?: string;
+  complete: boolean;
+};
+
+/**
+ * Incremental per-file reducer state for `tallyClaudeCodeTranscriptLines`.
+ * Feeding a transcript in several appended chunks yields the same kept lines
+ * as parsing the whole file at once, because each response keeps its
+ * highest-ranked line (`claudeResponseLineRank`) and ties keep the first, the
+ * exact rule `parseClaudeCodeTranscript` applies. The state is JSON-safe so a
+ * hook can persist it between runs and read only the bytes a transcript
+ * gained since.
+ */
+export type ClaudeCodeUsageTally = {
+  version: 1;
+  /** Keyed by native response identity, or `line:<n>` for lines without one. */
+  responses: Record<string, ClaudeCodeUsageTallyLine>;
+  /** Lines without a native identity seen so far, for stable `line:<n>` keys. */
+  unidentifiedLines: number;
+  malformedLines: number;
+};
+
+export function createClaudeCodeUsageTally(): ClaudeCodeUsageTally {
+  return { version: 1, responses: {}, unidentifiedLines: 0, malformedLines: 0 };
+}
+
+/**
+ * Fold complete transcript lines into the tally. `text` must end at a line
+ * boundary; a trailing partial line is the caller's to hold back. Only
+ * assistant lines with `message.usage` count, `<synthetic>` placeholders are
+ * skipped, and a response written several times while streaming keeps the
+ * line carrying its final state.
+ */
+export function tallyClaudeCodeTranscriptLines(text: string, tally: ClaudeCodeUsageTally): void {
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    if (!line.includes('"usage"')) {
+      // Cheap pre-filter: a usage-bearing assistant line always contains the
+      // key. Lines without it are never counted, so they need no JSON parse.
+      continue;
+    }
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      tally.malformedLines += 1;
+      continue;
+    }
+    if (!isRecord(entry) || entry.type !== "assistant") continue;
+    const message = isRecord(entry.message) ? entry.message : undefined;
+    const usage = message && isRecord(message.usage) ? message.usage : undefined;
+    if (!message || !usage) continue;
+    if (stringOf(message.model) === "<synthetic>") continue;
+    const identity = claudeNativeResponseIdentity(message, entry);
+    const rank = claudeResponseLineRank(message, usage);
+    let key: string;
+    if (identity) {
+      key = identity.localDedupeKey;
+      const prior = tally.responses[key];
+      if (prior && !outranks(rank, { final: prior.final, outputTokens: prior.outputTokens })) continue;
+    } else {
+      tally.unidentifiedLines += 1;
+      key = `line:${tally.unidentifiedLines}`;
+    }
+    const parsed = parseClaudeFinancialUsage(usage, undefined, stringOf(message.model));
+    const kept: ClaudeCodeUsageTallyLine = {
+      tokens: totalUsageTokens(parsed.usage),
+      final: rank.final,
+      outputTokens: rank.outputTokens,
+      timestamp: toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString(),
+      complete: parsed.usageSupport !== "unsupported_token_shape"
+    };
+    const sessionId = stringOf(entry.sessionId);
+    if (sessionId) kept.sessionId = sessionId;
+    const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
+    if (workingDirectory) kept.workingDirectory = workingDirectory;
+    tally.responses[key] = kept;
+  }
+}
