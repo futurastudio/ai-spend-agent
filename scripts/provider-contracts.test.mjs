@@ -130,12 +130,16 @@ test("financial-schema markers catch one added OpenAI Costs result field", async
   const page = (fields) => [
     "<nav><li>Completions GET /organization/usage/completions</li><li>Costs GET /organization/costs</li><li>Embeddings GET /organization/usage/embeddings</li></nav>",
     `<main>${padding}`,
-    "<h4>OrganizationUsageCompletionsResult object { input_tokens, num_model_requests, object, 21 more }</h4>",
-    "<p>input_tokens: number, including cached and cache-write tokens.</p>",
-    "<p>output_tokens: number, across text, audio, and image outputs.</p>",
+    "<h4>OrganizationUsageCompletionsResult object { input_tokens, num_model_requests, object, 22 more }</h4>",
+    "<p>input_tokens: integer, including cached and cache-write tokens.</p>",
+    "<p>output_tokens: integer, across text, audio, and image outputs.</p>",
+    // The connector reads these fields, so each one is a reviewed claim.
+    "<p>api_source: optional string or null. input_cache_write_12h_tokens: optional integer. input_cache_write_30m_tokens: optional integer or null.</p>",
     padding,
     `<h4>OrganizationCostsResult object { ${fields.slice(0, 3).join(", ")}, ${fields.length - 3} more }</h4>`,
+    "<p>amount: optional object { currency, value }. currency: optional string Lowercase ISO-4217 currency. value : optional number The numeric value of the cost.</p>",
     ...fields.map((field) => `<p>${field}: documented field of the grouped costs result.</p>`),
+    "<p>user_id: optional string or null. When group_by=user_id, this field provides the user ID of the grouped costs result.</p>",
     "</main>"
   ].join("\n");
   const reviewed = normalizeDocument(page(costFields));
@@ -161,35 +165,60 @@ test("financial-schema markers catch one added OpenAI Costs result field", async
   assert.equal(observation.error, "reviewed semantic fingerprint changed");
 });
 
-test("Gemini pricing markers anchor on the priced gemini-2.5-pro rows and survive its literal <=", async () => {
+test("normalizeDocument strips markup but keeps a bare < comparison as text", () => {
+  assert.equal(
+    normalizeDocument("<!doctype html><p class=\"x\">A <= b<br>and C > d</p><!-- note --><?xml version=\"1.0\"?>"),
+    "a <= b and c > d"
+  );
+  // Angle-bracket placeholders still read as tags; encoded comparisons are decoded after stripping.
+  assert.equal(normalizeDocument("~/.gemini/tmp/<project_hash>/chats/ &lt;= 1"), "~/.gemini/tmp/ /chats/ <= 1");
+});
+
+test("Gemini pricing markers anchor on the priced gemini-2.5-pro rows of the Markdown mirror and keep its literal <=", async () => {
   const contracts = await readProviderContracts();
   const resource = contracts.contracts.find((entry) => entry.id === "google-gemini")
     .resources.find((entry) => entry.kind === "pricing");
-  const genericMarkers = ["Output price (including thinking tokens)", "Context caching price", "Paid Tier"];
-  for (const marker of [...genericMarkers, "gemini-2.5-pro", "$15.00, prompts > 200k"]) {
+  assert.equal(resource.url, "https://aistudio.google.com/docs/pricing.md");
+  const genericMarkers = ["Output price (including thinking tokens)", "Context caching price", "Paid Tier, per 1M tokens in USD"];
+  for (const marker of [...genericMarkers, "gemini-2.5-pro", "$10.00, prompts <= 200k tokens", "$15.00, prompts > 200k", "Gemini 3.8 Flash rates"]) {
     assert.ok(resource.requiredMarkers.includes(marker), `missing required marker: ${marker}`);
   }
-  // A newer model is listed first, as on the real page. Its rows are what the generic
-  // markers anchor on; the padding keeps the priced model outside their windows.
-  // The real table writes "prompts <= 200k tokens" with a literal "<", which
-  // normalizeDocument drops through the next tag.
+  // The Markdown mirror lists newer models first, as the real page does. Their rows
+  // are what the generic markers anchor on; the padding keeps the priced model
+  // outside their windows. The tables write "prompts <= 200k tokens" with a literal
+  // "<", which normalizeDocument keeps as text.
   const padding = "unchanged ".repeat(60);
-  const header = "<tr><th></th><th>Free Tier</th><th>Paid Tier, per 1M tokens in USD</th></tr>";
+  const table = (rows) => ["{% table %}", "* Feature", "* Free Tier", "* Paid Tier, per 1M tokens in USD", ...rows.flatMap((row) => ["---", ...row]), "{% /table %}"].join("\n");
   const page = (outputAbove200k) => [
-    `<h2>Gemini 4 Argon</h2><table>${header}`,
-    "<tr><td>Input price</td><td>Not available</td><td>$2.00</td></tr>",
-    "<tr><td>Output price (including thinking tokens)</td><td>Not available</td><td>$10.00</td></tr>",
-    "<tr><td>Context caching price</td><td>Not available</td><td>$0.10</td></tr></table>",
+    "# Gemini Developer API pricing",
+    "## Gemini 4 Argon  {% id=\"gemini-4-argon\" %}",
+    table([
+      ["* Input price", "* Not available", "* $2.00 through November 30, 2026.   \n  $4.00 starting December 1, 2026."],
+      ["* Output price (including thinking tokens)", "* Not available", "* $10.00 through November 30, 2026.   \n  $20.00 starting December 1, 2026."],
+      ["* Context caching price", "* Not available", "* $0.10 through November 30, 2026.   \n  $0.20 starting December 1, 2026."]
+    ]),
     padding,
-    `<h2>Gemini 2.5 Pro</h2><em><code>gemini-2.5-pro</code></em><table>${header}`,
-    "<tr><td>Input price</td><td>Free of charge</td><td>$1.25, prompts <= 200k tokens<br>$2.50, prompts > 200k tokens</td></tr>",
-    `<tr><td>Output price (including thinking tokens)</td><td>Free of charge</td><td>$10.00, prompts <= 200k tokens<br>${outputAbove200k}, prompts > 200k</td></tr>`,
-    "<tr><td>Context caching price</td><td>Not available</td><td>$0.125, prompts <= 200k tokens<br>$0.25, prompts > 200k<br>$4.50 / 1,000,000 tokens per hour (storage price)</td></tr></table>",
+    "## Gemini 3.8 Flash  {% id=\"gemini-3.8-flash\" %}",
+    table([
+      ["* Input price", "* Free of charge", "* $0.75 through December 31, 2026.   \n  $1.50 starting January 1, 2027."],
+      ["* Output price (including thinking tokens)", "* Free of charge", "* $3.75 through December 31, 2026.   \n  $7.50 starting January 1, 2027."],
+      ["* Context caching price", "* Free of charge", "* $0.075 through December 31, 2026.   \n  $0.15 starting January 1, 2027."]
+    ]),
+    padding,
+    "## Gemini 2.5 Pro  {% id=\"gemini-2.5-pro\" %}",
+    "*[`gemini-2.5-pro`](/docs/models/gemini-2.5-pro)*",
+    "{% callout type=\"caution\" %}\nGemini 2.5 Pro (`gemini-2.5-pro`) is deprecated. Effective December 1, 2026, all API requests to `gemini-2.5-pro` will automatically route to Gemini 3.8 Flash and be billed at Gemini 3.8 Flash rates.\n{% /callout %}",
+    table([
+      ["* Input price", "* Free of charge", "* $1.25, prompts <= 200k tokens    \n  $2.50, prompts > 200k tokens"],
+      ["* Output price (including thinking tokens)", "* Free of charge", `* $10.00, prompts <= 200k tokens    \n  ${outputAbove200k}, prompts > 200k`],
+      ["* Context caching price", "* Not available", "* $0.125, prompts <= 200k tokens    \n  $0.25, prompts > 200k    \n  $4.50 / 1,000,000 tokens per hour (storage price)"]
+    ]),
     padding
   ].join("\n");
   const reviewed = normalizeDocument(page("$15.00"));
   const repriced = normalizeDocument(page("$16.00"));
-  assert.equal(reviewed.includes(normalizeDocument("$10.00, prompts <= 200k tokens")), false);
+  // Both tiers of every priced row survive normalization, so each is a claim.
+  assert.ok(reviewed.includes(normalizeDocument("$10.00, prompts <= 200k tokens $15.00, prompts > 200k")));
   // The generic markers alone never see a gemini-2.5-pro price change.
   assert.equal(semanticFingerprint(repriced, genericMarkers), semanticFingerprint(reviewed, genericMarkers));
   assert.notEqual(semanticFingerprint(repriced, resource.requiredMarkers), semanticFingerprint(reviewed, resource.requiredMarkers));
