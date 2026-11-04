@@ -91,7 +91,7 @@ historical untagged exception.
   parts that tests assemble, so no token-shaped string is committed, and the
   fixture check pins those parts claim by claim.
 
-## 0.9.15 (unreleased)
+## 0.9.15 (published on npm)
 
 - Treat two copies of one Claude Code response that carry the same evidence
   as one call. A sub-agent transcript opens with the parent turn it was forked
