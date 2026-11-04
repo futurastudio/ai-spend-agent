@@ -488,7 +488,7 @@ export type LocalAgentStreamCheckpointAdapter = {
 // inherited baseline: v2 entries priced a fork's replayed parent history as
 // the child's own usage, so those cached amounts are overstated and must not
 // be reused.
-export const localAgentFinancialParserVersion = 3;
+export const localAgentFinancialParserVersion = 4;
 
 /**
  * Qualitative parser contract version. Bumped to 2 with the checkpointed
@@ -508,7 +508,7 @@ export const localAgentFinancialParserVersion = 3;
  * with the user-fork inherited-baseline fix: v5 entries and checkpoints treated
  * a fork's replayed parent history as the child's own usage and activity.
  */
-export const localAgentQualitativeParserVersion = 6;
+export const localAgentQualitativeParserVersion = 7;
 
 /**
  * Conservative launch defaults for action-capable qualitative evidence.
@@ -2554,7 +2554,8 @@ export async function readClaudeCodeFinancialFileForRegistry(
   const calls: LocalAgentCall[] = [];
   const fileDiagnostics: TranscriptParseDiagnostic[] = [];
   // Streaming writes the same API response on several lines. Hold the slim
-  // candidates and keep, per response, the line carrying its final state.
+  // candidates and keep, per response, the highest-ranked line (the final
+  // state; see claudeResponseLineRank).
   const responses = new Map<string, ClaudeFinancialCandidate>();
   const unidentified: ClaudeFinancialCandidate[] = [];
   let order = 0;
@@ -2574,7 +2575,7 @@ export async function readClaudeCodeFinancialFileForRegistry(
       const candidate: ClaudeFinancialCandidate = {
         entry: slimClaudeFinancialEntry(entry),
         timestamp,
-        outputTokens: tokenComponentOf(entry.message.usage.output_tokens) ?? -1,
+        rank: claudeResponseLineRank(entry.message, entry.message.usage),
         order: order++
       };
       const identity = claudeNativeResponseIdentity(entry.message, entry);
@@ -2583,7 +2584,7 @@ export async function readClaudeCodeFinancialFileForRegistry(
         return;
       }
       const prior = responses.get(identity.localDedupeKey);
-      if (!prior || candidate.outputTokens > prior.outputTokens) responses.set(identity.localDedupeKey, candidate);
+      if (!prior || outranks(candidate.rank, prior.rank)) responses.set(identity.localDedupeKey, candidate);
     }, workspaceDailyFacts);
   } catch (error) {
     recordUnreadableFile("claude-code", scan, diagnostics, error);
@@ -4560,12 +4561,32 @@ function claudeNativeResponseIdentity(
   };
 }
 
+type ClaudeResponseLineRank = { final: boolean; outputTokens: number };
+
 type ClaudeFinancialCandidate = {
   entry: Record<string, unknown>;
   timestamp: string | undefined;
-  outputTokens: number;
+  rank: ClaudeResponseLineRank;
   order: number;
 };
+
+/**
+ * Ranks the lines Claude Code writes for one response. The line carrying the
+ * final state has `iterations` or a stop reason and the largest output count;
+ * the `message_start` placeholder has neither, and a zeroed copy written after
+ * the final line ranks below it on output.
+ */
+function claudeResponseLineRank(message: Record<string, unknown>, usage: Record<string, unknown>): ClaudeResponseLineRank {
+  return {
+    final: Array.isArray(usage.iterations) || stringOf(message.stop_reason) !== undefined,
+    outputTokens: tokenComponentOf(usage.output_tokens) ?? -1
+  };
+}
+
+function outranks(candidate: ClaudeResponseLineRank, prior: ClaudeResponseLineRank): boolean {
+  if (candidate.final !== prior.final) return candidate.final;
+  return candidate.outputTokens > prior.outputTokens;
+}
 
 /** The fields the financial parser reads, without the message content. */
 function slimClaudeFinancialEntry(entry: Record<string, unknown>): Record<string, unknown> {
@@ -4583,12 +4604,12 @@ function slimClaudeFinancialEntry(entry: Record<string, unknown>): Record<string
 /**
  * Claude Code writes an assistant message several times while it streams: a
  * `message_start` line with a placeholder output count first, the final
- * `message_delta` counts later, sometimes a zeroed copy after that. The line
- * with the largest output count carries the final state; ties keep the first.
- * Returns the chosen line index per native response identity.
+ * `message_delta` counts later, sometimes a zeroed copy after that. The
+ * highest-ranked line carries the final state; ties keep the first. Returns
+ * the chosen line index per native response identity.
  */
 function finalClaudeResponseLines(lines: readonly string[]): Map<string, number> {
-  const chosen = new Map<string, { index: number; outputTokens: number }>();
+  const chosen = new Map<string, { index: number; rank: ClaudeResponseLineRank }>();
   lines.forEach((line, index) => {
     if (!line.includes('"usage"')) return;
     let entry: unknown;
@@ -4602,9 +4623,9 @@ function finalClaudeResponseLines(lines: readonly string[]): Map<string, number>
     if (!isRecord(message.usage) || stringOf(message.model) === "<synthetic>") return;
     const identity = claudeNativeResponseIdentity(message, entry);
     if (!identity) return;
-    const outputTokens = tokenComponentOf(message.usage.output_tokens) ?? -1;
+    const rank = claudeResponseLineRank(message, message.usage);
     const prior = chosen.get(identity.localDedupeKey);
-    if (!prior || outputTokens > prior.outputTokens) chosen.set(identity.localDedupeKey, { index, outputTokens });
+    if (!prior || outranks(rank, prior.rank)) chosen.set(identity.localDedupeKey, { index, rank });
   });
   return new Map([...chosen].map(([key, value]) => [key, value.index]));
 }

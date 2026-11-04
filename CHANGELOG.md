@@ -35,7 +35,12 @@ historical untagged exception.
   counts later, sometimes a zeroed copy after that. Earlier versions kept the
   first line, which undercounted output tokens by about 30% on those
   transcripts and could make a forked parent turn look like a conflict. The
-  line with the largest output count is kept; ties keep the first.
+  line carrying the final state is kept: the one with `iterations` or a stop
+  reason and the largest output count; ties keep the first. Tool-use and file
+  evidence and the call's timestamp come from that line too, so a message
+  streamed across UTC midnight counts on its completion day. The reader's
+  cache versions are bumped so files indexed by earlier versions are read
+  again.
 
 ## 0.9.14 (published on npm)
 

@@ -270,6 +270,55 @@ describe("parseClaudeCodeTranscript", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("prefers the line carrying the final state, keeps the first of a tie, and counts a message that straddles the window", () => {
+    // A fallback: the early line carries the failed attempt's counts and no
+    // iterations; the final line carries the served request with iterations
+    // and a smaller output count.
+    const failedAttempt = {
+      input_tokens: 2,
+      output_tokens: 254,
+      cache_read_input_tokens: 883_323,
+      cache_creation_input_tokens: 874,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 874 }
+    };
+    const servedRequest = {
+      input_tokens: 2,
+      output_tokens: 40,
+      cache_read_input_tokens: 686_903,
+      cache_creation_input_tokens: 0,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }
+    };
+    const content = [
+      claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" }, failedAttempt),
+      claudeLine({ timestamp: "2026-06-08T10:00:20.000Z" }, {
+        ...servedRequest,
+        iterations: [
+          { type: "message", model: "claude-fable-5", ...failedAttempt },
+          { type: "fallback_message", model: "claude-opus-4-8", ...servedRequest }
+        ]
+      })
+    ].join("\n");
+    const [call] = parseClaudeCodeTranscript(content);
+    expect(call?.usage).toEqual({
+      inputTokens: 2,
+      outputTokens: 40,
+      cacheReadTokens: 686_903,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0
+    });
+    expect(call?.timestamp).toBe("2026-06-08T10:00:20.000Z");
+    // The placeholder sits before the window and the final line inside it:
+    // the message counts (earlier versions dropped it as a duplicate).
+    const straddle = parseClaudeCodeTranscript(content, "", Date.parse("2026-06-08T10:00:10.000Z"));
+    expect(straddle.map(item => item.usage.outputTokens)).toEqual([40]);
+    // Equal rank keeps the first line, whatever the later copy says elsewhere.
+    const tie = parseClaudeCodeTranscript([
+      claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" }, { cache_read_input_tokens: 1000 }),
+      claudeLine({ timestamp: "2026-06-08T10:00:01.000Z" }, { cache_read_input_tokens: 999 })
+    ].join("\n"));
+    expect(tie.map(item => [item.usage.cacheReadTokens, item.timestamp])).toEqual([[1000, "2026-06-08T10:00:00.000Z"]]);
+  });
+
   it("fails closed on iteration lists it does not recognise", () => {
     const diagnostics: Array<{ code: string; count: number }> = [];
     // A contradictory top-level split, so only a recognised served iteration
