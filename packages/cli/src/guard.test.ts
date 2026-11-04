@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AIBILL_POLICY_RELATIVE_PATH, parseClaudeCodeTranscript, projectIndexFinancialParserVersion } from "@agent-finops/core";
 import { checkGuard, formatRemaining, formatTokenCount } from "./guard.js";
-import { readGuardHookInput, runGuardHook } from "./guardHook.js";
+import { readGuardHookInput, refreshPauseClause, runGuardHook } from "./guardHook.js";
 import { AIBILL_POLICY_RELATIVE_PATH as HOOK_POLICY_PATH } from "./guardPolicyPath.js";
 import {
   GUARD_HOOK_COMMAND,
@@ -16,7 +16,14 @@ import {
   mergeGuardSettings,
   removeGuardSettings
 } from "./guardSettings.js";
-import { GUARD_CACHE_DIRECTORY_NAME, GUARD_READER_VERSION, guardStampPath, resolveGuardHookPackage } from "./guardStamp.js";
+import {
+  GUARD_CACHE_DIRECTORY_NAME,
+  GUARD_READER_VERSION,
+  displayPath,
+  globalNodeModulesRoots,
+  guardStampPath,
+  resolveGuardHookPackage
+} from "./guardStamp.js";
 import { computeGuardUsage, guardUsageCachePath } from "./guardUsage.js";
 import { runCli } from "./index.js";
 import { resolveCheckoutRoot } from "./repositoryRoot.js";
@@ -129,7 +136,7 @@ describe("guard install", () => {
     expect(result.stdout).toContain(".claude/settings.json: created");
     expect(result.stdout).toContain("hook: every prompt\n");
     expect(result.stdout).toContain(".aibill/guard-hook.mjs: created");
-    expect(result.stdout).toContain("hook runs: nothing yet; package.json does not declare aibill or ai-spend-agent");
+    expect(result.stdout).toContain("hook runs: nothing yet; package.json does not declare aibill or ai-spend-agent and no global install was found; run npm install --save-dev aibill (looked in ");
     expect(result.stdout).not.toContain("models.deny");
 
     const settingsPath = join(test.repo, ".claude", "settings.json");
@@ -555,6 +562,25 @@ describe("guard check", () => {
     expect(await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) })).toMatchObject({ tokens: 500, calls: 1 });
   });
 
+  it("catches a rewrite that grows the file and changes only the middle of the consumed prefix", async () => {
+    const test = await fixture();
+    // ~600 lines of ~380 bytes: a prefix far longer than the 64 KiB head and tail probes.
+    const lines = Array.from({ length: 600 }, (_, index) =>
+      transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: `r${String(index).padStart(4, "0")}`, tokens: 1_100 }));
+    const path = await writeTranscript(test, "long.jsonl", lines);
+    expect((await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) })).tokens).toBe(660_000);
+
+    // Replace line 300 with a same-length line worth 8,000 more tokens, and append one more line.
+    const edited = [...lines];
+    edited[300] = transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r0300", tokens: 9_100 });
+    expect(Buffer.byteLength(edited[300]!)).toBe(Buffer.byteLength(lines[300]!));
+    edited.push(transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r0600", tokens: 1_100 }));
+    await writeFile(path, `${edited.join("\n")}\n`);
+    const reread = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
+    expect(reread).toMatchObject({ tokens: 669_100, calls: 601, filesRead: 1 });
+    expect(reread.bytesRead).toBe(Buffer.byteLength(`${edited.join("\n")}\n`));
+  });
+
   it("dedupes a response copied into a sub-agent transcript and ignores other days", async () => {
     const test = await fixture();
     const parent = transcriptLine({ cwd: test.repo, sessionId: "sess-p", requestId: "p1", tokens: 500_000 });
@@ -730,6 +756,60 @@ describe("guard check", () => {
     expect(await readFile(guardStampPath(test.repo, deps(test)), "utf8")).toBe(before);
   });
 
+  it("invalidates the stamp when a transcript appears or disappears, and replays the pause clause for the current time", async () => {
+    const test = await fixture();
+    await writeTranscript(test, "s.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-h", requestId: "h1", tokens: 2_000_000 })]);
+    const events: string[] = [];
+    let written = "";
+    const run = (now = NOW) => runGuardHook({
+      stdin: hookStdin({ cwd: test.repo, session_id: "sess-h", hook_event_name: "UserPromptSubmit", prompt: "go" }),
+      stderr: { write: (text: string) => { written = text; } },
+      now,
+      dependencies: deps(test),
+      trace: (event) => events.push(event)
+    });
+    expect(await run()).toBe(2);
+    expect(written).toContain("paused until 00:00 UTC (in 9h00m)");
+    expect(await run(new Date("2026-11-04T16:30:00.000Z"))).toBe(2);
+    expect(events).toEqual(["computed", "stamp-reused"]);
+    expect(written).toContain("paused until 00:00 UTC (in 7h30m)");
+    expect(refreshPauseClause("x paused until 00:00 UTC (in 1h00m). y", Date.UTC(2026, 10, 5), new Date("2026-11-04T23:59:00.000Z"))).toBe("x paused until 00:00 UTC (in 1m). y");
+
+    const extra = await writeTranscript(test, "new.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-n", requestId: "n1", tokens: 10 })]);
+    expect(await run()).toBe(2);
+    expect(events.at(-1)).toBe("computed");
+    expect(await run()).toBe(2);
+    expect(events.at(-1)).toBe("stamp-reused");
+    await rm(extra);
+    expect(await run()).toBe(2);
+    expect(events.at(-1)).toBe("computed");
+  });
+
+  it("leaves no stamp while the index is still catching up", async () => {
+    const test = await fixture({ version: 1, budget: { perDay: { tokens: 1_000_000 } } });
+    for (const name of ["a", "b", "c"]) {
+      await writeTranscript(test, `${name}.jsonl`, [transcriptLine({ cwd: test.repo, sessionId: `s-${name}`, requestId: name, tokens: 1_000 })]);
+    }
+    let written = "";
+    const run = () => runGuardHook({
+      stdin: hookStdin({ cwd: test.repo, session_id: "s-a" }),
+      stderr: { write: (text: string) => { written = text; } },
+      now: NOW,
+      dependencies: { ...deps(test), readBudgetBytes: 10 }
+    });
+    // Three files, one folded in per run under a 10-byte budget: two deferred runs, then a complete one.
+    for (const _attempt of [1, 2]) {
+      written = "";
+      expect(await run()).toBe(0);
+      expect(written).toContain("still indexing");
+      await expect(stat(guardStampPath(test.repo, deps(test)))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    written = "";
+    expect(await run()).toBe(0);
+    expect(written).toBe("");
+    await expect(stat(guardStampPath(test.repo, deps(test)))).resolves.toBeTruthy();
+  });
+
   it("runs as the hook entry: stdin JSON in, exit code and stderr out, nothing on stdout", async () => {
     const test = await fixture();
     let quiet = "";
@@ -744,27 +824,34 @@ describe("guard check", () => {
     expect(quiet).toBe("aibill guard: not inside a repository; nothing to enforce.\n");
   });
 
-  it("launcher: uses the checkout's package only when package.json declares it, else the global install, else warns", async () => {
+  it("launcher: uses the checkout's package only when package.json declares it, else a global install, else warns naming the roots tried", async () => {
     const test = await fixture();
     await runCli(["guard", "install", "--path", test.repo]);
     const launcher = join(test.repo, ".aibill", "guard-hook.mjs");
-    const env = { ...process.env, HOME: test.home, USERPROFILE: test.home, PATH: process.env.PATH ?? "" };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: test.home, USERPROFILE: test.home, PATH: process.env.PATH ?? "" };
+    delete env.npm_config_prefix;
+    delete env.NPM_CONFIG_PREFIX;
+    const noGlobal = { execPath: "/nonexistent/prefix/bin/node", platform: "linux" as const, env: {}, homeDirectory: test.home };
     const fakePackage = join(test.repo, "node_modules", "ai-spend-agent");
     await mkdir(join(fakePackage, "dist"), { recursive: true });
     await writeFile(join(fakePackage, "package.json"), JSON.stringify({ name: "ai-spend-agent", version: "0.0.0-test", type: "module" }));
     await writeFile(join(fakePackage, "dist", "guardHook.js"),
       "export async function runGuardHook() { process.stderr.write('fake hook ran\\n'); return 2; }\n");
 
-    // Present in node_modules but undeclared: not used.
-    expect(resolveGuardHookPackage(test.repo, "/nonexistent/prefix/bin/node", "linux")).toMatchObject({ source: "none" });
+    // Present in node_modules but undeclared: not used, and the warning names every root tried.
+    const undeclaredResolution = resolveGuardHookPackage(test.repo, noGlobal);
+    expect(undeclaredResolution.source).toBe("none");
+    expect(undeclaredResolution.tried).toEqual(globalNodeModulesRoots(noGlobal));
     const undeclared = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
     expect(undeclared.stdout).toBe("");
-    expect(undeclared.stderr).toBe("aibill guard: no ai-spend-agent package for this checkout (declare aibill in package.json and npm install, or install it globally); policy not checked, not blocking.\n");
+    expect(undeclared.stderr).toMatch(/^aibill guard: no ai-spend-agent package for this checkout; looked in .*lib\/node_modules.*\. Declare aibill in package.json and npm install, or install it globally\. Policy not checked, not blocking\.\n$/);
+    expect(undeclared.stderr).toContain(join(test.home, ".volta", "tools", "image", "packages", "aibill", "lib", "node_modules"));
 
     await writeFile(join(test.repo, "package.json"), JSON.stringify({ name: "checkout-api", private: true, devDependencies: { aibill: "*" } }));
-    expect(resolveGuardHookPackage(test.repo, "/nonexistent/prefix/bin/node", "linux")).toMatchObject({
+    expect(resolveGuardHookPackage(test.repo, noGlobal)).toMatchObject({
       source: "repository",
-      entry: join(fakePackage, "dist", "guardHook.js")
+      entry: join(fakePackage, "dist", "guardHook.js"),
+      tried: [join(test.repo, "node_modules")]
     });
     await expect(execFileAsync(process.execPath, [launcher], { cwd: join(test.repo, "src"), env }))
       .rejects.toMatchObject({ code: 2, stderr: "fake hook ran\n", stdout: "" });
@@ -776,12 +863,93 @@ describe("guard check", () => {
     await writeFile(join(fakePackage, "dist", "guardHook.js"), "throw new Error('boom');\n");
     const broken = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
     expect(broken.stderr).toContain("aibill guard: the installed ai-spend-agent could not run the hook (boom); not blocking.");
+  });
 
-    // A global install is found next to the running Node.
-    const prefix = join(test.root, "prefix");
-    await mkdir(join(prefix, "lib", "node_modules", "ai-spend-agent"), { recursive: true });
-    await writeFile(join(prefix, "lib", "node_modules", "ai-spend-agent", "package.json"), JSON.stringify({ name: "ai-spend-agent" }));
-    expect(resolveGuardHookPackage(join(test.root, "elsewhere"), join(prefix, "bin", "node"), "linux")).toMatchObject({ source: "global" });
+  it("launcher: finds `npm i -g aibill` (ai-spend-agent nested under aibill) through npm_config_prefix, ~/.npmrc and Volta", async () => {
+    const test = await fixture();
+    await runCli(["guard", "install", "--path", test.repo]);
+    const launcher = join(test.repo, ".aibill", "guard-hook.mjs");
+    const prefix = join(test.home, ".npm-global");
+    const nested = join(prefix, "lib", "node_modules", "aibill", "node_modules", "ai-spend-agent");
+    await mkdir(join(nested, "dist"), { recursive: true });
+    await writeFile(join(prefix, "lib", "node_modules", "aibill", "package.json"), JSON.stringify({ name: "aibill", dependencies: { "ai-spend-agent": "*" } }));
+    await writeFile(join(nested, "package.json"), JSON.stringify({ name: "ai-spend-agent", type: "module" }));
+    await writeFile(join(nested, "dist", "guardHook.js"), "export async function runGuardHook() { process.stderr.write('global hook ran\\n'); return 2; }\n");
+    const base = { execPath: "/nonexistent/prefix/bin/node", platform: "linux" as const, homeDirectory: test.home };
+
+    expect(resolveGuardHookPackage(test.repo, { ...base, env: { npm_config_prefix: prefix } })).toMatchObject({
+      source: "global",
+      packageDir: nested,
+      entry: join(nested, "dist", "guardHook.js")
+    });
+    expect(resolveGuardHookPackage(test.repo, { ...base, env: { NPM_CONFIG_PREFIX: prefix } })).toMatchObject({ source: "global", packageDir: nested });
+    expect(resolveGuardHookPackage(test.repo, { ...base, env: {} })).toMatchObject({ source: "none" });
+
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: test.home, USERPROFILE: test.home, PATH: process.env.PATH ?? "", npm_config_prefix: prefix };
+    delete env.NPM_CONFIG_PREFIX;
+    await expect(execFileAsync(process.execPath, [launcher], { cwd: test.repo, env }))
+      .rejects.toMatchObject({ code: 2, stderr: "global hook ran\n", stdout: "" });
+
+    // ~/.npmrc prefix (with ~ expansion), then Volta's image layout.
+    await writeFile(join(test.home, ".npmrc"), "; registry stays default\nprefix = ~/custom-prefix-rc\n");
+    const rcNested = join(test.home, "custom-prefix-rc", "lib", "node_modules", "ai-spend-agent");
+    await mkdir(rcNested, { recursive: true });
+    await writeFile(join(rcNested, "package.json"), JSON.stringify({ name: "ai-spend-agent" }));
+    expect(resolveGuardHookPackage(test.repo, { ...base, env: {} })).toMatchObject({ source: "global", packageDir: rcNested });
+    delete env.npm_config_prefix;
+    const viaRc = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
+    expect(viaRc.stderr).toContain("could not run the hook");
+    await rm(join(test.home, ".npmrc"));
+
+    const volta = join(test.home, ".volta", "tools", "image", "packages", "aibill", "lib", "node_modules", "aibill", "node_modules", "ai-spend-agent");
+    await mkdir(volta, { recursive: true });
+    await writeFile(join(test.home, ".volta", "tools", "image", "packages", "aibill", "lib", "node_modules", "aibill", "package.json"), JSON.stringify({ name: "aibill" }));
+    await writeFile(join(volta, "package.json"), JSON.stringify({ name: "ai-spend-agent" }));
+    expect(resolveGuardHookPackage(test.repo, { ...base, env: {} })).toMatchObject({ source: "global", packageDir: volta });
+
+    // Status prints the entry ~-relative, never an absolute home path. The
+    // process environment decides the npm prefix, as it does for the launcher.
+    expect(displayPath(join(test.home, "a", "b.js"), test.home)).toBe("~/a/b.js");
+    expect(displayPath(join(test.root, "elsewhere.js"), test.home)).toBe(join(test.root, "elsewhere.js"));
+    const previous = { npm_config_prefix: process.env.npm_config_prefix, NPM_CONFIG_PREFIX: process.env.NPM_CONFIG_PREFIX };
+    process.env.npm_config_prefix = prefix;
+    delete process.env.NPM_CONFIG_PREFIX;
+    try {
+      const status = await runCli(["guard", "status", "--path", test.repo], { guardNow: NOW, homeDirectory: test.home });
+      expect(status.stdout).toContain("hook runs: ~/.npm-global/lib/node_modules/aibill/node_modules/ai-spend-agent/dist/guardHook.js (global install)");
+      expect(status.stdout).not.toContain(test.home);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("derives the global roots in order and in the platform's path shape", () => {
+    expect(globalNodeModulesRoots({
+      platform: "linux",
+      execPath: "/opt/node/bin/node",
+      homeDirectory: "/home/dev",
+      env: { NPM_CONFIG_PREFIX: "~/.npm-global" }
+    })).toEqual([
+      "/home/dev/.npm-global/lib/node_modules",
+      "/home/dev/.volta/tools/image/packages/aibill/lib/node_modules",
+      "/home/dev/.volta/tools/image/packages/ai-spend-agent/lib/node_modules",
+      "/opt/node/lib/node_modules"
+    ]);
+    expect(globalNodeModulesRoots({
+      platform: "win32",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      homeDirectory: "C:\\Users\\dev",
+      env: { APPDATA: "C:\\Users\\dev\\AppData\\Roaming", npm_config_prefix: "D:\\tools\\npm" }
+    })).toEqual([
+      "D:\\tools\\npm\\node_modules",
+      "C:\\Users\\dev\\.volta\\tools\\image\\packages\\aibill\\node_modules",
+      "C:\\Users\\dev\\.volta\\tools\\image\\packages\\ai-spend-agent\\node_modules",
+      "C:\\Program Files\\nodejs\\node_modules",
+      "C:\\Users\\dev\\AppData\\Roaming\\npm\\node_modules"
+    ]);
   });
 
   it("stays silent on unreadable individual transcripts and still blocks on the certain lower bound", async () => {
@@ -871,9 +1039,12 @@ describe("guard formatting", () => {
 
   it("writes a launcher that resolves the declared package first and the global install second", async () => {
     const source = buildGuardLauncherSource();
-    expect(source.split("\n")[1]).toContain("aibill guard hook launcher v2");
+    expect(source.split("\n")[1]).toContain("aibill guard hook launcher v3");
     expect(source).toContain("declaresAibill()");
-    expect(source.indexOf('join(checkoutRoot, "package.json")')).toBeLessThan(source.indexOf('join(globalRoot, "package.json")'));
+    expect(source).toContain('resolve("aibill/package.json")');
+    expect(source.indexOf('join(checkoutRoot, "node_modules")')).toBeLessThan(source.indexOf("npm_config_prefix"));
+    expect(source.indexOf("npm_config_prefix")).toBeLessThan(source.indexOf("const rcPrefix = npmrcPrefix()"));
+    expect(source.indexOf('".volta"')).toBeLessThan(source.indexOf("process.execPath"));
     expect(source).not.toContain("process.cwd()");
     const directory = await mkdtemp(join(tmpdir(), "aibill-guard-launcher-"));
     await writeFile(join(directory, "guard-hook.mjs"), source);

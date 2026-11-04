@@ -43,6 +43,10 @@ const READ_CHUNK_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_READ_BUDGET_BYTES = 256 * 1_024 * 1_024;
 /** Bytes hashed at the start and at the end of the consumed prefix. */
 const PROBE_BYTES = 64 * 1_024;
+/** Bytes hashed at each of the sampled offsets inside the consumed prefix. */
+const SAMPLE_BYTES = 4 * 1_024;
+/** Where inside the consumed prefix the samples sit (fractions of the offset). */
+const SAMPLE_POSITIONS = [0.25, 0.5, 0.75] as const;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 /** Kept lines older than this (from the day start) can no longer change a verdict. */
 const RETAIN_LINES_MS = DAY_MS;
@@ -113,6 +117,8 @@ type CachedFile = {
   headSha256: string;
   /** sha256 of the last min(PROBE_BYTES, offset) consumed bytes. */
   tailSha256: string;
+  /** sha256 of SAMPLE_BYTES at each SAMPLE_POSITIONS fraction of the offset. */
+  sampleSha256: string;
   tally: PersistedTally;
 };
 
@@ -228,6 +234,7 @@ export async function computeGuardUsage(options: GuardUsageOptions): Promise<Gua
       offset: folded.offset,
       headSha256: folded.headSha256,
       tailSha256: folded.tailSha256,
+      sampleSha256: folded.sampleSha256,
       tally
     };
   }
@@ -252,20 +259,26 @@ function unchanged(cached: CachedFile, file: TranscriptFile): boolean {
 }
 
 /**
- * Resume proof: same inode, monotonic size, and the consumed prefix still
- * reads the same at its head and tail. A rewritten file of the same or larger
- * size fails the probe and is read from byte zero again. Throws when the file
- * cannot be read.
+ * Resume proof: same inode, a size that grew (an append always grows the
+ * file, so the same size with a newer mtime is a rewrite), and a consumed
+ * prefix that still reads the same at its head, its tail and three sampled
+ * offsets in between. Anything less is read from byte zero again. Throws when
+ * the file cannot be read.
  */
 function resumable(cached: CachedFile, file: TranscriptFile): boolean {
   if (cached.dev !== file.dev || cached.ino !== file.ino) return false;
   if (file.size < cached.offset) return false;
+  if (file.size === cached.size && file.mtimeMs !== cached.mtimeMs) return false;
   if (cached.offset === 0) return true;
   const probes = probeConsumedPrefix(file.path, cached.offset);
-  return probes.headSha256 === cached.headSha256 && probes.tailSha256 === cached.tailSha256;
+  return probes.headSha256 === cached.headSha256 &&
+    probes.tailSha256 === cached.tailSha256 &&
+    probes.sampleSha256 === cached.sampleSha256;
 }
 
-type FoldResult = { offset: number; bytes: number; headSha256: string; tailSha256: string };
+type Probes = { headSha256: string; tailSha256: string; sampleSha256: string };
+
+type FoldResult = { offset: number; bytes: number } & Probes;
 
 /**
  * Read the complete lines a transcript gained since `offset` and fold them
@@ -287,29 +300,35 @@ function foldAppendedLines(
     const consumed = lastNewline < 0 ? 0 : lastNewline + 1;
     if (consumed > 0) tallyClaudeCodeTranscriptLines(appended.subarray(0, consumed).toString("utf8"), tally);
     const nextOffset = offset + consumed;
-    if (nextOffset === 0) return { offset: 0, bytes: 0, headSha256: "", tailSha256: "" };
-    // Head: unchanged by appends once the first PROBE_BYTES are consumed, so
-    // the cached value stands; otherwise hash what is on disk now.
-    const headSha256 = resume && resume.offset >= PROBE_BYTES
-      ? resume.headSha256
-      : sha256(readRange(descriptor, 0, Math.min(PROBE_BYTES, nextOffset)));
-    const tailStart = Math.max(0, nextOffset - PROBE_BYTES);
-    const tailSha256 = sha256(readRange(descriptor, tailStart, nextOffset));
-    return { offset: nextOffset, bytes: consumed, headSha256, tailSha256 };
+    if (nextOffset === 0) return { offset: 0, bytes: 0, headSha256: "", tailSha256: "", sampleSha256: "" };
+    return { offset: nextOffset, bytes: consumed, ...probesAt(descriptor, nextOffset, resume) };
   } finally {
     closeSync(descriptor);
   }
 }
 
-function probeConsumedPrefix(path: string, offset: number): { headSha256: string; tailSha256: string } {
+function probeConsumedPrefix(path: string, offset: number): Probes {
   const descriptor = openSync(path, "r");
   try {
-    const head = readRange(descriptor, 0, Math.min(PROBE_BYTES, offset));
-    const tail = readRange(descriptor, Math.max(0, offset - PROBE_BYTES), offset);
-    return { headSha256: sha256(head), tailSha256: sha256(tail) };
+    return probesAt(descriptor, offset, undefined);
   } finally {
     closeSync(descriptor);
   }
+}
+
+function probesAt(descriptor: number, offset: number, resume: CachedFile | undefined): Probes {
+  // Head: unchanged by appends once the first PROBE_BYTES are consumed, so a
+  // cached value stands; otherwise hash what is on disk now.
+  const headSha256 = resume && resume.offset >= PROBE_BYTES
+    ? resume.headSha256
+    : sha256(readRange(descriptor, 0, Math.min(PROBE_BYTES, offset)));
+  const tailSha256 = sha256(readRange(descriptor, Math.max(0, offset - PROBE_BYTES), offset));
+  const samples = createHash("sha256");
+  for (const position of SAMPLE_POSITIONS) {
+    const start = Math.floor(offset * position);
+    samples.update(readRange(descriptor, start, Math.min(offset, start + SAMPLE_BYTES)));
+  }
+  return { headSha256, tailSha256, sampleSha256: samples.digest("hex") };
 }
 
 function readRange(descriptor: number, start: number, end: number): Buffer {
@@ -445,7 +464,7 @@ function isCachedFile(value: unknown): value is CachedFile {
   if (!isRecord(value)) return false;
   if (!isCount(value.size) || typeof value.mtimeMs !== "number" || !isCount(value.offset)) return false;
   if (typeof value.dev !== "number" || typeof value.ino !== "number") return false;
-  if (typeof value.headSha256 !== "string" || typeof value.tailSha256 !== "string") return false;
+  if (typeof value.headSha256 !== "string" || typeof value.tailSha256 !== "string" || typeof value.sampleSha256 !== "string") return false;
   if (value.offset > value.size) return false;
   const tally = value.tally;
   if (!isRecord(tally) || tally.version !== 1 || !isRecord(tally.responses)) return false;

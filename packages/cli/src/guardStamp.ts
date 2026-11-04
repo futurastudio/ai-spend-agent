@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve, sep, win32 } from "node:path";
 
 /**
  * The parts of the guard that must stay cheap enough to run before anything
@@ -180,41 +180,127 @@ export function writePrivateJson(path: string, value: unknown): boolean {
 }
 
 export type GuardHookPackage =
-  | { source: "repository" | "global"; packageDir: string; entry: string }
-  | { source: "none"; reason: string };
+  | { source: "repository" | "global"; packageDir: string; entry: string; tried: string[] }
+  | { source: "none"; reason: string; tried: string[] };
+
+export type GuardHookResolutionOptions = {
+  execPath?: string;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  homeDirectory?: string;
+};
 
 /**
  * Where the committed launcher will find `ai-spend-agent`, mirrored from the
  * launcher's own JavaScript: the checkout's `node_modules` only when its
- * `package.json` declares `ai-spend-agent` or `aibill`, else the global
- * install next to the running Node.
+ * `package.json` declares `ai-spend-agent` or `aibill`, else each global
+ * `node_modules` root of `globalNodeModulesRoots`, in order. In every root
+ * `ai-spend-agent` may sit at the top (`npm i -g ai-spend-agent`) or nested
+ * under `aibill` (`npm i -g aibill`), so both are tried.
  */
-export function resolveGuardHookPackage(checkoutRoot: string, execPath = process.execPath, platform = process.platform): GuardHookPackage {
+export function resolveGuardHookPackage(checkoutRoot: string, options: GuardHookResolutionOptions = {}): GuardHookPackage {
   const declared = checkoutDeclaresAibill(checkoutRoot);
-  const anchors: Array<{ source: "repository" | "global"; anchor: string }> = [];
-  if (declared) anchors.push({ source: "repository", anchor: join(checkoutRoot, "package.json") });
-  anchors.push({ source: "global", anchor: join(globalNodeModules(execPath, platform), "package.json") });
-  for (const { source, anchor } of anchors) {
-    try {
-      const manifest = createRequire(anchor).resolve("ai-spend-agent/package.json");
-      const packageDir = dirname(manifest);
-      return { source, packageDir, entry: join(packageDir, "dist", "guardHook.js") };
-    } catch {
-      // Try the next anchor.
-    }
+  const tried: string[] = [];
+  if (declared) {
+    const root = join(checkoutRoot, "node_modules");
+    tried.push(root);
+    const packageDir = resolvePackageFromRoot(root);
+    if (packageDir) return { source: "repository", packageDir, entry: join(packageDir, "dist", "guardHook.js"), tried };
+  }
+  for (const root of globalNodeModulesRoots(options)) {
+    tried.push(root);
+    const packageDir = resolvePackageFromRoot(root);
+    if (packageDir) return { source: "global", packageDir, entry: join(packageDir, "dist", "guardHook.js"), tried };
   }
   return {
     source: "none",
     reason: declared
       ? "ai-spend-agent is declared in package.json but not installed; run npm install"
-      : "package.json does not declare aibill or ai-spend-agent and no global install was found; run npm install --save-dev aibill"
+      : "package.json does not declare aibill or ai-spend-agent and no global install was found; run npm install --save-dev aibill",
+    tried
   };
 }
 
-export function globalNodeModules(execPath = process.execPath, platform = process.platform): string {
-  return platform === "win32"
-    ? join(dirname(execPath), "node_modules")
-    : join(dirname(dirname(execPath)), "lib", "node_modules");
+/**
+ * The global `node_modules` directories a launcher looks in, most specific
+ * first: an npm prefix from the environment, one from `~/.npmrc`, Volta's
+ * package images, the prefix the running Node was installed under, and on
+ * Windows the per-user `%APPDATA%\npm` tree. Pure: paths are derived, not
+ * checked, so a test can pin the shapes.
+ */
+export function globalNodeModulesRoots(options: GuardHookResolutionOptions = {}): string[] {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.homeDirectory ?? homedir();
+  const execPath = options.execPath ?? process.execPath;
+  const path = platform === "win32" ? win32 : posix;
+  const prefixRoot = (prefix: string): string => platform === "win32"
+    ? path.join(prefix, "node_modules")
+    : path.join(prefix, "lib", "node_modules");
+  const roots: string[] = [];
+  const envPrefix = env.npm_config_prefix ?? env.NPM_CONFIG_PREFIX;
+  if (envPrefix && envPrefix.trim()) roots.push(prefixRoot(expandHome(envPrefix.trim(), home, path)));
+  const rcPrefix = npmrcPrefix(path.join(home, ".npmrc"));
+  if (rcPrefix) roots.push(prefixRoot(expandHome(rcPrefix, home, path)));
+  for (const name of ["aibill", "ai-spend-agent"]) {
+    roots.push(prefixRoot(path.join(home, ".volta", "tools", "image", "packages", name)));
+  }
+  roots.push(platform === "win32"
+    ? path.join(path.dirname(execPath), "node_modules")
+    : path.join(path.dirname(path.dirname(execPath)), "lib", "node_modules"));
+  if (platform === "win32" && env.APPDATA) roots.push(path.join(env.APPDATA, "npm", "node_modules"));
+  return [...new Set(roots)];
+}
+
+/** `~`-relative when the path sits under the home directory, for printing. */
+export function displayPath(path: string, home = homedir()): string {
+  const prefix = home.endsWith(sep) ? home : `${home}${sep}`;
+  return path.startsWith(prefix) ? `~${sep}${path.slice(prefix.length)}` : path;
+}
+
+/** 18720000 ms → 5h12m; 2700000 → 45m; under a minute → <1m. */
+export function formatRemaining(milliseconds: number): string {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 1) return "<1m";
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours > 0 ? `${hours}h${String(rest).padStart(2, "0")}m` : `${rest}m`;
+}
+
+function resolvePackageFromRoot(root: string): string | undefined {
+  const anchor = join(root, "package.json");
+  try {
+    return dirname(createRequire(anchor).resolve("ai-spend-agent/package.json"));
+  } catch {
+    // Not at the top of this root.
+  }
+  try {
+    const aibillDir = dirname(createRequire(anchor).resolve("aibill/package.json"));
+    return dirname(createRequire(join(aibillDir, "package.json")).resolve("ai-spend-agent/package.json"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `prefix` an `.npmrc` sets, if any; comments and other keys are ignored. */
+function npmrcPrefix(file: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const match = /^prefix\s*=\s*(.+?)\s*$/.exec(line);
+    if (match) return match[1]!.replace(/^["']|["']$/g, "");
+  }
+  return undefined;
+}
+
+function expandHome(value: string, home: string, path: typeof posix | typeof win32): string {
+  return value === "~" ? home : value.startsWith("~/") || value.startsWith("~\\") ? path.join(home, value.slice(2)) : value;
 }
 
 function checkoutDeclaresAibill(checkoutRoot: string): boolean {

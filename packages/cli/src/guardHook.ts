@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { AIBILL_POLICY_RELATIVE_PATH } from "./guardPolicyPath.js";
 import {
+  formatRemaining,
   guardStampPath,
   listTranscripts,
   policyIdentity,
@@ -238,7 +239,12 @@ function fastPath(context: {
   if (stamp && stamp.dayKey === dayKey && stamp.policy === policy &&
       stamp.signature === listing.signature && stamp.sessionId === sessionId) {
     return {
-      reuse: { exitCode: stamp.exitCode, stderr: stamp.stderr, reason: stamp.reason as GuardCheckOutcome["reason"], repositoryRoot },
+      reuse: {
+        exitCode: stamp.exitCode,
+        stderr: refreshPauseClause(stamp.stderr, dayStartMs + 24 * 60 * 60 * 1_000, now),
+        reason: stamp.reason as GuardCheckOutcome["reason"],
+        repositoryRoot
+      },
       listing,
       stampPath,
       dayKey,
@@ -246,4 +252,13 @@ function fastPath(context: {
     };
   }
   return { listing, stampPath, dayKey, policy };
+}
+
+/**
+ * A replayed block message must not freeze the time it was computed at: the
+ * "(in 5h12m)" clause of `paused until 00:00 UTC (in …)` is recomputed for
+ * the current run.
+ */
+export function refreshPauseClause(stderr: string, dayEndMs: number, now: Date): string {
+  return stderr.replace(/paused until 00:00 UTC \(in [^)]*\)/g, `paused until 00:00 UTC (in ${formatRemaining(dayEndMs - now.getTime())})`);
 }

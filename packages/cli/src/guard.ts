@@ -10,7 +10,7 @@ import {
 } from "@agent-finops/core";
 import { computeGuardUsage, type GuardBudget, type GuardUsageOptions, type GuardUsageResult } from "./guardUsage.js";
 import { GUARD_LAUNCHER_RELATIVE_PATH, readGuardInstallState, type GuardInstallState } from "./guardSettings.js";
-import type { TranscriptListing } from "./guardStamp.js";
+import { displayPath, formatRemaining, type TranscriptListing } from "./guardStamp.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
 
 /**
@@ -240,17 +240,19 @@ export function formatTokenCount(value: number): string {
   return String(Math.round(value));
 }
 
-/** 18720000 ms → 5h12m; 2700000 → 45m; under a minute → <1m. */
-export function formatRemaining(milliseconds: number): string {
-  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
-  if (minutes < 1) return "<1m";
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return hours > 0 ? `${hours}h${String(rest).padStart(2, "0")}m` : `${rest}m`;
+export { formatRemaining };
+
+/** One line naming the package the launcher resolves, `~`-relative; never an absolute home path. */
+export function describeHookPackage(hookPackage: GuardInstallState["hookPackage"], homeDirectory = homedir()): string {
+  if (hookPackage.source === "none") {
+    return `nothing yet; ${hookPackage.reason} (looked in ${hookPackage.tried.map((root) => displayPath(root, homeDirectory)).join(", ")})`;
+  }
+  return `${displayPath(hookPackage.entry, homeDirectory)} (${hookPackage.source === "repository" ? "declared in package.json" : "global install"})`;
 }
 
 export type GuardStatusInput = {
   repositoryRoot: string;
+  homeDirectory?: string;
   /** The checkout the settings are read from; differs from the repository in a linked worktree. */
   checkoutRoot: string;
   policy: GuardPolicyLoad;
@@ -343,9 +345,7 @@ export function renderGuardStatus(input: GuardStatusInput): string {
       ].join(" · ");
   lines.push(`installed   .claude/settings.json: ${settingsState}`);
   lines.push(`            ${GUARD_LAUNCHER_RELATIVE_PATH}: ${install.launcher}`);
-  lines.push(install.hookPackage.source === "none"
-    ? `            hook runs: nothing yet; ${install.hookPackage.reason}`
-    : `            hook runs: ${install.hookPackage.entry} (${install.hookPackage.source === "repository" ? "declared in package.json" : "global install"})`);
+  lines.push(`            hook runs: ${describeHookPackage(install.hookPackage, input.homeDirectory)}`);
   if (install.managed.files.length === 0) {
     lines.push(`managed     none found in ${install.managed.directory}`);
     lines.push("            project settings are a convention a developer can edit; `aibill guard install --managed` prints the enforced form");
@@ -396,7 +396,7 @@ export async function collectGuardStatus(options: {
     policy: policy.status === "ok" ? policy.policy : undefined,
     homeDirectory
   });
-  return { repositoryRoot, text: renderGuardStatus({ repositoryRoot, checkoutRoot, policy, usage, usageError, install, now }) };
+  return { repositoryRoot, text: renderGuardStatus({ repositoryRoot, checkoutRoot, homeDirectory, policy, usage, usageError, install, now }) };
 }
 
 export type { TranscriptListing };

@@ -197,7 +197,7 @@ import {
   readStatuslineCache,
   renderStatusline
 } from "./statuslineRuntime.js";
-import { checkGuard, collectGuardStatus, describePolicyIssues, loadGuardPolicy } from "./guard.js";
+import { checkGuard, collectGuardStatus, describeHookPackage, describePolicyIssues, loadGuardPolicy } from "./guard.js";
 import { readGuardHookInput } from "./guardHook.js";
 import {
   GuardSettingsError,
@@ -2849,10 +2849,7 @@ async function guardInstallCommand(args: ParsedArgs): Promise<CliResult> {
       `  hook: every prompt${result.events.includes("PreToolUse") ? " and every tool call (about 0.1 s each)" : ""}`,
       `  ${GUARD_LAUNCHER_RELATIVE_PATH}: ${result.launcher}`
     );
-    const hookPackage = resolveGuardHookPackage(located.checkout);
-    lines.push(hookPackage.source === "none"
-      ? `  hook runs: nothing yet; ${hookPackage.reason}`
-      : `  hook runs: ${hookPackage.entry} (${hookPackage.source === "repository" ? "declared in package.json" : "global install"})`);
+    lines.push(`  hook runs: ${describeHookPackage(resolveGuardHookPackage(located.checkout))}`);
     if (policy.models?.deny) {
       lines.push("  models.deny: reported only at project scope; deniedModels is honoured from managed settings (npx aibill guard install --managed)");
     }

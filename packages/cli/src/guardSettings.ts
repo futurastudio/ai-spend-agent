@@ -26,7 +26,7 @@ import { resolveStatuslinePaths, type StatuslinePlatform } from "./statuslineIns
  */
 
 export const GUARD_LAUNCHER_RELATIVE_PATH = ".aibill/guard-hook.mjs";
-export const GUARD_LAUNCHER_VERSION = 2;
+export const GUARD_LAUNCHER_VERSION = 3;
 /** Every event the guard may own; uninstall strips all of them. */
 export const GUARD_HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse"] as const;
 export const GUARD_HOOK_TIMEOUT_SECONDS = 10;
@@ -246,9 +246,12 @@ function stripGuardHandlers(groups: readonly unknown[]): { kept: unknown[]; remo
 
 /**
  * The committed launcher. Plain ESM; no dependency on the aibill version that
- * wrote it. Resolution mirrors `resolveGuardHookPackage`: the checkout's own
- * `node_modules` only when its package.json declares `ai-spend-agent` or
- * `aibill`, else the global install next to the running Node.
+ * wrote it. Resolution mirrors `resolveGuardHookPackage` and
+ * `globalNodeModulesRoots`: the checkout's own `node_modules` only when its
+ * package.json declares `ai-spend-agent` or `aibill`, else each global root
+ * (npm prefix from the environment or `~/.npmrc`, Volta's package images, the
+ * running Node's prefix, `%APPDATA%\npm` on Windows), where `ai-spend-agent`
+ * may sit at the top or nested under a global `aibill`.
  */
 export function buildGuardLauncherSource(): string {
   return [
@@ -256,17 +259,20 @@ export function buildGuardLauncherSource(): string {
     `// ${LAUNCHER_MARKER} v${GUARD_LAUNCHER_VERSION}. Written by \`aibill guard install\`; \`aibill guard install --uninstall\` removes it.`,
     "// Claude Code runs this on every prompt (and every tool call when the policy opts in); see",
     "// .claude/settings.json. It runs `aibill guard check` from the ai-spend-agent package this",
-    "// checkout declares in package.json, else from the global install, and never blocks when",
-    "// no package is found or the hook fails to load.",
+    "// checkout declares in package.json, else from a global install (npm prefix, ~/.npmrc prefix,",
+    "// Volta, the running Node's prefix, %APPDATA%\\npm), and never blocks when no package is",
+    "// found or the hook fails to load.",
     'import { readFileSync } from "node:fs";',
     'import { createRequire } from "node:module";',
+    'import { homedir } from "node:os";',
     'import { dirname, join } from "node:path";',
     'import { fileURLToPath, pathToFileURL } from "node:url";',
     "",
     "const checkoutRoot = dirname(dirname(fileURLToPath(import.meta.url)));",
-    "const globalRoot = process.platform === \"win32\"",
-    '  ? join(dirname(process.execPath), "node_modules")',
-    '  : join(dirname(dirname(process.execPath)), "lib", "node_modules");',
+    "const home = homedir();",
+    'const windows = process.platform === "win32";',
+    'const prefixRoot = (prefix) => (windows ? join(prefix, "node_modules") : join(prefix, "lib", "node_modules"));',
+    'const expandHome = (value) => (value === "~" ? home : value.startsWith("~/") || value.startsWith("~\\\\") ? join(home, value.slice(2)) : value);',
     "",
     "function declaresAibill() {",
     "  try {",
@@ -278,24 +284,56 @@ export function buildGuardLauncherSource(): string {
     "  }",
     "}",
     "",
-    "const anchors = [];",
-    'if (declaresAibill()) anchors.push(join(checkoutRoot, "package.json"));',
-    'anchors.push(join(globalRoot, "package.json"));',
-    "let manifest;",
-    "for (const anchor of anchors) {",
+    "function npmrcPrefix() {",
     "  try {",
-    '    manifest = createRequire(anchor).resolve("ai-spend-agent/package.json");',
-    "    break;",
+    '    for (const raw of readFileSync(join(home, ".npmrc"), "utf8").split(/\\r?\\n/)) {',
+    "      const line = raw.trim();",
+    '      if (!line || line.startsWith("#") || line.startsWith(";")) continue;',
+    "      const match = /^prefix\\s*=\\s*(.+?)\\s*$/.exec(line);",
+    '      if (match) return match[1].replace(/^["\']|["\']$/g, "");',
+    "    }",
     "  } catch {",
-    "    // Try the next anchor.",
+    "    // No ~/.npmrc.",
+    "  }",
+    "  return undefined;",
+    "}",
+    "",
+    "function resolveFromRoot(root) {",
+    '  const anchor = join(root, "package.json");',
+    "  try {",
+    '    return dirname(createRequire(anchor).resolve("ai-spend-agent/package.json"));',
+    "  } catch {",
+    "    // Not at the top of this root.",
+    "  }",
+    "  try {",
+    '    const aibillDir = dirname(createRequire(anchor).resolve("aibill/package.json"));',
+    '    return dirname(createRequire(join(aibillDir, "package.json")).resolve("ai-spend-agent/package.json"));',
+    "  } catch {",
+    "    return undefined;",
     "  }",
     "}",
-    "if (!manifest) {",
-    '  process.stderr.write("aibill guard: no ai-spend-agent package for this checkout (declare aibill in package.json and npm install, or install it globally); policy not checked, not blocking.\\n");',
+    "",
+    "const roots = [];",
+    'if (declaresAibill()) roots.push(join(checkoutRoot, "node_modules"));',
+    "const envPrefix = process.env.npm_config_prefix ?? process.env.NPM_CONFIG_PREFIX;",
+    "if (envPrefix && envPrefix.trim()) roots.push(prefixRoot(expandHome(envPrefix.trim())));",
+    "const rcPrefix = npmrcPrefix();",
+    "if (rcPrefix) roots.push(prefixRoot(expandHome(rcPrefix)));",
+    'for (const name of ["aibill", "ai-spend-agent"]) roots.push(prefixRoot(join(home, ".volta", "tools", "image", "packages", name)));',
+    'roots.push(windows ? join(dirname(process.execPath), "node_modules") : join(dirname(dirname(process.execPath)), "lib", "node_modules"));',
+    'if (windows && process.env.APPDATA) roots.push(join(process.env.APPDATA, "npm", "node_modules"));',
+    "",
+    "let packageDir;",
+    "for (const root of [...new Set(roots)]) {",
+    "  packageDir = resolveFromRoot(root);",
+    "  if (packageDir) break;",
+    "}",
+    "if (!packageDir) {",
+    '  process.stderr.write(`aibill guard: no ai-spend-agent package for this checkout; looked in ${[...new Set(roots)].join(", ")}. Declare aibill in package.json and npm install, or install it globally. Policy not checked, not blocking.\\n`);',
     "  process.exit(0);",
     "}",
     "try {",
-    '  const { runGuardHook } = await import(pathToFileURL(join(dirname(manifest), "dist", "guardHook.js")).href);',
+    '  const { runGuardHook } = await import(pathToFileURL(join(packageDir, "dist", "guardHook.js")).href);',
     "  process.exitCode = await runGuardHook();",
     "} catch (error) {",
     '  process.stderr.write(`aibill guard: the installed ai-spend-agent could not run the hook (${error instanceof Error ? error.message : String(error)}); not blocking.\\n`);',
@@ -491,7 +529,7 @@ export async function readGuardInstallState(options: {
     hookEvents,
     launcherPath,
     launcher,
-    hookPackage: resolveGuardHookPackage(options.checkoutRoot),
+    hookPackage: resolveGuardHookPackage(options.checkoutRoot, { homeDirectory: options.homeDirectory }),
     managed: {
       directory: dirname(paths.managedSettingsPath),
       files: managedFiles,
