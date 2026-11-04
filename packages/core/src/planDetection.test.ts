@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_PLAN_TIER_OPT_OUT,
   detectLocalPlans,
+  normalizeClaudeOrganizationType,
   normalizeClaudePlanTier,
   normalizeCodexPlanTier,
   readAgentPlanFacts,
@@ -229,6 +230,34 @@ describe("agent plan facts for Workspace", () => {
     expect(normalizeCodexPlanTier("Pro")).toBe("chatgpt_pro");
     expect(normalizeCodexPlanTier("prolite")).toBe("unknown");
     expect(normalizeCodexPlanTier("free")).toBe("unknown");
+
+    expect(normalizeClaudeOrganizationType("claude_team")).toBe("claude_team");
+    expect(normalizeClaudeOrganizationType("Claude_Enterprise")).toBe("claude_enterprise");
+    expect(normalizeClaudeOrganizationType("claude_api")).toBe("unknown");
+  });
+
+  it("reports a Team or Enterprise organization from organizationType, and consumer plans from the rate-limit tier", async () => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-plan-facts-org-"));
+    const write = (account: Record<string, unknown>) => writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: account }));
+    const read = async () => (await readAgentPlanFacts({ now, home, env: {} }))[0];
+
+    await write({ organizationType: "claude_team", organizationRateLimitTier: "default_claude_max_5x" });
+    expect(await read()).toMatchObject({ tier: "claude_team", tierRaw: "claude_team", source: "claude_json.oauthAccount.organizationType", activeUntil: null });
+    await write({ organizationType: "claude_enterprise", organizationRateLimitTier: "default_claude_max_20x" });
+    expect(await read()).toMatchObject({ tier: "claude_enterprise", tierRaw: "claude_enterprise", source: "claude_json.oauthAccount.organizationType" });
+    // An organization type the CLI does not know is still not a consumer plan: unknown, raw kept, honest source.
+    await write({ organizationType: "claude_api", organizationRateLimitTier: "default_claude_max_20x" });
+    expect(await read()).toMatchObject({ tier: "unknown", tierRaw: "claude_api", source: "claude_json.oauthAccount.organizationType" });
+    // Consumer organizations name their plan through the rate-limit tier.
+    await write({ organizationType: "claude_max", organizationRateLimitTier: "default_claude_max_5x" });
+    expect(await read()).toMatchObject({ tier: "claude_max_5x", tierRaw: "default_claude_max_5x", source: "claude_json.oauthAccount.organizationRateLimitTier" });
+    await write({ organizationType: "claude_pro", organizationRateLimitTier: "default_claude_pro" });
+    expect(await read()).toMatchObject({ tier: "claude_pro", source: "claude_json.oauthAccount.organizationRateLimitTier" });
+    await write({ organizationRateLimitTier: "default_claude_max_20x" });
+    expect(await read()).toMatchObject({ tier: "claude_max_20x", source: "claude_json.oauthAccount.organizationRateLimitTier" });
+    // A team organization type that is not an identifier yields nothing rather than a malformed fact.
+    await write({ organizationType: "x".repeat(65) });
+    expect(await read()).toBeUndefined();
   });
 
   it("keeps an unmapped tier as unknown while sending the raw string", async () => {
@@ -272,7 +301,11 @@ describe("agent plan facts for Workspace", () => {
     expect(await read()).toEqual([]);
     await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationRateLimitTier: "has a space" } }));
     expect(await read()).toEqual([]);
-    await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationRateLimitTier: "x".repeat(121) } }));
+    await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationRateLimitTier: "x".repeat(65) } }));
+    expect(await read()).toEqual([]);
+    await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationRateLimitTier: "x".repeat(64) } }));
+    expect(await read()).toMatchObject([{ tier: "unknown", tierRaw: "x".repeat(64) }]);
+    await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: {} }));
     expect(await read()).toEqual([]);
 
     // Codex: API-key sign-in, no tokens, id_token that is not a JWT, two segments, payload that is not JSON,
@@ -304,14 +337,16 @@ describe("agent plan facts for Workspace", () => {
     expect(await readAgentPlanFacts({ now: "yesterday", home: good, env: {} })).toEqual([]);
   });
 
-  it("normalizes the subscription end to an ISO instant and drops one it cannot read", async () => {
+  it("keeps only the UTC day of the subscription end and drops one it cannot read", async () => {
     const home = await mkdtemp(join(tmpdir(), "aibill-plan-facts-until-"));
     await mkdir(join(home, ".codex"));
     const write = (until: unknown) => writeFile(join(home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "chatgpt",
       tokens: { id_token: fakeJwt({ "https://api.openai.com/auth": { chatgpt_plan_type: "plus", chatgpt_subscription_active_until: until } }) } }));
 
     await write("2027-01-31T23:59:59+01:00");
-    expect((await readAgentPlanFacts({ now, home, env: {} }))[0]?.activeUntil).toBe("2027-01-31T22:59:59.000Z");
+    expect((await readAgentPlanFacts({ now, home, env: {} }))[0]?.activeUntil).toBe("2027-01-31T00:00:00.000Z");
+    await write("2027-02-01T00:30:00+01:00");
+    expect((await readAgentPlanFacts({ now, home, env: {} }))[0]?.activeUntil).toBe("2027-01-31T00:00:00.000Z");
     await write("soon");
     expect((await readAgentPlanFacts({ now, home, env: {} }))[0]?.activeUntil).toBeNull();
     await write(1800000000);

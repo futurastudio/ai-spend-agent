@@ -223,6 +223,7 @@ export type AgentPlanTierId = typeof AGENT_PLAN_TIER_IDS[number];
 
 export const AGENT_PLAN_FACT_SOURCES = [
   "claude_json.oauthAccount.organizationRateLimitTier",
+  "claude_json.oauthAccount.organizationType",
   "codex_auth.id_token.chatgpt_plan_type"
 ] as const;
 export type AgentPlanFactSource = typeof AGENT_PLAN_FACT_SOURCES[number];
@@ -236,12 +237,16 @@ export type AgentPlanFact = {
   kind: "agent_plan";
   agent: "claude_code" | "codex";
   tier: AgentPlanTierId;
-  /** The tier string exactly as the agent stored it, bounded to a short identifier. */
+  /** The tier string exactly as the agent stored it, bounded to a 64-character identifier. */
   tierRaw: string;
   source: AgentPlanFactSource;
   /** When this machine's file was read (an ISO instant supplied by the caller). */
   observedAt: string;
-  /** Subscription end the agent recorded, as an ISO instant, or null when it records none. */
+  /**
+   * The UTC day the subscription the agent recorded runs to, as that day's
+   * start (`YYYY-MM-DDT00:00:00.000Z`), or null when it records none. The day
+   * is enough to cost sessions; the recorded instant would be a quasi-identifier.
+   */
   activeUntil: string | null;
 };
 
@@ -257,7 +262,9 @@ export type AgentPlanFactOptions = PlanDetectionOptions & {
   env?: Record<string, string | undefined>;
 };
 
-const TIER_RAW = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
+const TIER_RAW = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+/** Claude Code organization types billed as a consumer subscription; the rate-limit tier names the plan. */
+const CLAUDE_CONSUMER_ORGANIZATION_TYPES = new Set(["claude_pro", "claude_max"]);
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
 /**
@@ -269,6 +276,19 @@ export function normalizeClaudePlanTier(raw: string): AgentPlanTierId {
   const candidate = raw.trim().toLowerCase().replace(/^default_/, "");
   return candidate !== "unknown" && candidate.startsWith("claude_") && (AGENT_PLAN_TIER_IDS as readonly string[]).includes(candidate)
     ? candidate as AgentPlanTierId : "unknown";
+}
+
+/**
+ * A Claude Code organization that is not a consumer plan is a Team or
+ * Enterprise seat; the rate-limit tier then describes the organization's
+ * limits, not the plan. Unrecognized organization types stay `unknown`.
+ */
+export function normalizeClaudeOrganizationType(raw: string): AgentPlanTierId {
+  switch (raw.trim().toLowerCase()) {
+    case "claude_team": return "claude_team";
+    case "claude_enterprise": return "claude_enterprise";
+    default: return "unknown";
+  }
 }
 
 /** Codex's id_token names the ChatGPT plan: `plus`, `pro`, `business` (`team` before the rename), `enterprise`. */
@@ -307,7 +327,21 @@ export async function readAgentPlanFacts(options: AgentPlanFactOptions): Promise
 async function readClaudePlanFact(configPath: string, observedAt: string): Promise<AgentPlanFact | undefined> {
   const config = await readJsonQuietly(configPath);
   const account = isRecord(config) && isRecord(config.oauthAccount) ? config.oauthAccount : undefined;
-  const tierRaw = account ? stringOf(account.organizationRateLimitTier) : undefined;
+  if (!account) return undefined;
+  const organizationType = stringOf(account.organizationType);
+  if (organizationType && !CLAUDE_CONSUMER_ORGANIZATION_TYPES.has(organizationType.trim().toLowerCase())) {
+    if (!TIER_RAW.test(organizationType)) return undefined;
+    return {
+      kind: "agent_plan",
+      agent: "claude_code",
+      tier: normalizeClaudeOrganizationType(organizationType),
+      tierRaw: organizationType,
+      source: "claude_json.oauthAccount.organizationType",
+      observedAt,
+      activeUntil: null
+    };
+  }
+  const tierRaw = stringOf(account.organizationRateLimitTier);
   if (!tierRaw || !TIER_RAW.test(tierRaw)) return undefined;
   return {
     kind: "agent_plan",
@@ -342,13 +376,13 @@ async function readCodexPlanFact(authPath: string, observedAt: string): Promise<
     tierRaw,
     source: "codex_auth.id_token.chatgpt_plan_type",
     observedAt,
-    activeUntil: isoInstantOf(authClaims.chatgpt_subscription_active_until)
+    activeUntil: utcDayStartOf(authClaims.chatgpt_subscription_active_until)
   };
 }
 
-/** A parseable date string becomes a canonical ISO instant; anything else is null. */
-function isoInstantOf(value: unknown): string | null {
+/** A parseable date string becomes the start of its UTC day; anything else is null. */
+function utcDayStartOf(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 64) return null;
   const ms = Date.parse(value);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  return Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 10)}T00:00:00.000Z` : null;
 }

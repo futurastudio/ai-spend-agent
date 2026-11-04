@@ -1729,6 +1729,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       return ok([`Workspace: ${status.origin}`, `Last accepted push: ${status.lastAcceptedAt ?? "no push yet"}`,
         `Pairing state: local record present; disconnect ${status.disconnect ?? "not requested"}`,
         `Acknowledged fact keys: ${status.acknowledgedFacts}`, `Pending batch: ${status.pending?.state ?? "none"}`,
+        `Subscription tier facts: ${status.capabilities.agentPlanFacts
+          ? `announced by this Workspace; sent with each push unless ${AGENT_PLAN_TIER_OPT_OUT} is set`
+          : "not announced by this Workspace in an accepted push yet; none are read or sent"}`,
         "Status reads local pairing state only; it does not confirm current server grant authority."].join("\n"));
     }
     if (action === "connect") {
@@ -1787,20 +1790,26 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         ...[...counts].sort(([left], [right]) => left.localeCompare(right)).map(([label, count]) => `${label}: ${count}`),
         "Share these diagnostic counts for help before retrying. Do not delete logs or reconnect this machine."].join("\n"));
     }
-    // The subscription tier each agent left on this machine, so Workspace can cost
-    // its sessions. Read fail-open from the same files doctor reads; the preview
-    // below shows the exact fact, and AIBILL_NO_PLAN_TIER=1 leaves it out.
-    const agentPlanFacts = status.pending ? [] : await readAgentPlanFacts({ now, home: runtime.homeDirectory,
-      claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG, codexAuthPath: process.env.AI_SPEND_CODEX_AUTH });
+    // The subscription tier each agent left on this machine, so Workspace can cost its
+    // sessions: read fail-open from the same files doctor reads, and only once this
+    // Workspace has announced it accepts the fact. The preview shows the exact fact;
+    // AIBILL_NO_PLAN_TIER=1 leaves it out and strips it from a retained batch.
+    const planFactsOptOut = Boolean(process.env[AGENT_PLAN_TIER_OPT_OUT]);
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
-      resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, agentPlanFacts,
+      resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, planFactsOptOut,
+      readAgentPlanFacts: () => readAgentPlanFacts({ now, home: runtime.homeDirectory,
+        claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG, codexAuthPath: process.env.AI_SPEND_CODEX_AUTH }),
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
         ...(coverage.agentPlanFacts?.length
           ? [`Subscription tier included for ${coverage.agentPlanFacts.map(fact => `${fact.agent} (${fact.tier})`).join(", ")}: the tier id and raw tier string only, no account, email or token. Set ${AGENT_PLAN_TIER_OPT_OUT}=1 to leave it out.`]
           : []),
+        ...(coverage.planFactsRemoved
+          ? [`Subscription tier facts were removed from the retained batch because ${AGENT_PLAN_TIER_OPT_OUT} is set; it was re-signed under the same sequence with a fresh nonce.`]
+          : []),
         ...(representedUnknowns ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),
-        status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
+        coverage.planFactsRemoved ? "Send the rebuilt batch? [y/N] "
+          : status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
           : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n")) });
     if (prepared.state === "unchanged") return ok(prepared.coverage?.excludedCalls
       ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
@@ -1808,13 +1817,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (prepared.state === "cancelled") return ok("Not sent.");
     if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
-    const withheld = (outcome: string) => sent.planFactsWithheld ? [`Subscription tier facts were not accepted by this Workspace; ${outcome}`] : [];
-    return sent.state === "accepted" ? ok([...withheld("sent without them."),
-      `Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`].join("\n"))
-      : sent.state === "refused" ? fail([...withheld("the batch without them was refused too."),
-        "Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created."].join("\n"))
-        : fail([...withheld("the retry without them has an unknown outcome."),
-          "Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch."].join("\n"));
+    return sent.state === "accepted" ? ok(`Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`)
+      : sent.state === "refused" ? fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.")
+        : fail("Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.");
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
     if (error instanceof WorkspaceEnrollmentRefusal) return fail(error.reason === "connected"

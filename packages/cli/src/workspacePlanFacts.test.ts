@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentPlanFact, LocalAgentCall } from "@agent-finops/core";
 import { runCli } from "./index.js";
 import {
-  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, workspaceAgentPlanFactKey, workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey,
-  WORKSPACE_ORIGIN, type WorkspaceDevice, type WorkspaceEnvelopeFact, type WorkspaceFact, type WorkspaceState
+  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePush, workspaceAgentPlanFactKey,
+  workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey, WORKSPACE_ORIGIN,
+  type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceEnvelopeFact, type WorkspaceFact, type WorkspaceState
 } from "./workspaceConnect.js";
 
 const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "../../core/src/fixtures/local-agent-formats");
@@ -16,6 +17,7 @@ const claudePlanFixture = join(fixtureRoot, "claude-code-plan-v1/claude.json");
 const codexPlanFixture = join(fixtureRoot, "codex-plan-v1/auth.json");
 const codexPlanTokenParts = join(fixtureRoot, "codex-plan-v1/id-token-parts.json");
 const ref = (char: string) => `oref_${char.repeat(43)}`;
+const now = "2026-09-20T12:00:00.000Z";
 type TokenParts = { header: Record<string, unknown>; payload: Record<string, unknown>; signature: string };
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 
@@ -27,7 +29,6 @@ async function assembledCodexAuth(): Promise<{ auth: { tokens: Record<string, st
   auth.tokens.id_token = token;
   return { auth, token, parts };
 }
-const now = "2026-09-20T12:00:00.000Z";
 const evidence = {
   inputTokens: "observed", outputTokens: "observed", cacheReadTokens: "observed",
   cacheWriteTokens: "not_separately_reported", thoughtTokens: "not_separately_reported", toolTokens: "not_separately_reported",
@@ -46,15 +47,26 @@ const planFact = (overrides: Partial<AgentPlanFact> = {}): AgentPlanFact => ({
   kind: "agent_plan", agent: "claude_code", tier: "claude_max_20x", tierRaw: "default_claude_max_20x",
   source: "claude_json.oauthAccount.organizationRateLimitTier", observedAt: now, activeUntil: null, ...overrides
 });
+const expectedPlanFacts: AgentPlanFact[] = [
+  { kind: "agent_plan", agent: "claude_code", tier: "claude_max_20x", tierRaw: "default_claude_max_20x",
+    source: "claude_json.oauthAccount.organizationRateLimitTier", observedAt: now, activeUntil: null },
+  { kind: "agent_plan", agent: "codex", tier: "chatgpt_pro", tierRaw: "pro",
+    source: "codex_auth.id_token.chatgpt_plan_type", observedAt: now, activeUntil: "2026-12-01T00:00:00.000Z" }
+];
 
-/** A paired machine whose home also holds the two agents' sign-in files, copied from the gated fixtures. */
-async function pairedHome(options: { planFiles: boolean }): Promise<{ home: string; device: WorkspaceDevice; statePath: string }> {
+/**
+ * A paired machine whose home also holds the two agents' sign-in files, copied
+ * from the gated fixtures. `capability` writes what the Workspace announced in
+ * its last accepted push; absent, the machine has not pushed since pairing.
+ */
+async function pairedHome(options: { planFiles: boolean; capability?: boolean }): Promise<{ home: string; device: WorkspaceDevice; statePath: string }> {
   const home = await mkdtemp(join(tmpdir(), "aibill-plan-facts-"));
   const key = generateKeyPairSync("ed25519");
   const device: WorkspaceDevice = { origin: WORKSPACE_ORIGIN, grantId: ref("a"), keyId: ref("b"), grantRevision: "1", connectionEpoch: "1",
     sequence: "0", token: Buffer.alloc(32, 1).toString("base64url"), privateKeyPem: key.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
     collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", expiresAt: "2026-10-01T00:00:00.000Z" };
-  const state: WorkspaceState = { version: 1, device, facts: {}, pending: null, lastAcceptedAt: null, disconnect: null };
+  const state: WorkspaceState = { version: 1, device, facts: {}, pending: null, lastAcceptedAt: null, disconnect: null,
+    ...(options.capability === undefined ? {} : { capabilities: { agentPlanFacts: options.capability } }) };
   const privateDir = join(home, ".aibill");
   await mkdir(privateDir, { mode: 0o700 });
   const statePath = join(privateDir, "workspace-device.json");
@@ -86,18 +98,29 @@ async function fixtureSecrets(): Promise<string[]> {
   return values as string[];
 }
 
+/** A Workspace that accepts everything and announces the plan-fact capability unless told otherwise. */
+const accepting = (requests: string[], options: { capabilities?: unknown } = { capabilities: { agentPlanFacts: true } }) =>
+  async (_path: string, body: string) => {
+    requests.push(body);
+    const envelope = JSON.parse(body) as { batchId: string; manifestHash: string; facts: unknown[] };
+    return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
+      factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z",
+      ...("capabilities" in options ? { capabilities: options.capabilities } : {}) } };
+  };
+const lost = (requests: string[]) => async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); };
+const readState = async (statePath: string) => JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
+const parse = (body: string) => JSON.parse(body) as WorkspaceEnvelope;
+const verifies = (envelope: WorkspaceEnvelope, device: WorkspaceDevice) => {
+  const { signature, ...unsigned } = envelope;
+  return verify(null, Buffer.from(workspaceCanonicalJson(unsigned as never)), createPublicKey(device.privateKeyPem), Buffer.from(signature.value, "base64url"));
+};
+
 function pushRuntime(home: string, calls: LocalAgentCall[], requests: string[], messages: string[]) {
   return { homeDirectory: home, interactive: true, workspaceNow: now, workspaceLoadCalls: loaded(calls),
-    consentRead: async (message: string) => { messages.push(message); return "y"; },
-    workspaceTransport: async (_path: string, body: string) => {
-      requests.push(body);
-      const envelope = JSON.parse(body) as { batchId: string; manifestHash: string; facts: unknown[] };
-      return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
-        factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z" } };
-    } };
+    consentRead: async (message: string) => { messages.push(message); return "y"; }, workspaceTransport: accepting(requests) };
 }
 
-describe("workspace push carries this machine's plan tiers", () => {
+describe("workspace push carries this machine's plan tiers once the Workspace accepts them", () => {
   beforeEach(() => {
     // Other suites point these at missing files; this one reads the fixture home.
     delete process.env.AI_SPEND_CLAUDE_CONFIG;
@@ -106,22 +129,17 @@ describe("workspace push carries this machine's plan tiers", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("sends one exact agent_plan fact per agent beside the session facts, previews it, and keeps it out of the fact ledger", async () => {
-    const { home, device, statePath } = await pairedHome({ planFiles: true });
+    const { home, device, statePath } = await pairedHome({ planFiles: true, capability: true });
     const requests: string[] = [], messages: string[] = [];
     const result = await runCli(["workspace", "push"], pushRuntime(home, [call()], requests, messages));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("accepted 3 local session facts");
 
-    const envelope = JSON.parse(requests[0]!) as { facts: WorkspaceEnvelopeFact[] };
+    const envelope = parse(requests[0]!);
     const plans = envelope.facts.filter(isWorkspaceAgentPlanFact);
-    const sessions = envelope.facts.filter(fact => !isWorkspaceAgentPlanFact(fact)) as WorkspaceFact[];
+    const sessions = envelope.facts.filter(isWorkspaceSessionFact);
     expect(sessions).toHaveLength(1);
-    expect(plans).toEqual([
-      { kind: "agent_plan", agent: "claude_code", tier: "claude_max_20x", tierRaw: "default_claude_max_20x",
-        source: "claude_json.oauthAccount.organizationRateLimitTier", observedAt: now, activeUntil: null },
-      { kind: "agent_plan", agent: "codex", tier: "chatgpt_pro", tierRaw: "pro",
-        source: "codex_auth.id_token.chatgpt_plan_type", observedAt: now, activeUntil: "2026-12-01T00:00:00.000Z" }
-    ]);
+    expect(plans).toEqual(expectedPlanFacts);
     expect(plans.map(fact => workspaceAgentPlanFactKey(fact, device.keyId))).toEqual([
       `agent_plan:${device.keyId}:claude_code`, `agent_plan:${device.keyId}:codex`
     ]);
@@ -136,30 +154,71 @@ describe("workspace push carries this machine's plan tiers", () => {
       expect(messages[0], secret).not.toContain(secret);
     }
     // Plan facts have no revision; only the session fact enters the acknowledged ledger.
-    const state = JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
+    const state = await readState(statePath);
     expect(Object.keys(state.facts)).toEqual([workspaceFactKey(sessions[0]!)]);
     expect(state.pending).toBeNull();
     expect(state.device.sequence).toBe("1");
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
+  });
+
+  it("reads and sends nothing about tiers until the Workspace has announced the capability, then does from the next push on", async () => {
+    // Freshly paired: no capability stored, no sign-in file read.
+    const reader = vi.fn(async () => expectedPlanFacts);
+    const fresh = await pairedHome({ planFiles: true });
+    const prepared = await prepareWorkspacePush({ home: fresh.home, calls: [call()], generatedAt: now, readAgentPlanFacts: reader,
+      confirm: async (payload, coverage) => { expect(coverage.agentPlanFacts).toEqual([]); expect(payload).not.toContain("agent_plan"); return false; } });
+    expect(prepared.state).toBe("cancelled");
+    expect(reader).not.toHaveBeenCalled();
+
+    // Push 1: the Workspace accepts and announces the capability; this batch carried no plan facts.
+    const requests: string[] = [], messages: string[] = [];
+    const first = await runCli(["workspace", "push"], pushRuntime(fresh.home, [call()], requests, messages));
+    expect(first.stdout).toContain("accepted 1 local session facts");
+    expect(parse(requests[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(messages[0]).not.toContain("Subscription tier");
+    expect((await readState(fresh.statePath)).capabilities).toEqual({ agentPlanFacts: true });
+    const status = await runCli(["workspace", "status"], { homeDirectory: fresh.home });
+    expect(status.stdout).toContain("Subscription tier facts: announced by this Workspace");
+
+    // Push 2: the stored capability admits the plan facts.
+    const nextDay = call({ callId: "call-two", timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" });
+    const second = await runCli(["workspace", "push"], pushRuntime(fresh.home, [call(), nextDay], requests, messages));
+    expect(second.stdout).toContain("accepted 3 local session facts");
+    expect(parse(requests[1]!).facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
+    expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
+
+    // Push 3: a receipt that announces nothing takes the capability away again.
+    const third = await runCli(["workspace", "push"], { ...pushRuntime(fresh.home, [call(), nextDay,
+      call({ callId: "call-three", model: "gpt-5-mini" })], requests, messages), workspaceTransport: accepting(requests, {}) });
+    expect(third.exitCode).toBe(0);
+    expect((await readState(fresh.statePath)).capabilities).toEqual({ agentPlanFacts: false });
+    const fourth = await runCli(["workspace", "push"], { ...pushRuntime(fresh.home, [call(), nextDay,
+      call({ callId: "call-three", model: "gpt-5-mini" }), call({ callId: "call-four", model: "gpt-5-nano" })], requests, messages),
+      workspaceTransport: accepting(requests, {}) });
+    expect(fourth.stdout).toContain("accepted 1 local session facts");
+    expect(parse(requests[3]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(messages[3]).not.toContain("Subscription tier");
+    expect((await runCli(["workspace", "status"], { homeDirectory: fresh.home })).stdout).toContain("not announced by this Workspace in an accepted push yet");
   });
 
   it("leaves the tiers out under AIBILL_NO_PLAN_TIER and when the machine has no sign-in files", async () => {
-    const withFiles = await pairedHome({ planFiles: true });
+    const withFiles = await pairedHome({ planFiles: true, capability: true });
     vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
     const optedOut: string[] = [], optedOutMessages: string[] = [];
     expect((await runCli(["workspace", "push"], pushRuntime(withFiles.home, [call()], optedOut, optedOutMessages))).exitCode).toBe(0);
-    expect((JSON.parse(optedOut[0]!) as { facts: WorkspaceEnvelopeFact[] }).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(parse(optedOut[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     expect(optedOutMessages[0]).not.toContain("Subscription tier");
     vi.unstubAllEnvs();
 
-    const bare = await pairedHome({ planFiles: false });
+    const bare = await pairedHome({ planFiles: false, capability: true });
     const requests: string[] = [], messages: string[] = [];
     expect((await runCli(["workspace", "push"], pushRuntime(bare.home, [call()], requests, messages))).stdout).toContain("accepted 1 local session facts");
-    expect((JSON.parse(requests[0]!) as { facts: WorkspaceEnvelopeFact[] }).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(parse(requests[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     expect(messages[0]).not.toContain("Subscription tier");
   });
 
   it("never sends plan facts alone, and makes room for them inside the 256-fact batch", async () => {
-    const { home } = await pairedHome({ planFiles: true });
+    const { home } = await pairedHome({ planFiles: true, capability: true });
     const idle: string[] = [], idleMessages: string[] = [];
     const nothing = await runCli(["workspace", "push"], pushRuntime(home, [], idle, idleMessages));
     expect(nothing.stdout).toContain("No changed eligible local session facts to push.");
@@ -170,19 +229,74 @@ describe("workspace push carries this machine's plan tiers", () => {
     const requests: string[] = [];
     const result = await runCli(["workspace", "push"], pushRuntime(home, many, requests, []));
     expect(result.exitCode).toBe(0);
-    const facts = (JSON.parse(requests[0]!) as { facts: WorkspaceEnvelopeFact[] }).facts;
+    const facts = parse(requests[0]!).facts;
     expect(facts).toHaveLength(256);
     expect(facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(2);
   });
 
-  it("retries a retained batch with the plan facts it was signed with and reads no files again", async () => {
-    const { home, statePath } = await pairedHome({ planFiles: true });
+  it("treats a 400 unavailable reply like any other unknown outcome: the batch is retained and resent identically", async () => {
+    const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
     const requests: string[] = [], messages: string[] = [];
-    const lost = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages),
-      workspaceTransport: async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); } });
-    expect(lost.stderr).toContain("outcome is unknown");
-    expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");
+    // The deployed Workspace answers a schema failure this way after marking the mutation dispatched.
+    const unavailable = async (_path: string, body: string) => { requests.push(body); return { status: 400, body: { state: "unavailable", retry: "same_envelope_only" } }; };
+    const first = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: unavailable });
+    expect(first.exitCode).toBe(1);
+    expect(first.stderr).toContain("Push outcome is unknown");
+    expect(first.stderr).not.toContain("Subscription tier");
+    const retained = await readState(statePath);
+    expect(retained.pending?.state).toBe("uncertain");
+    expect(retained.pending?.envelope.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
 
+    const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
+      workspaceLoadCalls: async () => { throw Error("unexpected local read"); } });
+    expect(second.exitCode).toBe(0);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+    expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(messages[1]).toContain("identical retained signed batch");
+    expect((await readState(statePath)).pending).toBeNull();
+  });
+
+  it("rebuilds a retained batch without its plan facts when the opt-out is set, re-signed under the same sequence", async () => {
+    const { home, device, statePath } = await pairedHome({ planFiles: true, capability: true });
+    const requests: string[] = [], messages: string[] = [];
+    const first = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: lost(requests) });
+    expect(first.stderr).toContain("outcome is unknown");
+    expect((await readState(statePath)).pending?.state).toBe("uncertain");
+
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
+      workspaceLoadCalls: async () => { throw Error("unexpected local read"); } });
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(requests).toHaveLength(2);
+    const original = parse(requests[0]!), rebuilt = parse(requests[1]!);
+    expect(original.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
+    expect(rebuilt.facts).toEqual(original.facts.filter(isWorkspaceSessionFact));
+    expect(rebuilt.sequence).toBe(original.sequence);
+    expect(rebuilt.generatedAt).toBe(original.generatedAt);
+    expect(rebuilt.deviceKeyId).toBe(original.deviceKeyId);
+    expect(rebuilt.nonce).not.toBe(original.nonce);
+    expect(rebuilt.batchId).not.toBe(original.batchId);
+    expect(rebuilt.idempotencyKey).not.toBe(original.idempotencyKey);
+    expect(rebuilt.manifestHash).not.toBe(original.manifestHash);
+    expect(verifies(rebuilt, device)).toBe(true);
+    expect(requests[1]).not.toContain("agent_plan");
+    // The preview showed the rebuilt payload and said why.
+    expect(messages[1]).toContain(requests[1]!);
+    expect(messages[1]).toContain("Subscription tier facts were removed from the retained batch because AIBILL_NO_PLAN_TIER is set");
+    expect(messages[1]).toContain("Send the rebuilt batch?");
+    expect(messages[1]).not.toContain("identical retained signed batch");
+    const state = await readState(statePath);
+    expect(state.pending).toBeNull();
+    expect(Object.keys(state.facts)).toEqual([workspaceFactKey(rebuilt.facts[0] as WorkspaceFact)]);
+    expect(state.device.sequence).toBe(rebuilt.sequence);
+  });
+
+  it("keeps a retained batch identical when the opt-out is not set, reading no files again", async () => {
+    const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
+    const requests: string[] = [], messages: string[] = [];
+    await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: lost(requests) });
     // The sign-in files change after the batch was signed; the retry must resend the identical envelope.
     await writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationRateLimitTier: "default_claude_pro" } }));
     const retry = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
@@ -191,110 +305,7 @@ describe("workspace push carries this machine's plan tiers", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]).toBe(requests[0]);
     expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
-    expect(messages[1]).toContain("identical retained signed batch");
-  });
-
-  /** A Workspace that does not accept agent_plan facts yet: invalid for any batch carrying them, accepting otherwise. */
-  const refusingPlans = (requests: string[]) => async (_path: string, body: string) => {
-    requests.push(body);
-    const envelope = JSON.parse(body) as { batchId: string; manifestHash: string; facts: WorkspaceEnvelopeFact[] };
-    if (envelope.facts.some(isWorkspaceAgentPlanFact)) return { status: 409, body: { state: "refused", reason: "invalid" } };
-    return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
-      factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z" } };
-  };
-  const refusing = (requests: string[], reason: string) => async (_path: string, body: string) => {
-    requests.push(body);
-    return { status: 409, body: { state: "refused", reason } };
-  };
-
-  it("resends the same session facts without plan facts, re-signed, when the Workspace refuses them as invalid", async () => {
-    const { home, device, statePath } = await pairedHome({ planFiles: true });
-    const requests: string[] = [], messages: string[] = [];
-    const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: refusingPlans(requests) });
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Subscription tier facts were not accepted by this Workspace; sent without them.");
-    expect(result.stdout).toContain("accepted 1 local session facts");
-    expect(messages).toHaveLength(1);
-
-    expect(requests).toHaveLength(2);
-    const first = JSON.parse(requests[0]!), second = JSON.parse(requests[1]!);
-    expect(first.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(2);
-    expect(second.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
-    expect(second.facts).toEqual(first.facts.filter(isWorkspaceSessionFact));
-    // Same sequence and time, fresh batch identity, a signature that verifies over the new body.
-    expect(second.sequence).toBe(first.sequence);
-    expect(second.generatedAt).toBe(first.generatedAt);
-    expect(second.deviceKeyId).toBe(first.deviceKeyId);
-    expect(second.batchId).not.toBe(first.batchId);
-    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
-    expect(second.nonce).not.toBe(first.nonce);
-    expect(second.manifestHash).not.toBe(first.manifestHash);
-    const { signature, ...unsigned } = second;
-    expect(verify(null, Buffer.from(workspaceCanonicalJson(unsigned)), createPublicKey(device.privateKeyPem), Buffer.from(signature.value, "base64url"))).toBe(true);
-    expect(requests[1]).not.toContain("agent_plan");
-
-    const state = JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
-    expect(Object.keys(state.facts)).toEqual([workspaceFactKey(second.facts[0])]);
-    expect(state.pending).toBeNull();
-    expect(state.device.sequence).toBe(second.sequence);
-  });
-
-  it("does not retry a refused batch that carried no plan facts, nor a non-invalid refusal", async () => {
-    const bare = await pairedHome({ planFiles: false });
-    const bareRequests: string[] = [];
-    const refused = await runCli(["workspace", "push"], { ...pushRuntime(bare.home, [call()], bareRequests, []), workspaceTransport: refusing(bareRequests, "invalid") });
-    expect(refused.exitCode).toBe(1);
-    expect(refused.stderr).toContain("Workspace refused this batch");
-    expect(refused.stderr).not.toContain("Subscription tier");
-    expect(bareRequests).toHaveLength(1);
-    const bareState = JSON.parse(await readFile(bare.statePath, "utf8")) as WorkspaceState;
-    expect(bareState.pending?.state).toBe("refused");
-    expect(bareState.pending?.refusal).toBe("invalid");
-
-    const stale = await pairedHome({ planFiles: true });
-    const staleRequests: string[] = [];
-    const staleResult = await runCli(["workspace", "push"], { ...pushRuntime(stale.home, [call()], staleRequests, []), workspaceTransport: refusing(staleRequests, "stale") });
-    expect(staleResult.exitCode).toBe(1);
-    expect(staleResult.stderr).not.toContain("Subscription tier");
-    expect(staleRequests).toHaveLength(1);
-    const staleState = JSON.parse(await readFile(stale.statePath, "utf8")) as WorkspaceState;
-    expect(staleState.pending?.state).toBe("refused");
-    expect(staleState.pending?.refusal).toBe("stale");
-    expect(staleState.pending?.envelope.facts.some(isWorkspaceAgentPlanFact)).toBe(true);
-  });
-
-  it("retries once only: a refusal of the plan-free batch is retained as refused", async () => {
-    const { home, statePath } = await pairedHome({ planFiles: true });
-    const requests: string[] = [];
-    const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []), workspaceTransport: refusing(requests, "invalid") });
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Subscription tier facts were not accepted by this Workspace; the batch without them was refused too.");
-    expect(result.stderr).toContain("Workspace refused this batch");
-    expect(requests).toHaveLength(2);
-    const state = JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
-    expect(state.pending?.state).toBe("refused");
-    expect(state.pending?.envelope.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
-    expect(workspaceCanonicalJson(state.pending!.envelope as never)).toBe(requests[1]);
-  });
-
-  it("falls back the same way for a retained batch retried later", async () => {
-    const { home, statePath } = await pairedHome({ planFiles: true });
-    const requests: string[] = [], messages: string[] = [];
-    const lost = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages),
-      workspaceTransport: async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); } });
-    expect(lost.stderr).toContain("outcome is unknown");
-    expect(JSON.parse(await readFile(statePath, "utf8")).pending.state).toBe("uncertain");
-
-    const retry = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
-      workspaceLoadCalls: async () => { throw Error("unexpected local read"); }, workspaceTransport: refusingPlans(requests) });
-    expect(retry.exitCode).toBe(0);
-    expect(retry.stdout).toContain("Subscription tier facts were not accepted by this Workspace; sent without them.");
-    expect(requests).toHaveLength(3);
-    expect(requests[1]).toBe(requests[0]);
-    expect(JSON.parse(requests[2]!).facts).toEqual(JSON.parse(requests[0]!).facts.filter(isWorkspaceSessionFact));
-    const state = JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
-    expect(state.pending).toBeNull();
-    expect(Object.keys(state.facts)).toHaveLength(1);
+    expect((await readState(statePath)).pending).toBeNull();
   });
 });
 
@@ -310,23 +321,30 @@ describe("agent plan facts inside the envelope", () => {
   const envelopeWith = (...plans: AgentPlanFact[]) => {
     const fact = session();
     fact.sessionsHash = workspaceDomainHash("tilden:local-session-identities:v1", fact.sessionRefs);
-    return buildWorkspaceEnvelope(device(), [fact, ...plans], now);
+    return buildWorkspaceEnvelope(device(), [fact, ...plans] as WorkspaceEnvelopeFact[], now);
   };
 
   it("accepts the exact shape and refuses every deviation", () => {
     expect(envelopeWith(planFact(), planFact({ agent: "codex", tier: "chatgpt_plus", tierRaw: "plus",
       source: "codex_auth.id_token.chatgpt_plan_type", activeUntil: "2026-12-01T00:00:00.000Z" })).facts).toHaveLength(3);
     expect(envelopeWith(planFact({ tier: "unknown", tierRaw: "default_claude_max_100x" })).facts).toHaveLength(2);
+    expect(envelopeWith(planFact({ tier: "claude_team", tierRaw: "claude_team", source: "claude_json.oauthAccount.organizationType" })).facts).toHaveLength(2);
+    expect(envelopeWith(planFact({ tierRaw: "x".repeat(64) , tier: "unknown" })).facts).toHaveLength(2);
 
     const refused: Partial<AgentPlanFact>[] = [
       { tier: "chatgpt_pro" },
       { tier: "claude_max_50x" as AgentPlanFact["tier"] },
       { agent: "codex" },
       { source: "codex_auth.id_token.chatgpt_plan_type" },
+      { agent: "codex", tier: "chatgpt_pro", tierRaw: "pro", source: "claude_json.oauthAccount.organizationType" },
+      { source: "claude_json.oauthAccount.seatTier" as AgentPlanFact["source"] },
       { tierRaw: "" },
       { tierRaw: "has space" },
+      { tierRaw: "x".repeat(65) },
       { observedAt: "2026-09-20" },
       { activeUntil: "soon" },
+      { activeUntil: "2026-12-01T12:00:00.000Z" },
+      { activeUntil: "2026-12-01T00:00:00Z" },
       { kind: "plan" as AgentPlanFact["kind"] }
     ];
     for (const overrides of refused) expect(() => envelopeWith(planFact(overrides)), JSON.stringify(overrides)).toThrow();

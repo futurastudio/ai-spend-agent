@@ -5,7 +5,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { request as httpsRequest } from "node:https";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { AGENT_PLAN_TIER_IDS, dedupeCumulativeSessionCalls, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
+import { AGENT_PLAN_FACT_SOURCES, AGENT_PLAN_TIER_IDS, dedupeCumulativeSessionCalls, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
 
 export const WORKSPACE_ORIGIN = "https://app.asktilden.com";
 export const WORKSPACE_FACTS_PATH = "/api/workspace/local-session-facts";
@@ -27,10 +27,13 @@ export type WorkspaceFact = {
 };
 /**
  * This machine's subscription tier for one agent, read by core's plan reader
- * and sent beside the day's session facts. The Workspace keys it
- * `agent_plan:<device>:<agent>`; it has no revision and is replaced on every push.
+ * and sent beside the day's session facts once the Workspace has announced it
+ * accepts the kind. The Workspace keys it `agent_plan:<device>:<agent>`; it has
+ * no revision and is replaced on every push.
  */
 export type WorkspaceAgentPlanFact = AgentPlanFact;
+/** What the Workspace accepts, as its last accepted-push receipt announced it; absent until the first accepted push. */
+export type WorkspaceCapabilities = { agentPlanFacts: boolean };
 export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
 /** The fields that form a fact's key. */
@@ -54,11 +57,14 @@ export type WorkspaceState = {
   version: 1; device: WorkspaceDevice; facts: WorkspaceFactState;
   pending: WorkspacePending | null; lastAcceptedAt: string | null;
   disconnect: null | { state: "uncertain" | "revoked"; requestId: string; revokedAt: string | null };
+  capabilities?: WorkspaceCapabilities;
 };
 export type WorkspaceAggregate = {
   facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
   /** Plan facts prepared beside the session facts; absent from a bare aggregate. */
   agentPlanFacts?: WorkspaceAgentPlanFact[];
+  /** True when a retained batch was rebuilt without its plan facts because the opt-out is set. */
+  planFactsRemoved?: boolean;
 };
 
 export function workspaceCanonicalJson(value: Json): string {
@@ -228,8 +234,10 @@ export function aggregateWorkspaceFacts(calls: readonly LocalAgentCall[], previo
   return { facts, excludedCalls, incompleteComponents, reasons: [...reasons].sort() };
 }
 
-function exactKeys(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join("\0") !== keys.sort().join("\0"))
+function exactKeys(value: unknown, keys: string[], optional: string[] = []): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Workspace state or receipt has an invalid shape.");
+  const present = Object.keys(value), allowed = new Set([...keys, ...optional]);
+  if (keys.some(key => !present.includes(key)) || present.some(key => !allowed.has(key)))
     throw Error("Workspace state or receipt has an invalid shape.");
 }
 function bytes(value: unknown, count: number): value is string {
@@ -253,15 +261,16 @@ function validateFact(fact: WorkspaceFact): void {
       || /[/\\\u0000-\u001f\u007f@]/.test(fact.projectName) || [".", ".."].includes(fact.projectName)))
     throw Error("Workspace fact shape is invalid.");
 }
-const PLAN_TIER_IDS = new Set<string>(AGENT_PLAN_TIER_IDS);
+const PLAN_TIER_IDS = new Set<string>(AGENT_PLAN_TIER_IDS), PLAN_SOURCES = new Set<string>(AGENT_PLAN_FACT_SOURCES);
 function validateAgentPlanFact(fact: WorkspaceAgentPlanFact): void {
   exactKeys(fact, ["kind", "agent", "tier", "tierRaw", "source", "observedAt", "activeUntil"]);
-  const family = fact.agent === "claude_code" ? "claude_" : "chatgpt_";
+  const family = fact.agent === "claude_code" ? "claude_" : "chatgpt_", file = fact.agent === "claude_code" ? "claude_json." : "codex_auth.";
   if (fact.kind !== "agent_plan" || !["claude_code", "codex"].includes(fact.agent)
     || typeof fact.tier !== "string" || !PLAN_TIER_IDS.has(fact.tier) || fact.tier !== "unknown" && !fact.tier.startsWith(family)
-    || typeof fact.tierRaw !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(fact.tierRaw)
-    || fact.source !== (fact.agent === "claude_code" ? "claude_json.oauthAccount.organizationRateLimitTier" : "codex_auth.id_token.chatgpt_plan_type")
-    || typeof fact.observedAt !== "string" || fact.activeUntil !== null && typeof fact.activeUntil !== "string")
+    || typeof fact.tierRaw !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(fact.tierRaw)
+    || typeof fact.source !== "string" || !PLAN_SOURCES.has(fact.source) || !fact.source.startsWith(file)
+    || typeof fact.observedAt !== "string"
+    || fact.activeUntil !== null && (typeof fact.activeUntil !== "string" || !/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(fact.activeUntil)))
     throw Error("Workspace agent plan fact shape is invalid.");
   utcDay(fact.observedAt);
   if (fact.activeUntil !== null) utcDay(fact.activeUntil);
@@ -334,9 +343,13 @@ async function readState(path: string): Promise<WorkspaceState | null> {
     if (!info.isFile() || info.nlink !== 1 || info.mode & 0o077 || info.size > MAX_STATE_BYTES || process.getuid && info.uid !== process.getuid())
       throw Error("Workspace state is not a private regular file.");
     const state = JSON.parse(await file.readFile("utf8")) as WorkspaceState;
-    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"]);
+    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities"]);
     if (state.version !== 1 || !state.facts || typeof state.facts !== "object" || Array.isArray(state.facts)) throw Error("Workspace state is invalid.");
     validateDevice(state.device);
+    if (state.capabilities !== undefined) {
+      exactKeys(state.capabilities, ["agentPlanFacts"]);
+      if (typeof state.capabilities.agentPlanFacts !== "boolean") throw Error("Workspace capability state is invalid.");
+    }
     if (state.lastAcceptedAt !== null) utcDay(state.lastAcceptedAt);
     for (const [key, value] of Object.entries(state.facts)) {
       exactKeys(value, ["revision", "contentHash"]);
@@ -398,7 +411,7 @@ export type WorkspaceStatus = { state: "not_connected" } | {
   state: "enrollment_pending"; enrollment: "prepared" | "exchange_uncertain"; requestId: string;
 } | {
   state: "connected"; origin: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
-  disconnect: "uncertain" | "revoked" | null;
+  disconnect: "uncertain" | "revoked" | null; capabilities: WorkspaceCapabilities;
   pending: null | { state: WorkspacePending["state"]; factCount: number; generatedAt: string; refusal: WorkspacePending["refusal"] };
 };
 /** Reads only the private pairing record; never logs, a provider, or the Workspace. */
@@ -412,7 +425,8 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
       : { state: "not_connected" };
   }
   return { state: "connected", origin: state.device.origin, lastAcceptedAt: state.lastAcceptedAt,
-    acknowledgedFacts: Object.keys(state.facts).length, disconnect: state.disconnect?.state ?? null, pending: state.pending ? { state: state.pending.state,
+    acknowledgedFacts: Object.keys(state.facts).length, disconnect: state.disconnect?.state ?? null,
+    capabilities: state.capabilities ?? { agentPlanFacts: false }, pending: state.pending ? { state: state.pending.state,
       factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null };
 }
 
@@ -467,20 +481,35 @@ export async function prepareWorkspacePush(options: {
   confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean>;
   /** Finds a session folder's checkout; absent, facts keep the folder name. */
   resolveRepositoryRoot?: (directory: string) => string | undefined;
-  /** This machine's subscription tier per agent, sent beside changed session facts; never alone. */
-  agentPlanFacts?: readonly WorkspaceAgentPlanFact[];
+  /**
+   * Reads this machine's subscription tier per agent. Called only when the
+   * Workspace announced `agentPlanFacts` in its last accepted-push receipt, the
+   * opt-out is not set, and a new envelope is being built; the facts ride
+   * beside changed session facts, never alone.
+   */
+  readAgentPlanFacts?: () => Promise<readonly WorkspaceAgentPlanFact[]>;
+  /** AIBILL_NO_PLAN_TIER: read no plan facts, and strip them from a retained batch before it is sent again. */
+  planFactsOptOut?: boolean;
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state) throw Error("This machine is not connected to a Workspace.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending) {
       if (state.pending.state === "refused") return { state: "pending" };
-      const coverage: WorkspaceAggregate = { facts: state.pending.envelope.facts.filter(isWorkspaceSessionFact),
-        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"],
-        agentPlanFacts: state.pending.envelope.facts.filter(isWorkspaceAgentPlanFact) };
-      if (!await options.confirm(workspaceCanonicalJson(state.pending.envelope), coverage)) return { state: "cancelled", coverage };
-      // Explicit consent permits only the identical retained envelope to be attempted again.
-      if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
+      let envelope = state.pending.envelope, planFactsRemoved = false;
+      if (options.planFactsOptOut && envelope.facts.some(isWorkspaceAgentPlanFact)) {
+        // Rebuilt here, before anything is dispatched: the same session facts under the
+        // same sequence and time, re-signed with a fresh nonce and batch identity. A
+        // failure surfaces as this command's error, never as an unconfirmed send.
+        envelope = buildWorkspaceEnvelope(state.device, envelope.facts.filter(isWorkspaceSessionFact), envelope.generatedAt);
+        planFactsRemoved = true;
+      }
+      const coverage: WorkspaceAggregate = { facts: envelope.facts.filter(isWorkspaceSessionFact),
+        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch", ...(planFactsRemoved ? ["plan_facts_removed_by_opt_out"] : [])],
+        agentPlanFacts: envelope.facts.filter(isWorkspaceAgentPlanFact), planFactsRemoved };
+      if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
+      // Explicit consent permits only the identical retained envelope (or its opt-out rebuild) to be attempted again.
+      if (planFactsRemoved || state.pending.state === "uncertain") await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
       return { state: "prepared", coverage };
     }
     const calls = options.resolveRepositoryRoot
@@ -493,7 +522,10 @@ export async function prepareWorkspacePush(options: {
     if (eligible.length !== coverage.facts.length) coverage.reasons.push("outside_closed_authorized_days");
     coverage.facts = eligible;
     if (!coverage.facts.length) return { state: "unchanged", coverage };
-    coverage.agentPlanFacts = [...(options.agentPlanFacts ?? [])];
+    // Capability gating: a Workspace that has not announced agentPlanFacts in an accepted
+    // receipt gets none, so the first push after its upgrade carries none and the next does.
+    coverage.agentPlanFacts = state.capabilities?.agentPlanFacts === true && !options.planFactsOptOut && options.readAgentPlanFacts
+      ? [...await options.readAgentPlanFacts()] : [];
     const envelope = buildWorkspaceEnvelope(state.device,
       [...coverage.facts.slice(0, MAX_FACTS - coverage.agentPlanFacts.length), ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
@@ -502,63 +534,49 @@ export async function prepareWorkspacePush(options: {
   });
 }
 
-export type WorkspaceSendResult = {
-  state: "accepted" | "refused" | "unconfirmed"; factCount?: number;
-  /** True when the Workspace refused the batch as invalid and the same session facts were sent once more without the plan facts. */
-  planFactsWithheld: boolean;
-};
-/**
- * One attempt, plus one fallback: a Workspace that does not accept `agent_plan`
- * facts yet refuses the whole batch as `invalid`, so the identical session facts
- * are re-signed without the plan facts and sent once more under the same
- * sequence. Uncertain/refused batches remain retained and cannot silently be resubmitted.
- */
-export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<WorkspaceSendResult> {
+/** The capabilities an accepted-push receipt announces; a receipt that names none leaves the Workspace at none. */
+function receiptCapabilities(value: unknown): WorkspaceCapabilities {
+  if (value === undefined) return { agentPlanFacts: false };
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("receipt_capabilities");
+  return { agentPlanFacts: (value as Record<string, unknown>).agentPlanFacts === true };
+}
+/** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */
+export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state?.pending) throw Error("No prepared Workspace batch exists.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending.state !== "ready") throw Error("This batch already has a result or an uncertain outcome; reconcile it before another push.");
-    const transport = options.transport ?? workspaceTransport;
-    let envelope = state.pending.envelope, planFactsWithheld = false;
-    for (;;) {
-      const dispatched: WorkspaceState = { ...state, pending: { envelope, state: "uncertain", refusal: null } };
-      await save(dispatched);
-      let result: WorkspaceTransportResult;
-      try { result = await transport(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
-      catch { return { state: "unconfirmed", planFactsWithheld }; }
-      try {
-        const receipt = result.body;
-        if (result.status === 200) {
-          exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"]);
-          if (receipt.state !== "accepted" || receipt.batchId !== envelope.batchId || receipt.manifestHash !== envelope.manifestHash
-            || receipt.factCount !== envelope.facts.length || typeof receipt.acceptedAt !== "string") throw Error("receipt_mismatch");
-          utcDay(receipt.acceptedAt);
-          const counts = [receipt.introduced, receipt.replaced, receipt.unchanged];
-          if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
-            || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
-          const facts = { ...state.facts };
-          for (const fact of envelope.facts)
-            if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
-          await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt });
-          return { state: "accepted", factCount: envelope.facts.length, planFactsWithheld };
-        }
-        if (result.status === 409) {
-          exactKeys(receipt, ["state", "reason"]);
-          if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
-          if (receipt.reason === "invalid" && !planFactsWithheld && envelope.facts.some(isWorkspaceAgentPlanFact)) {
-            // The refusal names no field, so an invalid batch that carried plan facts is
-            // taken as a Workspace that does not accept them: the same session facts go
-            // once more, re-signed, with a fresh nonce and batch identity and no plan facts.
-            envelope = buildWorkspaceEnvelope(state.device, envelope.facts.filter(isWorkspaceSessionFact), envelope.generatedAt);
-            planFactsWithheld = true;
-            continue;
-          }
-          await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
-          return { state: "refused", planFactsWithheld };
-        }
-      } catch { return { state: "unconfirmed", planFactsWithheld }; }
-      return { state: "unconfirmed", planFactsWithheld };
-    }
+    const envelope = state.pending.envelope;
+    const dispatched: WorkspaceState = { ...state, pending: { ...state.pending, state: "uncertain" } };
+    await save(dispatched);
+    let result: WorkspaceTransportResult;
+    try { result = await (options.transport ?? workspaceTransport)(WORKSPACE_FACTS_PATH, workspaceCanonicalJson(envelope), state.device.token); }
+    catch { return { state: "unconfirmed" }; }
+    try {
+      const receipt = result.body;
+      if (result.status === 200) {
+        exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"], ["capabilities"]);
+        if (receipt.state !== "accepted" || receipt.batchId !== envelope.batchId || receipt.manifestHash !== envelope.manifestHash
+          || receipt.factCount !== envelope.facts.length || typeof receipt.acceptedAt !== "string") throw Error("receipt_mismatch");
+        utcDay(receipt.acceptedAt);
+        const counts = [receipt.introduced, receipt.replaced, receipt.unchanged];
+        if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
+          || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
+        const capabilities = receiptCapabilities(receipt.capabilities);
+        const facts = { ...state.facts };
+        for (const fact of envelope.facts)
+          if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+        await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt, capabilities });
+        return { state: "accepted", factCount: envelope.facts.length };
+      }
+      if (result.status === 409) {
+        exactKeys(receipt, ["state", "reason"]);
+        if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
+        await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
+        return { state: "refused" };
+      }
+    } catch { return { state: "unconfirmed" }; }
+    return { state: "unconfirmed" };
   });
 }
 

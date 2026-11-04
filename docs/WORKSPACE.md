@@ -82,19 +82,25 @@ unknown rather than zero. Gemini activity is not part of this upload.
 Each push also carries one subscription-tier fact per agent signed in on the
 machine, so Workspace can cost Claude Code and Codex sessions at the plan that
 ran them: the agent (`claude_code` or `codex`), a normalized tier id such as
-`claude_max_20x` or `chatgpt_pro` (`unknown` when the CLI does not recognize
-the string), the raw tier string exactly as the agent stored it, where it was
-read (`~/.claude.json` → `oauthAccount.organizationRateLimitTier`, or the
-`chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`, decoded
-locally without any network call), the instant it was read, and the
-subscription end when the agent recorded one. Nothing else from those files is
+`claude_max_20x`, `claude_team` or `chatgpt_pro` (`unknown` when the CLI does
+not recognize the string), the raw tier string exactly as the agent stored it,
+where it was read (`~/.claude.json` → `oauthAccount.organizationRateLimitTier`,
+or `oauthAccount.organizationType` for a Team or Enterprise organization, or
+the `chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`, decoded
+locally without any network call), the instant it was read, and the UTC day
+the subscription runs to when the agent recorded one. Nothing else from those files is
 read into the fact: no token, email, name, account id, organization name or
 uuid. A missing or unreadable file yields no fact. The preview names the tiers
-included. If the Workspace refuses a batch that carries tier facts as invalid
-(a deployment that does not accept them yet), the CLI re-signs the same
-session facts without the tier facts, sends them once more and says so. Set
-`AIBILL_NO_PLAN_TIER=1` to leave plan tiers out of every push; Workspace then
-costs those sessions at a tier the owner types by hand.
+included. Tier facts are sent only after this Workspace has announced, in the
+receipt of an accepted push, that it accepts them (`workspace status` shows
+whether it has); the first push after that announcement carries none and the
+next one does. While a batch is pending, `~/.aibill/workspace-device.json`
+retains the exact signed envelope, tier facts (those seven fields) included,
+until the Workspace accepts it. Set `AIBILL_NO_PLAN_TIER=1` to leave plan
+tiers out of every push; if a retained batch carries them when the opt-out is
+set, the CLI rebuilds that batch without them under the same sequence with a
+fresh nonce, re-signs it and says so before sending. Workspace then costs those
+sessions at a tier the owner types by hand.
 
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local

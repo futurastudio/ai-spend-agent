@@ -51,22 +51,27 @@ historical untagged exception.
   `claude_enterprise`, `chatgpt_plus`, `chatgpt_pro`, `chatgpt_business`,
   `chatgpt_enterprise`, or `unknown` with the raw string kept), the raw tier
   string, where it was read (`~/.claude.json` →
-  `oauthAccount.organizationRateLimitTier`; the `chatgpt_plan_type` claim of
-  the id token in `~/.codex/auth.json`, whose payload is decoded locally
-  without verification or network), when, and the subscription end Codex
-  records. No token, email, name, account id, organization name or uuid is
-  read into the fact, cached or sent; a missing or unreadable file, a
-  malformed token or an unexpected shape yields no fact and no error, and an
-  API-key Codex sign-in has no tier. The push preview names the tiers
-  included; plan facts never travel without session facts and are not
-  counted against the retained fact keys. A Workspace that refuses a batch
-  carrying plan facts as invalid gets the same session facts once more,
-  re-signed without them, and the CLI says so. `AIBILL_NO_PLAN_TIER=1` leaves
-  them out. Core gains `readAgentPlanFacts`, the tier normalizers and two
-  gated synthetic fixtures (`claude-code-plan-v1`, `codex-plan-v1`); the
-  Codex fixture keeps its synthetic id token as decoded parts that tests
-  assemble, so no token-shaped string is committed, and the fixture check
-  pins those parts claim by claim.
+  `oauthAccount.organizationRateLimitTier`, or `oauthAccount.organizationType`
+  when that names a Team or Enterprise organization rather than a consumer
+  plan; the `chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`,
+  whose payload is decoded locally without verification or network), when,
+  and the UTC day the subscription runs to when Codex records one. No token,
+  email, name, account id, organization name or uuid is read into the fact,
+  cached or sent; a missing or unreadable file, a malformed token or an
+  unexpected shape yields no fact and no error, and an API-key Codex sign-in
+  has no tier. The fact is sent only once the Workspace has announced, in an
+  accepted push's receipt, that it accepts it (`capabilities.agentPlanFacts`,
+  kept in the private pairing state), so the first push after that upgrade
+  carries none and the next one does; `workspace status` shows which. The
+  push preview names the tiers included; plan facts never travel without
+  session facts and are not counted against the retained fact keys.
+  `AIBILL_NO_PLAN_TIER=1` leaves them out and, when a retained batch carries
+  them, rebuilds that batch without them under the same sequence with a
+  fresh nonce before it is sent again. Core gains `readAgentPlanFacts`, the
+  tier normalizers and two gated synthetic fixtures (`claude-code-plan-v1`,
+  `codex-plan-v1`); the Codex fixture keeps its synthetic id token as decoded
+  parts that tests assemble, so no token-shaped string is committed, and the
+  fixture check pins those parts claim by claim.
 
 ## 0.9.15 (unreleased)
 
