@@ -268,6 +268,8 @@ describe("parseClaudeCodeTranscript", () => {
       [7, "2026-06-08T10:00:00.000Z"]
     ]);
     expect(diagnostics).toEqual([]);
+  });
+
   it("fails closed on iteration lists it does not recognise", () => {
     const diagnostics: Array<{ code: string; count: number }> = [];
     // A contradictory top-level split, so only a recognised served iteration
