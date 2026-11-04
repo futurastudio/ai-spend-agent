@@ -1,63 +1,71 @@
 import { createHash } from "node:crypto";
-import {
-  closeSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync
-} from "node:fs";
+import { closeSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   createClaudeCodeUsageTally,
   tallyClaudeCodeTranscriptLines,
   type ClaudeCodeUsageTally,
   type ClaudeCodeUsageTallyLine
 } from "@agent-finops/core";
+import {
+  guardCacheDirectory,
+  guardRepositoryKey,
+  listTranscripts,
+  writePrivateJson,
+  type GuardPathOptions,
+  type TranscriptFile,
+  type TranscriptListing
+} from "./guardStamp.js";
 import { resolveRepositoryRoot } from "./repositoryRoot.js";
 
 /**
  * Today's Claude Code usage for one repository, read from the local
  * transcripts under ~/.claude/projects and nothing else: no network, no
- * provider call. `aibill guard check` runs on every prompt and tool call, so
- * the work per run is bounded by the bytes transcripts gained since the last
- * run: a private cache keeps, per transcript file, the byte offset already
- * folded in and the kept-line tally (`tallyClaudeCodeTranscriptLines`), and a
- * warm run re-reads only the appended tail of the active session.
+ * provider call. The hook runs on every prompt (and every tool call when a
+ * policy opts in), so the work per run is bounded by the bytes transcripts
+ * gained since the last run: a private cache keeps, per transcript file, the
+ * byte offset already folded in, probes of the consumed bytes that prove the
+ * file was not rewritten underneath, and the kept-line tally
+ * (`tallyClaudeCodeTranscriptLines`). A warm run re-reads only the appended
+ * tail of the active session.
  *
  * Attribution is per repository, never per person: a line counts when the
  * checkout its recorded cwd belongs to (the main checkout for a linked
  * worktree) is the repository asked about. Lines whose token shape the parser
- * does not support contribute only the components present, so the total is a
- * lower bound and a block on it is never an overstatement.
+ * does not support contribute only the components present, so every total is
+ * a lower bound and a block on it is never an overstatement.
  */
 
-export const GUARD_USAGE_CACHE_DIRECTORY_NAME = "guard-usage-v1";
 export const GUARD_USAGE_CACHE_KIND = "aibill.guard_usage_cache";
 const CACHE_MAX_BYTES = 32 * 1_024 * 1_024;
 const READ_CHUNK_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_READ_BUDGET_BYTES = 256 * 1_024 * 1_024;
-const MAX_WALK_DEPTH = 8;
+/** Bytes hashed at the start and at the end of the consumed prefix. */
+const PROBE_BYTES = 64 * 1_024;
 const DAY_MS = 24 * 60 * 60 * 1_000;
+/** Kept lines older than this (from the day start) can no longer change a verdict. */
+const RETAIN_LINES_MS = DAY_MS;
+/** Cache rewrite throttle: skip a rewrite this soon after the last one... */
+const PERSIST_INTERVAL_MS = 60 * 1_000;
+/** ...unless this many new bytes were folded in or a budget is this close. */
+const PERSIST_BYTES = 1_024 * 1_024;
+const PERSIST_MARGIN = 0.8;
 
-export type GuardUsageOptions = {
+export type GuardBudget = { tokens?: number; outputTokens?: number; sessions?: number };
+
+export type GuardUsageOptions = GuardPathOptions & {
   /** The checkout the policy belongs to, as `resolveRepositoryRoot` returns it. */
   repositoryRoot: string;
   now?: Date;
   /** Default: ~/.claude/projects (the CLI passes AI_SPEND_CLAUDE_LOGS_DIR when set). */
   claudeProjectsDir?: string;
-  /** Default: AIBILL_CACHE_DIR, else ~/.aibill/cache. */
-  cacheDirectory?: string;
-  homeDirectory?: string;
+  /** A listing the caller already took for today's window, to avoid a second walk. */
+  listing?: TranscriptListing;
   /** New transcript bytes one run may read before deferring the rest to the next run. */
   readBudgetBytes?: number;
+  /** The daily budget, so a run far from it can skip rewriting the cache. */
+  budget?: GuardBudget;
   resolveRepositoryRoot?: typeof resolveRepositoryRoot;
 };
 
@@ -68,19 +76,24 @@ export type GuardUsageResult = {
   dayEndMs: number;
   /** Input + output + cache read + cache write tokens of the day's attributed calls. */
   tokens: number;
+  /** Output tokens of the same calls. */
+  outputTokens: number;
   /** Distinct session ids with an attributed call today. Internal: never printed. */
   sessionIds: string[];
   calls: number;
-  /** Calls whose token shape was unsupported; `tokens` is then a lower bound. */
+  /** Calls whose token shape was unsupported; the token figures are then lower bounds. */
   incompleteCalls: number;
   transcripts: "readable" | "missing" | "unreadable";
+  /** Changes whenever a transcript touched today grows, is rewritten, appears or disappears. */
+  signature: string;
   filesConsidered: number;
   filesRead: number;
   filesUnreadable: number;
   bytesRead: number;
   /** False when the read budget ran out before every changed transcript was folded in. */
   complete: boolean;
-  cache: "hit" | "updated" | "unavailable";
+  /** `deferred`: nothing worth a rewrite yet (far from the budget, few new bytes). */
+  cache: "hit" | "updated" | "deferred" | "unavailable";
   durationMs: number;
 };
 
@@ -93,7 +106,13 @@ type PersistedTally = Omit<ClaudeCodeUsageTally, "responses"> & {
 type CachedFile = {
   size: number;
   mtimeMs: number;
+  dev: number;
+  ino: number;
   offset: number;
+  /** sha256 of the first min(PROBE_BYTES, offset) consumed bytes. */
+  headSha256: string;
+  /** sha256 of the last min(PROBE_BYTES, offset) consumed bytes. */
+  tailSha256: string;
   tally: PersistedTally;
 };
 
@@ -101,16 +120,13 @@ type GuardUsageCache = {
   kind: typeof GUARD_USAGE_CACHE_KIND;
   version: 1;
   repositoryRoot: string;
+  writtenAt: string;
   files: Record<string, CachedFile>;
 };
 
 /** The private cache file for one repository (no transcript paths inside). */
-export function guardUsageCachePath(repositoryRoot: string, options: Pick<GuardUsageOptions, "cacheDirectory" | "homeDirectory"> = {}): string {
-  const configured = options.cacheDirectory?.trim() || process.env.AIBILL_CACHE_DIR?.trim();
-  const directory = configured && configured.length > 0
-    ? resolve(configured)
-    : join(options.homeDirectory ?? homedir(), ".aibill", "cache");
-  return join(directory, GUARD_USAGE_CACHE_DIRECTORY_NAME, `${digest(repositoryRoot).slice(0, 32)}.json`);
+export function guardUsageCachePath(repositoryRoot: string, options: GuardPathOptions = {}): string {
+  return join(guardCacheDirectory(options), `${guardRepositoryKey(repositoryRoot)}.json`);
 }
 
 export function utcDayWindow(now: Date): { dayKey: string; dayStartMs: number; dayEndMs: number } {
@@ -134,10 +150,12 @@ export async function computeGuardUsage(options: GuardUsageOptions): Promise<Gua
     dayStartMs,
     dayEndMs,
     tokens: 0,
+    outputTokens: 0,
     sessionIds: [],
     calls: 0,
     incompleteCalls: 0,
     transcripts: "readable",
+    signature: "",
     filesConsidered: 0,
     filesRead: 0,
     filesUnreadable: 0,
@@ -147,7 +165,8 @@ export async function computeGuardUsage(options: GuardUsageOptions): Promise<Gua
     durationMs: 0
   };
 
-  const listing = listTranscriptFiles(projectsDir);
+  const listing = options.listing ?? listTranscripts(projectsDir, dayStartMs);
+  result.signature = listing.signature;
   if (listing.status !== "readable") {
     result.transcripts = listing.status;
     result.durationMs = Date.now() - startedAt;
@@ -155,34 +174,32 @@ export async function computeGuardUsage(options: GuardUsageOptions): Promise<Gua
   }
 
   const cache = readCache(cachePath, repositoryRoot);
-  const next: GuardUsageCache = { kind: GUARD_USAGE_CACHE_KIND, version: 1, repositoryRoot, files: {} };
-  let changed = false;
+  const next: GuardUsageCache = {
+    kind: GUARD_USAGE_CACHE_KIND,
+    version: 1,
+    repositoryRoot,
+    writtenAt: cache?.writtenAt ?? new Date(0).toISOString(),
+    files: {}
+  };
+  let structureChanged = false;
 
   for (const file of listing.files) {
-    let stat;
-    try {
-      stat = lstatSync(file);
-    } catch {
-      result.filesUnreadable += 1;
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    const key = digest(file).slice(0, 32);
-    const cached = cache?.files[key];
-    const recency = Math.max(stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs);
-    if (!Number.isFinite(recency) || recency < dayStartMs) {
-      // Nothing was written to this transcript today; a cached tally for it
-      // can only hold earlier days and is dropped.
-      if (cached) changed = true;
-      continue;
-    }
     result.filesConsidered += 1;
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    const key = guardRepositoryKey(file.path);
+    const cached = cache?.files[key];
+    if (cached && unchanged(cached, file)) {
       next.files[key] = cached;
       continue;
     }
-    const resume = cached && stat.size >= cached.offset ? cached : undefined;
-    const pending = stat.size - (resume?.offset ?? 0);
+    let resume: CachedFile | undefined;
+    try {
+      resume = cached && resumable(cached, file) ? cached : undefined;
+    } catch {
+      result.filesUnreadable += 1;
+      if (cached) next.files[key] = cached;
+      continue;
+    }
+    const pending = file.size - (resume?.offset ?? 0);
     if (result.bytesRead > 0 && result.bytesRead + pending > readBudget) {
       // Defer the rest to the next run rather than risk the hook's timeout;
       // the caller sees `complete: false` and lets the developer continue.
@@ -191,34 +208,127 @@ export async function computeGuardUsage(options: GuardUsageOptions): Promise<Gua
       continue;
     }
     const tally: PersistedTally = resume ? resume.tally : createClaudeCodeUsageTally();
-    let consumed: { offset: number; bytes: number };
+    let folded: FoldResult;
     try {
-      consumed = foldAppendedLines(file, resume?.offset ?? 0, stat.size, tally);
+      folded = foldAppendedLines(file.path, resume?.offset ?? 0, file.size, tally, resume);
     } catch {
       result.filesUnreadable += 1;
       if (cached) next.files[key] = cached;
       continue;
     }
-    attribution.apply(tally, dayStartMs);
+    attribution.apply(tally, dayStartMs - RETAIN_LINES_MS);
     result.filesRead += 1;
-    result.bytesRead += consumed.bytes;
-    changed = true;
-    next.files[key] = { size: stat.size, mtimeMs: stat.mtimeMs, offset: consumed.offset, tally };
+    result.bytesRead += folded.bytes;
+    structureChanged = true;
+    next.files[key] = {
+      size: file.size,
+      mtimeMs: file.mtimeMs,
+      dev: file.dev,
+      ino: file.ino,
+      offset: folded.offset,
+      headSha256: folded.headSha256,
+      tailSha256: folded.tailSha256,
+      tally
+    };
   }
-  if (cache && Object.keys(cache.files).some((key) => !(key in next.files))) changed = true;
+  if (cache && Object.keys(cache.files).some((key) => !(key in next.files))) structureChanged = true;
 
   aggregate(next, dayStartMs, dayEndMs, result);
-  if (changed || !cache) {
-    result.cache = writeCache(cachePath, next) ? "updated" : "unavailable";
+  if (!cache || structureChanged) {
+    if (shouldPersist(cache, result, options.budget, now)) {
+      next.writtenAt = now.toISOString();
+      result.cache = writePrivateJson(cachePath, next) ? "updated" : "unavailable";
+    } else {
+      result.cache = "deferred";
+    }
   }
   result.durationMs = Date.now() - startedAt;
   return result;
 }
 
+function unchanged(cached: CachedFile, file: TranscriptFile): boolean {
+  return cached.size === file.size && cached.mtimeMs === file.mtimeMs &&
+    cached.dev === file.dev && cached.ino === file.ino;
+}
+
+/**
+ * Resume proof: same inode, monotonic size, and the consumed prefix still
+ * reads the same at its head and tail. A rewritten file of the same or larger
+ * size fails the probe and is read from byte zero again. Throws when the file
+ * cannot be read.
+ */
+function resumable(cached: CachedFile, file: TranscriptFile): boolean {
+  if (cached.dev !== file.dev || cached.ino !== file.ino) return false;
+  if (file.size < cached.offset) return false;
+  if (cached.offset === 0) return true;
+  const probes = probeConsumedPrefix(file.path, cached.offset);
+  return probes.headSha256 === cached.headSha256 && probes.tailSha256 === cached.tailSha256;
+}
+
+type FoldResult = { offset: number; bytes: number; headSha256: string; tailSha256: string };
+
+/**
+ * Read the complete lines a transcript gained since `offset` and fold them
+ * into the tally. A trailing partial line stays unread; its bytes are folded
+ * in by the run that sees the file change again. Returns the new offset and
+ * the probes of the consumed prefix.
+ */
+function foldAppendedLines(
+  path: string,
+  offset: number,
+  size: number,
+  tally: PersistedTally,
+  resume: CachedFile | undefined
+): FoldResult {
+  const descriptor = openSync(path, "r");
+  try {
+    const appended = readRange(descriptor, offset, size);
+    const lastNewline = appended.lastIndexOf(0x0a);
+    const consumed = lastNewline < 0 ? 0 : lastNewline + 1;
+    if (consumed > 0) tallyClaudeCodeTranscriptLines(appended.subarray(0, consumed).toString("utf8"), tally);
+    const nextOffset = offset + consumed;
+    if (nextOffset === 0) return { offset: 0, bytes: 0, headSha256: "", tailSha256: "" };
+    // Head: unchanged by appends once the first PROBE_BYTES are consumed, so
+    // the cached value stands; otherwise hash what is on disk now.
+    const headSha256 = resume && resume.offset >= PROBE_BYTES
+      ? resume.headSha256
+      : sha256(readRange(descriptor, 0, Math.min(PROBE_BYTES, nextOffset)));
+    const tailStart = Math.max(0, nextOffset - PROBE_BYTES);
+    const tailSha256 = sha256(readRange(descriptor, tailStart, nextOffset));
+    return { offset: nextOffset, bytes: consumed, headSha256, tailSha256 };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function probeConsumedPrefix(path: string, offset: number): { headSha256: string; tailSha256: string } {
+  const descriptor = openSync(path, "r");
+  try {
+    const head = readRange(descriptor, 0, Math.min(PROBE_BYTES, offset));
+    const tail = readRange(descriptor, Math.max(0, offset - PROBE_BYTES), offset);
+    return { headSha256: sha256(head), tailSha256: sha256(tail) };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readRange(descriptor: number, start: number, end: number): Buffer {
+  const chunks: Buffer[] = [];
+  let position = start;
+  while (position < end) {
+    const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - position));
+    const read = readSync(descriptor, chunk, 0, chunk.length, position);
+    if (read <= 0) break;
+    chunks.push(read === chunk.length ? chunk : chunk.subarray(0, read));
+    position += read;
+  }
+  return chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks);
+}
+
 function aggregate(cache: GuardUsageCache, dayStartMs: number, dayEndMs: number, result: GuardUsageResult): void {
   // One native response can appear in two files (a sub-agent transcript opens
-  // with the parent turn it was forked from); the first file in path order
-  // keeps it. Lines without a native identity are per file.
+  // with the parent turn it was forked from); the first file in cache-key
+  // order keeps it. Lines without a native identity are per file.
   const seen = new Set<string>();
   const sessions = new Set<string>();
   for (const [fileKey, file] of Object.entries(cache.files).sort(([left], [right]) => left.localeCompare(right))) {
@@ -229,8 +339,13 @@ function aggregate(cache: GuardUsageCache, dayStartMs: number, dayEndMs: number,
       if (!line.attributed) continue;
       const at = Date.parse(line.timestamp);
       if (!Number.isFinite(at) || at < dayStartMs || at >= dayEndMs) continue;
+      // A zeroed copy Claude Code writes after a response's final line carries
+      // no work of its own; when it is the only line kept for a response (its
+      // final line fell outside today), it must not conjure a call or session.
+      if (line.tokens === 0 && line.outputTokens <= 0) continue;
       result.calls += 1;
       result.tokens += line.tokens;
+      result.outputTokens += Math.max(0, line.outputTokens);
       if (!line.complete) result.incompleteCalls += 1;
       if (line.sessionId) sessions.add(line.sessionId);
     }
@@ -239,37 +354,19 @@ function aggregate(cache: GuardUsageCache, dayStartMs: number, dayEndMs: number,
 }
 
 /**
- * Read the complete lines a transcript gained since `offset` and fold them
- * into the tally. A trailing partial line stays unread; its bytes are folded
- * in by the run that sees the file change again.
+ * A rewrite costs a few milliseconds, but a run far from every budget with
+ * few new bytes gains nothing from it: the next run folds the same tail in
+ * again. Close to a budget, or once enough new bytes accumulated, persist.
  */
-function foldAppendedLines(
-  file: string,
-  offset: number,
-  size: number,
-  tally: PersistedTally
-): { offset: number; bytes: number } {
-  if (size <= offset) return { offset, bytes: 0 };
-  const descriptor = openSync(file, "r");
-  try {
-    const chunks: Buffer[] = [];
-    let position = offset;
-    while (position < size) {
-      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, size - position));
-      const read = readSync(descriptor, chunk, 0, chunk.length, position);
-      if (read <= 0) break;
-      chunks.push(read === chunk.length ? chunk : chunk.subarray(0, read));
-      position += read;
-    }
-    const appended = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks);
-    const lastNewline = appended.lastIndexOf(0x0a);
-    if (lastNewline < 0) return { offset, bytes: 0 };
-    const complete = appended.subarray(0, lastNewline + 1);
-    tallyClaudeCodeTranscriptLines(complete.toString("utf8"), tally);
-    return { offset: offset + lastNewline + 1, bytes: lastNewline + 1 };
-  } finally {
-    closeSync(descriptor);
-  }
+function shouldPersist(cache: GuardUsageCache | undefined, result: GuardUsageResult, budget: GuardBudget | undefined, now: Date): boolean {
+  if (!cache || !budget || !result.complete) return true;
+  if (result.bytesRead >= PERSIST_BYTES) return true;
+  const writtenAt = Date.parse(cache.writtenAt);
+  if (!Number.isFinite(writtenAt) || now.getTime() - writtenAt >= PERSIST_INTERVAL_MS) return true;
+  const close = (used: number, limit: number | undefined) => limit !== undefined && used >= limit * PERSIST_MARGIN;
+  return close(result.tokens, budget.tokens) ||
+    close(result.outputTokens, budget.outputTokens) ||
+    close(result.sessionIds.length, budget.sessions);
 }
 
 function createAttribution(repositoryRoot: string, findRoot: typeof resolveRepositoryRoot) {
@@ -291,10 +388,11 @@ function createAttribution(repositoryRoot: string, findRoot: typeof resolveRepos
   return {
     /**
      * Resolve attribution for lines the reducer just (re)wrote, drop their raw
-     * cwd so no transcript path persists, and prune lines that cannot belong to
-     * today.
+     * cwd so no transcript path persists, and prune lines too old to matter.
+     * Yesterday's lines are kept one more day so a copy written after midnight
+     * still meets the final line it must not outrank.
      */
-    apply(tally: PersistedTally, dayStartMs: number): void {
+    apply(tally: PersistedTally, retainFromMs: number): void {
       for (const [key, line] of Object.entries(tally.responses)) {
         if (line.workingDirectory !== undefined) {
           line.attributed = belongs(line.workingDirectory);
@@ -303,7 +401,7 @@ function createAttribution(repositoryRoot: string, findRoot: typeof resolveRepos
           line.attributed = false;
         }
         const at = Date.parse(line.timestamp);
-        if (!Number.isFinite(at) || at < dayStartMs) delete tally.responses[key];
+        if (!Number.isFinite(at) || at < retainFromMs) delete tally.responses[key];
       }
     }
   };
@@ -315,39 +413,6 @@ function canonical(path: string): string {
   } catch {
     return resolve(path);
   }
-}
-
-function listTranscriptFiles(root: string): { status: "readable"; files: string[] } | { status: "missing" | "unreadable"; files: [] } {
-  try {
-    const info = statSync(root);
-    if (!info.isDirectory()) return { status: "unreadable", files: [] };
-  } catch (error) {
-    return { status: isCode(error, "ENOENT") ? "missing" : "unreadable", files: [] };
-  }
-  const files: string[] = [];
-  const walk = (directory: string, depth: number): void => {
-    if (depth > MAX_WALK_DEPTH) return;
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue;
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) walk(path, depth + 1);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(path);
-    }
-  };
-  try {
-    readdirSync(root);
-  } catch {
-    return { status: "unreadable", files: [] };
-  }
-  walk(root, 0);
-  files.sort();
-  return { status: "readable", files };
 }
 
 function readCache(path: string, repositoryRoot: string): GuardUsageCache | undefined {
@@ -367,17 +432,20 @@ function readCache(path: string, repositoryRoot: string): GuardUsageCache | unde
   }
   if (!isRecord(value) || value.kind !== GUARD_USAGE_CACHE_KIND || value.version !== 1) return undefined;
   if (value.repositoryRoot !== repositoryRoot || !isRecord(value.files)) return undefined;
+  if (typeof value.writtenAt !== "string") return undefined;
   const files: Record<string, CachedFile> = {};
   for (const [key, entry] of Object.entries(value.files)) {
     if (!isCachedFile(entry)) return undefined;
     files[key] = entry;
   }
-  return { kind: GUARD_USAGE_CACHE_KIND, version: 1, repositoryRoot, files };
+  return { kind: GUARD_USAGE_CACHE_KIND, version: 1, repositoryRoot, writtenAt: value.writtenAt, files };
 }
 
 function isCachedFile(value: unknown): value is CachedFile {
   if (!isRecord(value)) return false;
   if (!isCount(value.size) || typeof value.mtimeMs !== "number" || !isCount(value.offset)) return false;
+  if (typeof value.dev !== "number" || typeof value.ino !== "number") return false;
+  if (typeof value.headSha256 !== "string" || typeof value.tailSha256 !== "string") return false;
   if (value.offset > value.size) return false;
   const tally = value.tally;
   if (!isRecord(tally) || tally.version !== 1 || !isRecord(tally.responses)) return false;
@@ -397,25 +465,7 @@ function isPersistedLine(value: unknown): value is PersistedLine {
     value.workingDirectory === undefined;
 }
 
-function writeCache(path: string, cache: GuardUsageCache): boolean {
-  const directory = dirname(path);
-  const temporary = `${path}.${process.pid}.${Date.now().toString(36)}.tmp`;
-  try {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(temporary, `${JSON.stringify(cache)}\n`, { mode: 0o600 });
-    renameSync(temporary, path);
-    return true;
-  } catch {
-    try {
-      unlinkSync(temporary);
-    } catch {
-      // Nothing to clean up.
-    }
-    return false;
-  }
-}
-
-function digest(value: string): string {
+function sha256(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -425,8 +475,4 @@ function isCount(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isCode(error: unknown, code: string): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }

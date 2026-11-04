@@ -2,20 +2,22 @@ import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises
 import { platform as hostPlatform } from "node:os";
 import { dirname, join } from "node:path";
 import type { AibillPolicy } from "@agent-finops/core";
+import { resolveGuardHookPackage, type GuardHookPackage } from "./guardStamp.js";
 import { resolveStatuslinePaths, type StatuslinePlatform } from "./statuslineInstaller.js";
 
 /**
- * What `aibill guard install` writes into a repository, and how it is read
- * back and removed. Two files, both meant to be committed next to
+ * What `aibill guard install` writes into a checkout, and how it is read back
+ * and removed. Two files, both meant to be committed next to
  * `.aibill/policy.json`:
  *
  *  - `.claude/settings.json` (Claude Code shared project settings): the
  *    policy's `models.allow` as `availableModels`, and one command hook on
- *    `UserPromptSubmit` and on `PreToolUse` that runs the launcher below.
- *    Every other key in the file is left as it was.
- *  - `.aibill/guard-hook.mjs`: a launcher that finds the `ai-spend-agent`
- *    package installed for the repository and runs its hook entry, or exits 0
- *    with a one-line warning when the package is missing. A committed hook
+ *    `UserPromptSubmit`, plus one on `PreToolUse` when the policy (or the
+ *    `--per-tool-call` flag) opts in. Every other key in the file is left as
+ *    it was.
+ *  - `.aibill/guard-hook.mjs`: a launcher that runs the hook entry of the
+ *    `ai-spend-agent` package the checkout declares (or the global install),
+ *    or exits 0 with a one-line warning when none is found. A committed hook
  *    cannot carry a machine path, and `npx` would add network and ~200 ms to
  *    every prompt; the launcher keeps the hook portable and fast.
  *
@@ -24,12 +26,16 @@ import { resolveStatuslinePaths, type StatuslinePlatform } from "./statuslineIns
  */
 
 export const GUARD_LAUNCHER_RELATIVE_PATH = ".aibill/guard-hook.mjs";
-export const GUARD_LAUNCHER_VERSION = 1;
+export const GUARD_LAUNCHER_VERSION = 2;
+/** Every event the guard may own; uninstall strips all of them. */
 export const GUARD_HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse"] as const;
 export const GUARD_HOOK_TIMEOUT_SECONDS = 10;
 /** Shell form: Claude Code expands ${CLAUDE_PROJECT_DIR}; the quotes keep spaces in paths intact. */
 export const GUARD_HOOK_COMMAND = 'node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"';
-/** Managed settings reach every repository, so the hook runs only where a launcher is committed. */
+/**
+ * Managed settings reach every repository, so the hook runs only where a
+ * launcher is committed. POSIX shell only (`sh -c`, Git Bash on Windows).
+ */
 export const GUARD_MANAGED_HOOK_COMMAND =
   'if [ -f "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs" ]; then node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"; fi';
 const LAUNCHER_MARKER = "aibill guard hook launcher";
@@ -57,27 +63,37 @@ export class GuardSettingsError extends Error {
   }
 }
 
+export type GuardInstallOptions = {
+  /** `--per-tool-call`: the same as `perToolCall: true` in the policy. */
+  perToolCall?: boolean;
+};
+
+/** The events a policy installs hooks on. */
+export function guardHookEvents(policy: AibillPolicy, options: GuardInstallOptions = {}): GuardHookEvent[] {
+  return policy.perToolCall || options.perToolCall ? ["UserPromptSubmit", "PreToolUse"] : ["UserPromptSubmit"];
+}
+
 export function buildGuardHookHandler(command: string = GUARD_HOOK_COMMAND): GuardHookHandler {
   return { type: "command", command, timeout: GUARD_HOOK_TIMEOUT_SECONDS };
 }
 
 /** The exact settings fragment project scope receives for a policy. */
-export function guardProjectSettingsFragment(policy: AibillPolicy): JsonObject {
+export function guardProjectSettingsFragment(policy: AibillPolicy, options: GuardInstallOptions = {}): JsonObject {
   const fragment: JsonObject = {};
   if (policy.models?.allow) fragment.availableModels = uniqueModels(policy.models.allow);
   fragment.hooks = Object.fromEntries(
-    GUARD_HOOK_EVENTS.map((event) => [event, [{ hooks: [buildGuardHookHandler()] }]])
+    guardHookEvents(policy, options).map((event) => [event, [{ hooks: [buildGuardHookHandler()] }]])
   );
   return fragment;
 }
 
 /** The managed-settings document an organization deploys to enforce the same policy. */
-export function guardManagedSettingsSnippet(policy: AibillPolicy): JsonObject {
+export function guardManagedSettingsSnippet(policy: AibillPolicy, options: GuardInstallOptions = {}): JsonObject {
   const snippet: JsonObject = {};
   if (policy.models?.allow) snippet.availableModels = uniqueModels(policy.models.allow);
   if (policy.models?.deny) snippet.deniedModels = uniqueModels(policy.models.deny);
   snippet.hooks = Object.fromEntries(
-    GUARD_HOOK_EVENTS.map((event) => [event, [{ hooks: [buildGuardHookHandler(GUARD_MANAGED_HOOK_COMMAND)] }]])
+    guardHookEvents(policy, options).map((event) => [event, [{ hooks: [buildGuardHookHandler(GUARD_MANAGED_HOOK_COMMAND)] }]])
   );
   return snippet;
 }
@@ -91,35 +107,49 @@ export function isGuardHookHandler(value: unknown): value is GuardHookHandler {
 
 /**
  * Merge the policy into existing project settings: `availableModels` follows
- * the policy, earlier guard hook handlers are replaced by the current one,
- * and every other key, hook group and handler is kept byte-for-byte in
- * meaning. Returns the next document and the human-readable changes.
+ * the policy; on each event the policy enables, the guard handler is updated
+ * where it already sits or appended once when absent; on an event the policy
+ * does not enable, an earlier guard handler is removed. Every other key, hook
+ * group and handler keeps its place. Returns the next document and the
+ * human-readable changes.
  */
-export function mergeGuardSettings(existing: JsonObject, policy: AibillPolicy): { next: JsonObject; changes: string[] } {
+export function mergeGuardSettings(
+  existing: JsonObject,
+  policy: AibillPolicy,
+  options: GuardInstallOptions = {}
+): { next: JsonObject; changes: string[] } {
   const next: JsonObject = cloneJson(existing);
   const changes: string[] = [];
   const allow = policy.models?.allow ? uniqueModels(policy.models.allow) : undefined;
-  if (allow) {
-    if (!sameJson(next.availableModels, allow)) {
-      changes.push(next.availableModels === undefined
-        ? `availableModels: set to ${allow.join(", ")}`
-        : `availableModels: replaced with ${allow.join(", ")}`);
-      next.availableModels = allow;
-    }
+  if (allow && !sameJson(next.availableModels, allow)) {
+    changes.push(next.availableModels === undefined
+      ? `availableModels: set to ${allow.join(", ")}`
+      : `availableModels: replaced with ${allow.join(", ")}`);
+    next.availableModels = allow;
   }
+  const enabled = new Set<GuardHookEvent>(guardHookEvents(policy, options));
   const hooks: JsonObject = isObject(next.hooks) ? next.hooks : {};
   if (!isObject(next.hooks) && next.hooks !== undefined) changes.push("hooks: replaced a non-object value");
   for (const event of GUARD_HOOK_EVENTS) {
-    const groups = Array.isArray(hooks[event]) ? [...hooks[event] as unknown[]] : [];
+    const groups = Array.isArray(hooks[event]) ? hooks[event] as unknown[] : [];
     if (hooks[event] !== undefined && !Array.isArray(hooks[event])) changes.push(`hooks.${event}: replaced a non-array value`);
-    const stripped = stripGuardHandlers(groups);
-    const nextGroups = [...stripped.kept, { hooks: [buildGuardHookHandler()] }];
-    if (!sameJson(groups, nextGroups)) {
-      changes.push(stripped.removed > 0 ? `hooks.${event}: guard hook updated` : `hooks.${event}: guard hook added`);
+    if (enabled.has(event)) {
+      const placed = placeGuardHandler(groups);
+      if (!sameJson(groups, placed.groups)) {
+        changes.push(placed.replaced ? `hooks.${event}: guard hook updated` : `hooks.${event}: guard hook added`);
+      }
+      hooks[event] = placed.groups;
+    } else {
+      const stripped = stripGuardHandlers(groups);
+      if (stripped.removed > 0) {
+        changes.push(`hooks.${event}: guard hook removed (not enabled by the policy)`);
+        if (stripped.kept.length > 0) hooks[event] = stripped.kept;
+        else delete hooks[event];
+      }
     }
-    hooks[event] = nextGroups;
   }
-  next.hooks = hooks;
+  if (Object.keys(hooks).length > 0 || next.hooks !== undefined) next.hooks = hooks;
+  if (isObject(next.hooks) && Object.keys(next.hooks).length === 0) delete next.hooks;
   return { next, changes };
 }
 
@@ -158,6 +188,41 @@ export function removeGuardSettings(existing: JsonObject, policy: AibillPolicy |
   return { next, changes, kept };
 }
 
+/**
+ * Exactly one current guard handler, where an earlier one already sits (the
+ * first group that holds one keeps it in place; later copies go), else as a
+ * new last group. Rerunning install therefore never moves a group a
+ * developer reordered.
+ */
+function placeGuardHandler(groups: readonly unknown[]): { groups: unknown[]; replaced: boolean } {
+  const desired = buildGuardHookHandler();
+  const result: unknown[] = [];
+  let placed = false;
+  for (const group of groups) {
+    if (!isObject(group) || !Array.isArray(group.hooks)) {
+      result.push(group);
+      continue;
+    }
+    const handlers: unknown[] = [];
+    let touched = false;
+    for (const handler of group.hooks) {
+      if (!isGuardHookHandler(handler)) {
+        handlers.push(handler);
+        continue;
+      }
+      touched = true;
+      if (!placed) {
+        handlers.push(desired);
+        placed = true;
+      }
+    }
+    if (!touched) result.push(group);
+    else if (handlers.length > 0) result.push({ ...group, hooks: handlers });
+  }
+  if (!placed) result.push({ hooks: [desired] });
+  return { groups: result, replaced: placed };
+}
+
 function stripGuardHandlers(groups: readonly unknown[]): { kept: unknown[]; removed: number } {
   const kept: unknown[] = [];
   let removed = 0;
@@ -179,28 +244,43 @@ function stripGuardHandlers(groups: readonly unknown[]): { kept: unknown[]; remo
   return { kept, removed };
 }
 
-/** The committed launcher. Plain ESM; no dependency on the aibill version that wrote it. */
+/**
+ * The committed launcher. Plain ESM; no dependency on the aibill version that
+ * wrote it. Resolution mirrors `resolveGuardHookPackage`: the checkout's own
+ * `node_modules` only when its package.json declares `ai-spend-agent` or
+ * `aibill`, else the global install next to the running Node.
+ */
 export function buildGuardLauncherSource(): string {
   return [
     "#!/usr/bin/env node",
     `// ${LAUNCHER_MARKER} v${GUARD_LAUNCHER_VERSION}. Written by \`aibill guard install\`; \`aibill guard install --uninstall\` removes it.`,
-    "// Claude Code runs this on every prompt and tool call (see .claude/settings.json). It",
-    "// runs `aibill guard check` from the ai-spend-agent package installed for this repository",
-    "// and never blocks when that package is missing or fails to load.",
+    "// Claude Code runs this on every prompt (and every tool call when the policy opts in); see",
+    "// .claude/settings.json. It runs `aibill guard check` from the ai-spend-agent package this",
+    "// checkout declares in package.json, else from the global install, and never blocks when",
+    "// no package is found or the hook fails to load.",
+    'import { readFileSync } from "node:fs";',
     'import { createRequire } from "node:module";',
     'import { dirname, join } from "node:path";',
     'import { fileURLToPath, pathToFileURL } from "node:url";',
     "",
-    "const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));",
+    "const checkoutRoot = dirname(dirname(fileURLToPath(import.meta.url)));",
     "const globalRoot = process.platform === \"win32\"",
     '  ? join(dirname(process.execPath), "node_modules")',
     '  : join(dirname(dirname(process.execPath)), "lib", "node_modules");',
-    "const anchors = [",
-    '  join(repositoryRoot, "package.json"),',
-    '  join(process.cwd(), "package.json"),',
-    '  join(globalRoot, "package.json")',
-    "];",
     "",
+    "function declaresAibill() {",
+    "  try {",
+    '    const manifest = JSON.parse(readFileSync(join(checkoutRoot, "package.json"), "utf8"));',
+    '    return ["dependencies", "devDependencies", "optionalDependencies"].some((group) =>',
+    '      manifest[group] && ("ai-spend-agent" in manifest[group] || "aibill" in manifest[group]));',
+    "  } catch {",
+    "    return false;",
+    "  }",
+    "}",
+    "",
+    "const anchors = [];",
+    'if (declaresAibill()) anchors.push(join(checkoutRoot, "package.json"));',
+    'anchors.push(join(globalRoot, "package.json"));',
     "let manifest;",
     "for (const anchor of anchors) {",
     "  try {",
@@ -211,7 +291,7 @@ export function buildGuardLauncherSource(): string {
     "  }",
     "}",
     "if (!manifest) {",
-    '  process.stderr.write("aibill guard: ai-spend-agent is not installed for this repository, so its policy was not checked. Install it with: npm install --save-dev aibill\\n");',
+    '  process.stderr.write("aibill guard: no ai-spend-agent package for this checkout (declare aibill in package.json and npm install, or install it globally); policy not checked, not blocking.\\n");',
     "  process.exit(0);",
     "}",
     "try {",
@@ -230,19 +310,21 @@ export function isGuardLauncherSource(text: string): boolean {
 }
 
 export type GuardInstallResult = {
-  repositoryRoot: string;
+  checkoutRoot: string;
   settingsPath: string;
   launcherPath: string;
   settings: "created" | "updated" | "unchanged";
   launcher: "created" | "updated" | "unchanged";
+  events: GuardHookEvent[];
   changes: string[];
 };
 
-export async function installGuard(options: { repositoryRoot: string; policy: AibillPolicy }): Promise<GuardInstallResult> {
-  const settingsPath = join(options.repositoryRoot, ".claude", "settings.json");
-  const launcherPath = join(options.repositoryRoot, GUARD_LAUNCHER_RELATIVE_PATH);
+/** Writes into `checkoutRoot`, the directory Claude Code will load the settings from. */
+export async function installGuard(options: { checkoutRoot: string; policy: AibillPolicy } & GuardInstallOptions): Promise<GuardInstallResult> {
+  const settingsPath = join(options.checkoutRoot, ".claude", "settings.json");
+  const launcherPath = join(options.checkoutRoot, GUARD_LAUNCHER_RELATIVE_PATH);
   const existing = await readProjectSettings(settingsPath);
-  const merged = mergeGuardSettings(existing.value, options.policy);
+  const merged = mergeGuardSettings(existing.value, options.policy, options);
   // Only a change in meaning rewrites the file, so a developer's formatting
   // survives an install that has nothing to add.
   const settings: GuardInstallResult["settings"] = !existing.exists
@@ -270,11 +352,19 @@ export async function installGuard(options: { repositoryRoot: string; policy: Ai
     await mkdir(dirname(launcherPath), { recursive: true });
     await writeFile(launcherPath, launcherSource, { encoding: "utf8", mode: 0o644 });
   }
-  return { repositoryRoot: options.repositoryRoot, settingsPath, launcherPath, settings, launcher, changes: merged.changes };
+  return {
+    checkoutRoot: options.checkoutRoot,
+    settingsPath,
+    launcherPath,
+    settings,
+    launcher,
+    events: guardHookEvents(options.policy, options),
+    changes: merged.changes
+  };
 }
 
 export type GuardUninstallResult = {
-  repositoryRoot: string;
+  checkoutRoot: string;
   settingsPath: string;
   launcherPath: string;
   settings: "removed" | "updated" | "unchanged" | "absent";
@@ -283,9 +373,9 @@ export type GuardUninstallResult = {
   kept: string[];
 };
 
-export async function uninstallGuard(options: { repositoryRoot: string; policy: AibillPolicy | undefined }): Promise<GuardUninstallResult> {
-  const settingsPath = join(options.repositoryRoot, ".claude", "settings.json");
-  const launcherPath = join(options.repositoryRoot, GUARD_LAUNCHER_RELATIVE_PATH);
+export async function uninstallGuard(options: { checkoutRoot: string; policy: AibillPolicy | undefined }): Promise<GuardUninstallResult> {
+  const settingsPath = join(options.checkoutRoot, ".claude", "settings.json");
+  const launcherPath = join(options.checkoutRoot, GUARD_LAUNCHER_RELATIVE_PATH);
   const existing = await readProjectSettings(settingsPath);
   let settings: GuardUninstallResult["settings"] = existing.exists ? "unchanged" : "absent";
   let changes: string[] = [];
@@ -316,7 +406,7 @@ export async function uninstallGuard(options: { repositoryRoot: string; policy: 
       launcher = "kept-foreign";
     }
   }
-  return { repositoryRoot: options.repositoryRoot, settingsPath, launcherPath, settings, launcher, changes, kept };
+  return { checkoutRoot: options.checkoutRoot, settingsPath, launcherPath, settings, launcher, changes, kept };
 }
 
 export type GuardInstallState = {
@@ -328,6 +418,8 @@ export type GuardInstallState = {
   hookEvents: GuardHookEvent[];
   launcherPath: string;
   launcher: "present" | "absent" | "foreign";
+  /** Where the launcher would find ai-spend-agent on this machine. */
+  hookPackage: GuardHookPackage;
   managed: {
     directory: string;
     files: string[];
@@ -339,15 +431,15 @@ export type GuardInstallState = {
 
 /** What is installed where, for `guard status`. Reads only; never throws. */
 export async function readGuardInstallState(options: {
-  repositoryRoot: string;
+  checkoutRoot: string;
   policy: AibillPolicy | undefined;
   homeDirectory: string;
   platform?: StatuslinePlatform;
 }): Promise<GuardInstallState> {
   const platform = options.platform ?? normalizePlatform(hostPlatform());
-  const paths = resolveStatuslinePaths(options.homeDirectory, options.repositoryRoot, platform);
-  const settingsPath = join(options.repositoryRoot, ".claude", "settings.json");
-  const launcherPath = join(options.repositoryRoot, GUARD_LAUNCHER_RELATIVE_PATH);
+  const paths = resolveStatuslinePaths(options.homeDirectory, options.checkoutRoot, platform);
+  const settingsPath = join(options.checkoutRoot, ".claude", "settings.json");
+  const launcherPath = join(options.checkoutRoot, GUARD_LAUNCHER_RELATIVE_PATH);
   let settingsExists = false;
   let settingsReadable = true;
   let value: JsonObject = {};
@@ -399,6 +491,7 @@ export async function readGuardInstallState(options: {
     hookEvents,
     launcherPath,
     launcher,
+    hookPackage: resolveGuardHookPackage(options.checkoutRoot),
     managed: {
       directory: dirname(paths.managedSettingsPath),
       files: managedFiles,

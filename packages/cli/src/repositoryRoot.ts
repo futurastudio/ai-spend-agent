@@ -35,3 +35,26 @@ export function resolveRepositoryRoot(directory: string): string | undefined {
     current = parent;
   }
 }
+
+/**
+ * The checkout a directory sits in, linked worktrees included: the nearest
+ * ancestor holding a `.git` directory or file. This is the directory Claude
+ * Code reads shared project settings from when a session starts there, so
+ * `guard install` writes into it; `resolveRepositoryRoot` names the main
+ * checkout that owns the policy. Undefined outside any checkout.
+ */
+export function resolveCheckoutRoot(directory: string): string | undefined {
+  if (!isAbsolute(directory)) return undefined;
+  let current = resolve(directory);
+  for (;;) {
+    try {
+      const stat = lstatSync(resolve(current, ".git"));
+      if (stat.isDirectory() || stat.isFile()) return current;
+    } catch {
+      // Keep climbing.
+    }
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}

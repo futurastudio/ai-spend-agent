@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import { appendFile, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AIBILL_POLICY_RELATIVE_PATH, parseClaudeCodeTranscript, projectIndexFinancialParserVersion } from "@agent-finops/core";
 import { checkGuard, formatRemaining, formatTokenCount } from "./guard.js";
-import { runGuardHook } from "./guardHook.js";
+import { readGuardHookInput, runGuardHook } from "./guardHook.js";
+import { AIBILL_POLICY_RELATIVE_PATH as HOOK_POLICY_PATH } from "./guardPolicyPath.js";
 import {
   GUARD_HOOK_COMMAND,
   GUARD_MANAGED_HOOK_COMMAND,
@@ -14,20 +16,25 @@ import {
   mergeGuardSettings,
   removeGuardSettings
 } from "./guardSettings.js";
+import { GUARD_CACHE_DIRECTORY_NAME, GUARD_READER_VERSION, guardStampPath, resolveGuardHookPackage } from "./guardStamp.js";
 import { computeGuardUsage, guardUsageCachePath } from "./guardUsage.js";
 import { runCli } from "./index.js";
+import { resolveCheckoutRoot } from "./repositoryRoot.js";
 
 const execFileAsync = promisify(execFile);
 const NOW = new Date("2026-11-04T15:00:00.000Z");
 const DAY = "2026-11-04";
+const GUARD_HANDLER = { type: "command", command: GUARD_HOOK_COMMAND, timeout: 10 };
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
+/** Hooks every prompt and every tool call; the prompt-only default has its own tests. */
 const policy = {
   version: 1,
   models: { allow: ["sonnet", "haiku"], deny: ["claude-opus-5-5"] },
-  budget: { perDay: { tokens: 1_500_000, sessions: 2 } },
+  budget: { perDay: { tokens: 1_500_000, outputTokens: 2_000, sessions: 2 } },
   message: "Daily agent budget for this repository is spent. Ask the platform team for an exception.",
+  perToolCall: true,
   codex: { model: "gpt-5.6" }
 };
 
@@ -51,16 +58,25 @@ async function fixture(policyOverride: unknown = policy) {
   return { root, repo, projectsDir, cacheDir, home };
 }
 
+async function linkedWorktree(test: Fixture, name = "feature"): Promise<string> {
+  const worktree = join(test.root, `${name}-worktree`);
+  await mkdir(join(worktree, "src"), { recursive: true });
+  await mkdir(join(test.repo, ".git", "worktrees", name), { recursive: true });
+  await writeFile(join(worktree, ".git"), `gitdir: ${join(test.repo, ".git", "worktrees", name)}\n`);
+  return worktree;
+}
+
 function transcriptLine(options: {
   cwd: string;
   sessionId: string;
   requestId: string;
   tokens: number;
+  output?: number;
   timestamp?: string;
   final?: boolean;
   model?: string;
 }): string {
-  const output = 100;
+  const output = options.output ?? 100;
   return JSON.stringify({
     type: "assistant",
     timestamp: options.timestamp ?? `${DAY}T10:00:00.000Z`,
@@ -105,31 +121,40 @@ afterEach(() => {
 });
 
 describe("guard install", () => {
-  it("writes the model allowlist, both hooks and the launcher into a fresh repository", async () => {
-    const test = await fixture();
+  it("writes the model allowlist, the prompt hook and the launcher; the tool-call hook is opt-in", async () => {
+    const test = await fixture({ version: 1, models: { allow: ["sonnet", "haiku"] }, budget: { perDay: { outputTokens: 4_000_000 } } });
     const result = await runCli(["guard", "install", "--path", join(test.repo, "src")]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("aibill guard installed for checkout-api.");
+    expect(result.stdout).toContain("aibill guard installed in checkout-api.");
     expect(result.stdout).toContain(".claude/settings.json: created");
+    expect(result.stdout).toContain("hook: every prompt\n");
     expect(result.stdout).toContain(".aibill/guard-hook.mjs: created");
-    expect(result.stdout).toContain("models.deny: reported only at project scope");
-    expect(result.stdout).toContain("codex.model gpt-5.6: reported only");
+    expect(result.stdout).toContain("hook runs: nothing yet; package.json does not declare aibill or ai-spend-agent");
+    expect(result.stdout).not.toContain("models.deny");
 
-    const settings = JSON.parse(await readFile(join(test.repo, ".claude", "settings.json"), "utf8"));
-    expect(settings).toEqual({
+    const settingsPath = join(test.repo, ".claude", "settings.json");
+    expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
       availableModels: ["sonnet", "haiku"],
-      hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: GUARD_HOOK_COMMAND, timeout: 10 }] }],
-        PreToolUse: [{ hooks: [{ type: "command", command: GUARD_HOOK_COMMAND, timeout: 10 }] }]
-      }
+      hooks: { UserPromptSubmit: [{ hooks: [GUARD_HANDLER] }] }
     });
     expect(GUARD_HOOK_COMMAND).toBe('node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"');
-    const launcher = await readFile(join(test.repo, ".aibill", "guard-hook.mjs"), "utf8");
-    expect(launcher).toBe(buildGuardLauncherSource());
-    expect(launcher).toContain("ai-spend-agent/package.json");
+    expect(await readFile(join(test.repo, ".aibill", "guard-hook.mjs"), "utf8")).toBe(buildGuardLauncherSource());
+
+    const perToolCall = await runCli(["guard", "install", "--per-tool-call", "--path", test.repo]);
+    expect(perToolCall.stdout).toContain("hook: every prompt and every tool call (about 0.1 s each)");
+    expect(perToolCall.stdout).toContain("hooks.PreToolUse: guard hook added");
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).hooks).toEqual({
+      UserPromptSubmit: [{ hooks: [GUARD_HANDLER] }],
+      PreToolUse: [{ hooks: [GUARD_HANDLER] }]
+    });
+
+    // Without the flag the policy decides: it does not opt in, so the tool-call hook goes.
+    const promptOnly = await runCli(["guard", "install", "--path", test.repo]);
+    expect(promptOnly.stdout).toContain("hooks.PreToolUse: guard hook removed (not enabled by the policy)");
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).hooks).toEqual({ UserPromptSubmit: [{ hooks: [GUARD_HANDLER] }] });
   });
 
-  it("merges into existing settings, is idempotent, and uninstall restores the original bytes", async () => {
+  it("merges into existing settings, is idempotent, and uninstall removes exactly what was added", async () => {
     const test = await fixture();
     const original = `${JSON.stringify({
       $schema: "https://json.schemastore.org/claude-code-settings.json",
@@ -146,6 +171,8 @@ describe("guard install", () => {
     const first = await runCli(["guard", "install", "--path", test.repo]);
     expect(first.exitCode).toBe(0);
     expect(first.stdout).toContain(".claude/settings.json: updated · availableModels: set to sonnet, haiku · hooks.UserPromptSubmit: guard hook added · hooks.PreToolUse: guard hook added");
+    expect(first.stdout).toContain("models.deny: reported only at project scope");
+    expect(first.stdout).toContain("codex.model gpt-5.6: reported only");
     const merged = JSON.parse(await readFile(settingsPath, "utf8"));
     expect(merged.$schema).toBe("https://json.schemastore.org/claude-code-settings.json");
     expect(merged.permissions).toEqual({ allow: ["Bash(npm test)"] });
@@ -153,14 +180,14 @@ describe("guard install", () => {
     expect(merged.availableModels).toEqual(["sonnet", "haiku"]);
     expect(merged.hooks.PreToolUse).toEqual([
       { matcher: "Bash", hooks: [{ type: "command", command: "./scripts/lint-bash.sh" }] },
-      { hooks: [{ type: "command", command: GUARD_HOOK_COMMAND, timeout: 10 }] }
+      { hooks: [GUARD_HANDLER] }
     ]);
-    expect(merged.hooks.UserPromptSubmit).toHaveLength(1);
+    expect(merged.hooks.UserPromptSubmit).toEqual([{ hooks: [GUARD_HANDLER] }]);
     const afterFirst = await readFile(settingsPath, "utf8");
 
     const second = await runCli(["guard", "install", "--path", test.repo]);
     expect(second.exitCode).toBe(0);
-    expect(second.stdout).toContain("already installed for checkout-api; nothing changed");
+    expect(second.stdout).toContain("already installed in checkout-api; nothing changed");
     expect(await readFile(settingsPath, "utf8")).toBe(afterFirst);
 
     // A developer's own formatting survives an install with nothing to add.
@@ -168,6 +195,14 @@ describe("guard install", () => {
     await writeFile(settingsPath, reformatted);
     await runCli(["guard", "install", "--path", test.repo]);
     expect(await readFile(settingsPath, "utf8")).toBe(reformatted);
+
+    // A developer who moved the guard group to the front keeps it there.
+    const reordered = JSON.parse(afterFirst);
+    reordered.hooks.PreToolUse.reverse();
+    await writeFile(settingsPath, `${JSON.stringify(reordered, null, 2)}\n`);
+    const third = await runCli(["guard", "install", "--path", test.repo]);
+    expect(third.stdout).toContain("nothing changed");
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).hooks.PreToolUse[0]).toEqual({ hooks: [GUARD_HANDLER] });
     await writeFile(settingsPath, afterFirst);
 
     const removed = await runCli(["guard", "install", "--uninstall", "--path", test.repo]);
@@ -197,18 +232,25 @@ describe("guard install", () => {
     expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({ availableModels: ["sonnet", "haiku", "opus"] });
   });
 
-  it("writes into the main checkout when run from a linked worktree", async () => {
+  it("writes into the linked worktree Claude Code will start in, naming the main checkout that owns the policy", async () => {
     const test = await fixture();
-    const worktree = join(test.root, "feature-worktree");
-    await mkdir(worktree);
-    await mkdir(join(test.repo, ".git", "worktrees", "feature"), { recursive: true });
-    await writeFile(join(worktree, ".git"), `gitdir: ${join(test.repo, ".git", "worktrees", "feature")}\n`);
-    const result = await runCli(["guard", "install", "--path", worktree]);
+    const worktree = await linkedWorktree(test);
+    expect(resolveCheckoutRoot(join(worktree, "src"))).toBe(worktree);
+    expect(resolveCheckoutRoot(join(test.repo, "src"))).toBe(test.repo);
+    expect(resolveCheckoutRoot(test.root)).toBeUndefined();
+
+    const result = await runCli(["guard", "install", "--path", join(worktree, "src")]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("installed for checkout-api");
-    await expect(stat(join(test.repo, ".claude", "settings.json"))).resolves.toBeTruthy();
-    await expect(stat(join(test.repo, ".aibill", "guard-hook.mjs"))).resolves.toBeTruthy();
-    await expect(stat(join(worktree, ".claude"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result.stdout).toContain("aibill guard installed in feature-worktree.");
+    expect(result.stdout).toContain("checkout: feature-worktree is a linked worktree; its settings are written here, the policy and today's figures belong to checkout-api");
+    await expect(stat(join(worktree, ".claude", "settings.json"))).resolves.toBeTruthy();
+    await expect(stat(join(worktree, ".aibill", "guard-hook.mjs"))).resolves.toBeTruthy();
+    await expect(stat(join(test.repo, ".claude"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(test.repo, ".aibill", "guard-hook.mjs"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const removed = await runCli(["guard", "install", "--uninstall", "--path", worktree]);
+    expect(removed.stdout).toContain("aibill guard removed from feature-worktree.");
+    await expect(stat(join(worktree, ".claude", "settings.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses without a policy, with an invalid policy, outside a repository, or over broken settings", async () => {
@@ -216,7 +258,9 @@ describe("guard install", () => {
     const noPolicy = await runCli(["guard", "install", "--path", missing.repo]);
     expect(noPolicy.exitCode).toBe(1);
     expect(noPolicy.stderr).toContain("checkout-api has no .aibill/policy.json yet");
-    expect(noPolicy.stderr).toContain('"perDay"');
+    expect(noPolicy.stderr).toContain("npx aibill guard status");
+    expect(noPolicy.stderr).toContain('"tokens": 400000000');
+    expect(noPolicy.stderr).toContain('"outputTokens": 4000000');
 
     const invalid = await fixture({ version: 1, budget: { perDay: { token: 5 } } });
     const bad = await runCli(["guard", "install", "--path", invalid.repo]);
@@ -238,16 +282,17 @@ describe("guard install", () => {
     await expect(stat(join(broken.repo, ".aibill", "guard-hook.mjs"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("prints the managed-settings document with deniedModels and a launcher-guarded hook", async () => {
+  it("prints the managed-settings document with deniedModels and a launcher-guarded POSIX hook", async () => {
     const test = await fixture();
     const result = await runCli(["guard", "install", "--managed", "--path", test.repo]);
     expect(result.exitCode).toBe(0);
+    const managedHandler = { type: "command", command: GUARD_MANAGED_HOOK_COMMAND, timeout: 10 };
     expect(JSON.parse(result.stdout)).toEqual({
       availableModels: ["sonnet", "haiku"],
       deniedModels: ["claude-opus-5-5"],
       hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: GUARD_MANAGED_HOOK_COMMAND, timeout: 10 }] }],
-        PreToolUse: [{ hooks: [{ type: "command", command: GUARD_MANAGED_HOOK_COMMAND, timeout: 10 }] }]
+        UserPromptSubmit: [{ hooks: [managedHandler] }],
+        PreToolUse: [{ hooks: [managedHandler] }]
       }
     });
     expect(GUARD_MANAGED_HOOK_COMMAND).toBe(
@@ -255,7 +300,12 @@ describe("guard install", () => {
     );
     expect(result.stderr).toContain("/Library/Application Support/ClaudeCode/managed-settings.json");
     expect(result.stderr).toContain("/etc/claude-code/managed-settings.json");
+    expect(result.stderr).toContain("POSIX shell");
     await expect(stat(join(test.repo, ".claude"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const promptOnly = await fixture({ version: 1, budget: { perDay: { sessions: 3 } } });
+    const minimal = await runCli(["guard", "install", "--managed", "--path", promptOnly.repo]);
+    expect(Object.keys(JSON.parse(minimal.stdout).hooks)).toEqual(["UserPromptSubmit"]);
     const both = await runCli(["guard", "install", "--managed", "--uninstall", "--path", test.repo]);
     expect(both.exitCode).toBe(1);
   });
@@ -271,16 +321,9 @@ describe("guard install", () => {
     };
     const merged = mergeGuardSettings(existing, { version: 1, models: { allow: ["sonnet"] } });
     expect(existing.hooks.UserPromptSubmit[0]!.hooks).toHaveLength(2);
-    expect(merged.changes).toEqual([
-      "availableModels: set to sonnet",
-      "hooks.UserPromptSubmit: guard hook updated",
-      "hooks.PreToolUse: guard hook added"
-    ]);
-    expect(merged.next.hooks).toMatchObject({
-      UserPromptSubmit: [
-        { hooks: [{ type: "command", command: "./notify.sh" }] },
-        { hooks: [{ type: "command", command: GUARD_HOOK_COMMAND, timeout: 10 }] }
-      ]
+    expect(merged.changes).toEqual(["availableModels: set to sonnet", "hooks.UserPromptSubmit: guard hook updated"]);
+    expect(merged.next.hooks).toEqual({
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: "./notify.sh" }, GUARD_HANDLER] }]
     });
     const removed = removeGuardSettings(merged.next, { version: 1, models: { allow: ["sonnet"] } });
     expect(removed.next).toEqual({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "./notify.sh" }] }] } });
@@ -316,6 +359,18 @@ describe("guard check", () => {
     }
   });
 
+  it("enforces an output-token budget separately from the all-components figure", async () => {
+    const test = await fixture({ version: 1, budget: { perDay: { tokens: 500_000_000, outputTokens: 1_000 } } });
+    await writeTranscript(test, "s.jsonl", [
+      transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "o1", tokens: 300_000, output: 600 }),
+      transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "o2", tokens: 300_000, output: 450, timestamp: `${DAY}T11:00:00.000Z` })
+    ]);
+    const outcome = await checkGuard({ cwd: test.repo, sessionId: "s1", now: NOW }, deps(test));
+    expect(outcome.reason).toBe("output_tokens_spent");
+    expect(outcome.usage).toMatchObject({ tokens: 600_000, outputTokens: 1_050 });
+    expect(outcome.stderr).toContain(`checkout-api produced 1.1k output tokens of its 1k daily budget (UTC ${DAY})`);
+  });
+
   it("counts sessions per repository and never counts the current session against itself", async () => {
     const test = await fixture();
     await writeTranscript(test, "one.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-1", requestId: "r1", tokens: 1_000 })]);
@@ -336,12 +391,61 @@ describe("guard check", () => {
     expect(terminal.reason).toBe("sessions_spent");
   });
 
+  it("reads the whole hook input however large a prompt or tool_input is, so a running session never blocks itself", async () => {
+    const test = await fixture();
+    await writeTranscript(test, "one.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-1", requestId: "r1", tokens: 1_000 })]);
+    await writeTranscript(test, "two.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-2", requestId: "r2", tokens: 1_000 })]);
+    const largeWrite = {
+      session_id: "sess-2",
+      cwd: test.repo,
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: join(test.repo, "src", "big.ts"), content: "x".repeat(70_000) }
+    };
+    expect(JSON.stringify(largeWrite).length).toBeGreaterThan(70_000);
+    const toolCall = await runCli(["guard", "check", "--path", test.repo], { guardStdin: hookStdin(largeWrite), guardNow: NOW, homeDirectory: test.home });
+    expect(toolCall).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+
+    const largePrompt = { session_id: "sess-2", cwd: test.repo, hook_event_name: "UserPromptSubmit", prompt: "y".repeat(70_000) };
+    const prompt = await runCli(["guard", "check", "--path", test.repo], { guardStdin: hookStdin(largePrompt), guardNow: NOW, homeDirectory: test.home });
+    expect(prompt).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+
+    // A sub-agent's hook carries the parent's session id plus agent_id; still the same session.
+    const subagent = await runGuardHook({
+      stdin: hookStdin({ ...largeWrite, agent_id: "agent-77" }),
+      stderr: { write: () => undefined },
+      now: NOW,
+      dependencies: deps(test)
+    });
+    expect(subagent).toBe(0);
+
+    // Several MiB still parse; the cap exists only against runaway producers.
+    const huge = hookStdin({ ...largeWrite, tool_input: { content: "z".repeat(3 * 1_024 * 1_024) } });
+    expect(await readGuardHookInput(huge)).toMatchObject({ status: "ok", input: { sessionId: "sess-2" } });
+  });
+
+  it("skips the sessions rule, with a warning, when the hook input could not be read; tokens still count", async () => {
+    const test = await fixture();
+    await writeTranscript(test, "one.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-1", requestId: "r1", tokens: 1_000 })]);
+    await writeTranscript(test, "two.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-2", requestId: "r2", tokens: 1_000 })]);
+    expect(await readGuardHookInput(Readable.from(["{ not json"]))).toEqual({ status: "incomplete" });
+    expect(await readGuardHookInput(Readable.from(["[1, 2]"]))).toEqual({ status: "incomplete" });
+    expect(await readGuardHookInput(Readable.from(["x".repeat(2_048)]), 1_024)).toEqual({ status: "incomplete" });
+    expect(await readGuardHookInput(Readable.from([""]))).toEqual({ status: "none" });
+    expect(await readGuardHookInput(null)).toEqual({ status: "none" });
+
+    const malformed = await runCli(["guard", "check", "--path", test.repo], { guardStdin: Readable.from(["{ not json"]), guardNow: NOW, homeDirectory: test.home });
+    expect(malformed.exitCode).toBe(0);
+    expect(malformed.stderr).toBe("aibill guard: the hook input could not be read, so the current session is unknown; the sessions budget was not evaluated this time.");
+
+    await writeTranscript(test, "big.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-3", requestId: "r3", tokens: 1_600_000 })]);
+    const spent = await checkGuard({ cwd: test.repo, hookInputIncomplete: true, now: NOW }, deps(test));
+    expect(spent).toMatchObject({ exitCode: 2, reason: "tokens_spent" });
+  });
+
   it("attributes a linked worktree's sessions to the main checkout", async () => {
     const test = await fixture();
-    const worktree = join(test.root, "wt-feature");
-    await mkdir(worktree);
-    await mkdir(join(test.repo, ".git", "worktrees", "feature"), { recursive: true });
-    await writeFile(join(worktree, ".git"), `gitdir: ${join(test.repo, ".git", "worktrees", "feature")}\n`);
+    const worktree = await linkedWorktree(test);
     await writeTranscript(test, "wt.jsonl", [transcriptLine({ cwd: worktree, sessionId: "sess-wt", requestId: "w1", tokens: 1_600_000 })]);
     const outcome = await checkGuard({ cwd: worktree, sessionId: "sess-wt", now: NOW }, deps(test));
     expect(outcome.reason).toBe("tokens_spent");
@@ -379,22 +483,12 @@ describe("guard check", () => {
       stderr: expect.stringContaining("transcript directory is missing")
     });
 
-    const noBudget = await fixture({ version: 1, models: { allow: ["sonnet"] } });
+    const noBudget = await fixture({ version: 1, models: { allow: ["sonnet"], deny: ["opus"] } });
     expect(await checkGuard({ cwd: noBudget.repo, now: NOW }, deps(noBudget))).toMatchObject({
       exitCode: 0,
       reason: "nothing_to_enforce",
       stderr: ""
     });
-  });
-
-  it("refuses a denied model when the hook input carries one", async () => {
-    const test = await fixture();
-    const denied = await checkGuard({ cwd: test.repo, model: "claude-opus-5-5-20261001", now: NOW }, deps(test));
-    expect(denied.exitCode).toBe(2);
-    expect(denied.reason).toBe("model_denied");
-    expect(denied.stderr).toContain("Model claude-opus-5-5-20261001 is denied by checkout-api's policy (.aibill/policy.json models.deny: claude-opus-5-5)");
-    const allowed = await checkGuard({ cwd: test.repo, model: "claude-sonnet-5", now: NOW }, deps(test));
-    expect(allowed.exitCode).toBe(0);
   });
 
   it("reads only appended transcript bytes on a warm run and keeps no transcript path in the cache", async () => {
@@ -403,15 +497,16 @@ describe("guard check", () => {
       transcriptLine({ cwd: test.repo, sessionId: "sess-a", requestId: "a1", tokens: 400_000 })
     ]);
     const cold = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
-    expect(cold).toMatchObject({ tokens: 400_000, filesRead: 1, cache: "updated", complete: true });
+    expect(cold).toMatchObject({ tokens: 400_000, outputTokens: 100, filesRead: 1, cache: "updated", complete: true });
     const warm = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
-    expect(warm).toMatchObject({ tokens: 400_000, filesRead: 0, bytesRead: 0, cache: "hit" });
+    expect(warm).toMatchObject({ tokens: 400_000, filesRead: 0, bytesRead: 0, cache: "hit", signature: cold.signature });
 
     const placeholder = transcriptLine({ cwd: test.repo, sessionId: "sess-a", requestId: "a2", tokens: 150, final: false });
     await appendFile(path, `${placeholder}\n`);
     const partial = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
     expect(partial.tokens).toBe(400_150);
     expect(partial.bytesRead).toBe(Buffer.byteLength(placeholder) + 1);
+    expect(partial.signature).not.toBe(cold.signature);
 
     const final = transcriptLine({ cwd: test.repo, sessionId: "sess-a", requestId: "a2", tokens: 300_000 });
     await appendFile(path, `${final}\n{"type":"assistant","message":{"usage":`);
@@ -421,6 +516,7 @@ describe("guard check", () => {
     expect(streamed.bytesRead).toBe(Buffer.byteLength(final) + 1);
 
     const cachePath = guardUsageCachePath(test.repo, deps(test));
+    expect(cachePath).toContain(`${GUARD_CACHE_DIRECTORY_NAME}/`);
     const cacheText = await readFile(cachePath, "utf8");
     expect(cacheText).not.toContain(test.projectsDir);
     expect(cacheText).not.toContain("active.jsonl");
@@ -431,7 +527,35 @@ describe("guard check", () => {
     }
   });
 
-  it("dedupes a response copied into a sub-agent transcript, ignores other days, and resets a rewritten file", async () => {
+  it("detects a transcript rewritten in place, same size or larger, and reads it from the start again", async () => {
+    const test = await fixture();
+    const first = transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r1", tokens: 2_000 });
+    const path = await writeTranscript(test, "rewritten.jsonl", [first]);
+    expect((await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) })).tokens).toBe(2_000);
+
+    // Same byte length, different content: the mtime moves but the size does not.
+    const sameSize = transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r2", tokens: 9_000 });
+    expect(Buffer.byteLength(sameSize)).toBe(Buffer.byteLength(first));
+    await new Promise((done) => setTimeout(done, 15));
+    await writeFile(path, `${sameSize}\n`);
+    const replaced = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
+    expect(replaced).toMatchObject({ tokens: 9_000, calls: 1, filesRead: 1 });
+
+    // Larger rewrite with a different prefix: no mixing of a stale prefix with the new tail.
+    const rewritten = [
+      transcriptLine({ cwd: test.repo, sessionId: "s2", requestId: "r3", tokens: 2_000 }),
+      transcriptLine({ cwd: test.repo, sessionId: "s2", requestId: "r4", tokens: 500, timestamp: `${DAY}T11:00:00.000Z` })
+    ];
+    await writeFile(path, `${rewritten.join("\n")}\n`);
+    const larger = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
+    expect(larger).toMatchObject({ tokens: 2_500, calls: 2, filesRead: 1, sessionIds: ["s2"] });
+
+    // A shrunk file is a rewrite too.
+    await writeFile(path, `${transcriptLine({ cwd: test.repo, sessionId: "s3", requestId: "r5", tokens: 500 })}\n`);
+    expect(await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) })).toMatchObject({ tokens: 500, calls: 1 });
+  });
+
+  it("dedupes a response copied into a sub-agent transcript and ignores other days", async () => {
     const test = await fixture();
     const parent = transcriptLine({ cwd: test.repo, sessionId: "sess-p", requestId: "p1", tokens: 500_000 });
     await writeTranscript(test, "parent.jsonl", [
@@ -443,13 +567,68 @@ describe("guard check", () => {
     await writeFile(join(test.projectsDir, "-checkout-api", "sess-p", "subagents", "agent-x.jsonl"), `${parent}\n`);
     const usage = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
     expect(usage).toMatchObject({ tokens: 500_000, calls: 1, sessionIds: ["sess-p"], filesConsidered: 2 });
+  });
 
-    // A transcript that shrank was rewritten: its cached tally is dropped and
-    // the file is read from the start again.
-    await rm(join(test.projectsDir, "-checkout-api", "sess-p"), { recursive: true });
-    await writeFile(join(test.projectsDir, "-checkout-api", "parent.jsonl"), `${transcriptLine({ cwd: test.repo, sessionId: "sess-p", requestId: "p3", tokens: 1_000 })}\n`);
-    const rewritten = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
-    expect(rewritten).toMatchObject({ tokens: 1_000, calls: 1, filesConsidered: 1 });
+  it("never lets a zeroed copy written after midnight conjure a call or a session", async () => {
+    const test = await fixture();
+    const final = transcriptLine({ cwd: test.repo, sessionId: "sess-night", requestId: "n1", tokens: 5_000, timestamp: "2026-11-03T23:59:30.000Z" });
+    const path = await writeTranscript(test, "night.jsonl", [final]);
+    const yesterday = new Date("2026-11-03T23:59:40.000Z");
+    expect((await computeGuardUsage({ repositoryRoot: test.repo, now: yesterday, ...deps(test) })).tokens).toBe(5_000);
+
+    const zeroed = JSON.stringify({
+      type: "assistant",
+      timestamp: `${DAY}T00:00:01.000Z`,
+      cwd: test.repo,
+      sessionId: "sess-night",
+      requestId: "n1",
+      message: { id: "msg-n1", model: "claude-sonnet-5", usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    });
+    await appendFile(path, `${zeroed}\n`);
+    const today = await computeGuardUsage({ repositoryRoot: test.repo, now: new Date(`${DAY}T00:05:00.000Z`), ...deps(test) });
+    expect(today).toMatchObject({ tokens: 0, calls: 0, sessionIds: [] });
+
+    // Even as the only kept line for its response, a zeroed copy is not a call.
+    const lone = await writeTranscript(test, "lone.jsonl", [zeroed]);
+    expect(lone).toBeTruthy();
+    const withLone = await computeGuardUsage({ repositoryRoot: test.repo, now: new Date(`${DAY}T00:06:00.000Z`), ...deps(test) });
+    expect(withLone).toMatchObject({ calls: 0, sessionIds: [] });
+  });
+
+  it("prices a fallback-iterations message the way the whole-file reader does", async () => {
+    const test = await fixture({ version: 1, budget: { perDay: { tokens: 1 } } });
+    const line = JSON.stringify({
+      type: "assistant",
+      timestamp: `${DAY}T10:00:00.000Z`,
+      cwd: test.repo,
+      sessionId: "sess-it",
+      requestId: "it-1",
+      message: {
+        id: "msg-it-1",
+        model: "claude-sonnet-5",
+        usage: {
+          input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40,
+          // The top-level split sums both attempts; the served iteration's own split is what counts.
+          cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 40 },
+          iterations: [
+            { type: "fallback_message", model: "claude-opus-5-5", input_tokens: 10, output_tokens: 0,
+              cache_read_input_tokens: 0, cache_creation_input_tokens: 40,
+              cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 40 } },
+            { type: "message", model: "claude-sonnet-5", input_tokens: 10, output_tokens: 20,
+              cache_read_input_tokens: 30, cache_creation_input_tokens: 40,
+              cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 0 } }
+          ]
+        }
+      }
+    });
+    await writeTranscript(test, "iterations.jsonl", [line]);
+    const usage = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
+    const [call] = parseClaudeCodeTranscript(`${line}\n`);
+    const expected = call!.usage.inputTokens + call!.usage.outputTokens + (call!.usage.cacheReadTokens ?? 0) +
+      (call!.usage.cacheWrite5mTokens ?? 0) + (call!.usage.cacheWrite1hTokens ?? 0);
+    expect(expected).toBe(100);
+    expect(usage).toMatchObject({ tokens: expected, outputTokens: 20, calls: 1, incompleteCalls: 0 });
+    expect(await checkGuard({ cwd: test.repo, now: NOW }, deps(test))).toMatchObject({ reason: "tokens_spent" });
   });
 
   it("defers transcripts beyond the read budget and reports the figure as incomplete", async () => {
@@ -470,20 +649,89 @@ describe("guard check", () => {
     expect(third.sessionIds).toEqual(["s-a", "s-b", "s-c"]);
   });
 
-  it("runs as the hook entry: stdin JSON in, exit code and stderr out, nothing on stdout", async () => {
+  it("ignores a cache written by another reader version and pins the version to core's parser", () => {
+    expect(GUARD_READER_VERSION).toBe(projectIndexFinancialParserVersion);
+    expect(GUARD_CACHE_DIRECTORY_NAME).toBe(`guard-usage-v1-r${projectIndexFinancialParserVersion}`);
+    expect(HOOK_POLICY_PATH).toBe(AIBILL_POLICY_RELATIVE_PATH);
+  });
+
+  it("does not trust a cache left under an older reader's directory", async () => {
     const test = await fixture();
-    await writeTranscript(test, "s.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-h", requestId: "h1", tokens: 2_000_000 })]);
+    await writeTranscript(test, "s.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r1", tokens: 1_000 })]);
+    const current = guardUsageCachePath(test.repo, deps(test));
+    const older = join(dirname(dirname(current)), `guard-usage-v1-r${GUARD_READER_VERSION - 1}`, `${current.split("/").pop()}`);
+    await mkdir(dirname(older), { recursive: true });
+    await writeFile(older, JSON.stringify({ kind: "aibill.guard_usage_cache", version: 1, repositoryRoot: test.repo, writtenAt: NOW.toISOString(), files: {} }));
+    const usage = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, ...deps(test) });
+    expect(usage).toMatchObject({ tokens: 1_000, filesRead: 1, cache: "updated" });
+    await expect(stat(current)).resolves.toBeTruthy();
+  });
+
+  it("throttles cache rewrites while the budget is far away and few bytes arrived", async () => {
+    const test = await fixture();
+    const path = await writeTranscript(test, "s.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r1", tokens: 1_000 })]);
+    const budget = { tokens: 1_000_000, sessions: 50 };
+    const first = await computeGuardUsage({ repositoryRoot: test.repo, now: NOW, budget, ...deps(test) });
+    expect(first.cache).toBe("updated");
+
+    await appendFile(path, `${transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r2", tokens: 1_000 })}\n`);
+    const soon = new Date(NOW.getTime() + 5_000);
+    const deferred = await computeGuardUsage({ repositoryRoot: test.repo, now: soon, budget, ...deps(test) });
+    expect(deferred).toMatchObject({ tokens: 2_000, cache: "deferred" });
+    // The deferred bytes are read again next time, so nothing is lost.
+    const again = await computeGuardUsage({ repositoryRoot: test.repo, now: soon, budget, ...deps(test) });
+    expect(again).toMatchObject({ tokens: 2_000, filesRead: 1, cache: "deferred" });
+
+    const later = new Date(NOW.getTime() + 61_000);
+    expect((await computeGuardUsage({ repositoryRoot: test.repo, now: later, budget, ...deps(test) })).cache).toBe("updated");
+
+    await appendFile(path, `${transcriptLine({ cwd: test.repo, sessionId: "s1", requestId: "r3", tokens: 900_000 })}\n`);
+    const close = await computeGuardUsage({ repositoryRoot: test.repo, now: new Date(later.getTime() + 1_000), budget, ...deps(test) });
+    expect(close).toMatchObject({ tokens: 902_000, cache: "updated" });
+  });
+
+  it("reuses the last verdict from the stamp while nothing that could change it has changed", async () => {
+    const test = await fixture();
+    const path = await writeTranscript(test, "s.jsonl", [transcriptLine({ cwd: test.repo, sessionId: "sess-h", requestId: "h1", tokens: 2_000_000 })]);
+    const events: string[] = [];
     let written = "";
-    const code = await runGuardHook({
-      stdin: hookStdin({ cwd: test.repo, session_id: "sess-h", hook_event_name: "PreToolUse", tool_name: "Bash" }),
+    const run = (input: Record<string, unknown>, now = NOW) => runGuardHook({
+      stdin: hookStdin(input),
       stderr: { write: (text: string) => { written += text; } },
-      now: NOW,
-      dependencies: deps(test)
+      now,
+      dependencies: deps(test),
+      trace: (event) => events.push(event)
     });
-    expect(code).toBe(2);
+    const input = { cwd: test.repo, session_id: "sess-h", hook_event_name: "UserPromptSubmit", prompt: "go" };
+    expect(await run(input)).toBe(2);
     expect(written).toContain("checkout-api used 2M tokens of its 1.5M daily budget");
     expect(written.endsWith("\n")).toBe(true);
+    await expect(stat(guardStampPath(test.repo, deps(test)))).resolves.toBeTruthy();
 
+    written = "";
+    expect(await run(input)).toBe(2);
+    expect(written).toContain("2M tokens");
+    expect(events).toEqual(["computed", "stamp-reused"]);
+
+    // Another session, a changed transcript, a new day or an edited policy all recompute.
+    expect(await run({ ...input, session_id: "sess-other" })).toBe(2);
+    await appendFile(path, `${transcriptLine({ cwd: test.repo, sessionId: "sess-h", requestId: "h2", tokens: 10 })}\n`);
+    expect(await run(input)).toBe(2);
+    expect(await run(input, new Date("2026-11-05T01:00:00.000Z"))).toBe(0);
+    await writeFile(join(test.repo, ".aibill", "policy.json"), JSON.stringify({ version: 1, budget: { perDay: { tokens: 5_000_000 } } }));
+    await new Promise((done) => setTimeout(done, 15));
+    expect(await run(input)).toBe(0);
+    expect(events).toEqual(["computed", "stamp-reused", "computed", "computed", "computed", "computed"]);
+
+    // Unreadable input never reuses a verdict, and leaves no stamp of its own.
+    const before = await readFile(guardStampPath(test.repo, deps(test)), "utf8");
+    events.length = 0;
+    expect(await runGuardHook({ stdin: Readable.from(["{ no"]), stderr: { write: () => undefined }, cwd: test.repo, now: NOW, dependencies: deps(test) })).toBe(0);
+    expect(await readFile(guardStampPath(test.repo, deps(test)), "utf8")).toBe(before);
+  });
+
+  it("runs as the hook entry: stdin JSON in, exit code and stderr out, nothing on stdout", async () => {
+    const test = await fixture();
     let quiet = "";
     const malformed = await runGuardHook({
       stdin: Readable.from(["{ not json"]),
@@ -496,27 +744,44 @@ describe("guard check", () => {
     expect(quiet).toBe("aibill guard: not inside a repository; nothing to enforce.\n");
   });
 
-  it("launcher: exits 0 with a warning without ai-spend-agent, and runs the installed hook entry when present", async () => {
+  it("launcher: uses the checkout's package only when package.json declares it, else the global install, else warns", async () => {
     const test = await fixture();
     await runCli(["guard", "install", "--path", test.repo]);
     const launcher = join(test.repo, ".aibill", "guard-hook.mjs");
     const env = { ...process.env, HOME: test.home, USERPROFILE: test.home, PATH: process.env.PATH ?? "" };
-
-    const missing = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
-    expect(missing.stdout).toBe("");
-    expect(missing.stderr).toBe("aibill guard: ai-spend-agent is not installed for this repository, so its policy was not checked. Install it with: npm install --save-dev aibill\n");
-
     const fakePackage = join(test.repo, "node_modules", "ai-spend-agent");
     await mkdir(join(fakePackage, "dist"), { recursive: true });
     await writeFile(join(fakePackage, "package.json"), JSON.stringify({ name: "ai-spend-agent", version: "0.0.0-test", type: "module" }));
     await writeFile(join(fakePackage, "dist", "guardHook.js"),
-      "export async function runGuardHook() { process.stderr.write(`hook ran in ${process.cwd().length > 0 ? 'cwd' : '?'}\\n`); return 2; }\n");
-    await expect(execFileAsync(process.execPath, [launcher], { cwd: join(test.repo, "src"), env }))
-      .rejects.toMatchObject({ code: 2, stderr: "hook ran in cwd\n", stdout: "" });
+      "export async function runGuardHook() { process.stderr.write('fake hook ran\\n'); return 2; }\n");
 
+    // Present in node_modules but undeclared: not used.
+    expect(resolveGuardHookPackage(test.repo, "/nonexistent/prefix/bin/node", "linux")).toMatchObject({ source: "none" });
+    const undeclared = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
+    expect(undeclared.stdout).toBe("");
+    expect(undeclared.stderr).toBe("aibill guard: no ai-spend-agent package for this checkout (declare aibill in package.json and npm install, or install it globally); policy not checked, not blocking.\n");
+
+    await writeFile(join(test.repo, "package.json"), JSON.stringify({ name: "checkout-api", private: true, devDependencies: { aibill: "*" } }));
+    expect(resolveGuardHookPackage(test.repo, "/nonexistent/prefix/bin/node", "linux")).toMatchObject({
+      source: "repository",
+      entry: join(fakePackage, "dist", "guardHook.js")
+    });
+    await expect(execFileAsync(process.execPath, [launcher], { cwd: join(test.repo, "src"), env }))
+      .rejects.toMatchObject({ code: 2, stderr: "fake hook ran\n", stdout: "" });
+
+    const status = await runCli(["guard", "status", "--path", test.repo], { guardNow: NOW, homeDirectory: test.home });
+    expect(status.stdout).toContain(`hook runs: ${join(fakePackage, "dist", "guardHook.js")} (declared in package.json)`);
+
+    // Declared but the package fails to load: not blocking.
     await writeFile(join(fakePackage, "dist", "guardHook.js"), "throw new Error('boom');\n");
     const broken = await execFileAsync(process.execPath, [launcher], { cwd: test.repo, env });
     expect(broken.stderr).toContain("aibill guard: the installed ai-spend-agent could not run the hook (boom); not blocking.");
+
+    // A global install is found next to the running Node.
+    const prefix = join(test.root, "prefix");
+    await mkdir(join(prefix, "lib", "node_modules", "ai-spend-agent"), { recursive: true });
+    await writeFile(join(prefix, "lib", "node_modules", "ai-spend-agent", "package.json"), JSON.stringify({ name: "ai-spend-agent" }));
+    expect(resolveGuardHookPackage(join(test.root, "elsewhere"), join(prefix, "bin", "node"), "linux")).toMatchObject({ source: "global" });
   });
 
   it("stays silent on unreadable individual transcripts and still blocks on the certain lower bound", async () => {
@@ -536,18 +801,21 @@ describe("guard status", () => {
   it("prints the policy, today's usage, what is installed, and the managed-settings verdict without any person", async () => {
     const test = await fixture();
     await writeTranscript(test, "s.jsonl", [
-      transcriptLine({ cwd: test.repo, sessionId: "sess-status", requestId: "s1", tokens: 1_200_000 })
+      transcriptLine({ cwd: test.repo, sessionId: "sess-status", requestId: "s1", tokens: 1_200_000, output: 500 })
     ]);
     const before = await runCli(["guard", "status", "--path", test.repo], { guardNow: NOW, homeDirectory: test.home });
     expect(before.exitCode).toBe(0);
     expect(before.stdout).toContain("aibill guard · checkout-api");
+    expect(before.stdout).not.toContain("checkout    linked worktree");
     expect(before.stdout).toContain("policy      .aibill/policy.json (version 1)");
     expect(before.stdout).toContain("models    allow: sonnet, haiku · deny: claude-opus-5-5 (deniedModels is honoured from managed settings only)");
-    expect(before.stdout).toContain("budget    per UTC day: 1.5M tokens · 2 sessions");
+    expect(before.stdout).toContain("budget    per UTC day: 1.5M tokens · 2k output tokens · 2 sessions");
+    expect(before.stdout).toContain("hook      every prompt and every tool call (perToolCall)");
     expect(before.stdout).toContain("codex     model gpt-5.6 · reported only; Codex is not enforced");
-    expect(before.stdout).toContain(`today       ${DAY} UTC · 1.2M of 1.5M tokens (80%) · 1 of 2 sessions · resets in 9h00m`);
+    expect(before.stdout).toContain(`today       ${DAY} UTC · 1.2M of 1.5M tokens (80%) · 500 of 2k output tokens (25%) · 1 of 2 sessions · resets in 9h00m`);
     expect(before.stdout).toContain("installed   .claude/settings.json: absent");
     expect(before.stdout).toContain(".aibill/guard-hook.mjs: absent");
+    expect(before.stdout).toContain("hook runs: nothing yet; package.json does not declare aibill or ai-spend-agent");
     // The managed verdict reads the real system directory, which a developer
     // machine may populate; the convention note belongs to the "none" case.
     expect(before.stdout).toMatch(/^managed     (none found in |\d+ files? in )/m);
@@ -560,6 +828,11 @@ describe("guard status", () => {
     const after = await runCli(["guard", "status", "--path", test.repo], { guardNow: NOW, homeDirectory: test.home });
     expect(after.stdout).toContain("installed   .claude/settings.json: availableModels: set from the policy · hooks: UserPromptSubmit, PreToolUse");
     expect(after.stdout).toContain(".aibill/guard-hook.mjs: present");
+
+    const worktree = await linkedWorktree(test);
+    const fromWorktree = await runCli(["guard", "status", "--path", worktree], { guardNow: NOW, homeDirectory: test.home });
+    expect(fromWorktree.stdout).toContain("checkout    linked worktree feature-worktree; the policy and today's figures belong to checkout-api");
+    expect(fromWorktree.stdout).toContain("installed   .claude/settings.json: absent");
 
     const none = await fixture(null);
     const bare = await runCli(["guard", "status", "--path", none.repo], { guardNow: NOW, homeDirectory: none.home });
@@ -576,6 +849,7 @@ describe("guard status", () => {
     expect(result.stderr).toContain("guard install [--managed|--uninstall] | guard check | guard status");
     expect((await runCli(["guard"])).stderr).toContain("aibill guard needs an action.");
     expect((await runCli(["--help"])).stdout).toContain("guard check");
+    expect((await runCli(["--help"])).stdout).toContain("--per-tool-call");
   });
 });
 
@@ -584,6 +858,7 @@ describe("guard formatting", () => {
     expect(formatTokenCount(1_900_000)).toBe("1.9M");
     expect(formatTokenCount(1_500_000)).toBe("1.5M");
     expect(formatTokenCount(2_000_000)).toBe("2M");
+    expect(formatTokenCount(400_000_000)).toBe("400M");
     expect(formatTokenCount(950_000)).toBe("950k");
     expect(formatTokenCount(1_234)).toBe("1.2k");
     expect(formatTokenCount(42)).toBe("42");
@@ -594,11 +869,12 @@ describe("guard formatting", () => {
     expect(formatRemaining(30_000)).toBe("<1m");
   });
 
-  it("writes a launcher that lists the repository, cwd and global anchors in that order", async () => {
+  it("writes a launcher that resolves the declared package first and the global install second", async () => {
     const source = buildGuardLauncherSource();
-    expect(source.split("\n")[1]).toContain("aibill guard hook launcher v1");
-    expect(source.indexOf('join(repositoryRoot, "package.json")')).toBeLessThan(source.indexOf('join(process.cwd(), "package.json")'));
-    expect(source.indexOf('join(process.cwd(), "package.json")')).toBeLessThan(source.indexOf('join(globalRoot, "package.json")'));
+    expect(source.split("\n")[1]).toContain("aibill guard hook launcher v2");
+    expect(source).toContain("declaresAibill()");
+    expect(source.indexOf('join(checkoutRoot, "package.json")')).toBeLessThan(source.indexOf('join(globalRoot, "package.json")'));
+    expect(source).not.toContain("process.cwd()");
     const directory = await mkdtemp(join(tmpdir(), "aibill-guard-launcher-"));
     await writeFile(join(directory, "guard-hook.mjs"), source);
     await execFileAsync(process.execPath, ["--check", join(directory, "guard-hook.mjs")]);
