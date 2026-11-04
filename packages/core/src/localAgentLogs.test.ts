@@ -1621,6 +1621,36 @@ describe("aggregateCalls", () => {
     expect(dedupeCumulativeSessionCalls([complete, unsupported])).toEqual([complete]);
   });
 
+  it("keeps one call when the same complete stable turn is written twice with different timestamps", () => {
+    // Claude Code relays a sub-agent's reply into the parent transcript; the
+    // two copies carry the same evidence with timestamps seconds apart.
+    const base = {
+      agent: "claude-code" as const,
+      callId: "same-message",
+      sessionId: "same-session",
+      model: "claude-opus-5-5",
+      project: "agent-finops",
+      usageScope: "turn" as const,
+      usage: {
+        inputTokens: 2,
+        outputTokens: 2659,
+        cacheReadTokens: 172_213,
+        cacheWrite5mTokens: 0,
+        cacheWrite1hTokens: 21_985
+      }
+    };
+    const parent = { ...base, timestamp: "2026-10-31T22:49:56.701Z" };
+    const relayed = { ...base, timestamp: "2026-10-31T22:50:10.120Z" };
+    const conflicts: string[] = [];
+
+    const forward = dedupeCumulativeSessionCalls([parent, relayed], (agent) => conflicts.push(agent));
+    const reverse = dedupeCumulativeSessionCalls([relayed, parent], (agent) => conflicts.push(agent));
+
+    expect(forward).toEqual([parent]);
+    expect(reverse).toEqual([parent]);
+    expect(conflicts).toEqual([]);
+  });
+
   it("groups by day+agent+model+project, prices via the rule table, and passes schema", () => {
     const calls = [
       ...parseClaudeCodeTranscript(claudeLine()),
@@ -2038,6 +2068,26 @@ describe("Claude native response identity across transcript files", () => {
       expect(calls[0]?.callId).toMatch(/^callref_[a-f0-9]{64}$/);
       expect(calls[0]?.callId).not.toContain("msg-1");
       expect(calls[0]?.callId).not.toContain("req-1");
+      expect(result.records.find((record) => record.agentId === "claude-code")).toMatchObject({
+        quantity: 1,
+        costConfidence: "estimated"
+      });
+    });
+
+    it(`${name} path keeps one call when a sub-agent reply is relayed into its parent seconds later`, async () => {
+      const directories = await fixtureDirectories(`aibill-claude-${name}-relay-`);
+      const parent = claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" });
+      const relayed = claudeLine({ timestamp: "2026-06-08T10:00:14.120Z" });
+      await writeFile(join(directories.claudeProjectsDir, "parent.jsonl"), parent, "utf8");
+      await mkdir(join(directories.claudeProjectsDir, "subagents"));
+      await writeFile(join(directories.claudeProjectsDir, "subagents", "agent-1.jsonl"), relayed, "utf8");
+
+      const result = await load(directories);
+      const calls = result.calls.filter((call) => call.agent === "claude-code");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.timestamp).toBe("2026-06-08T10:00:00.000Z");
+      expect(calls[0]?.usageSupport).toBeUndefined();
+      expect(result.diagnostics.filter((item) => item.code === "unsupported_token_shape")).toEqual([]);
       expect(result.records.find((record) => record.agentId === "claude-code")).toMatchObject({
         quantity: 1,
         costConfidence: "estimated"

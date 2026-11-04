@@ -16,6 +16,12 @@ historical untagged exception.
   anything. The message now costs the sum of its requests, its context size is
   the last request's, and a message with no readable iterations is priced from
   the top level exactly as before.
+- Treat two copies of one Claude Code response that carry the same evidence
+  but different timestamps as one call, kept at its earliest timestamp. Claude
+  Code relays a sub-agent's reply into the parent transcript seconds later;
+  earlier versions marked the pair `conflicting-local-evidence`, and that one
+  pair made `workspace push` refuse to send anything. Copies whose evidence
+  differs still fail closed.
 
 ## 0.9.14 (published on npm)
 

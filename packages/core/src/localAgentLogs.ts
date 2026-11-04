@@ -737,6 +737,11 @@ export function dedupeCumulativeSessionCalls(
           stableTurnEvidenceFingerprint(call) !== stableTurnEvidenceFingerprint(prior)) {
         stableTurns.set(key, conflictingStableTurn(prior, call));
         onStableTurnConflict?.(call.agent);
+      } else if (isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
+        // The same complete evidence written twice (Claude Code relays a
+        // sub-agent's reply into the parent transcript seconds later) is one
+        // call. Keep its earliest timestamp, whichever file came first.
+        if (call.timestamp.localeCompare(prior.timestamp) < 0) stableTurns.set(key, call);
       } else if (!isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
         // JSONL/checkpoint copies can preserve an early tokenless snapshot
         // beside its later complete update. Complete evidence supersedes only
@@ -767,8 +772,9 @@ function isCompleteStableTurn(call: LocalAgentCall): boolean {
 }
 
 function stableTurnEvidenceFingerprint(call: LocalAgentCall): string {
+  // The timestamp is left out: copies of one response can be written seconds
+  // apart, and only the evidence decides whether they conflict.
   return JSON.stringify({
-    timestamp: call.timestamp,
     model: call.model,
     project: call.project ?? null,
     workingDirectoryRef: stableWorkingDirectoryRef(call),
