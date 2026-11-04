@@ -24,6 +24,9 @@ const officialHosts = new Set([
   "platform.claude.com",
   "geminicli.com",
   "ai.google.dev",
+  // The Gemini Developer API docs moved here in late October 2026; the HTML is
+  // a JavaScript shell, so contracts point at the Markdown mirror (.md).
+  "aistudio.google.com",
   "docs.cloud.google.com",
   "cursor.com",
   "docs.github.com"
@@ -242,7 +245,11 @@ export function normalizeDocument(value) {
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
+    // Only tag-like sequences are markup: a tag name, a closing slash, a comment
+    // or a processing instruction. A bare "<" followed by anything else is text,
+    // as in a pricing table's "prompts <= 200k tokens". Every reviewed HTML page
+    // normalizes identically either way; this matters for Markdown pages.
+    .replace(/<\/?[a-zA-Z!?][^>]*>/g, " ")
     .replace(/&nbsp;|&#160;/gi, " ")
     .replace(/&amp;|&#38;/gi, "&")
     .replace(/&lt;|&#60;/gi, "<")
