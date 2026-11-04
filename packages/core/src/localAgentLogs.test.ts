@@ -246,6 +246,46 @@ describe("parseClaudeCodeTranscript", () => {
     expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
   });
 
+  it("fails closed on iteration lists it does not recognise", () => {
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    // A contradictory top-level split, so only a recognised served iteration
+    // can make the line price.
+    const contradictory = { cache_creation: { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 201 } };
+    const served = {
+      type: "message",
+      input_tokens: 100,
+      output_tokens: 200,
+      cache_read_input_tokens: 1000,
+      cache_creation_input_tokens: 500,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 }
+    };
+    const sideCall = { type: "advisor_message", input_tokens: 9, output_tokens: 9, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const parse = (iterations: unknown[]) =>
+      parseClaudeCodeTranscript(claudeLine({}, { ...contradictory, iterations }), "", undefined, diagnostic => diagnostics.push(diagnostic))[0];
+    // Recognised: the served reply, then a server-side side call.
+    const priced = parse([served, sideCall]);
+    expect(priced?.usageSupport).toBeUndefined();
+    expect(priced?.usage).toMatchObject({ outputTokens: 200, cacheWrite1hTokens: 500 });
+    expect(priced?.latestTurnUsage?.contextTokens).toBe(1600);
+    expect(diagnostics).toEqual([]);
+    // Not recognised: an unknown kind or shape ends the search; a served
+    // iteration missing a count, naming another model, or carrying an
+    // inconsistent split never replaces the top level.
+    const { cache_read_input_tokens: _absent, ...withoutRead } = served;
+    for (const iterations of [
+      [served, { ...sideCall, type: "retry_message" }],
+      [served, null],
+      [{ ...served, model: "claude-sonnet-5-5" }],
+      [withoutRead],
+      [{ ...served, cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 5 } }]
+    ]) {
+      expect(parse(iterations)?.usageSupport).toBe("unsupported_token_shape");
+    }
+    expect(diagnostics).toHaveLength(5);
+    // A served iteration that names the message's own model is recognised.
+    expect(parse([{ ...served, type: "fallback_message", model: "claude-opus-4-8" }])?.usageSupport).toBeUndefined();
+  });
+
   it("distinguishes a provider total from a partial calculated Claude component total", () => {
     const [withoutTotal] = parseClaudeCodeTranscript(claudeLine({}, {
       cache_read_input_tokens: undefined,

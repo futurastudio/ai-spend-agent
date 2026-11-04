@@ -869,7 +869,8 @@ type ParsedClaudeFinancialUsage = {
 
 function parseClaudeFinancialUsage(
   value: Record<string, unknown>,
-  onDiagnostic?: TranscriptParseDiagnosticHandler
+  onDiagnostic?: TranscriptParseDiagnosticHandler,
+  messageModel?: string
 ): ParsedClaudeFinancialUsage {
   // Claude Code copies the API's `usage.iterations` when one assistant message
   // took several requests (a model fallback after a failed attempt). The
@@ -879,7 +880,7 @@ function parseClaudeFinancialUsage(
   // served iteration, that iteration's own split is the one to read. Any other
   // list is left to the top-level rules below.
   const served = lastServedIteration(value.iterations);
-  if (served && servedIterationMatches(value, served) && isRecord(served.cache_creation)) {
+  if (served && servedIterationMatches(value, served, messageModel) && isRecord(served.cache_creation)) {
     value = { ...value, cache_creation: served.cache_creation };
   }
   const inputTokens = tokenComponentOf(value.input_tokens);
@@ -975,7 +976,8 @@ function parseClaudeFinancialUsage(
 /**
  * The last iteration that answered the request: a `message` or a
  * `fallback_message`. Server-side side calls (`advisor_message`, `compaction`)
- * are not the served reply, and an iteration of unknown shape ends the search.
+ * are skipped; any other kind, or an iteration of unknown shape, ends the
+ * search so an unfamiliar list falls to the top-level rules.
  */
 function lastServedIteration(iterations: unknown): Record<string, unknown> | undefined {
   if (!Array.isArray(iterations)) return undefined;
@@ -984,13 +986,23 @@ function lastServedIteration(iterations: unknown): Record<string, unknown> | und
     if (!isRecord(iteration)) return undefined;
     const type = stringOf(iteration.type);
     if (type === "message" || type === "fallback_message") return iteration;
-    if (type === undefined) return undefined;
+    if (type !== "advisor_message" && type !== "compaction") return undefined;
   }
   return undefined;
 }
 
-/** The four top-level counts are present and equal the served iteration's own. */
-function servedIterationMatches(value: Record<string, unknown>, served: Record<string, unknown>): boolean {
+/**
+ * The four top-level counts are present and equal the served iteration's own,
+ * and a served iteration that names its model names the message's model, so
+ * a request is never priced at another model's rate.
+ */
+function servedIterationMatches(
+  value: Record<string, unknown>,
+  served: Record<string, unknown>,
+  messageModel: string | undefined
+): boolean {
+  const servedModel = stringOf(served.model);
+  if (servedModel !== undefined && servedModel !== messageModel) return false;
   return (["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const)
     .every((key) => {
       const top = tokenComponentOf(value[key]);
@@ -1303,7 +1315,7 @@ export function parseClaudeCodeTranscript(
       pendingPrompts.length = 0;
       continue;
     }
-    const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
+    const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic, stringOf(message.model));
     const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
     const project = projectFromCwd(workingDirectory) ?? projectFromTranscriptPath(filePath);
     const sessionId = stringOf(entry.sessionId);
@@ -4539,7 +4551,7 @@ function parseClaudeFinancialEntry(
   if (nativeResponse) seen.add(nativeResponse.localDedupeKey);
   const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
   if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) return undefined;
-  const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic);
+  const parsedUsage = parseClaudeFinancialUsage(usage, onDiagnostic, stringOf(message.model));
   const workingDirectory = absoluteWorkingDirectory(stringOf(entry.cwd));
   return {
     agent: "claude-code",
