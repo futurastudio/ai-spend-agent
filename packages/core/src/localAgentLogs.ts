@@ -4825,18 +4825,20 @@ export function aggregateCallsForFormats(
     const sourceVersions = [...new Set(
       groupCalls.flatMap((call) => call.sourceVersion ? [call.sourceVersion] : [])
     )].sort().slice(0, 8);
-    const tieredPricingEvidenceSupported = !usesPromptTieredPricing(model) ||
+    // Every call in the group shares this UTC day, which selects dated rates
+    // and whether a prompt-size tier is in force that day.
+    const tieredPricingEvidenceSupported = !usesPromptTieredPricing(model, day) ||
       groupCalls.every((call) =>
         canPriceTokenUsageAtScope(
           model,
           call.usage,
           call.usageScope === "turn" ? "request" : "aggregate",
-          call.maxRequestPromptTokens
+          call.maxRequestPromptTokens,
+          day
         ) && (agent !== "gemini-cli" || hasCompleteGeminiPromptEvidence(call))
       );
-    // Every call in the group shares this UTC day, which selects dated rates.
     const amountUsd = usageSupported && tieredPricingEvidenceSupported && format
-      ? usesPromptTieredPricing(model)
+      ? usesPromptTieredPricing(model, day)
         ? estimateTokenCostsUsd(
             model,
             groupCalls.map((call) => call.usage),

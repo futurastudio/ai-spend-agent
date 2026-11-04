@@ -1166,7 +1166,8 @@ function callCost(call: LocalAgentCall): number | undefined {
     call.model,
     call.usage,
     call.usageScope === "turn" ? "request" : "aggregate",
-    call.maxRequestPromptTokens
+    call.maxRequestPromptTokens,
+    call.timestamp
   )) return undefined;
   // Tier must come from the largest single request, and dated rates from the
   // call's UTC day, exactly as the report's aggregation does — otherwise the
