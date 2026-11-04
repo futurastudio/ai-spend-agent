@@ -15,6 +15,16 @@ import {
 import type { UsageRecord } from "./schema.js";
 import { redactSecrets } from "./discovery.js";
 import {
+  claudeNativeResponseIdentity,
+  claudeResponseLineRank,
+  eachNewClaudeToolUse,
+  finalClaudeResponseLines,
+  outranks,
+  preferredClaudeResponseCopy,
+  tokenComponentOf,
+  type ClaudeResponseLineRank
+} from "./claudeResponseLines.js";
+import {
   createCodexInvocationCollector,
   isCodexInvocationCollectorSnapshot,
   type CodexInvocationCollectorSnapshot,
@@ -507,8 +517,10 @@ export const localAgentFinancialParserVersion = 4;
  * version mismatch discards it and re-parses from scratch instead. Bumped to 6
  * with the user-fork inherited-baseline fix: v5 entries and checkpoints treated
  * a fork's replayed parent history as the child's own usage and activity.
+ * Bumped to 8 when tool-use evidence became the union over a streamed
+ * response's lines: v7 entries and checkpoints counted the blocks of one line.
  */
-export const localAgentQualitativeParserVersion = 7;
+export const localAgentQualitativeParserVersion = 8;
 
 /**
  * Conservative launch defaults for action-capable qualitative evidence.
@@ -822,8 +834,8 @@ function isStableTurnConflict(call: LocalAgentCall): boolean {
 }
 
 function preferredStableTurnCopy(prior: LocalAgentCall, candidate: LocalAgentCall): LocalAgentCall {
-  if (Boolean(prior.subagentId) !== Boolean(candidate.subagentId)) return prior.subagentId ? candidate : prior;
-  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+  const copy = (call: LocalAgentCall) => ({ subagent: Boolean(call.subagentId), timestamp: call.timestamp, call });
+  return preferredClaudeResponseCopy(copy(prior), copy(candidate)).call;
 }
 
 function conflictingStableTurn(
@@ -1197,12 +1209,21 @@ export function parseClaudeCodeTranscript(
   const calls: LocalAgentCall[] = [];
   const lines = content.split("\n");
   const finalLines = finalClaudeResponseLines(lines);
+  // Streaming writes one content block per line, so a response's tool_use
+  // evidence is the union over its lines, keyed by native identity.
+  const responseToolUse = new Map<string, {
+    seen: Set<string>;
+    toolCallCount: number;
+    files: Map<string, number>;
+  }>();
   let lineIndex = -1;
   const pendingPrompts: string[] = [];
   const activityEvidence = new Map<string, {
     prompts: string[];
     files: Map<string, number>;
     toolCallCount: number;
+    /** Native identities of the responses counted here; their tool_use evidence is attributed after the pass. */
+    responses: string[];
   }>();
   let title: string | undefined;
   let lastPrompt: string | undefined;
@@ -1302,14 +1323,23 @@ export function parseClaudeCodeTranscript(
         if (isHumanPrompt(prompt)) pendingPrompts.push(prompt);
       }
     }
-    if (entry.type !== "assistant") continue;
-    const usage = message && isRecord(message.usage) ? message.usage : undefined;
-    if (!message || !usage) continue;
+    if (entry.type !== "assistant" || !message) continue;
     // "<synthetic>" marks Claude Code internal placeholder messages, not API calls.
     if (stringOf(message.model) === "<synthetic>") continue;
-    // Streaming writes the same API response on several lines; only the one
-    // carrying its final state counts.
     const nativeResponse = claudeNativeResponseIdentity(message, entry);
+    if (nativeResponse) {
+      const toolUse = responseToolUse.get(nativeResponse.localDedupeKey) ??
+        { seen: new Set<string>(), toolCallCount: 0, files: new Map<string, number>() };
+      eachNewClaudeToolUse(message, toolUse.seen, (block) => {
+        toolUse.toolCallCount += 1;
+        collectToolFiles(block.input, toolUse.files);
+      });
+      responseToolUse.set(nativeResponse.localDedupeKey, toolUse);
+    }
+    const usage = isRecord(message.usage) ? message.usage : undefined;
+    if (!usage) continue;
+    // Streaming writes the same API response on several lines; only the one
+    // carrying its final state counts as the call.
     if (nativeResponse && finalLines.get(nativeResponse.localDedupeKey) !== lineIndex) continue;
     const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
     if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) {
@@ -1351,14 +1381,19 @@ export function parseClaudeCodeTranscript(
     const evidence = activityEvidence.get(activityKey) ?? {
       prompts: [],
       files: new Map<string, number>(),
-      toolCallCount: 0
+      toolCallCount: 0,
+      responses: []
     };
     evidence.prompts.push(...pendingPrompts);
     pendingPrompts.length = 0;
-    for (const item of recordValues(message.content)) {
-      if (item.type !== "tool_use") continue;
-      evidence.toolCallCount += 1;
-      collectToolFiles(item.input, evidence.files);
+    if (nativeResponse) {
+      evidence.responses.push(nativeResponse.localDedupeKey);
+    } else {
+      for (const item of recordValues(message.content)) {
+        if (item.type !== "tool_use") continue;
+        evidence.toolCallCount += 1;
+        collectToolFiles(item.input, evidence.files);
+      }
     }
     activityEvidence.set(activityKey, evidence);
     latestActivityKey = activityKey;
@@ -1385,6 +1420,18 @@ export function parseClaudeCodeTranscript(
     target.subagentCompletions = [...bySubagent.entries()]
       .sort((left, right) => left[0].localeCompare(right[0]))
       .map(([subagentId, observedAt]) => ({ subagentId, observedAt }));
+  }
+  // Attribute each counted response's tool_use evidence, gathered over all of
+  // its lines, to the activity that counted it.
+  for (const evidence of activityEvidence.values()) {
+    for (const key of evidence.responses) {
+      const toolUse = responseToolUse.get(key);
+      if (!toolUse) continue;
+      evidence.toolCallCount += toolUse.toolCallCount;
+      for (const [file, count] of toolUse.files) {
+        evidence.files.set(file, (evidence.files.get(file) ?? 0) + count);
+      }
+    }
   }
   const fallbackPrompt = lastPrompt && isHumanPrompt(lastPrompt) ? lastPrompt : undefined;
   const activities = new Map<string, LocalAgentActivity>();
@@ -4527,66 +4574,12 @@ function newErrorWithCode(code: string): NodeJS.ErrnoException {
   return error;
 }
 
-type ClaudeNativeResponseIdentity = {
-  /** In-process only; raw provider ids never enter a returned call or cache. */
-  localDedupeKey: string;
-  /** Stable privacy-safe identity used for cross-file checkpoint deduplication. */
-  callId: string;
-};
-
-function claudeNativeResponseIdentity(
-  message: Record<string, unknown>,
-  entry: Record<string, unknown>
-): ClaudeNativeResponseIdentity | undefined {
-  const rawMessageId = stringOf(message.id);
-  const rawRequestId = stringOf(entry.requestId);
-  // Never weaken a two-part native identity by silently dropping one
-  // attacker-sized component; without the exact bounded pair there is no
-  // cross-file deduplication proof.
-  if ((rawMessageId && rawMessageId.length > 4_096) ||
-      (rawRequestId && rawRequestId.length > 4_096)) {
-    return undefined;
-  }
-  const messageId = rawMessageId || undefined;
-  const requestId = rawRequestId || undefined;
-  if (!messageId && !requestId) return undefined;
-  const localDedupeKey = JSON.stringify([messageId ?? null, requestId ?? null]);
-  return {
-    localDedupeKey,
-    callId: `callref_${createHash("sha256")
-      .update("claude-native-response-v1")
-      .update("\u0000")
-      .update(localDedupeKey)
-      .digest("hex")}`
-  };
-}
-
-type ClaudeResponseLineRank = { final: boolean; outputTokens: number };
-
 type ClaudeFinancialCandidate = {
   entry: Record<string, unknown>;
   timestamp: string | undefined;
   rank: ClaudeResponseLineRank;
   order: number;
 };
-
-/**
- * Ranks the lines Claude Code writes for one response. The line carrying the
- * final state has `iterations` or a stop reason and the largest output count;
- * the `message_start` placeholder has neither, and a zeroed copy written after
- * the final line ranks below it on output.
- */
-function claudeResponseLineRank(message: Record<string, unknown>, usage: Record<string, unknown>): ClaudeResponseLineRank {
-  return {
-    final: Array.isArray(usage.iterations) || stringOf(message.stop_reason) !== undefined,
-    outputTokens: tokenComponentOf(usage.output_tokens) ?? -1
-  };
-}
-
-function outranks(candidate: ClaudeResponseLineRank, prior: ClaudeResponseLineRank): boolean {
-  if (candidate.final !== prior.final) return candidate.final;
-  return candidate.outputTokens > prior.outputTokens;
-}
 
 /** The fields the financial parser reads, without the message content. */
 function slimClaudeFinancialEntry(entry: Record<string, unknown>): Record<string, unknown> {
@@ -4599,35 +4592,6 @@ function slimClaudeFinancialEntry(entry: Record<string, unknown>): Record<string
     if (key in entry) slim[key] = entry[key];
   }
   return slim;
-}
-
-/**
- * Claude Code writes an assistant message several times while it streams: a
- * `message_start` line with a placeholder output count first, the final
- * `message_delta` counts later, sometimes a zeroed copy after that. The
- * highest-ranked line carries the final state; ties keep the first. Returns
- * the chosen line index per native response identity.
- */
-function finalClaudeResponseLines(lines: readonly string[]): Map<string, number> {
-  const chosen = new Map<string, { index: number; rank: ClaudeResponseLineRank }>();
-  lines.forEach((line, index) => {
-    if (!line.includes('"usage"')) return;
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (!isRecord(entry) || entry.type !== "assistant" || !isRecord(entry.message)) return;
-    const message = entry.message;
-    if (!isRecord(message.usage) || stringOf(message.model) === "<synthetic>") return;
-    const identity = claudeNativeResponseIdentity(message, entry);
-    if (!identity) return;
-    const rank = claudeResponseLineRank(message, message.usage);
-    const prior = chosen.get(identity.localDedupeKey);
-    if (!prior || outranks(rank, prior.rank)) chosen.set(identity.localDedupeKey, { index, rank });
-  });
-  return new Map([...chosen].map(([key, value]) => [key, value.index]));
 }
 
 function parseClaudeFinancialEntry(
@@ -5589,11 +5553,6 @@ function sum(calls: LocalAgentCall[], pick: (call: LocalAgentCall) => number): n
 
 function numberOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function tokenComponentOf(value: unknown): number | undefined {
-  const parsed = numberOf(value);
-  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
 function stringOf(value: unknown): string | undefined {

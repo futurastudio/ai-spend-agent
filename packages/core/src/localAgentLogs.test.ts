@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, mkdir, readFile, symlink, unlink, utimes, writeFile } from "node:fs/promises";
@@ -3750,5 +3751,34 @@ describe("Codex USER forks inherit a baseline, not a bill", () => {
       .replace('"forked_from_id":"parent-session"', '"parent_thread_id":"parent-session"');
     const call = parseCodexRollout(subagent)[0]!;
     expect(call.usage).toMatchObject({ inputTokens: 20_000, outputTokens: 5_000 });
+  });
+});
+
+describe("parseClaudeCodeTranscript on a streamed Claude Code message", () => {
+  it("attributes the tool_use blocks from every line of the message to its activity", () => {
+    // Real 2.1.222 lines, anonymized: a placeholder thinking line, then one
+    // Read block per line; only the sixth line carries the final state.
+    const streamed = readFileSync(
+      new URL("./fixtures/local-agent-formats/claude-code-streaming-v1/streamed-tool-use.jsonl", import.meta.url),
+      "utf8"
+    );
+    const calls = parseClaudeCodeTranscript(
+      streamed,
+      "/Users/testuser/.claude/projects/-fixture-project/fixture-session/subagents/agent-fixture.jsonl"
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      timestamp: "2026-06-16T12:00:03.191Z",
+      subagentId: "agent-fixture",
+      usage: { outputTokens: 475 }
+    });
+    // Before this fix the activity saw the final line's one block.
+    expect(calls[0]?.activity).toMatchObject({
+      toolCallCount: 5,
+      files: ["file-1.ts", "file-2.ts", "file-3.ts", "file-4.ts", "file-5.ts"]
+    });
+    // The window is the final line's: the earlier lines' blocks still count.
+    const straddle = parseClaudeCodeTranscript(streamed, "", Date.parse("2026-06-16T12:00:03.000Z"));
+    expect(straddle.map((call) => call.activity?.toolCallCount)).toEqual([5]);
   });
 });

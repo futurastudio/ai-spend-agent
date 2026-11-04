@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -626,5 +627,246 @@ describe("loadToolInvocations", () => {
     } finally {
       await rm(staleRoot, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Real Claude Code 2.1.222 transcript lines, anonymized (every string value
+ * replaced, numbers kept): one assistant message written on six lines. The
+ * `message_start` placeholder (a thinking block, 7 output tokens, no stop
+ * reason) comes first, then one `tool_use` block per line; only the last line
+ * carries `stop_reason` and the final output count.
+ */
+const streamedFixture = readFileSync(
+  new URL("./fixtures/local-agent-formats/claude-code-streaming-v1/streamed-tool-use.jsonl", import.meta.url),
+  "utf8"
+);
+
+/** The tool_use blocks on one JSONL line: what a single-line selection would count. */
+function toolUsesOnLine(line: string): number {
+  const entry = JSON.parse(line) as { message: { content: Array<{ type: string }> } };
+  return entry.message.content.filter((block) => block.type === "tool_use").length;
+}
+
+describe("parseClaudeCodeInvocations on a streamed Claude Code message", () => {
+  const lines = streamedFixture.trim().split("\n");
+
+  it("counts the union of tool_use blocks over the message's lines, not one line's", () => {
+    expect(lines).toHaveLength(6);
+    // Before this fix the first line per response was kept, so the message
+    // counted 0 tool invocations; the final-state line alone would count 1.
+    expect(toolUsesOnLine(lines[0]!)).toBe(0);
+    expect(toolUsesOnLine(lines[5]!)).toBe(1);
+    expect(lines.reduce((sum, line) => sum + toolUsesOnLine(line), 0)).toBe(5);
+
+    const parsed = parseClaudeCodeInvocations(streamedFixture);
+    expect(parsed.assistantTurns).toBe(1);
+    expect(parsed.invocations).toEqual([{ name: "Read", count: 5 }]);
+    expect(parsed.contextSignal).toMatchObject({
+      sessionId: "fixture-session",
+      isSubagent: true,
+      lastActivityAt: "2026-06-16T12:00:03.191Z",
+      fileReads: [1, 2, 3, 4, 5].map((n) => ({ name: `file-${n}.ts`, count: 1 })),
+      repeatedFileReads: []
+    });
+  });
+
+  it("counts the message once from its final line, inside the window, with every block", () => {
+    // Placeholder and the first blocks sit before the window start, the final
+    // line inside it: the message counts, with all five blocks.
+    const straddle = parseClaudeCodeInvocations(streamedFixture, Date.parse("2026-06-16T12:00:03.000Z"));
+    expect(straddle.assistantTurns).toBe(1);
+    expect(straddle.invocations).toEqual([{ name: "Read", count: 5 }]);
+    // Final line before the window: nothing counts.
+    const after = parseClaudeCodeInvocations(streamedFixture, Date.parse("2026-06-16T12:00:04.000Z"));
+    expect(after.assistantTurns).toBe(0);
+    expect(after.invocations).toEqual([]);
+  });
+
+  it("gathers blocks written after the counted line and leaves single-line messages unchanged", () => {
+    // The shape from 2.1.287 on: identical final usage on every line (ties keep
+    // the first line as the turn) with the blocks on later lines.
+    const usage = { input_tokens: 2, output_tokens: 551, cache_read_input_tokens: 40_658, cache_creation_input_tokens: 0 };
+    const streamed = (blocks: Array<Record<string, unknown>>, lineUsage: Record<string, unknown> = usage): string =>
+      JSON.stringify({
+        type: "assistant",
+        requestId: "req_tie",
+        timestamp: "2026-06-16T12:00:00.000Z",
+        sessionId: "tie-session",
+        message: { id: "msg_tie", model: "claude-opus-4-8", role: "assistant", stop_reason: "tool_use", usage: lineUsage, content: blocks }
+      });
+    const content = [
+      streamed([{ type: "thinking", thinking: "x" }]),
+      streamed([{ type: "text", text: "x" }]),
+      streamed([{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }]),
+      streamed([{ type: "tool_use", id: "t2", name: "Bash", input: { command: "pwd" } }]),
+      // A zeroed copy repeating the last block after the final line counts once.
+      streamed([{ type: "tool_use", id: "t2", name: "Bash", input: { command: "pwd" } }], { input_tokens: 0, output_tokens: 0 }),
+      assistantLine("msg_single", "req_single", [
+        { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/private/project/x.ts" } }
+      ], { sessionId: "tie-session" })
+    ].join("\n");
+    const parsed = parseClaudeCodeInvocations(content);
+    expect(parsed.assistantTurns).toBe(2);
+    expect(parsed.invocations).toEqual([{ name: "Bash", count: 2 }, { name: "Edit", count: 1 }]);
+    // Straddling the window start: the first line is the turn (ties keep the
+    // first), so a window that opens after it counts nothing, however many of
+    // the later lines fall inside it. The financial reader keeps the same line
+    // and excludes the call the same way.
+    const tieLines = content.split("\n").slice(0, 5);
+    const straddle = parseClaudeCodeInvocations(
+      tieLines.map((line, index) => index === 0 ? line : line.replace("12:00:00.000Z", "12:00:02.000Z")).join("\n"),
+      Date.parse("2026-06-16T12:00:01.000Z")
+    );
+    expect(straddle.assistantTurns).toBe(0);
+    expect(straddle.invocations).toEqual([]);
+  });
+});
+
+describe("loadToolInvocations across parent and sub-agent transcripts", () => {
+  const usage = (output_tokens: number) => ({ input_tokens: 2, output_tokens, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 });
+  const parentTurn = (overrides: Record<string, unknown>, message: Record<string, unknown>): string => JSON.stringify({
+    type: "assistant",
+    sessionId: "session-a",
+    requestId: "req_parent",
+    timestamp: "2026-06-16T12:00:00.000Z",
+    message: { id: "msg_parent", model: "claude-opus-4-8", role: "assistant", stop_reason: null, usage: usage(3), content: [], ...message },
+    ...overrides
+  });
+  const placeholder = parentTurn({}, { content: [{ type: "thinking", thinking: "x" }] });
+  const finalLine = parentTurn({ timestamp: "2026-06-16T12:00:05.000Z" }, {
+    stop_reason: "tool_use",
+    usage: usage(120),
+    content: [{ type: "tool_use", id: "tu_agent", name: "Agent", input: { subagent_type: "general-purpose" } }]
+  });
+  // The sub-agent transcript opens with a copy of the forked parent turn,
+  // written seconds later, then holds its own streamed message (the fixture).
+  const forkedCopy = parentTurn({ timestamp: "2026-06-16T12:00:09.000Z", isSidechain: true, agentId: "agent-fixture" }, {
+    stop_reason: "tool_use",
+    usage: usage(120),
+    content: [{ type: "tool_use", id: "tu_agent", name: "Agent", input: { subagent_type: "general-purpose" } }]
+  });
+  const subagentTranscript = `${forkedCopy}\n${streamedFixture.replaceAll("fixture-session", "session-a")}`;
+
+  async function summarize(
+    projectFiles: Record<string, string>,
+    sinceIso?: string
+  ): Promise<Awaited<ReturnType<typeof loadToolInvocations>>> {
+    const dir = await mkdtemp(join(tmpdir(), "aibill-invocations-"));
+    try {
+      const projectDir = join(dir, "projects", "-Users-testuser-project");
+      for (const [relative, content] of Object.entries(projectFiles)) {
+        const file = join(projectDir, relative);
+        await mkdir(join(file, ".."), { recursive: true });
+        await writeFile(file, content);
+      }
+      return await loadToolInvocations({
+        claudeProjectsDir: join(dir, "projects"),
+        codexSessionsDir: join(dir, "no-codex"),
+        ...(sinceIso ? { sinceIso } : {})
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("counts a response copied into a sub-agent transcript once, in the parent", async () => {
+    const summary = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    });
+    expect(summary.sessions).toBe(2);
+    expect(summary.sessionTurnCounts).toEqual([1, 1]);
+    expect(summary.totalAssistantTurns).toBe(2);
+    expect(summary.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }]);
+    expect(summary.invokedSubagents).toEqual(["general-purpose"]);
+    expect(summary.sessionSignals?.map((signal) => signal.isSubagent)).toEqual([false, true]);
+  });
+
+  it("keeps the blocks either copy saw when the lines are split across the two files", async () => {
+    // The parent holds only the placeholder line; the sub-agent copy holds the
+    // final line with the block. One turn, in the parent, with that block.
+    const split = await summarize({
+      "session-a.jsonl": `${placeholder}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    });
+    expect(split.sessionTurnCounts).toEqual([1, 1]);
+    expect(split.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }]);
+    // Without a parent copy, the sub-agent transcript is the only evidence and counts it.
+    const alone = await summarize({ "session-a/subagents/agent-fixture.jsonl": subagentTranscript });
+    expect(alone.sessionTurnCounts).toEqual([2]);
+    expect(alone.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }]);
+  });
+
+  it("lets the owning copy's own line decide the window, as the financial reader does", async () => {
+    // Parent turn at 12:00:05, its sub-agent copy at 12:00:09, window from
+    // 12:00:07: the parent copy owns the turn and sits before the window, so
+    // the turn is not counted; the sub-agent's own message (final line
+    // 12:00:03.191) is before the window too.
+    const windowed = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    }, "2026-06-16T12:00:07.000Z");
+    expect(windowed.sessions).toBe(0);
+    expect(windowed.invocations).toEqual([]);
+    // The parent copy inside the window counts, once.
+    const inside = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    }, "2026-06-16T12:00:04.000Z");
+    expect(inside.sessionTurnCounts).toEqual([1]);
+    expect(inside.invocations).toEqual([{ name: "Agent", count: 1 }]);
+  });
+
+  it("decides a sub-agent transcript by its path, so an inline-sidechain parent keeps its place", async () => {
+    // Older layout: the parent transcript carries sidechain lines inline
+    // (isSidechain, agentId) beside its own turn, and a `subagents/` file
+    // holds another run. Both are sessions; the parent owns its copied turn.
+    const inlineSidechain = JSON.stringify({
+      type: "assistant",
+      sessionId: "session-a",
+      requestId: "fixture-req-inline",
+      timestamp: "2026-06-16T12:00:02.000Z",
+      isSidechain: true,
+      agentId: "agent-inline",
+      message: { id: "fixture-msg-inline", model: "claude-opus-4-8", role: "assistant", stop_reason: "tool_use", usage: usage(9), content: [
+        { type: "tool_use", id: "tu_inline", name: "Grep", input: { pattern: "x" } }
+      ] }
+    });
+    const mixed = await summarize({
+      "session-a.jsonl": `${placeholder}\n${inlineSidechain}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    });
+    expect(mixed.sessions).toBe(2);
+    expect(mixed.sessionTurnCounts).toEqual([2, 1]);
+    expect(mixed.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }, { name: "Grep", count: 1 }]);
+    expect(mixed.sessionSignals?.map((signal) => signal.isSubagent)).toEqual([true, true]);
+  });
+
+  it("counts a session copied into a second transcript once, in the earlier copy", async () => {
+    // "session-a-copy.jsonl" sorts before "session-a.jsonl"; the later-sorting
+    // file holds the earlier copy and owns the turn (preferredStableTurnCopy).
+    const later = (line: string): string => line.replace("12:00:05.000Z", "12:00:45.000Z").replace("12:00:00.000Z", "12:00:40.000Z");
+    const earlierOwns = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a-copy.jsonl": `${later(placeholder)}\n${later(finalLine)}\n`
+    });
+    expect(earlierOwns.sessions).toBe(1);
+    expect(earlierOwns.sessionSignals?.map((signal) => signal.lastActivityAt)).toEqual(["2026-06-16T12:00:05.000Z"]);
+    expect(earlierOwns.invocations).toEqual([{ name: "Agent", count: 1 }]);
+    const copied = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a-copy.jsonl": `${placeholder}\n${finalLine}\n`
+    });
+    expect(copied.sessions).toBe(1);
+    expect(copied.sessionTurnCounts).toEqual([1]);
+    expect(copied.invocations).toEqual([{ name: "Agent", count: 1 }]);
+    // A different session with the same message ids is separate evidence.
+    const other = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-b.jsonl": `${placeholder.replace("session-a", "session-b")}\n${finalLine.replace("session-a", "session-b")}\n`
+    });
+    expect(other.sessions).toBe(2);
+    expect(other.invocations).toEqual([{ name: "Agent", count: 2 }]);
   });
 });

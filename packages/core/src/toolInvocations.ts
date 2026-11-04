@@ -2,6 +2,14 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { safeUntrustedLabel, WITHHELD_FILE_LABEL } from "./untrustedLabel.js";
+import {
+  claudeNativeResponseIdentity,
+  claudeResponseLineRank,
+  eachNewClaudeToolUse,
+  outranks,
+  preferredClaudeResponseCopy,
+  type ClaudeResponseLineRank
+} from "./claudeResponseLines.js";
 
 /**
  * Read-only ingestion of which tools were actually INVOKED in Claude Code
@@ -20,9 +28,15 @@ import { safeUntrustedLabel, WITHHELD_FILE_LABEL } from "./untrustedLabel.js";
  *  - Slash commands surface in type:"user" lines as
  *    "<command-name>/foo</command-name>".
  *
- * A "turn" = one assistant message that produced an API call, deduped by
- * message.id + requestId (streaming/retries write the same response on
- * multiple lines), matching parseClaudeCodeTranscript in localAgentLogs.ts.
+ * A "turn" = one assistant message that produced an API call. Claude Code
+ * writes a streamed message on several lines (same message.id + requestId,
+ * one content block per line): the turn counts once, from the line carrying
+ * its final state, and its tool_use blocks are the union over those lines,
+ * matching parseClaudeCodeTranscript in localAgentLogs.ts (the selection is
+ * shared in claudeResponseLines.ts). A response copied into several
+ * transcripts of one session (a sub-agent transcript opens with the parent
+ * turn it was forked from) counts once, in the transcript the financial
+ * reader's stable-turn dedupe would keep.
  */
 
 export type ToolInvocationCount = { name: string; count: number };
@@ -135,19 +149,80 @@ export function parseClaudeCodeInvocations(
   content: string,
   sinceMs?: number
 ): ParsedInvocationFile {
-  const counts = new Map<string, number>();
-  const mcpTools = new Set<string>();
-  const skills = new Set<string>();
-  const subagents = new Set<string>();
+  return finishClaudeCodeInvocations(collectClaudeCodeInvocations(content, sinceMs));
+}
+
+/** One `tool_use` block's privacy-safe evidence: names and a file basename, never input text. */
+type ClaudeToolUse = {
+  /** The block id, or the serialized block when it has none; dedupes copies across lines and files. */
+  key: string;
+  name: string;
+  skill?: string;
+  subagent?: string;
+  readFile?: string;
+};
+
+/** One Claude Code response (native identity) as one transcript shows it. */
+type ClaudeResponseEvidence = {
+  /** Session + native identity when the counted line proves both; the cross-file dedupe key. */
+  crossFileKey?: string;
+  /** The line carrying the response's final state fell inside the selected window. */
+  inWindow: boolean;
+  /** That line's timestamp (epoch when undated), for the cross-file owner rule. */
+  timestamp: string;
+  /** The transcript sits under a `subagents/` directory. */
+  subagent: boolean;
+  /** Rank of the counted line so far; undefined while no line carried usage. */
+  rank?: ClaudeResponseLineRank;
+  /** Block keys already gathered across this response's lines. */
+  seen: Set<string>;
+  toolUses: ClaudeToolUse[];
+  /** Another transcript holds the originating copy of this response. */
+  duplicate: boolean;
+};
+
+/** The per-file pass over one Claude Code transcript, before cross-file dedupe. */
+type ClaudeInvocationCollection = {
+  responses: ClaudeResponseEvidence[];
+  commands: Set<string>;
+  compactionEvents: number;
+  sessionId: string | undefined;
+  lastActivityAt: string | undefined;
+  isSubagent: boolean;
+  parentSessionId: string | undefined;
+};
+
+const EPOCH_ISO = new Date(0).toISOString();
+
+/**
+ * One pass over the transcript. Each line is parsed once: a response's
+ * counted line is the highest-ranked line carrying usage (`claudeResponseLineRank`,
+ * ties keep the first, the rule `finalClaudeResponseLines` applies for the
+ * financial reader), its first line when none carries usage; the window,
+ * session and timestamp evidence come from that line, and the tool_use
+ * blocks from every line.
+ */
+function collectClaudeCodeInvocations(
+  content: string,
+  sinceMs?: number,
+  subagentPath = false
+): ClaudeInvocationCollection {
+  const byIdentity = new Map<string, ClaudeResponseEvidence>();
+  const responses: ClaudeResponseEvidence[] = [];
   const commands = new Set<string>();
-  const fileReads = new Map<string, number>();
-  const seen = new Set<string>();
-  let assistantTurns = 0;
+  let compactionEvents = 0;
   let sessionId: string | undefined;
   let lastActivityAt: string | undefined;
-  let compactionEvents = 0;
   let isSubagent = false;
   let parentSessionId: string | undefined;
+  const newResponse = (): ClaudeResponseEvidence => ({
+    inWindow: false,
+    timestamp: EPOCH_ISO,
+    subagent: subagentPath,
+    seen: new Set<string>(),
+    toolUses: [],
+    duplicate: false
+  });
 
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
@@ -169,50 +244,130 @@ export function parseClaudeCodeInvocations(
     // A selected window requires dated evidence. Undated lines cannot prove an
     // invocation occurred inside that window and must not create removal-safe
     // coverage by accident.
-    if (typeof sinceMs === "number") {
-      const ts = Date.parse(stringOf(entry.timestamp) ?? "");
-      if (!Number.isFinite(ts) || ts < sinceMs) continue;
-    }
-    if (isClaudeCompactionEntry(entry)) compactionEvents += 1;
+    const timestampMs = Date.parse(timestamp ?? "");
+    const inWindow = typeof sinceMs !== "number" || (Number.isFinite(timestampMs) && timestampMs >= sinceMs);
 
-    // Slash commands surface in user lines as "<command-name>/foo</command-name>".
-    if (entry.type === "user") {
-      for (const cmd of slashCommandsFrom(entry)) commands.add(cmd);
+    if (entry.type === "assistant") {
+      const message = isRecord(entry.message) ? entry.message : undefined;
+      if (!message) continue;
+      // "<synthetic>" marks Claude Code internal placeholder messages, not API calls.
+      if (stringOf(message.model) === "<synthetic>") continue;
+      const identity = claudeNativeResponseIdentity(message, entry);
+      const prior = identity ? byIdentity.get(identity.localDedupeKey) : undefined;
+      const response = prior ?? newResponse();
+      if (!prior) {
+        if (identity) byIdentity.set(identity.localDedupeKey, response);
+        responses.push(response);
+      }
+      // One content block per streamed line: gather the response's tool_use
+      // blocks from every line it was written on.
+      eachNewClaudeToolUse(message, response.seen, (block, key) => {
+        const toolUse = claudeToolUseOf(block, key);
+        if (toolUse) response.toolUses.push(toolUse);
+      });
+      const usage = isRecord(message.usage) ? message.usage : undefined;
+      const rank = usage ? claudeResponseLineRank(message, usage) : undefined;
+      const countedLine = rank
+        ? !response.rank || outranks(rank, response.rank)
+        : !prior;
+      if (!countedLine) continue;
+      if (rank) response.rank = rank;
+      response.inWindow = inWindow;
+      response.timestamp = Number.isFinite(timestampMs) ? new Date(timestampMs).toISOString() : EPOCH_ISO;
+      const entrySessionId = stringOf(entry.sessionId);
+      response.crossFileKey = identity && entrySessionId
+        ? `${entrySessionId}\u0000${identity.localDedupeKey}`
+        : undefined;
       continue;
     }
 
-    if (entry.type !== "assistant") continue;
-    const message = isRecord(entry.message) ? entry.message : undefined;
-    if (!message) continue;
-    // "<synthetic>" marks Claude Code internal placeholder messages, not API calls.
-    if (stringOf(message.model) === "<synthetic>") continue;
+    if (!inWindow) continue;
+    if (isClaudeCompactionEntry(entry)) compactionEvents += 1;
+    // Slash commands surface in user lines as "<command-name>/foo</command-name>".
+    if (entry.type === "user") {
+      for (const cmd of slashCommandsFrom(entry)) commands.add(cmd);
+    }
+  }
 
-    // Streaming/retries can write the same API response on multiple lines.
-    const dedupeKey = `${stringOf(message.id) ?? ""}:${stringOf(entry.requestId) ?? ""}`;
-    if (dedupeKey !== ":" && seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
+  return {
+    responses,
+    commands,
+    compactionEvents,
+    sessionId,
+    lastActivityAt,
+    isSubagent,
+    parentSessionId
+  };
+}
 
-    assistantTurns += 1;
+function claudeToolUseOf(block: Record<string, unknown>, key: string): ClaudeToolUse | undefined {
+  const name = stringOf(block.name);
+  if (!name) return undefined;
+  const input = isRecord(block.input) ? block.input : undefined;
+  const toolUse: ClaudeToolUse = { key, name };
+  if (name === "Skill") {
+    const skill = input && stringOf(input.skill);
+    if (skill) toolUse.skill = skill;
+  } else if (name === "Task" || name === "Agent") {
+    const subagent = input && stringOf(input.subagent_type);
+    if (subagent) toolUse.subagent = subagent;
+  }
+  const readFile = input && explicitReadFile(name, input);
+  if (readFile) toolUse.readFile = readFile;
+  return toolUse;
+}
 
-    const blocks = Array.isArray(message.content) ? message.content : [];
-    for (const block of blocks) {
-      if (!isRecord(block) || block.type !== "tool_use") continue;
-      const name = stringOf(block.name);
-      if (!name) continue;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-
-      const input = isRecord(block.input) ? block.input : undefined;
-      if (name.startsWith("mcp__")) {
-        mcpTools.add(name);
-      } else if (name === "Skill") {
-        const skill = input && stringOf(input.skill);
-        if (skill) skills.add(skill);
-      } else if (name === "Task" || name === "Agent") {
-        const sub = input && stringOf(input.subagent_type);
-        if (sub) subagents.add(sub);
+/**
+ * One message, one count. The same response (same session, same native
+ * identity) can sit in several transcripts: a sub-agent transcript opens with
+ * the parent turn it was forked from, and a copied or resumed session repeats
+ * its history. The copy the financial reader's stable-turn dedupe keeps
+ * (`preferredClaudeResponseCopy`: outside a sub-agent transcript, else the
+ * earliest, else the first in path order) owns the turn, with the union of
+ * the tool_use blocks every copy saw, and its own line decides the window;
+ * the other copies are not counted.
+ */
+function dedupeClaudeResponsesAcrossFiles(collections: ClaudeInvocationCollection[]): void {
+  const copies = new Map<string, ClaudeResponseEvidence[]>();
+  for (const collection of collections) {
+    for (const response of collection.responses) {
+      if (!response.crossFileKey) continue;
+      const group = copies.get(response.crossFileKey) ?? [];
+      group.push(response);
+      copies.set(response.crossFileKey, group);
+    }
+  }
+  for (const group of copies.values()) {
+    if (group.length < 2) continue;
+    const owner = group.reduce((prior, candidate) => preferredClaudeResponseCopy(prior, candidate));
+    for (const response of group) {
+      if (response === owner) continue;
+      response.duplicate = true;
+      for (const toolUse of response.toolUses) {
+        if (owner.seen.has(toolUse.key)) continue;
+        owner.seen.add(toolUse.key);
+        owner.toolUses.push(toolUse);
       }
-      const file = input && explicitReadFile(name, input);
-      if (file) fileReads.set(file, (fileReads.get(file) ?? 0) + 1);
+    }
+  }
+}
+
+function finishClaudeCodeInvocations(collection: ClaudeInvocationCollection): ParsedInvocationFile {
+  const counts = new Map<string, number>();
+  const mcpTools = new Set<string>();
+  const skills = new Set<string>();
+  const subagents = new Set<string>();
+  const fileReads = new Map<string, number>();
+  let assistantTurns = 0;
+  for (const response of collection.responses) {
+    if (!response.inWindow || response.duplicate) continue;
+    assistantTurns += 1;
+    for (const toolUse of response.toolUses) {
+      counts.set(toolUse.name, (counts.get(toolUse.name) ?? 0) + 1);
+      if (toolUse.name.startsWith("mcp__")) mcpTools.add(toolUse.name);
+      if (toolUse.skill) skills.add(toolUse.skill);
+      if (toolUse.subagent) subagents.add(toolUse.subagent);
+      if (toolUse.readFile) fileReads.set(toolUse.readFile, (fileReads.get(toolUse.readFile) ?? 0) + 1);
     }
   }
 
@@ -225,16 +380,16 @@ export function parseClaudeCodeInvocations(
     invokedMcpTools: [...mcpTools].sort(),
     invokedSkills: [...skills].sort(),
     invokedSubagents: [...subagents].sort(),
-    invokedCommands: [...commands].sort(),
+    invokedCommands: [...collection.commands].sort(),
     assistantTurns,
     contextSignal: buildSessionContextSignal({
       agent: "claude-code",
-      sessionId,
-      lastActivityAt,
-      compactionEvents,
+      sessionId: collection.sessionId,
+      lastActivityAt: collection.lastActivityAt,
+      compactionEvents: collection.compactionEvents,
       fileReads,
-      isSubagent,
-      parentSessionId
+      isSubagent: collection.isSubagent,
+      parentSessionId: collection.parentSessionId
     })
   };
 }
@@ -568,10 +723,21 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   let claudeCodeSessions = 0;
   let codexSessions = 0;
 
-  for (const file of await listJsonlFiles(claudeDir)) {
+  // Path order breaks owner ties between equal copies of a response, so the
+  // per-session counts are the same on every run and filesystem.
+  const claudeCollections: ClaudeInvocationCollection[] = [];
+  for (const file of (await listJsonlFiles(claudeDir)).sort()) {
     const content = await readFile(file, "utf8").catch(() => "");
     if (!content) continue;
-    const parsed = parseClaudeCodeInvocations(content, sinceMs);
+    claudeCollections.push(collectClaudeCodeInvocations(
+      content,
+      sinceMs,
+      file.split(/[\\/]/).includes("subagents")
+    ));
+  }
+  dedupeClaudeResponsesAcrossFiles(claudeCollections);
+  for (const collection of claudeCollections) {
+    const parsed = finishClaudeCodeInvocations(collection);
     // A transcript file is not coverage for the selected window merely
     // because it exists on disk. Without an in-window assistant turn there
     // was no opportunity to observe an invocation, so counting the file would
