@@ -738,10 +738,11 @@ export function dedupeCumulativeSessionCalls(
         stableTurns.set(key, conflictingStableTurn(prior, call));
         onStableTurnConflict?.(call.agent);
       } else if (isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
-        // The same complete evidence written twice (Claude Code relays a
-        // sub-agent's reply into the parent transcript seconds later) is one
-        // call. Keep its earliest timestamp, whichever file came first.
-        if (call.timestamp.localeCompare(prior.timestamp) < 0) stableTurns.set(key, call);
+        // The same complete evidence written twice is one call: a sub-agent
+        // transcript opens with the parent turn it was forked from, written
+        // seconds later. Keep the originating copy (the one outside a
+        // sub-agent transcript), then the earliest, whichever file came first.
+        if (preferredStableTurnCopy(prior, call) === call) stableTurns.set(key, call);
       } else if (!isCompleteStableTurn(prior) && isCompleteStableTurn(call)) {
         // JSONL/checkpoint copies can preserve an early tokenless snapshot
         // beside its later complete update. Complete evidence supersedes only
@@ -820,6 +821,11 @@ function isStableTurnConflict(call: LocalAgentCall): boolean {
     call.usageSupport === "unsupported_token_shape";
 }
 
+function preferredStableTurnCopy(prior: LocalAgentCall, candidate: LocalAgentCall): LocalAgentCall {
+  if (Boolean(prior.subagentId) !== Boolean(candidate.subagentId)) return prior.subagentId ? candidate : prior;
+  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+}
+
 function conflictingStableTurn(
   left: LocalAgentCall,
   right: LocalAgentCall
@@ -865,20 +871,16 @@ function parseClaudeFinancialUsage(
   value: Record<string, unknown>,
   onDiagnostic?: TranscriptParseDiagnosticHandler
 ): ParsedClaudeFinancialUsage {
-  // Claude Code can serve one assistant message with several API requests
-  // (retries, continuations) and records each under `usage.iterations`. The
-  // top-level counts then describe only the last request while the
-  // cache_creation split sums every request, so the two disagree. Each
-  // iteration is a billed request: when every one prices on its own, the
-  // message costs their sum and its context is the last request's.
-  const iterations = Array.isArray(value.iterations) ? (value.iterations as unknown[]) : undefined;
-  if (iterations && iterations.length > 0 && iterations.every(isRecord)) {
-    const parts = iterations.map((iteration) => parseClaudeFinancialUsage(iteration));
-    if (parts.every((part) => part.usageSupport === undefined)) {
-      return sumClaudeIterationUsage(parts);
-    }
-    // An iteration the parser can't price leaves the top-level fields as the
-    // only evidence; they are judged below like any other message.
+  // Claude Code copies the API's `usage.iterations` when one assistant message
+  // took several requests (a model fallback after a failed attempt). The
+  // top-level counts describe the served request, but the top-level
+  // cache_creation split can sum every attempt, so the two disagree. The
+  // served request is what is billed: when the top level matches the last
+  // served iteration, that iteration's own split is the one to read. Any other
+  // list is left to the top-level rules below.
+  const served = lastServedIteration(value.iterations);
+  if (served && servedIterationMatches(value, served) && isRecord(served.cache_creation)) {
+    value = { ...value, cache_creation: served.cache_creation };
   }
   const inputTokens = tokenComponentOf(value.input_tokens);
   const outputTokens = tokenComponentOf(value.output_tokens);
@@ -971,59 +973,29 @@ function parseClaudeFinancialUsage(
 }
 
 /**
- * One assistant message served by several API requests: money is the sum of
- * the requests, and the context size is the last request's.
+ * The last iteration that answered the request: a `message` or a
+ * `fallback_message`. Server-side side calls (`advisor_message`, `compaction`)
+ * are not the served reply, and an iteration of unknown shape ends the search.
  */
-function sumClaudeIterationUsage(
-  parts: readonly ParsedClaudeFinancialUsage[]
-): ParsedClaudeFinancialUsage {
-  const usage: TokenUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWrite5mTokens: 0,
-    cacheWrite1hTokens: 0
-  };
-  for (const part of parts) {
-    usage.inputTokens += part.usage.inputTokens;
-    usage.outputTokens += part.usage.outputTokens;
-    usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (part.usage.cacheReadTokens ?? 0);
-    usage.cacheWrite5mTokens = (usage.cacheWrite5mTokens ?? 0) + (part.usage.cacheWrite5mTokens ?? 0);
-    usage.cacheWrite1hTokens = (usage.cacheWrite1hTokens ?? 0) + (part.usage.cacheWrite1hTokens ?? 0);
+function lastServedIteration(iterations: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(iterations)) return undefined;
+  for (let index = iterations.length - 1; index >= 0; index -= 1) {
+    const iteration: unknown = iterations[index];
+    if (!isRecord(iteration)) return undefined;
+    const type = stringOf(iteration.type);
+    if (type === "message" || type === "fallback_message") return iteration;
+    if (type === undefined) return undefined;
   }
-  // A component is observed only when every request reported it; a sum with a
-  // request missing stays partial, never a complete source-faithful total.
-  const evidence = parts.map((part) => part.tokenComponentEvidence);
-  const cacheReadTokens = evidence.every((item) => item?.cacheReadTokens === "observed")
-    ? "observed" as const
-    : "not_separately_reported" as const;
-  const cacheWriteTokens = evidence.every((item) => item?.cacheWriteTokens === "observed")
-    ? "observed" as const
-    : evidence.some((item) => item?.cacheWriteTokens !== "not_separately_reported")
-      ? "partial" as const
-      : "not_separately_reported" as const;
-  const reportedTotals = parts.map((part) => part.reportedTotalTokens);
-  const reportedTotalTokens = reportedTotals.every((total) => total !== undefined)
-    ? reportedTotals.reduce((sum, total) => sum + (total ?? 0), 0)
-    : undefined;
-  const last = parts[parts.length - 1];
-  return {
-    usage,
-    ...(last?.latestTurnUsage ? { latestTurnUsage: last.latestTurnUsage } : {}),
-    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
-    tokenComponentEvidence: {
-      inputTokens: "observed",
-      outputTokens: "observed",
-      cacheReadTokens,
-      cacheWriteTokens,
-      thoughtTokens: "not_separately_reported",
-      toolTokens: "not_separately_reported",
-      calculatedTotalTokens: cacheReadTokens === "observed" && cacheWriteTokens === "observed"
-        ? "calculated_complete"
-        : "calculated_partial",
-      reportedTotalTokens: reportedTotalTokens === undefined ? "not_reported" : "provider_reported"
-    }
-  };
+  return undefined;
+}
+
+/** The four top-level counts are present and equal the served iteration's own. */
+function servedIterationMatches(value: Record<string, unknown>, served: Record<string, unknown>): boolean {
+  return (["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const)
+    .every((key) => {
+      const top = tokenComponentOf(value[key]);
+      return top !== undefined && top === tokenComponentOf(served[key]);
+    });
 }
 
 type OptionalTokenComponent = {

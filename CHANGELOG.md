@@ -7,21 +7,20 @@ historical untagged exception.
 
 ## Unreleased
 
-- Price a Claude Code assistant message that was served by several API
-  requests from its `usage.iterations`. Claude Code records each request there
-  but writes only the last request's counts at the top level while summing the
-  cache-write split over every request, so the top level contradicts itself and
-  earlier versions marked the line `unsupported_token_shape`; one such line
-  anywhere in the scanned transcripts made `workspace push` refuse to send
-  anything. The message now costs the sum of its requests, its context size is
-  the last request's, and a message with no readable iterations is priced from
-  the top level exactly as before.
 - Treat two copies of one Claude Code response that carry the same evidence
-  but different timestamps as one call, kept at its earliest timestamp. Claude
-  Code relays a sub-agent's reply into the parent transcript seconds later;
-  earlier versions marked the pair `conflicting-local-evidence`, and that one
-  pair made `workspace push` refuse to send anything. Copies whose evidence
-  differs still fail closed.
+  as one call. A sub-agent transcript opens with the parent turn it was forked
+  from, written seconds later; earlier versions compared timestamps too and
+  marked the pair `conflicting-local-evidence`, and that one pair made
+  `workspace push` refuse to send anything. The copy from the originating
+  transcript is kept, then the earliest. Copies whose evidence differs still
+  fail closed.
+- Read `usage.iterations` on a Claude Code message that took several API
+  requests (a model fallback after a failed attempt). The top-level counts
+  describe the served request while the top-level cache-write split can sum
+  every attempt, so earlier versions marked the line `unsupported_token_shape`
+  and `workspace push` represented it as unknown tokens. The served request's
+  own split is read instead, and the line prices as that request. A line whose
+  top level does not match its served request stays unsupported.
 
 ## 0.9.14 (published on npm)
 

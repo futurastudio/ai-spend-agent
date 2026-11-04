@@ -127,10 +127,10 @@ describe("parseClaudeCodeTranscript", () => {
     }
   });
 
-  it("prices a Claude Code message served by several requests as the sum of its iterations", () => {
-    // Claude Code wrote the last request's counts at the top level but summed
-    // the cache_creation split over both requests, so the top level contradicts
-    // itself (seen in real transcripts, 2026-08-24).
+  it("prices a Claude Code fallback message as its served request and reads that request's cache split", () => {
+    // A failed first attempt and the served fallback. The top level carries the
+    // served request's counts but sums the cache-write split over both attempts
+    // (seen in real transcripts, 2026-08-24).
     const diagnostics: Array<{ code: string; count: number }> = [];
     const [call] = parseClaudeCodeTranscript(claudeLine({}, {
       input_tokens: 2,
@@ -141,6 +141,7 @@ describe("parseClaudeCodeTranscript", () => {
       iterations: [
         {
           type: "message",
+          model: "claude-fable-5",
           input_tokens: 2,
           output_tokens: 254,
           cache_read_input_tokens: 883_323,
@@ -148,7 +149,8 @@ describe("parseClaudeCodeTranscript", () => {
           cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 874 }
         },
         {
-          type: "message",
+          type: "fallback_message",
+          model: "claude-opus-4-8",
           input_tokens: 2,
           output_tokens: 4750,
           cache_read_input_tokens: 686_903,
@@ -159,74 +161,87 @@ describe("parseClaudeCodeTranscript", () => {
     }), "", undefined, diagnostic => diagnostics.push(diagnostic));
     expect(diagnostics).toEqual([]);
     expect(call?.usageSupport).toBeUndefined();
+    // The failed attempt is not billed and is not added.
     expect(call?.usage).toEqual({
-      inputTokens: 4,
-      outputTokens: 5004,
-      cacheReadTokens: 1_570_226,
+      inputTokens: 2,
+      outputTokens: 4750,
+      cacheReadTokens: 686_903,
       cacheWrite5mTokens: 0,
-      cacheWrite1hTokens: 874
+      cacheWrite1hTokens: 0
     });
-    // The context window holds the last request, not the sum of both.
-    expect(call?.latestTurnUsage).toMatchObject({
-      contextTokens: 2 + 686_903,
-      source: "assistant_message_usage"
-    });
+    expect(call?.latestTurnUsage).toMatchObject({ contextTokens: 2 + 686_903, source: "assistant_message_usage" });
     expect(call?.tokenComponentEvidence).toMatchObject({
-      cacheReadTokens: "observed",
       cacheWriteTokens: "observed",
       calculatedTotalTokens: "calculated_complete"
     });
     expect(aggregateCalls([call!])[0]?.amountUsd).toBeGreaterThan(0);
   });
 
-  it("prices a Claude Code message whose top-level total went stale from its one iteration", () => {
-    // Seen 2026-09: every top-level count is 0 except the 1h cache split, while
-    // the single iteration carries the full request.
+  it("keeps a line whose top level does not describe its served iteration unsupported", () => {
     const diagnostics: Array<{ code: string; count: number }> = [];
-    const [call] = parseClaudeCodeTranscript(claudeLine({}, {
+    const served = {
+      type: "message",
+      input_tokens: 32,
+      output_tokens: 5017,
+      cache_read_input_tokens: 959_767,
+      cache_creation_input_tokens: 2083,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 }
+    };
+    // A re-written copy with every top-level count zeroed (seen 2026-09).
+    const [zeroed] = parseClaudeCodeTranscript(claudeLine({}, {
       input_tokens: 0,
       output_tokens: 0,
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
       cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 },
-      iterations: [{
-        type: "message",
-        input_tokens: 3,
-        output_tokens: 310,
-        cache_read_input_tokens: 90_000,
-        cache_creation_input_tokens: 2083,
-        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 }
-      }]
+      iterations: [served]
     }), "", undefined, diagnostic => diagnostics.push(diagnostic));
-    expect(diagnostics).toEqual([]);
-    expect(call?.usage).toEqual({
-      inputTokens: 3,
-      outputTokens: 310,
-      cacheReadTokens: 90_000,
-      cacheWrite5mTokens: 0,
-      cacheWrite1hTokens: 2083
-    });
-    expect(call?.usageSupport).toBeUndefined();
+    expect(zeroed?.usageSupport).toBe("unsupported_token_shape");
+    // A readable top level that disagrees with its iteration is never overridden.
+    const [disagreeing] = parseClaudeCodeTranscript(claudeLine({}, {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_read_input_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 },
+      iterations: [served]
+    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(disagreeing?.usageSupport).toBe("unsupported_token_shape");
+    expect(diagnostics).toEqual([
+      { code: "unsupported_token_shape", count: 1 },
+      { code: "unsupported_token_shape", count: 1 }
+    ]);
   });
 
-  it("keeps the top-level usage when iterations are empty or unreadable", () => {
+  it("leaves other iteration lists to the top-level rules", () => {
     const diagnostics: Array<{ code: string; count: number }> = [];
-    const [empty] = parseClaudeCodeTranscript(claudeLine({}, { iterations: [] }), "", undefined,
-      diagnostic => diagnostics.push(diagnostic));
-    expect(empty?.usage).toMatchObject({ inputTokens: 100, outputTokens: 200, cacheWrite1hTokens: 500 });
-    expect(empty?.usageSupport).toBeUndefined();
-    const [unreadable] = parseClaudeCodeTranscript(claudeLine({}, {
-      iterations: [{ input_tokens: "2", output_tokens: 254 }]
-    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
-    expect(unreadable?.usage).toMatchObject({ inputTokens: 100, outputTokens: 200, cacheWrite1hTokens: 500 });
-    expect(unreadable?.usageSupport).toBeUndefined();
+    const parse = (usage: Record<string, unknown>) =>
+      parseClaudeCodeTranscript(claudeLine({}, usage), "", undefined, diagnostic => diagnostics.push(diagnostic))[0];
+    const defaults = { inputTokens: 100, outputTokens: 200, cacheReadTokens: 1000, cacheWrite5mTokens: 0, cacheWrite1hTokens: 500 };
+    expect(parse({ iterations: [] })?.usage).toEqual(defaults);
+    expect(parse({ iterations: [{ input_tokens: "2", output_tokens: 254 }] })?.usage).toEqual(defaults);
+    // A server-side side call after the served reply is not the served reply,
+    // and never becomes the context size.
+    const sideCall = parse({ iterations: [
+      {
+        type: "message",
+        input_tokens: 100,
+        output_tokens: 200,
+        cache_read_input_tokens: 1000,
+        cache_creation_input_tokens: 500,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 }
+      },
+      { type: "compaction", input_tokens: 50_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+    ] });
+    expect(sideCall?.usage).toEqual(defaults);
+    expect(sideCall?.latestTurnUsage?.contextTokens).toBe(1600);
     expect(diagnostics).toEqual([]);
-    // Unreadable iterations plus a contradictory top level is still one
-    // unsupported shape, reported once.
-    const [invalid] = parseClaudeCodeTranscript(claudeLine({}, {
+    // Unreadable iterations plus a contradictory top level is one unsupported
+    // shape, reported once.
+    const invalid = parse({
       cache_creation: { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 201 },
       iterations: [{ input_tokens: "2", output_tokens: 254 }]
-    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    });
     expect(invalid?.usageSupport).toBe("unsupported_token_shape");
     expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
   });
@@ -1622,8 +1637,8 @@ describe("aggregateCalls", () => {
   });
 
   it("keeps one call when the same complete stable turn is written twice with different timestamps", () => {
-    // Claude Code relays a sub-agent's reply into the parent transcript; the
-    // two copies carry the same evidence with timestamps seconds apart.
+    // A sub-agent transcript opens with the parent turn it was forked from,
+    // seconds later: two copies with the same evidence, timestamps apart.
     const base = {
       agent: "claude-code" as const,
       callId: "same-message",
@@ -1640,15 +1655,22 @@ describe("aggregateCalls", () => {
       }
     };
     const parent = { ...base, timestamp: "2026-10-31T22:49:56.701Z" };
-    const relayed = { ...base, timestamp: "2026-10-31T22:50:10.120Z" };
+    const forked = { ...base, timestamp: "2026-10-31T22:50:10.120Z", subagentId: "agent-a582e5" };
     const conflicts: string[] = [];
 
-    const forward = dedupeCumulativeSessionCalls([parent, relayed], (agent) => conflicts.push(agent));
-    const reverse = dedupeCumulativeSessionCalls([relayed, parent], (agent) => conflicts.push(agent));
+    const forward = dedupeCumulativeSessionCalls([parent, forked], (agent) => conflicts.push(agent));
+    const reverse = dedupeCumulativeSessionCalls([forked, parent], (agent) => conflicts.push(agent));
 
     expect(forward).toEqual([parent]);
     expect(reverse).toEqual([parent]);
     expect(conflicts).toEqual([]);
+    // The originating copy wins even when the sub-agent file was written first;
+    // without a sub-agent copy, the earliest wins.
+    const earlierFork = { ...forked, timestamp: "2026-10-31T22:49:40.000Z" };
+    expect(dedupeCumulativeSessionCalls([earlierFork, parent])).toEqual([parent]);
+    expect(dedupeCumulativeSessionCalls([parent, earlierFork])).toEqual([parent]);
+    const laterPlain = { ...base, timestamp: "2026-10-31T22:50:10.120Z" };
+    expect(dedupeCumulativeSessionCalls([laterPlain, parent])).toEqual([parent]);
   });
 
   it("groups by day+agent+model+project, prices via the rule table, and passes schema", () => {
@@ -2074,18 +2096,19 @@ describe("Claude native response identity across transcript files", () => {
       });
     });
 
-    it(`${name} path keeps one call when a sub-agent reply is relayed into its parent seconds later`, async () => {
-      const directories = await fixtureDirectories(`aibill-claude-${name}-relay-`);
+    it(`${name} path keeps one call when a sub-agent transcript opens with its parent turn, seconds later`, async () => {
+      const directories = await fixtureDirectories(`aibill-claude-${name}-fork-`);
       const parent = claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" });
-      const relayed = claudeLine({ timestamp: "2026-06-08T10:00:14.120Z" });
+      const forked = claudeLine({ timestamp: "2026-06-08T10:00:14.120Z", agentId: "agent-1", isSidechain: true });
       await writeFile(join(directories.claudeProjectsDir, "parent.jsonl"), parent, "utf8");
       await mkdir(join(directories.claudeProjectsDir, "subagents"));
-      await writeFile(join(directories.claudeProjectsDir, "subagents", "agent-1.jsonl"), relayed, "utf8");
+      await writeFile(join(directories.claudeProjectsDir, "subagents", "agent-1.jsonl"), forked, "utf8");
 
       const result = await load(directories);
       const calls = result.calls.filter((call) => call.agent === "claude-code");
       expect(calls).toHaveLength(1);
       expect(calls[0]?.timestamp).toBe("2026-06-08T10:00:00.000Z");
+      expect(calls[0]?.subagentId).toBeUndefined();
       expect(calls[0]?.usageSupport).toBeUndefined();
       expect(result.diagnostics.filter((item) => item.code === "unsupported_token_shape")).toEqual([]);
       expect(result.records.find((record) => record.agentId === "claude-code")).toMatchObject({
