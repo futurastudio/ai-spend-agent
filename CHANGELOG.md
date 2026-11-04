@@ -5,6 +5,21 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- Price Gemini 2.5 Pro (`gemini-2.5-pro`) by the UTC day of each call. Google
+  has deprecated the model: from 2026-12-01 every request to it is routed to
+  Gemini 3.8 Flash and billed at that model's rates, $0.75 input, $3.75 output
+  (thinking included) and $0.075 cached input per million tokens with no
+  prompt-size tier, and from 2027-01-01 those rates double to $1.50, $7.50 and
+  $0.15. Usage through 2026-11-30 keeps the published $1.25 / $10 / $0.125
+  rates and the over-200,000-token request tier ($2.50 / $15 / $0.25). As with
+  Gemini 4 Argon, a model with a dated price change is never priced without a
+  usage date, so a Gemini session record with no timestamp is now unpriced
+  instead of estimated at the old rate. Evidence:
+  `provider-contracts/model-pricing-2026-11-04.json`, taken from the pricing
+  page's new home at aistudio.google.com.
+
 ## 0.9.14 (published on npm)
 
 The CLI email ask now offers team access. The during-scan ask reads "Want

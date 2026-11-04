@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-10-18";
+export const PRICING_TABLE_AS_OF = "2026-11-04";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -32,19 +32,26 @@ type PricingRates = {
   cacheWrite1hPerM?: number;
 };
 
-type PricingRule = PricingRates & { match: RegExp } & ({
-  /** Some providers select one rate for the whole request from prompt size. */
-  abovePromptTokens?: PricingRates & { threshold: number };
-  scheduledRates?: never;
-} | {
-  abovePromptTokens?: never;
+/** Some providers select one rate for the whole request from prompt size. */
+type PromptTier = PricingRates & { threshold: number };
+
+/**
+ * A published price change. Its rates replace the rule's own for usage on or
+ * after `from`, a UTC date (`YYYY-MM-DD`). It carries its own prompt tier, or
+ * none when the new rates are flat: a tier never outlives the rates it was
+ * published with.
+ */
+type ScheduledRates = PricingRates & { from: string; abovePromptTokens?: PromptTier };
+
+type PricingRule = PricingRates & {
+  match: RegExp;
+  abovePromptTokens?: PromptTier;
   /**
-   * Published price changes, oldest first. Each replaces the rule's own rates
-   * for usage on or after its UTC date (`YYYY-MM-DD`). Usage with no date is
-   * never priced under such a rule.
+   * Published price changes, oldest first. Usage with no date is never priced
+   * under a rule that has any.
    */
-  scheduledRates: readonly (PricingRates & { from: string })[];
-});
+  scheduledRates?: readonly ScheduledRates[];
+};
 
 const pricingRules: PricingRule[] = [
   // Anthropic
@@ -237,6 +244,14 @@ const pricingRules: PricingRule[] = [
     cacheReadPerM: 0.1,
     scheduledRates: [{ from: "2026-12-01", inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 }]
   },
+  // Reviewed 2026-11-04: https://aistudio.google.com/docs/pricing.md (the Gemini
+  // Developer API docs moved there from ai.google.dev). Retained evidence:
+  // provider-contracts/model-pricing-2026-11-04.json. Gemini 2.5 Pro is
+  // deprecated: effective 2026-12-01 every request to it routes to Gemini 3.8
+  // Flash and is billed at 3.8 Flash rates, which have no prompt-size tier and
+  // double on 2027-01-01. Google names no time zone, so each change applies
+  // from its UTC day, as usage is bucketed. Through 2026-11-30 the published
+  // 2.5 Pro rates and its >200K-token request tier still apply.
   {
     match: /^gemini-2\.5-pro$/i,
     inputPerM: 1.25,
@@ -247,7 +262,11 @@ const pricingRules: PricingRule[] = [
       inputPerM: 2.5,
       outputPerM: 15,
       cacheReadPerM: 0.25
-    }
+    },
+    scheduledRates: [
+      { from: "2026-12-01", inputPerM: 0.75, outputPerM: 3.75, cacheReadPerM: 0.075 },
+      { from: "2027-01-01", inputPerM: 1.5, outputPerM: 7.5, cacheReadPerM: 0.15 }
+    ]
   },
   // Gemini CLI's persisted Flash/Flash-Lite summary does not retain token
   // modality, while published audio and non-audio input/cache rates differ.
@@ -358,14 +377,22 @@ export function estimateTokenCostsUsd(
   return roundUsd(total);
 }
 
-/** Whether this model's rate selection depends on each request's prompt size. */
-export function usesPromptTieredPricing(model: string): boolean {
-  return promptTierThreshold(model) !== undefined;
+/**
+ * Whether this model's rate selection depends on each request's prompt size.
+ * `usageAt` selects the rates in force on the usage's UTC day; without it, a
+ * model whose published tier ends on a date is still treated as tiered.
+ */
+export function usesPromptTieredPricing(model: string, usageAt?: string): boolean {
+  return promptTierThreshold(model, usageAt) !== undefined;
 }
 
-/** Prompt-size threshold for tiered request pricing, when one is published. */
-export function promptTierThreshold(model: string): number | undefined {
-  return findPricingRule(model)?.abovePromptTokens?.threshold;
+/**
+ * Prompt-size threshold for tiered request pricing, when one is published for
+ * the usage's day (see `usesPromptTieredPricing`).
+ */
+export function promptTierThreshold(model: string, usageAt?: string): number | undefined {
+  const rule = findPricingRule(model);
+  return rule ? promptTierOn(rule, usageAt)?.threshold : undefined;
 }
 
 /**
@@ -383,9 +410,10 @@ export function canPriceTokenUsageAtScope(
   model: string,
   usage: TokenUsage,
   scope: "request" | "aggregate",
-  maxRequestPromptTokens?: number
+  maxRequestPromptTokens?: number,
+  usageAt?: string
 ): boolean {
-  const threshold = promptTierThreshold(model);
+  const threshold = promptTierThreshold(model, usageAt);
   if (threshold === undefined || scope === "request") return true;
   if (effectivePromptTokens(usage) <= threshold) return true;
   return maxRequestPromptTokens !== undefined && maxRequestPromptTokens <= threshold;
@@ -414,10 +442,8 @@ function rawTokenCostUsd(
     return undefined;
   }
   const promptTokens = tierPromptTokens ?? effectivePromptTokens(usage);
-  const rates = rule.abovePromptTokens &&
-      promptTokens > rule.abovePromptTokens.threshold
-    ? rule.abovePromptTokens
-    : dated;
+  const tier = dated.abovePromptTokens;
+  const rates: PricingRates = tier && promptTokens > tier.threshold ? tier : dated;
   const cacheRead = rates.cacheReadPerM ?? rates.inputPerM * 0.1;
   const write5m = rates.cacheWrite5mPerM ?? rates.inputPerM * 1.25;
   const write1h = rates.cacheWrite1hPerM ?? rates.inputPerM * 2;
@@ -438,16 +464,26 @@ function rawTokenCostUsd(
  * price changes returns undefined without a usable date, so a rate is never
  * guessed across a published change.
  */
-function ratesOn(rule: PricingRule, usageAt: string | undefined): PricingRates | undefined {
+function ratesOn(rule: PricingRule, usageAt: string | undefined): PricingRule | ScheduledRates | undefined {
   if (!rule.scheduledRates) return rule;
   // ISO timestamps here are UTC; this is the same day the report buckets by.
   const day = usageAt?.slice(0, 10);
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined;
-  let rates: PricingRates = rule;
+  let rates: PricingRule | ScheduledRates = rule;
   for (const change of rule.scheduledRates) {
     if (day >= change.from) rates = change;
   }
   return rates;
+}
+
+/**
+ * The prompt tier in force on the usage's day: a dated change's own tier once
+ * one applies, otherwise the rule's. Without a usable date the rule's tier
+ * stands, so undated aggregate checks stay conservative.
+ */
+function promptTierOn(rule: PricingRule, usageAt: string | undefined): PromptTier | undefined {
+  const dated = ratesOn(rule, usageAt);
+  return dated ? dated.abovePromptTokens : rule.abovePromptTokens;
 }
 
 function effectivePromptTokens(usage: TokenUsage): number {

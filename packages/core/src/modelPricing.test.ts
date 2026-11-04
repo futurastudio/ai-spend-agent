@@ -4,6 +4,7 @@ import {
   estimateTokenCostUsd,
   estimateTokenCostsUsd,
   findPricingRule,
+  promptTierThreshold,
   usesPromptTieredPricing
 } from "./modelPricing.js";
 
@@ -148,8 +149,9 @@ describe("model pricing coverage", () => {
   });
 
   it("prices the major non-Anthropic/OpenAI model families", () => {
-    // Gemini Pro: the 1M-token prompt selects the >200k rate for all tokens.
-    expect(estimateTokenCostUsd("gemini-2.5-pro", usage)).toBeCloseTo(4, 2);
+    // Gemini Pro: the 1M-token prompt selects the >200k rate for all tokens
+    // (dated before its 2026-12-01 re-billing; see the dated-rates tests).
+    expect(estimateTokenCostUsd("gemini-2.5-pro", usage, "2026-11-30")).toBeCloseTo(4, 2);
     // DeepSeek
     expect(estimateTokenCostUsd("deepseek-chat", usage)).toBeCloseTo(0.38, 2);
     expect(estimateTokenCostUsd("deepseek-reasoner", usage)).toBeCloseTo(0.769, 2);
@@ -186,17 +188,17 @@ describe("model pricing coverage", () => {
     const aboveThreshold = { ...atThreshold, inputTokens: 150_001 };
 
     expect(usesPromptTieredPricing("gemini-2.5-pro")).toBe(true);
-    expect(estimateTokenCostUsd("gemini-2.5-pro", atThreshold)).toBe(0.325);
-    expect(estimateTokenCostUsd("gemini-2.5-pro", aboveThreshold)).toBe(0.59);
+    expect(estimateTokenCostUsd("gemini-2.5-pro", atThreshold, "2026-11-30")).toBe(0.325);
+    expect(estimateTokenCostUsd("gemini-2.5-pro", aboveThreshold, "2026-11-30")).toBe(0.59);
   });
 
   it("prices Gemini 2.5 Pro calls before aggregation", () => {
     const request = { inputTokens: 150_000, outputTokens: 10_000 };
-    expect(estimateTokenCostsUsd("gemini-2.5-pro", [request, request])).toBe(0.575);
+    expect(estimateTokenCostsUsd("gemini-2.5-pro", [request, request], undefined, "2026-11-30")).toBe(0.575);
     expect(estimateTokenCostUsd("gemini-2.5-pro", {
       inputTokens: 300_000,
       outputTokens: 20_000
-    })).toBe(1.05);
+    }, "2026-11-30")).toBe(1.05);
   });
 
   // Official Gemini API pricing reviewed 2026-10-18:
@@ -244,7 +246,7 @@ describe("model pricing coverage", () => {
       }
     );
 
-    it.each(["gemini-2.5-pro", "claude-haiku-5-5", "gpt-5.6-sol"])(
+    it.each(["claude-haiku-5-5", "gpt-5.6-sol"])(
       "%s keeps the same price whatever the usage date",
       (model) => {
         const undated = estimateTokenCostUsd(model, usage);
@@ -254,6 +256,51 @@ describe("model pricing coverage", () => {
         expect(estimateTokenCostUsd(model, usage, "not-a-date")).toBe(undated);
       }
     );
+  });
+
+  // https://aistudio.google.com/docs/pricing.md (the Gemini Developer API docs moved
+  // there from ai.google.dev). Reviewed 2026-11-04; evidence in
+  // provider-contracts/model-pricing-2026-11-04.json. Google deprecated Gemini 2.5
+  // Pro: from 2026-12-01 every request to it routes to Gemini 3.8 Flash and bills
+  // at 3.8 Flash rates, which have no prompt-size tier and double on 2027-01-01.
+  describe("Gemini 2.5 Pro dated rates", () => {
+    const small = { inputTokens: 150_000, outputTokens: 10_000 };
+    const large = { inputTokens: 300_000, outputTokens: 20_000 };
+
+    it("keeps the published 2.5 Pro rates and its >200K request tier through 2026-11-30 (UTC)", () => {
+      expect(estimateTokenCostUsd("gemini-2.5-pro", small, "2026-10-14T09:00:00.000Z")).toBe(0.2875);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", large, "2026-11-30T23:59:59.999Z")).toBe(1.05);
+      expect(usesPromptTieredPricing("gemini-2.5-pro", "2026-11-30")).toBe(true);
+      expect(promptTierThreshold("gemini-2.5-pro", "2026-11-30")).toBe(200_000);
+    });
+
+    it("bills at flat Gemini 3.8 Flash rates from 2026-12-01 and at their doubled rates from 2027-01-01", () => {
+      // $0.75 / $3.75 / $0.075 per MTok with no tier: the 300K prompt no longer moves the request.
+      expect(estimateTokenCostUsd("gemini-2.5-pro", small, "2026-12-01T00:00:00.000Z")).toBe(0.15);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", large, "2026-12-01")).toBe(0.3);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 }, "2026-12-15")).toBe(0.075);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", { inputTokens: 0, outputTokens: 0, thoughtTokens: 1_000_000 }, "2026-12-15")).toBe(3.75);
+      expect(usesPromptTieredPricing("gemini-2.5-pro", "2026-12-01")).toBe(false);
+      expect(promptTierThreshold("gemini-2.5-pro", "2026-12-01")).toBeUndefined();
+      // $1.50 / $7.50 / $0.15 per MTok from 2027-01-01.
+      expect(estimateTokenCostUsd("gemini-2.5-pro", small, "2026-12-31T23:59:59.999Z")).toBe(0.15);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", small, "2027-01-01T00:00:00.000Z")).toBe(0.3);
+      expect(estimateTokenCostUsd("gemini-2.5-pro", large, "2027-01-01")).toBe(0.6);
+    });
+
+    it("prices a large aggregate at scope once the tier is gone, and stays conservative when undated", () => {
+      expect(canPriceTokenUsageAtScope("gemini-2.5-pro", large, "aggregate")).toBe(false);
+      expect(canPriceTokenUsageAtScope("gemini-2.5-pro", large, "aggregate", undefined, "2026-11-30")).toBe(false);
+      expect(canPriceTokenUsageAtScope("gemini-2.5-pro", large, "aggregate", undefined, "2026-12-01")).toBe(true);
+      expect(usesPromptTieredPricing("gemini-2.5-pro")).toBe(true);
+      expect(estimateTokenCostsUsd("gemini-2.5-pro", [small, small], [150_000, 150_000], "2026-12-01")).toBe(0.3);
+    });
+
+    it.each([undefined, "", "not-a-date", "11/30/2026"])("never guesses a rate for usage dated %j", (usageAt) => {
+      expect(estimateTokenCostUsd("gemini-2.5-pro", small, usageAt)).toBeUndefined();
+      expect(estimateTokenCostsUsd("gemini-2.5-pro", [small], undefined, usageAt)).toBeUndefined();
+      expect(findPricingRule("gemini-2.5-pro")).toBeDefined();
+    });
   });
 
   it("kimi-k2.7-code no longer falls through to the old K2 rule (0.9.3 mispricing bug)", () => {

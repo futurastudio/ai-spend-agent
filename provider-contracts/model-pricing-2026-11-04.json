@@ -1,0 +1,40 @@
+{
+  "retrievedAt": "2026-11-04",
+  "fetchedAt": "2026-11-04T00:22:59Z",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard paid-tier API-equivalent estimates for the Gemini Developer API, not subscription charges, provider-reported spending or invoices. No batch, priority, data-residency, regional or negotiated adjustments. The Gemini Developer API pricing page moved from https://ai.google.dev/gemini-api/docs/pricing (now a redirect) to https://aistudio.google.com/docs/pricing, whose HTML is a JavaScript shell; the Markdown mirror at /docs/pricing.md is the retained source, and pageContentSha256 is the SHA-256 of its raw bytes. Gemini 2.5 Pro keeps its published rates and its per-request tier (a prompt over 200,000 tokens, counting cache reads and tool tokens, pays the above rates for the whole request) through 2026-11-30. Google has deprecated the model: effective 2026-12-01 every API request to gemini-2.5-pro automatically routes to Gemini 3.8 Flash and is billed at Gemini 3.8 Flash rates, which have no prompt-size tier, so each scheduledRates entry carries the 3.8 Flash paid-tier rates in force from its date; the 2027-01-01 entry is the published end of the 3.8 Flash introductory pricing. Output includes thinking tokens and cacheRead is the context caching price; per-token-hour storage prices are not estimated. The page names no time zone, so each change applies by the usage's UTC day. Earlier evidence files are retained unchanged.",
+  "sources": [
+    "https://aistudio.google.com/docs/pricing.md"
+  ],
+  "pageContentSha256": {
+    "https://aistudio.google.com/docs/pricing.md": "2ec77fa3d4b0fc3437d83edcc3e8c9abbe3beb8b1457c494435e840936c9b44e"
+  },
+  "models": [
+    {
+      "id": "gemini-2.5-pro",
+      "source": "https://aistudio.google.com/docs/pricing.md",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125,
+      "abovePromptTokens": 200000,
+      "aboveInput": 2.5,
+      "aboveOutput": 15,
+      "aboveCacheRead": 0.25,
+      "scheduledRates": [
+        {
+          "from": "2026-12-01",
+          "input": 0.75,
+          "output": 3.75,
+          "cacheRead": 0.075
+        },
+        {
+          "from": "2027-01-01",
+          "input": 1.5,
+          "output": 7.5,
+          "cacheRead": 0.15
+        }
+      ]
+    }
+  ]
+}

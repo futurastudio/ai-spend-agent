@@ -1193,7 +1193,8 @@ function allocateAggregateAmount(
       call.model,
       call.usage,
       call.usageScope === "turn" ? "request" : "aggregate",
-      call.maxRequestPromptTokens
+      call.maxRequestPromptTokens,
+      call.timestamp
     ) && callAmountUsd(call) !== undefined
   );
   if (priceable.some((supported) => !supported)) return calls.map(() => null);

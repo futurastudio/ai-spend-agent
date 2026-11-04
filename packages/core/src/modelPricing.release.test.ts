@@ -5,6 +5,54 @@ import { PRICING_TABLE_AS_OF, canPriceTokenUsageAtScope, estimateTokenCostUsd, e
 const evidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-07.json", import.meta.url), "utf8"));
 const sonnetEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-08.json", import.meta.url), "utf8"));
 const reviewedEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-18.json", import.meta.url), "utf8"));
+const geminiEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-04.json", import.meta.url), "utf8"));
+
+describe("2026-11-04 reviewed Gemini 2.5 Pro prices", () => {
+  type Rates = { from?: string; input: number; output: number; cacheRead: number };
+  const model = geminiEvidence.models.find((entry: { id: string }) => entry.id === "gemini-2.5-pro");
+  const changes = model.scheduledRates as Rates[];
+  // The last UTC millisecond before a published change.
+  const lastBefore = (from: string) => new Date(Date.parse(`${from}T00:00:00.000Z`) - 1).toISOString();
+  // One million tokens of one component, with the request tier fixed by the given prompt.
+  const price = (component: Partial<TokenUsage>, usageAt: string, tierPromptTokens: number) =>
+    estimateTokenCostsUsd(model.id, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], usageAt);
+
+  it("matches the retained official-price evidence and review date before the first change", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(geminiEvidence.retrievedAt);
+    const before = lastBefore(changes[0]!.from!);
+    expect(promptTierThreshold(model.id, before)).toBe(model.abovePromptTokens);
+    const base = model.abovePromptTokens;
+    const above = model.abovePromptTokens + 1;
+    expect(price({ inputTokens: 1_000_000 }, before, base)).toBe(model.input);
+    expect(price({ outputTokens: 1_000_000 }, before, base)).toBe(model.output);
+    expect(price({ cacheReadTokens: 1_000_000 }, before, base)).toBe(model.cacheRead);
+    expect(price({ inputTokens: 1_000_000 }, before, above)).toBe(model.aboveInput);
+    expect(price({ outputTokens: 1_000_000 }, before, above)).toBe(model.aboveOutput);
+    expect(price({ cacheReadTokens: 1_000_000 }, before, above)).toBe(model.aboveCacheRead);
+  });
+
+  it.each(changes.map((change): [string, Rates] => [change.from!, change]))(
+    "matches the retained flat rates in force from %s, whatever the prompt size",
+    (from, change) => {
+      const usageAt = `${from}T00:00:00.000Z`;
+      expect(promptTierThreshold(model.id, usageAt)).toBeUndefined();
+      expect(price({ inputTokens: 1_000_000 }, usageAt, 1_000_000)).toBe(change.input);
+      expect(price({ outputTokens: 1_000_000 }, usageAt, 1_000_000)).toBe(change.output);
+      expect(price({ cacheReadTokens: 1_000_000 }, usageAt, 1_000_000)).toBe(change.cacheRead);
+    }
+  );
+
+  it("switches on each published date and not before", () => {
+    expect(price({ inputTokens: 1_000_000 }, lastBefore(changes[1]!.from!), 1_000_000)).toBe(changes[0]!.input);
+  });
+
+  it("carries exactly the retained schedule, with no tier after the first change", () => {
+    const rule = findPricingRule(model.id)!;
+    expect(rule.scheduledRates?.map(({ from, inputPerM, outputPerM, cacheReadPerM, abovePromptTokens }) =>
+      ({ from, input: inputPerM, output: outputPerM, cacheRead: cacheReadPerM, tiered: abovePromptTokens !== undefined })))
+      .toEqual(changes.map((change) => ({ ...change, tiered: false })));
+  });
+});
 
 describe("2026-10-18 reviewed Haiku 5.5 prices", () => {
   const model = reviewedEvidence.models.find((entry: { id: string }) => entry.id === "claude-haiku-5-5");
@@ -13,8 +61,7 @@ describe("2026-10-18 reviewed Haiku 5.5 prices", () => {
   const price = (component: Partial<TokenUsage>, tierPromptTokens: number) =>
     estimateTokenCostsUsd(model.id, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens]);
 
-  it("matches the retained official-price evidence and review date", () => {
-    expect(PRICING_TABLE_AS_OF).toBe(reviewedEvidence.retrievedAt);
+  it("matches the retained official-price evidence", () => {
     expect(promptTierThreshold(model.id)).toBe(model.abovePromptTokens);
     const base = model.abovePromptTokens;
     const above = model.abovePromptTokens + 1;
