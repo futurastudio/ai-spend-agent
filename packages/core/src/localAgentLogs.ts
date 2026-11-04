@@ -1183,7 +1183,9 @@ export function parseClaudeCodeTranscript(
   onDiagnostic?: TranscriptParseDiagnosticHandler
 ): LocalAgentCall[] {
   const calls: LocalAgentCall[] = [];
-  const seen = new Set<string>();
+  const lines = content.split("\n");
+  const finalLines = finalClaudeResponseLines(lines);
+  let lineIndex = -1;
   const pendingPrompts: string[] = [];
   const activityEvidence = new Map<string, {
     prompts: string[];
@@ -1208,7 +1210,8 @@ export function parseClaudeCodeTranscript(
   const completionBySession = new Map<string, LocalAgentCompletionEvidence & {
     ordinal: number;
   }>();
-  for (const line of content.split("\n")) {
+  for (const line of lines) {
+    lineIndex += 1;
     if (!line.trim()) continue;
     let entry: unknown;
     try {
@@ -1292,10 +1295,10 @@ export function parseClaudeCodeTranscript(
     if (!message || !usage) continue;
     // "<synthetic>" marks Claude Code internal placeholder messages, not API calls.
     if (stringOf(message.model) === "<synthetic>") continue;
-    // Streaming/retries can write the same API response on multiple lines.
+    // Streaming writes the same API response on several lines; only the one
+    // carrying its final state counts.
     const nativeResponse = claudeNativeResponseIdentity(message, entry);
-    if (nativeResponse && seen.has(nativeResponse.localDedupeKey)) continue;
-    if (nativeResponse) seen.add(nativeResponse.localDedupeKey);
+    if (nativeResponse && finalLines.get(nativeResponse.localDedupeKey) !== lineIndex) continue;
     const timestamp = toIso(stringOf(entry.timestamp)) ?? new Date(0).toISOString();
     if (typeof sinceMs === "number" && Date.parse(timestamp) < sinceMs) {
       // These prompts led to a call outside the selected evidence window. Do
@@ -2538,7 +2541,11 @@ export async function readClaudeCodeFinancialFileForRegistry(
   }
   const calls: LocalAgentCall[] = [];
   const fileDiagnostics: TranscriptParseDiagnostic[] = [];
-  const seen = new Set<string>();
+  // Streaming writes the same API response on several lines. Hold the slim
+  // candidates and keep, per response, the line carrying its final state.
+  const responses = new Map<string, ClaudeFinancialCandidate>();
+  const unidentified: ClaudeFinancialCandidate[] = [];
+  let order = 0;
   let streamed: StreamedJsonlResult;
   try {
     streamed = await streamJsonlRecords(filePath, (entry) => {
@@ -2550,37 +2557,55 @@ export async function readClaudeCodeFinancialFileForRegistry(
       }
       const timestamp = toIso(stringOf(entry.timestamp));
       if (workspaceDailyFacts && timestamp && untilMs !== undefined && Date.parse(timestamp) >= untilMs) return;
-      const entryDiagnostics: TranscriptParseDiagnostic[] = [];
-      const call = parseClaudeFinancialEntry(
-        entry,
-        filePath,
-        // Workspace mode disables the cumulative cache, so dated historical
-        // events outside its window must not contribute diagnostics. Ordinary
-        // financial cache parses remain window-blind.
-        workspaceDailyFacts ? sinceMs : undefined,
-        seen,
-        (diagnostic) => entryDiagnostics.push(diagnostic)
-      );
-      if (call) {
-        if (workspaceDailyFacts) {
-          const nativeAgent = stringOf(entry.agentId);
-          const pathAgent = filePath.split(sep).includes("subagents")
-            ? basename(filePath).match(/^agent-([A-Za-z0-9_-]+)\.jsonl$/)?.[1] : undefined;
-          if (nativeAgent || pathAgent) call.subagentId = nativeAgent ?? pathAgent;
-        }
-        calls.push(call);
+      if (entry.type !== "assistant" || !isRecord(entry.message) || !isRecord(entry.message.usage)) return;
+      if (stringOf(entry.message.model) === "<synthetic>") return;
+      const candidate: ClaudeFinancialCandidate = {
+        entry: slimClaudeFinancialEntry(entry),
+        timestamp,
+        outputTokens: tokenComponentOf(entry.message.usage.output_tokens) ?? -1,
+        order: order++
+      };
+      const identity = claudeNativeResponseIdentity(entry.message, entry);
+      if (!identity) {
+        unidentified.push(candidate);
+        return;
       }
-      for (const diagnostic of entryDiagnostics) {
-        fileDiagnostics.push(workspaceDailyFacts && call?.sessionId && timestamp
-            && call.usageSupport === "unsupported_token_shape" && diagnostic.code === "unsupported_token_shape"
-          ? { ...diagnostic, workspaceFactCoverage: "unknown_tokens" } : diagnostic);
-      }
+      const prior = responses.get(identity.localDedupeKey);
+      if (!prior || candidate.outputTokens > prior.outputTokens) responses.set(identity.localDedupeKey, candidate);
     }, workspaceDailyFacts);
   } catch (error) {
     recordUnreadableFile("claude-code", scan, diagnostics, error);
     return [];
   }
   if (!streamed.hadContent) return [];
+  const seen = new Set<string>();
+  for (const candidate of [...responses.values(), ...unidentified].sort((left, right) => left.order - right.order)) {
+    const entryDiagnostics: TranscriptParseDiagnostic[] = [];
+    const call = parseClaudeFinancialEntry(
+      candidate.entry,
+      filePath,
+      // Workspace mode disables the cumulative cache, so dated historical
+      // events outside its window must not contribute diagnostics. Ordinary
+      // financial cache parses remain window-blind.
+      workspaceDailyFacts ? sinceMs : undefined,
+      seen,
+      (diagnostic) => entryDiagnostics.push(diagnostic)
+    );
+    if (call) {
+      if (workspaceDailyFacts) {
+        const nativeAgent = stringOf(candidate.entry.agentId);
+        const pathAgent = filePath.split(sep).includes("subagents")
+          ? basename(filePath).match(/^agent-([A-Za-z0-9_-]+)\.jsonl$/)?.[1] : undefined;
+        if (nativeAgent || pathAgent) call.subagentId = nativeAgent ?? pathAgent;
+      }
+      calls.push(call);
+    }
+    for (const diagnostic of entryDiagnostics) {
+      fileDiagnostics.push(workspaceDailyFacts && call?.sessionId && candidate.timestamp
+          && call.usageSupport === "unsupported_token_shape" && diagnostic.code === "unsupported_token_shape"
+        ? { ...diagnostic, workspaceFactCoverage: "unknown_tokens" } : diagnostic);
+    }
+  }
   scan.filesParsed += 1;
   for (const diagnostic of fileDiagnostics) {
     recordParseDiagnostic("claude-code", scan, diagnostics, diagnostic);
@@ -4521,6 +4546,55 @@ function claudeNativeResponseIdentity(
       .update(localDedupeKey)
       .digest("hex")}`
   };
+}
+
+type ClaudeFinancialCandidate = {
+  entry: Record<string, unknown>;
+  timestamp: string | undefined;
+  outputTokens: number;
+  order: number;
+};
+
+/** The fields the financial parser reads, without the message content. */
+function slimClaudeFinancialEntry(entry: Record<string, unknown>): Record<string, unknown> {
+  const message = isRecord(entry.message) ? entry.message : {};
+  const slim: Record<string, unknown> = {
+    type: entry.type,
+    message: { id: message.id, model: message.model, usage: message.usage }
+  };
+  for (const key of ["requestId", "timestamp", "cwd", "sessionId", "version", "agentId"] as const) {
+    if (key in entry) slim[key] = entry[key];
+  }
+  return slim;
+}
+
+/**
+ * Claude Code writes an assistant message several times while it streams: a
+ * `message_start` line with a placeholder output count first, the final
+ * `message_delta` counts later, sometimes a zeroed copy after that. The line
+ * with the largest output count carries the final state; ties keep the first.
+ * Returns the chosen line index per native response identity.
+ */
+function finalClaudeResponseLines(lines: readonly string[]): Map<string, number> {
+  const chosen = new Map<string, { index: number; outputTokens: number }>();
+  lines.forEach((line, index) => {
+    if (!line.includes('"usage"')) return;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!isRecord(entry) || entry.type !== "assistant" || !isRecord(entry.message)) return;
+    const message = entry.message;
+    if (!isRecord(message.usage) || stringOf(message.model) === "<synthetic>") return;
+    const identity = claudeNativeResponseIdentity(message, entry);
+    if (!identity) return;
+    const outputTokens = tokenComponentOf(message.usage.output_tokens) ?? -1;
+    const prior = chosen.get(identity.localDedupeKey);
+    if (!prior || outputTokens > prior.outputTokens) chosen.set(identity.localDedupeKey, { index, outputTokens });
+  });
+  return new Map([...chosen].map(([key, value]) => [key, value.index]));
 }
 
 function parseClaudeFinancialEntry(

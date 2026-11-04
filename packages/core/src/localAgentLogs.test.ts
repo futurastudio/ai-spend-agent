@@ -246,6 +246,30 @@ describe("parseClaudeCodeTranscript", () => {
     expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
   });
 
+  it("counts a streamed message once, from the line carrying its final state", () => {
+    // Claude Code 2.1.2xx writes the message_start placeholder first (2–3 output
+    // tokens), the final counts later, and sometimes a zeroed copy after that.
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const content = [
+      claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" }, { output_tokens: 3 }),
+      claudeLine({ timestamp: "2026-06-08T10:00:09.000Z" }, { output_tokens: 10_966 }),
+      claudeLine({ timestamp: "2026-06-08T10:00:09.500Z" }, {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 }
+      }),
+      claudeLine({ requestId: "req-2", message: { id: "msg-2", model: "claude-opus-4-8", usage: { input_tokens: 5, output_tokens: 7 } } })
+    ].join("\n");
+    const calls = parseClaudeCodeTranscript(content, "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(calls.map(call => [call.usage.outputTokens, call.timestamp])).toEqual([
+      [10_966, "2026-06-08T10:00:09.000Z"],
+      [7, "2026-06-08T10:00:00.000Z"]
+    ]);
+    expect(diagnostics).toEqual([]);
+  });
+
   it("distinguishes a provider total from a partial calculated Claude component total", () => {
     const [withoutTotal] = parseClaudeCodeTranscript(claudeLine({}, {
       cache_read_input_tokens: undefined,
@@ -2096,9 +2120,36 @@ describe("Claude native response identity across transcript files", () => {
       });
     });
 
+    it(`${name} path counts a streamed message once, from the line carrying its final state`, async () => {
+      const directories = await fixtureDirectories(`aibill-claude-${name}-stream-`);
+      const content = [
+        claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" }, { output_tokens: 3 }),
+        claudeLine({ timestamp: "2026-06-08T10:00:09.000Z" }, { output_tokens: 10_966 }),
+        claudeLine({ timestamp: "2026-06-08T10:00:09.500Z" }, {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 }
+        })
+      ].join("\n");
+      await writeFile(join(directories.claudeProjectsDir, "stream.jsonl"), content, "utf8");
+
+      const result = await load(directories);
+      const calls = result.calls.filter((call) => call.agent === "claude-code");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.usage.outputTokens).toBe(10_966);
+      expect(calls[0]?.usageSupport).toBeUndefined();
+      expect(result.diagnostics.filter((item) => item.code === "unsupported_token_shape")).toEqual([]);
+    });
+
     it(`${name} path keeps one call when a sub-agent transcript opens with its parent turn, seconds later`, async () => {
       const directories = await fixtureDirectories(`aibill-claude-${name}-fork-`);
-      const parent = claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" });
+      // The parent streamed the turn (placeholder, then final); the sub-agent copy is final only.
+      const parent = [
+        claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" }, { output_tokens: 3 }),
+        claudeLine({ timestamp: "2026-06-08T10:00:00.000Z" })
+      ].join("\n");
       const forked = claudeLine({ timestamp: "2026-06-08T10:00:14.120Z", agentId: "agent-1", isSidechain: true });
       await writeFile(join(directories.claudeProjectsDir, "parent.jsonl"), parent, "utf8");
       await mkdir(join(directories.claudeProjectsDir, "subagents"));
@@ -2108,6 +2159,7 @@ describe("Claude native response identity across transcript files", () => {
       const calls = result.calls.filter((call) => call.agent === "claude-code");
       expect(calls).toHaveLength(1);
       expect(calls[0]?.timestamp).toBe("2026-06-08T10:00:00.000Z");
+      expect(calls[0]?.usage.outputTokens).toBe(200);
       expect(calls[0]?.subagentId).toBeUndefined();
       expect(calls[0]?.usageSupport).toBeUndefined();
       expect(result.diagnostics.filter((item) => item.code === "unsupported_token_shape")).toEqual([]);
