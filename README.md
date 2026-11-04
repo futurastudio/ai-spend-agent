@@ -159,53 +159,70 @@ routing or automated business-value measurement.
 ## Guard: policy for coding agents
 
 `aibill guard` turns a committed policy file into Claude Code settings and a
-hook, per repository and never per person. Write `.aibill/policy.json` at the
-checkout root:
+hook, per repository and never per person. Run `npx aibill@latest guard status`
+in the checkout first: it shows today's figures, and the numbers are larger
+than intuition suggests, because `tokens` counts every component and cache
+reads dominate (one busy repository measured about 390M tokens in a day, 96%
+of them cache reads, against a few million output tokens). Then write
+`.aibill/policy.json` at the checkout root:
 
 ```json
 {
   "version": 1,
   "models": { "allow": ["sonnet", "haiku"] },
-  "budget": { "perDay": { "tokens": 1500000, "sessions": 20 } },
+  "budget": { "perDay": { "tokens": 400000000, "outputTokens": 4000000, "sessions": 20 } },
   "message": "This repository's daily agent budget is spent. Ask the platform team for an exception."
 }
 ```
 
-Then run `npx aibill@latest guard install` from the checkout and commit what it
-writes. Two files change:
+Then run `npx aibill@latest guard install` in the checkout Claude Code will
+start in and commit what it writes. Two files change:
 
 - `.claude/settings.json` (Claude Code shared project settings) gains
   `availableModels` from `models.allow` and one command hook on
-  `UserPromptSubmit` and on `PreToolUse`. Keys that were already there stay as
-  they were; rerunning install changes nothing; `guard install --uninstall`
-  removes exactly what install added.
+  `UserPromptSubmit`. Add `"perToolCall": true` to the policy, or pass
+  `--per-tool-call`, to hook `PreToolUse` as well; that costs about a tenth of
+  a second per tool call, so it is off by default. Keys that were already
+  there stay as they were; rerunning install changes nothing;
+  `guard install --uninstall` removes exactly what install added.
 - `.aibill/guard-hook.mjs`, the hook the settings point at with
   `node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"`. It runs
-  `aibill guard check` from the `ai-spend-agent` package installed for the
-  repository (`npm install --save-dev aibill`), without `npx` or any network.
+  `aibill guard check` from the `ai-spend-agent` package the checkout declares
+  in its `package.json` (`npm install --save-dev aibill`), else from a global
+  install, without `npx` or any network.
+
+In a linked worktree, install writes into the worktree, because that is where
+Claude Code reads the shared settings from; the policy and the day's figures
+belong to the main checkout, and the install output says so.
 
 What it enforces: the model allowlist applies as soon as Claude Code loads the
-project settings. The hook reads today's Claude Code usage for this repository
-from the transcripts already on the machine (the UTC day's input, output and
-cache tokens, and distinct sessions; a linked worktree counts toward its main
-checkout) and exits 2 with the policy message and the figure when a budget is
-spent, which blocks the prompt or tool call:
+project settings (model limits are the settings' job, `availableModels` and
+`deniedModels`; the hook does not look at models). The hook reads today's
+Claude Code usage for this repository from the transcripts already on the
+machine (the UTC day's tokens, output tokens and distinct sessions; a linked
+worktree counts toward its main checkout) and exits 2 with the policy message
+and the figure when a budget is spent, which blocks the prompt or tool call:
 
 ```
 This repository's daily agent budget is spent. Ask the platform team for an exception.
-checkout-api used 1.9M tokens of its 1.5M daily budget (UTC 2026-11-04); paused until 00:00 UTC (in 5h12m). aibill guard
+checkout-api used 410M tokens of its 400M daily budget (UTC 2026-11-04); paused until 00:00 UTC (in 5h12m). aibill guard
 ```
 
-The hook fails open. On a missing or invalid policy, a transcript directory it
-cannot read, or an index still catching up with a large day, it exits 0 with
-one warning line and the developer continues. It blocks only when the local
-transcripts make the spent budget certain; a line whose token shape the parser
-does not support counts its present components only, so the figure is a lower
-bound. A warm run reads only the bytes transcripts gained since the last run
-and finishes in about a tenth of a second.
+The hook fails open: it never blocks a developer on uncertain or stale data.
+On a missing or invalid policy, a transcript directory it cannot read, hook
+input it could not parse (the sessions rule then waits for the next prompt
+while the token rules still apply), or an index still catching up with a
+large day, it exits 0 with one warning line and the developer continues. A
+transcript rewritten in place is detected and read again from the start. A
+line whose token shape the parser does not support counts its present
+components only, so every figure is a lower bound. A warm run reads only the
+bytes transcripts gained since the last run, and a run whose verdict cannot
+have changed exits before loading anything: about a tenth of a second per
+prompt, and per tool call when opted in.
 
 `npx aibill@latest guard status` prints the policy in force, today's figures
-against it, what is installed where, and whether managed settings override.
+against it, what is installed where (including which `ai-spend-agent` the
+hook would run), and whether managed settings override.
 
 Honest limits. Project settings are a convention: a developer can edit
 `.claude/settings.json`, and Claude Code runs project hooks only after the
@@ -213,10 +230,11 @@ developer trusts the folder. Organizations that need enforcement deploy the
 same policy as managed settings, which win over every other scope:
 `npx aibill@latest guard install --managed` prints that document, including
 `deniedModels` from `models.deny` (a managed-only key that project scope can
-only report). Model lists match the way Claude Code documents (`opus` covers
-the family, `claude-opus-5` covers later minor versions). `codex.model` is
-reported, not enforced. Nothing here reads provider billing or acts on a
-provider account; that half lives in Tilden Workspace.
+only report); its hook command is POSIX shell (`sh -c`, Git Bash on Windows).
+Model lists match the way Claude Code documents (`opus` covers the family,
+`claude-opus-5` covers later minor versions). `codex.model` is reported, not
+enforced. Nothing here reads provider billing or acts on a provider account;
+that half lives in Tilden Workspace.
 
 ## Optional Workspace connection
 

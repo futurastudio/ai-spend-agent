@@ -14,11 +14,11 @@ Command details for [aibill, Tilden’s free CLI](../README.md). Start with the
 | `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
 | `statusline uninstall` | Remove only the owned setting and restore the preserved predecessor without rolling back unrelated settings |
 | `statusline expand` | Print every subscription with committed price, runways, and 7-day API-equivalent value |
-| `guard install [--path <dir>]` | Write the repository's committed `.aibill/policy.json` into Claude Code shared project settings (`availableModels` from `models.allow`, one command hook on `UserPromptSubmit` and `PreToolUse`) and the `.aibill/guard-hook.mjs` launcher; other settings keys are kept, rerunning changes nothing |
+| `guard install [--path <dir>] [--per-tool-call]` | Write the repository's committed `.aibill/policy.json` into the checkout's Claude Code shared project settings (`availableModels` from `models.allow`, one command hook on `UserPromptSubmit`, plus `PreToolUse` with `--per-tool-call` or `perToolCall: true`) and the `.aibill/guard-hook.mjs` launcher; other settings keys are kept, rerunning changes nothing; a linked worktree gets its own copy while the policy stays in the main checkout |
 | `guard install --managed` | Print the same policy as a managed-settings document (adds `deniedModels`) for organizations that enforce centrally; writes nothing |
 | `guard install --uninstall` | Remove exactly the settings and launcher that install added; an edited `availableModels` and the policy file stay |
-| `guard check` | The hook: read today's Claude Code usage for this repository from local transcripts and exit 2 with the policy message when a daily budget is spent; missing or unreadable evidence exits 0 with one warning (fail open) |
-| `guard status` | Show the policy in force, today's usage against it, what is installed where, and whether managed settings override; never a person |
+| `guard check` | The hook: read today's Claude Code usage for this repository from local transcripts and exit 2 with the policy message when a daily budget (tokens, output tokens or sessions) is spent; a missing policy, unreadable evidence, unreadable hook input or an index still catching up exits 0 with one warning (fail open) |
+| `guard status` | Show the policy in force, today's usage against it, what is installed where (and which `ai-spend-agent` the hook runs), and whether managed settings override; never a person. Run it before choosing budgets |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Register an admin-gated local connector stub and print the required `sync-provider` command; does not fetch billing data |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
@@ -157,28 +157,37 @@ setting sources on that host.
 
 ## Guard: repository policy for Claude Code
 
-`.aibill/policy.json` is committed per repository (version 1, strict keys):
+Run `npx aibill guard status` first: `tokens` counts every component and cache
+reads dominate, so a busy repository measures hundreds of millions a day while
+output tokens run in the millions. `.aibill/policy.json` is committed per
+repository (version 1, strict keys):
 
 | Key | Meaning |
 | --- | --- |
 | `models.allow` | Written to Claude Code `availableModels`; the project allowlist applies as soon as the settings load |
-| `models.deny` | Written to `deniedModels` by `--managed` only; Claude Code ignores the key outside managed settings, so project scope reports it |
-| `budget.perDay.tokens` | Input + output + cache read + cache write tokens of Claude Code sessions in this repository per UTC day |
+| `models.deny` | Written to `deniedModels` by `--managed` only; Claude Code ignores the key outside managed settings, so project scope reports it. Model limits are enforced by these two settings keys, not by the hook |
+| `budget.perDay.tokens` | Input + output + cache read + cache write tokens of Claude Code sessions in this repository per UTC day (hundreds of millions for a busy repository) |
+| `budget.perDay.outputTokens` | Output tokens only, per UTC day (a few million for a busy repository) |
 | `budget.perDay.sessions` | Distinct Claude Code sessions with a call in this repository per UTC day; the current session is never counted against itself |
 | `message` | Shown first when the guard blocks; at most 240 characters, no control characters |
+| `perToolCall` | `true` also hooks `PreToolUse` (about 0.1 s per tool call); the default hooks `UserPromptSubmit` only |
 | `codex.model` | Reported by `guard status`; Codex is not enforced in this version |
 
 ```bash
-npx aibill guard install          # writes .claude/settings.json + .aibill/guard-hook.mjs; commit both
-npx aibill guard status           # policy in force, today's figures, installed where, managed override
-npx aibill guard install --managed > managed-settings.json   # the enforced form for an organization
+npx aibill guard status           # today's figures first; then policy in force, installed where, managed override
+npx aibill guard install          # writes .claude/settings.json + .aibill/guard-hook.mjs in this checkout; commit both
+npx aibill guard install --per-tool-call
+npx aibill guard install --managed > managed-settings.json   # the enforced form for an organization (POSIX-shell hook command)
 npx aibill guard install --uninstall
 ```
 
 `guard check` is what the hook runs. It resolves the repository from the hook's
 `cwd` (a linked worktree resolves to its main checkout), reads only the bytes
 transcripts gained since its last run from a private cache under
-`~/.aibill/cache/guard-usage-v1/`, and blocks only when the figure is certain.
-Project settings are a convention a developer can edit, and Claude Code runs
-project hooks after the folder is trusted; managed settings are the enforced
-form.
+`~/.aibill/cache/guard-usage-v1-r<N>/` (`N` is the Claude Code reader
+version, so an older reader's cache is never reused), detects a transcript
+rewritten in place, and blocks only when the figure is certain. A run whose
+verdict cannot have changed (same day, policy, transcripts and session) exits
+before loading the evidence engine. Project settings are a convention a
+developer can edit, and Claude Code runs project hooks after the folder is
+trusted; managed settings are the enforced form.

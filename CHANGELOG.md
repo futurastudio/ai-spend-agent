@@ -9,24 +9,34 @@ historical untagged exception.
 
 - Add `aibill guard`: a committed per-repository policy for coding agents,
   enforced where Claude Code runs. `.aibill/policy.json` (version 1) declares
-  allowed and denied models, a daily budget in tokens and sessions per UTC
-  day, the message shown when blocked, and a Codex model that is reported
-  only. `guard install` merges `availableModels` and one command hook on
-  `UserPromptSubmit` and `PreToolUse` into the repository's
-  `.claude/settings.json`, keeping every other key, and writes the
-  `.aibill/guard-hook.mjs` launcher the hook runs; rerunning changes nothing
-  and `--uninstall` removes exactly what was added. `--managed` prints the
-  same policy as a managed-settings document, the only scope where
-  `deniedModels` applies. `guard check`, the hook, reads today's usage for the
-  repository from the local transcripts (a linked worktree counts toward its
-  main checkout) and exits 2 with the policy message and the figure when a
-  budget is spent; on a missing or invalid policy, unreadable transcripts or
-  an index still catching up it exits 0 with one warning and never blocks a
-  developer on uncertainty. A warm run reads only the bytes transcripts gained
-  since the last run. `guard status` prints the policy in force, today's
-  figures, what is installed where and whether managed settings override,
-  never a person. Core gains the policy schema and an incremental transcript
-  tally that keeps the same lines as the whole-file reader.
+  allowed and denied models, a daily budget per UTC day in tokens (every
+  component; a busy repository measures hundreds of millions, mostly cache
+  reads), output tokens and sessions, the message shown when blocked, whether
+  to hook every tool call as well as every prompt (`perToolCall`, off by
+  default), and a Codex model that is reported only. `guard install` merges
+  `availableModels` and one command hook on `UserPromptSubmit` (plus
+  `PreToolUse` when opted in) into the checkout's `.claude/settings.json`,
+  keeping every other key and the place of a group a developer moved, and
+  writes the `.aibill/guard-hook.mjs` launcher the hook runs; a linked
+  worktree gets its own copy while the policy stays in the main checkout.
+  Rerunning changes nothing and `--uninstall` removes exactly what was added.
+  `--managed` prints the same policy as a managed-settings document, the only
+  scope where `deniedModels` applies. `guard check`, the hook, reads today's
+  usage for the repository from the local transcripts (a linked worktree
+  counts toward its main checkout) and exits 2 with the policy message and the
+  figure when a budget is spent; it never blocks a developer on uncertain or
+  stale data: a missing or invalid policy, unreadable transcripts, hook input
+  it could not read (the sessions rule then waits; token rules still apply),
+  or an index still catching up exit 0 with one warning, and a transcript
+  rewritten in place is read again from the start. The current session is
+  never counted against itself however large the prompt or tool input in the
+  hook's stdin. A warm run reads only the bytes transcripts gained since the
+  last run, and a run whose verdict cannot have changed exits before loading
+  the evidence engine. `guard status` prints the policy in force, today's
+  figures, what is installed where, which `ai-spend-agent` the hook would run
+  and whether managed settings override, never a person. Core gains the
+  policy schema and an incremental transcript tally that keeps the same lines
+  as the whole-file reader.
 
 ## 0.9.15 (unreleased)
 
