@@ -638,7 +638,7 @@ describe("loadToolInvocations", () => {
  * carries `stop_reason` and the final output count.
  */
 const streamedFixture = readFileSync(
-  new URL("./fixtures/claude-code-streaming/streamed-tool-use.jsonl", import.meta.url),
+  new URL("./fixtures/local-agent-formats/claude-code-streaming-v1/streamed-tool-use.jsonl", import.meta.url),
   "utf8"
 );
 
@@ -709,6 +709,17 @@ describe("parseClaudeCodeInvocations on a streamed Claude Code message", () => {
     const parsed = parseClaudeCodeInvocations(content);
     expect(parsed.assistantTurns).toBe(2);
     expect(parsed.invocations).toEqual([{ name: "Bash", count: 2 }, { name: "Edit", count: 1 }]);
+    // Straddling the window start: the first line is the turn (ties keep the
+    // first), so a window that opens after it counts nothing, however many of
+    // the later lines fall inside it. The financial reader keeps the same line
+    // and excludes the call the same way.
+    const tieLines = content.split("\n").slice(0, 5);
+    const straddle = parseClaudeCodeInvocations(
+      tieLines.map((line, index) => index === 0 ? line : line.replace("12:00:00.000Z", "12:00:02.000Z")).join("\n"),
+      Date.parse("2026-06-16T12:00:01.000Z")
+    );
+    expect(straddle.assistantTurns).toBe(0);
+    expect(straddle.invocations).toEqual([]);
   });
 });
 
@@ -737,7 +748,10 @@ describe("loadToolInvocations across parent and sub-agent transcripts", () => {
   });
   const subagentTranscript = `${forkedCopy}\n${streamedFixture.replaceAll("fixture-session", "session-a")}`;
 
-  async function summarize(projectFiles: Record<string, string>): Promise<Awaited<ReturnType<typeof loadToolInvocations>>> {
+  async function summarize(
+    projectFiles: Record<string, string>,
+    sinceIso?: string
+  ): Promise<Awaited<ReturnType<typeof loadToolInvocations>>> {
     const dir = await mkdtemp(join(tmpdir(), "aibill-invocations-"));
     try {
       const projectDir = join(dir, "projects", "-Users-testuser-project");
@@ -748,7 +762,8 @@ describe("loadToolInvocations across parent and sub-agent transcripts", () => {
       }
       return await loadToolInvocations({
         claudeProjectsDir: join(dir, "projects"),
-        codexSessionsDir: join(dir, "no-codex")
+        codexSessionsDir: join(dir, "no-codex"),
+        ...(sinceIso ? { sinceIso } : {})
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -783,7 +798,62 @@ describe("loadToolInvocations across parent and sub-agent transcripts", () => {
     expect(alone.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }]);
   });
 
-  it("counts a session copied into a second transcript once", async () => {
+  it("lets the owning copy's own line decide the window, as the financial reader does", async () => {
+    // Parent turn at 12:00:05, its sub-agent copy at 12:00:09, window from
+    // 12:00:07: the parent copy owns the turn and sits before the window, so
+    // the turn is not counted; the sub-agent's own message (final line
+    // 12:00:03.191) is before the window too.
+    const windowed = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    }, "2026-06-16T12:00:07.000Z");
+    expect(windowed.sessions).toBe(0);
+    expect(windowed.invocations).toEqual([]);
+    // The parent copy inside the window counts, once.
+    const inside = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    }, "2026-06-16T12:00:04.000Z");
+    expect(inside.sessionTurnCounts).toEqual([1]);
+    expect(inside.invocations).toEqual([{ name: "Agent", count: 1 }]);
+  });
+
+  it("decides a sub-agent transcript by its path, so an inline-sidechain parent keeps its place", async () => {
+    // Older layout: the parent transcript carries sidechain lines inline
+    // (isSidechain, agentId) beside its own turn, and a `subagents/` file
+    // holds another run. Both are sessions; the parent owns its copied turn.
+    const inlineSidechain = JSON.stringify({
+      type: "assistant",
+      sessionId: "session-a",
+      requestId: "fixture-req-inline",
+      timestamp: "2026-06-16T12:00:02.000Z",
+      isSidechain: true,
+      agentId: "agent-inline",
+      message: { id: "fixture-msg-inline", model: "claude-opus-4-8", role: "assistant", stop_reason: "tool_use", usage: usage(9), content: [
+        { type: "tool_use", id: "tu_inline", name: "Grep", input: { pattern: "x" } }
+      ] }
+    });
+    const mixed = await summarize({
+      "session-a.jsonl": `${placeholder}\n${inlineSidechain}\n${finalLine}\n`,
+      "session-a/subagents/agent-fixture.jsonl": subagentTranscript
+    });
+    expect(mixed.sessions).toBe(2);
+    expect(mixed.sessionTurnCounts).toEqual([2, 1]);
+    expect(mixed.invocations).toEqual([{ name: "Read", count: 5 }, { name: "Agent", count: 1 }, { name: "Grep", count: 1 }]);
+    expect(mixed.sessionSignals?.map((signal) => signal.isSubagent)).toEqual([true, true]);
+  });
+
+  it("counts a session copied into a second transcript once, in the earlier copy", async () => {
+    // "session-a-copy.jsonl" sorts before "session-a.jsonl"; the later-sorting
+    // file holds the earlier copy and owns the turn (preferredStableTurnCopy).
+    const later = (line: string): string => line.replace("12:00:05.000Z", "12:00:45.000Z").replace("12:00:00.000Z", "12:00:40.000Z");
+    const earlierOwns = await summarize({
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
+      "session-a-copy.jsonl": `${later(placeholder)}\n${later(finalLine)}\n`
+    });
+    expect(earlierOwns.sessions).toBe(1);
+    expect(earlierOwns.sessionSignals?.map((signal) => signal.lastActivityAt)).toEqual(["2026-06-16T12:00:05.000Z"]);
+    expect(earlierOwns.invocations).toEqual([{ name: "Agent", count: 1 }]);
     const copied = await summarize({
       "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
       "session-a-copy.jsonl": `${placeholder}\n${finalLine}\n`

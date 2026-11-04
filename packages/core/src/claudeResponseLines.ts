@@ -99,6 +99,22 @@ export function finalClaudeResponseLines(lines: readonly string[]): Map<string, 
 }
 
 /**
+ * Of two copies of one response, the originating one: the copy outside a
+ * sub-agent transcript (a sub-agent transcript opens with the parent turn it
+ * was forked from), else the earlier; equal copies keep the prior. The
+ * financial reader (`dedupeCumulativeSessionCalls`) and the qualitative reader
+ * (`loadToolInvocations`) both pick with this, so money and counts agree on
+ * which transcript owns a turn.
+ */
+export function preferredClaudeResponseCopy<T extends { subagent: boolean; timestamp: string }>(
+  prior: T,
+  candidate: T
+): T {
+  if (prior.subagent !== candidate.subagent) return prior.subagent ? candidate : prior;
+  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+}
+
+/**
  * Calls `onBlock` for each `tool_use` block of this line that the response has
  * not shown on an earlier line. Streamed transcripts write one content block
  * per line, so the blocks of one response are the union over its lines;

@@ -3759,7 +3759,7 @@ describe("parseClaudeCodeTranscript on a streamed Claude Code message", () => {
     // Real 2.1.222 lines, anonymized: a placeholder thinking line, then one
     // Read block per line; only the sixth line carries the final state.
     const streamed = readFileSync(
-      new URL("./fixtures/claude-code-streaming/streamed-tool-use.jsonl", import.meta.url),
+      new URL("./fixtures/local-agent-formats/claude-code-streaming-v1/streamed-tool-use.jsonl", import.meta.url),
       "utf8"
     );
     const calls = parseClaudeCodeTranscript(

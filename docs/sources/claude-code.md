@@ -27,7 +27,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 ## How aibill reads it
 
 - Read one JSON object per line and keep assistant records with message.usage.
-- Ignore &lt;synthetic&gt; placeholder models and deduplicate streaming/retry rewrites by message and request identity.
+- Ignore &lt;synthetic&gt; placeholder models; a message streamed on several lines (same message and request identity, one content block per line) counts once, from the line carrying its final state, with the tool_use blocks of every line.
 - Treat each retained assistant usage record as turn-scoped evidence.
 
 ## Fields read
@@ -83,5 +83,6 @@ Fixtures and generated documentation must never contain a real transcript, promp
 ## Recorded fixture IDs
 
 - `claude-code-v1`
+- `claude-code-streaming-v1`
 
 The recorded fixtures are minimal synthetic reproductions of supported shapes. They are regression evidence for the reader—not provider billing evidence.

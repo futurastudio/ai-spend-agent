@@ -20,8 +20,8 @@ historical untagged exception.
   transcript opens with the parent turn it was forked from; a copied or
   resumed session repeats its history) counts once, in the originating
   transcript, with the blocks every copy saw. `localAgentQualitativeParserVersion`
-  is 8 so cached evidence is recomputed. Measured on 804 local transcripts:
-  tool invocations 12,603 -> 70,959; single-line messages unchanged.
+  is 8 so cached evidence is recomputed. On one machine the tool invocation
+  count rose about 5x; single-line messages are unchanged.
 - Add `aibill guard`: a committed per-repository policy for coding agents,
   enforced where Claude Code runs. `.aibill/policy.json` (version 1) declares
   allowed and denied models, a daily budget per UTC day in tokens (every

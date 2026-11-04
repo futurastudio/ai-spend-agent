@@ -20,6 +20,7 @@ import {
   eachNewClaudeToolUse,
   finalClaudeResponseLines,
   outranks,
+  preferredClaudeResponseCopy,
   tokenComponentOf,
   type ClaudeResponseLineRank
 } from "./claudeResponseLines.js";
@@ -833,8 +834,8 @@ function isStableTurnConflict(call: LocalAgentCall): boolean {
 }
 
 function preferredStableTurnCopy(prior: LocalAgentCall, candidate: LocalAgentCall): LocalAgentCall {
-  if (Boolean(prior.subagentId) !== Boolean(candidate.subagentId)) return prior.subagentId ? candidate : prior;
-  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+  const copy = (call: LocalAgentCall) => ({ subagent: Boolean(call.subagentId), timestamp: call.timestamp, call });
+  return preferredClaudeResponseCopy(copy(prior), copy(candidate)).call;
 }
 
 function conflictingStableTurn(
