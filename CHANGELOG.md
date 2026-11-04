@@ -29,6 +29,18 @@ historical untagged exception.
   keeps its folder names, because the server keys facts on the name and never
   deletes, so a renamed day would sit beside the old one. Folders outside any
   checkout, the home directory and unknown paths keep the folder name.
+- Count a streamed Claude Code message once, from the line that carries its
+  final state. Claude Code 2.1.221–2.1.295 writes an assistant message several
+  times while streaming: a placeholder first (2–3 output tokens), the final
+  counts later, sometimes a zeroed copy after that. Earlier versions kept the
+  first line, which undercounted output tokens by about 30% on those
+  transcripts and could make a forked parent turn look like a conflict. The
+  line carrying the final state is kept: the one with `iterations` or a stop
+  reason and the largest output count; ties keep the first. Tool-use and file
+  evidence and the call's timestamp come from that line too, so a message
+  streamed across UTC midnight counts on its completion day. The reader's
+  cache versions are bumped so files indexed by earlier versions are read
+  again.
 
 ## 0.9.14 (published on npm)
 
