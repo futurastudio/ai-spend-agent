@@ -197,6 +197,15 @@ import {
   readStatuslineCache,
   renderStatusline
 } from "./statuslineRuntime.js";
+import { checkGuard, collectGuardStatus, describePolicyIssues, loadGuardPolicy } from "./guard.js";
+import { readGuardHookInput } from "./guardHook.js";
+import {
+  GuardSettingsError,
+  GUARD_LAUNCHER_RELATIVE_PATH,
+  guardManagedSettingsSnippet,
+  installGuard,
+  uninstallGuard
+} from "./guardSettings.js";
 import {
   chooseLatestTokenReductionExperiment,
   loadTokenVerificationState,
@@ -314,6 +323,12 @@ type ParsedArgs = {
   statusline?: boolean;
   statuslineAction?: string;
   replaceStatusline?: boolean;
+  /** guard subcommand: install | check | status. */
+  guardAction?: string;
+  /** guard install --managed: print the managed-settings document instead of writing. */
+  guardManaged?: boolean;
+  /** guard install --uninstall: remove exactly what install added. */
+  guardUninstall?: boolean;
   verifyAction?: "inspect" | "start" | "mark-applied" | "rollback" | "cancel" | "result";
   verifyTarget?: string;
   canary?: "passed" | "failed";
@@ -358,6 +373,10 @@ export type CliRuntimeOptions = {
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
   statuslineRunnerContents?: string | Uint8Array;
+  /** guard check: the hook's stdin JSON; null means no hook input (a terminal). */
+  guardStdin?: NodeJS.ReadableStream | null;
+  /** guard: the instant "today" is measured from. */
+  guardNow?: Date;
   statuslineNow?: Date;
   statuslineColumns?: number;
   statuslineTimeZone?: string;
@@ -467,6 +486,10 @@ export async function runCli(
 
   if (args.command === "statusline") {
     return statuslineCommand(args, runtime);
+  }
+
+  if (args.command === "guard") {
+    return guardCommand(args, runtime);
   }
 
   if (args.command === "signup") {
@@ -2741,6 +2764,175 @@ async function resetCommand(args: ParsedArgs): Promise<CliResult> {
     removed.length > 0 ? `cleared: ${removed.join(", ")}` : "nothing to clear (no persisted spend state found)",
     "next run will re-read your real local agent logs; no sample is substituted without --sample."
   ].join("\n"));
+}
+
+async function guardCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const action = args.guardAction;
+  if (action === "check") return guardCheckCommand(args, runtime);
+  if (action === "status") return guardStatusCommand(args, runtime);
+  if (action === "install") {
+    if (args.guardManaged && args.guardUninstall) {
+      return { exitCode: 1, stdout: "", stderr: "aibill guard install takes --managed or --uninstall, not both." };
+    }
+    if (args.guardUninstall) return guardUninstallCommand(args);
+    if (args.guardManaged) return guardManagedCommand(args);
+    return guardInstallCommand(args);
+  }
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: `${action === undefined ? "aibill guard needs an action." : `Unknown guard action: ${sanitizeSecretishError(action)}`}\n` +
+      "Use: npx aibill guard install [--managed|--uninstall] | guard check | guard status"
+  };
+}
+
+function guardRepositoryRoot(args: ParsedArgs): { root: string } | { failure: CliResult } {
+  const root = resolveRepositoryRoot(resolve(args.path));
+  if (root) return { root };
+  return {
+    failure: {
+      exitCode: 1,
+      stdout: "",
+      stderr: "aibill guard: not inside a repository. Run it from a checkout (or pass --path <dir>) that holds .aibill/policy.json."
+    }
+  };
+}
+
+const guardPolicyExample = JSON.stringify({
+  version: 1,
+  models: { allow: ["sonnet", "haiku"] },
+  budget: { perDay: { tokens: 1_500_000, sessions: 20 } },
+  message: "This repository's daily agent budget is spent. Ask the platform team for an exception."
+}, null, 2);
+
+async function guardInstallCommand(args: ParsedArgs): Promise<CliResult> {
+  const located = guardRepositoryRoot(args);
+  if ("failure" in located) return located.failure;
+  const loaded = await loadGuardPolicy(located.root);
+  if (loaded.status !== "ok") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: loaded.status === "missing"
+        ? `aibill guard: ${basename(located.root)} has no .aibill/policy.json yet. Create it, then rerun. Example:\n${guardPolicyExample}`
+        : loaded.status === "invalid"
+          ? `aibill guard: .aibill/policy.json is invalid: ${describePolicyIssues(loaded.issues)}`
+          : `aibill guard: .aibill/policy.json could not be read (${loaded.reason}).`
+    };
+  }
+  const policy = loaded.policy;
+  try {
+    const result = await installGuard({ repositoryRoot: located.root, policy });
+    const lines = [
+      result.settings === "unchanged" && result.launcher === "unchanged"
+        ? `aibill guard is already installed for ${basename(located.root)}; nothing changed.`
+        : `aibill guard installed for ${basename(located.root)}.`,
+      `  .claude/settings.json: ${result.settings}${result.changes.length > 0 ? ` · ${result.changes.join(" · ")}` : ""}`,
+      `  ${GUARD_LAUNCHER_RELATIVE_PATH}: ${result.launcher}`
+    ];
+    if (policy.models?.deny) {
+      lines.push("  models.deny: reported only at project scope; deniedModels is honoured from managed settings (npx aibill guard install --managed)");
+    }
+    if (policy.codex?.model) lines.push(`  codex.model ${policy.codex.model}: reported only; Codex is not enforced`);
+    lines.push(
+      "  next: commit .claude/settings.json and .aibill/, and start Claude Code at the repository root so the project settings load",
+      "  limit: project settings are a convention a developer can edit; organizations enforce the same policy by deploying `npx aibill guard install --managed`"
+    );
+    return ok(lines.join("\n"));
+  } catch (error) {
+    return guardSettingsFailure("install", error);
+  }
+}
+
+async function guardUninstallCommand(args: ParsedArgs): Promise<CliResult> {
+  const located = guardRepositoryRoot(args);
+  if ("failure" in located) return located.failure;
+  const loaded = await loadGuardPolicy(located.root);
+  try {
+    const result = await uninstallGuard({
+      repositoryRoot: located.root,
+      policy: loaded.status === "ok" ? loaded.policy : undefined
+    });
+    const lines = [
+      `aibill guard removed from ${basename(located.root)}.`,
+      `  .claude/settings.json: ${result.settings}${result.changes.length > 0 ? ` · ${result.changes.join(" · ")}` : ""}`,
+      ...result.kept.map((note) => `  ${note}`),
+      `  ${GUARD_LAUNCHER_RELATIVE_PATH}: ${result.launcher === "kept-foreign" ? "kept, it was not written by aibill guard" : result.launcher}`,
+      "  .aibill/policy.json is yours and was not touched"
+    ];
+    return ok(lines.join("\n"));
+  } catch (error) {
+    return guardSettingsFailure("uninstall", error);
+  }
+}
+
+async function guardManagedCommand(args: ParsedArgs): Promise<CliResult> {
+  const located = guardRepositoryRoot(args);
+  if ("failure" in located) return located.failure;
+  const loaded = await loadGuardPolicy(located.root);
+  if (loaded.status !== "ok") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: loaded.status === "invalid"
+        ? `aibill guard: .aibill/policy.json is invalid: ${describePolicyIssues(loaded.issues)}`
+        : "aibill guard: .aibill/policy.json is missing or unreadable; nothing to print."
+    };
+  }
+  // stdout carries only the JSON document, so it can be redirected into a file.
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify(guardManagedSettingsSnippet(loaded.policy), null, 2),
+    stderr: [
+      "Managed settings for this repository's policy. Deploy the JSON above as managed-settings.json:",
+      "  macOS: /Library/Application Support/ClaudeCode/managed-settings.json",
+      "  Linux and WSL: /etc/claude-code/managed-settings.json",
+      "  Windows: C:\\Program Files\\ClaudeCode\\managed-settings.json",
+      "Managed values win over user, project and local settings; deniedModels is honoured only here.",
+      "The hook runs only in checkouts that commit .aibill/guard-hook.mjs (npx aibill guard install)."
+    ].join("\n")
+  };
+}
+
+async function guardCheckCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const stdin = runtime.guardStdin === undefined
+    ? (process.stdin.isTTY ? null : process.stdin)
+    : runtime.guardStdin;
+  const input = await readGuardHookInput(stdin as (NodeJS.ReadableStream & { isTTY?: boolean }) | null);
+  const outcome = await checkGuard({
+    cwd: input?.cwd ?? resolve(args.path),
+    sessionId: input?.sessionId,
+    model: input?.model,
+    hookEventName: input?.hookEventName,
+    now: runtime.guardNow
+  }, {
+    claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+    cacheDirectory: process.env.AIBILL_CACHE_DIR,
+    homeDirectory: runtime.homeDirectory
+  });
+  return { exitCode: outcome.exitCode, stdout: "", stderr: outcome.stderr };
+}
+
+async function guardStatusCommand(args: ParsedArgs, runtime: CliRuntimeOptions): Promise<CliResult> {
+  const status = await collectGuardStatus({
+    cwd: resolve(args.path),
+    now: runtime.guardNow,
+    homeDirectory: runtime.homeDirectory,
+    dependencies: {
+      claudeProjectsDir: process.env.AI_SPEND_CLAUDE_LOGS_DIR,
+      cacheDirectory: process.env.AIBILL_CACHE_DIR,
+      homeDirectory: runtime.homeDirectory
+    }
+  });
+  if (!status.repositoryRoot) return { exitCode: 1, stdout: "", stderr: status.text };
+  return ok(status.text);
+}
+
+function guardSettingsFailure(action: "install" | "uninstall", error: unknown): CliResult {
+  if (error instanceof GuardSettingsError) {
+    return { exitCode: 1, stdout: "", stderr: `aibill guard ${action} stopped safely: ${sanitizeSecretishError(error.message)}` };
+  }
+  throw error;
 }
 
 async function statuslineCommand(
@@ -8090,6 +8282,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (command === "statusline" && rest[0] && !rest[0].startsWith("--")) {
     parsed.statuslineAction = rest.shift();
   }
+  if (command === "guard" && rest[0] && !rest[0].startsWith("--")) {
+    parsed.guardAction = rest.shift();
+  }
   if (command === "connect" && rest[0] && !rest[0].startsWith("--")) {
     parsed.provider = rest[0];
     rest.shift();
@@ -8185,6 +8380,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--replace") {
       parsed.replaceStatusline = true;
+      continue;
+    }
+    if (arg === "--managed") {
+      parsed.guardManaged = true;
+      continue;
+    }
+    if (arg === "--uninstall") {
+      parsed.guardUninstall = true;
       continue;
     }
     if (arg === "--canary") {
@@ -8790,6 +8993,11 @@ function helpText(telemetryDisclosure?: boolean): string {
     "    [--replace]           Explicitly replace an existing statusLine while preserving it for uninstall",
     "  statusline uninstall    Remove only the owned setting and restore its preserved predecessor",
     "  statusline expand       Print every subscription with committed price, runways, and 7d API-equivalent",
+    "  guard install           Write this repository's .aibill/policy.json into Claude Code project settings (model allowlist + budget hook)",
+    "    [--managed]           Print the managed-settings document for organizations that enforce policy centrally",
+    "    [--uninstall]         Remove exactly the settings and launcher that install added",
+    "  guard check             The hook: exit 2 with the policy message when today's repository budget is spent; otherwise exit 0 (fails open)",
+    "  guard status            Show the policy in force, today's usage against it, and what is installed where",
     "  signup <email> [--ref <token>]  Join the launch list · email only · the exact payload is shown before send",
     "    [--never]             Never ask again (nothing is sent)   [--forget]  Clear local signup state",
     "  telemetry [on|off]      Show installation-linked command-count status + the exact last payload · switch it",
