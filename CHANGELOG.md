@@ -21,6 +21,14 @@ historical untagged exception.
   and `workspace push` represented it as unknown tokens. The served request's
   own split is read instead, and the line prices as that request. A line whose
   top level does not match its served request stays unsupported.
+- `workspace push` names a day's session facts after the repository instead of
+  the session folder: the checkout that holds the folder, or the main checkout
+  for a linked worktree, found from `.git` without running git. Worktrees,
+  sub-folders and clones of one repository therefore land in one Workspace
+  project. Only days this machine has never sent change; a day already sent
+  keeps its folder names, because the server keys facts on the name and never
+  deletes, so a renamed day would sit beside the old one. Folders outside any
+  checkout, the home directory and unknown paths keep the folder name.
 
 ## 0.9.14 (published on npm)
 
