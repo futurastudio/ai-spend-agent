@@ -84,6 +84,8 @@ import {
   loadContextHealth,
   detectLocalCredentials,
   detectLocalPlans,
+  readAgentPlanFacts,
+  AGENT_PLAN_TIER_OPT_OUT,
   redactSecrets,
   readSafeStateText,
   invalidateConnectedSpendTrustReceipt,
@@ -1785,10 +1787,18 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         ...[...counts].sort(([left], [right]) => left.localeCompare(right)).map(([label, count]) => `${label}: ${count}`),
         "Share these diagnostic counts for help before retrying. Do not delete logs or reconnect this machine."].join("\n"));
     }
+    // The subscription tier each agent left on this machine, so Workspace can cost
+    // its sessions. Read fail-open from the same files doctor reads; the preview
+    // below shows the exact fact, and AIBILL_NO_PLAN_TIER=1 leaves it out.
+    const agentPlanFacts = status.pending ? [] : await readAgentPlanFacts({ now, home: runtime.homeDirectory,
+      claudeConfigPath: process.env.AI_SPEND_CLAUDE_CONFIG, codexAuthPath: process.env.AI_SPEND_CODEX_AUTH });
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
-      resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot,
+      resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, agentPlanFacts,
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
+        ...(coverage.agentPlanFacts?.length
+          ? [`Subscription tier included for ${coverage.agentPlanFacts.map(fact => `${fact.agent} (${fact.tier})`).join(", ")}: the tier id and raw tier string only, no account, email or token. Set ${AGENT_PLAN_TIER_OPT_OUT}=1 to leave it out.`]
+          : []),
         ...(representedUnknowns ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),
         status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
           : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n")) });

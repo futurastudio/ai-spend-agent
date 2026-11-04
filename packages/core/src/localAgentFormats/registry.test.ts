@@ -318,9 +318,13 @@ describe("built-in runtime registry", () => {
 
   it("declares every recorded fixture directory exactly once", async () => {
     const fixtureRoot = resolve(import.meta.dirname, "../fixtures/local-agent-formats");
-    const declared = localAgentFormatRuntimeRegistry
-      .flatMap((runtime) => runtime.descriptor.fixtures)
-      .sort();
+    // Sign-in fixtures belong to the plan reader (planDetection.ts), not to a
+    // transcript parser; scripts/check-local-agent-format-fixtures.mjs gates them.
+    const planReaderFixtures = ["claude-code-plan-v1", "codex-plan-v1"];
+    const declared = [
+      ...localAgentFormatRuntimeRegistry.flatMap((runtime) => runtime.descriptor.fixtures),
+      ...planReaderFixtures
+    ].sort();
     const directories = (await readdir(fixtureRoot, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)

@@ -79,6 +79,20 @@ identities used to distinguish records. Project labels can identify work;
 this is not an anonymous activity feed. Unsupported token components remain
 unknown rather than zero. Gemini activity is not part of this upload.
 
+Each push also carries one subscription-tier fact per agent signed in on the
+machine, so Workspace can cost Claude Code and Codex sessions at the plan that
+ran them: the agent (`claude_code` or `codex`), a normalized tier id such as
+`claude_max_20x` or `chatgpt_pro` (`unknown` when the CLI does not recognize
+the string), the raw tier string exactly as the agent stored it, where it was
+read (`~/.claude.json` → `oauthAccount.organizationRateLimitTier`, or the
+`chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`, decoded
+locally without any network call), the instant it was read, and the
+subscription end when the agent recorded one. Nothing else from those files is
+read into the fact: no token, email, name, account id, organization name or
+uuid. A missing or unreadable file yields no fact. The preview names the tiers
+included. Set `AIBILL_NO_PLAN_TIER=1` to leave plan tiers out of every push;
+Workspace then costs those sessions at a tier the owner types by hand.
+
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local
 experiment/approval records. The local provider ledger is not part of the

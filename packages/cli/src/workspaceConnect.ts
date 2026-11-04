@@ -5,7 +5,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { request as httpsRequest } from "node:https";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { dedupeCumulativeSessionCalls, type LocalAgentCall } from "@agent-finops/core";
+import { AGENT_PLAN_TIER_IDS, dedupeCumulativeSessionCalls, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
 
 export const WORKSPACE_ORIGIN = "https://app.asktilden.com";
 export const WORKSPACE_FACTS_PATH = "/api/workspace/local-session-facts";
@@ -25,6 +25,13 @@ export type WorkspaceFact = {
   model: string; projectName: string | null; directoryRef: string; apiKeyRef: null; workspaceRef: null;
   sessionCount: string; sessionRefs: string[]; tokens: WorkspaceTokens; sessionsHash: string; factRevision: string;
 };
+/**
+ * This machine's subscription tier for one agent, read by core's plan reader
+ * and sent beside the day's session facts. The Workspace keys it
+ * `agent_plan:<device>:<agent>`; it has no revision and is replaced on every push.
+ */
+export type WorkspaceAgentPlanFact = AgentPlanFact;
+export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
 /** The fields that form a fact's key. */
 export type WorkspaceFactIdentity = Pick<WorkspaceFact, "day" | "agent" | "provider" | "model" | "projectName" | "directoryRef" | "apiKeyRef" | "workspaceRef">;
@@ -36,7 +43,7 @@ export type WorkspaceDevice = {
 export type WorkspaceEnvelope = {
   schemaVersion: "1"; deviceGrantId: string; grantRevision: string; deviceKeyId: string;
   sequence: string; nonce: string; batchId: string; idempotencyKey: string; generatedAt: string;
-  facts: WorkspaceFact[]; manifestHash: string;
+  facts: WorkspaceEnvelopeFact[]; manifestHash: string;
   signature: { algorithm: "ed25519"; canonicalization: "jcs-v1"; value: string };
 };
 export type WorkspacePending = {
@@ -48,7 +55,11 @@ export type WorkspaceState = {
   pending: WorkspacePending | null; lastAcceptedAt: string | null;
   disconnect: null | { state: "uncertain" | "revoked"; requestId: string; revokedAt: string | null };
 };
-export type WorkspaceAggregate = { facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[] };
+export type WorkspaceAggregate = {
+  facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
+  /** Plan facts prepared beside the session facts; absent from a bare aggregate. */
+  agentPlanFacts?: WorkspaceAgentPlanFact[];
+};
 
 export function workspaceCanonicalJson(value: Json): string {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -73,6 +84,19 @@ export function workspaceFactKey(fact: WorkspaceFactIdentity): string {
 export function workspaceFactContentHash(fact: WorkspaceFact): string {
   const { factRevision: ignored, ...content } = fact;
   return workspaceDomainHash("tilden:local-session-fact-content:v1", content);
+}
+export function isWorkspaceAgentPlanFact(fact: WorkspaceEnvelopeFact): fact is WorkspaceAgentPlanFact {
+  return "kind" in fact && fact.kind === "agent_plan";
+}
+export function isWorkspaceSessionFact(fact: WorkspaceEnvelopeFact): fact is WorkspaceFact {
+  return !isWorkspaceAgentPlanFact(fact);
+}
+/** The key the Workspace stores a plan fact under; the device is the key the push already signs with. */
+export function workspaceAgentPlanFactKey(fact: WorkspaceAgentPlanFact, deviceKeyId: string): string {
+  return `agent_plan:${deviceKeyId}:${fact.agent}`;
+}
+function envelopeFactKey(fact: WorkspaceEnvelopeFact, deviceKeyId: string): string {
+  return isWorkspaceAgentPlanFact(fact) ? workspaceAgentPlanFactKey(fact, deviceKeyId) : workspaceFactKey(fact);
 }
 function utcDay(value: string): string {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) || !Number.isFinite(Date.parse(value)))
@@ -229,6 +253,22 @@ function validateFact(fact: WorkspaceFact): void {
       || /[/\\\u0000-\u001f\u007f@]/.test(fact.projectName) || [".", ".."].includes(fact.projectName)))
     throw Error("Workspace fact shape is invalid.");
 }
+const PLAN_TIER_IDS = new Set<string>(AGENT_PLAN_TIER_IDS);
+function validateAgentPlanFact(fact: WorkspaceAgentPlanFact): void {
+  exactKeys(fact, ["kind", "agent", "tier", "tierRaw", "source", "observedAt", "activeUntil"]);
+  const family = fact.agent === "claude_code" ? "claude_" : "chatgpt_";
+  if (fact.kind !== "agent_plan" || !["claude_code", "codex"].includes(fact.agent)
+    || typeof fact.tier !== "string" || !PLAN_TIER_IDS.has(fact.tier) || fact.tier !== "unknown" && !fact.tier.startsWith(family)
+    || typeof fact.tierRaw !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(fact.tierRaw)
+    || fact.source !== (fact.agent === "claude_code" ? "claude_json.oauthAccount.organizationRateLimitTier" : "codex_auth.id_token.chatgpt_plan_type")
+    || typeof fact.observedAt !== "string" || fact.activeUntil !== null && typeof fact.activeUntil !== "string")
+    throw Error("Workspace agent plan fact shape is invalid.");
+  utcDay(fact.observedAt);
+  if (fact.activeUntil !== null) utcDay(fact.activeUntil);
+}
+function validateEnvelopeFact(fact: WorkspaceEnvelopeFact): void {
+  if (isWorkspaceAgentPlanFact(fact)) validateAgentPlanFact(fact); else validateFact(fact);
+}
 function validateEnvelope(envelope: WorkspaceEnvelope, device: WorkspaceDevice): void {
   exactKeys(envelope, ["schemaVersion", "deviceGrantId", "grantRevision", "deviceKeyId", "sequence", "nonce", "batchId", "idempotencyKey", "generatedAt", "facts", "manifestHash", "signature"]);
   exactKeys(envelope.signature, ["algorithm", "canonicalization", "value"]);
@@ -240,8 +280,8 @@ function validateEnvelope(envelope: WorkspaceEnvelope, device: WorkspaceDevice):
     || !Array.isArray(envelope.facts) || envelope.facts.length < 1 || envelope.facts.length > MAX_FACTS
     || envelope.signature.algorithm !== "ed25519" || envelope.signature.canonicalization !== "jcs-v1" || !bytes(envelope.signature.value, 64))
     throw Error("Workspace envelope shape is invalid.");
-  envelope.facts.forEach(validateFact);
-  if (new Set(envelope.facts.map(workspaceFactKey)).size !== envelope.facts.length) throw Error("Duplicate Workspace fact key.");
+  envelope.facts.forEach(validateEnvelopeFact);
+  if (new Set(envelope.facts.map(fact => envelopeFactKey(fact, envelope.deviceKeyId))).size !== envelope.facts.length) throw Error("Duplicate Workspace fact key.");
   const { signature, manifestHash, ...body } = envelope;
   if (workspaceDomainHash("tilden:local-session-facts-manifest:v1", body) !== manifestHash
     || !verify(null, Buffer.from(workspaceCanonicalJson({ ...body, manifestHash })), createPublicKey(device.privateKeyPem), Buffer.from(signature.value, "base64url"))
@@ -256,9 +296,11 @@ function validateDevice(device: WorkspaceDevice): void {
     || device.authorityStartsAt > device.collectionNotBefore || device.collectionNotBefore >= device.expiresAt
     || createPrivateKey(device.privateKeyPem).asymmetricKeyType !== "ed25519") throw Error("Workspace device state is invalid.");
 }
-export function buildWorkspaceEnvelope(device: WorkspaceDevice, facts: WorkspaceFact[], generatedAt: string): WorkspaceEnvelope {
-  validateDevice(device); utcDay(generatedAt); facts.forEach(validateFact);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(generatedAt) || facts.length < 1 || facts.length > MAX_FACTS)
+/** Plan facts ride beside session facts; an envelope never carries plan facts alone. */
+export function buildWorkspaceEnvelope(device: WorkspaceDevice, facts: WorkspaceEnvelopeFact[], generatedAt: string): WorkspaceEnvelope {
+  validateDevice(device); utcDay(generatedAt); facts.forEach(validateEnvelopeFact);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(generatedAt) || facts.length < 1 || facts.length > MAX_FACTS
+    || facts.every(isWorkspaceAgentPlanFact))
     throw Error("Workspace envelope bounds are invalid.");
   const sequence = String(BigInt(device.sequence) + 1n);
   if (!UINT.test(sequence)) throw Error("Workspace sequence exceeds its bound.");
@@ -425,13 +467,17 @@ export async function prepareWorkspacePush(options: {
   confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean>;
   /** Finds a session folder's checkout; absent, facts keep the folder name. */
   resolveRepositoryRoot?: (directory: string) => string | undefined;
+  /** This machine's subscription tier per agent, sent beside changed session facts; never alone. */
+  agentPlanFacts?: readonly WorkspaceAgentPlanFact[];
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state) throw Error("This machine is not connected to a Workspace.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending) {
       if (state.pending.state === "refused") return { state: "pending" };
-      const coverage = { facts: state.pending.envelope.facts, excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"] };
+      const coverage: WorkspaceAggregate = { facts: state.pending.envelope.facts.filter(isWorkspaceSessionFact),
+        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"],
+        agentPlanFacts: state.pending.envelope.facts.filter(isWorkspaceAgentPlanFact) };
       if (!await options.confirm(workspaceCanonicalJson(state.pending.envelope), coverage)) return { state: "cancelled", coverage };
       // Explicit consent permits only the identical retained envelope to be attempted again.
       if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
@@ -447,7 +493,9 @@ export async function prepareWorkspacePush(options: {
     if (eligible.length !== coverage.facts.length) coverage.reasons.push("outside_closed_authorized_days");
     coverage.facts = eligible;
     if (!coverage.facts.length) return { state: "unchanged", coverage };
-    const envelope = buildWorkspaceEnvelope(state.device, coverage.facts.slice(0, MAX_FACTS), options.generatedAt);
+    coverage.agentPlanFacts = [...(options.agentPlanFacts ?? [])];
+    const envelope = buildWorkspaceEnvelope(state.device,
+      [...coverage.facts.slice(0, MAX_FACTS - coverage.agentPlanFacts.length), ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
     await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
     return { state: "prepared", coverage };
@@ -477,7 +525,8 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
         if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
           || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
         const facts = { ...state.facts };
-        for (const fact of envelope.facts) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+        for (const fact of envelope.facts)
+          if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
         await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt });
         return { state: "accepted", factCount: envelope.facts.length };
       }

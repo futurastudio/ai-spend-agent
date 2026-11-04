@@ -43,7 +43,9 @@ Command details for [aibill, Tilden’s free CLI](../README.md). Start with the
 | `doctor [--sources]` | Check local runtime and safety posture; `--sources` separates connector validation, financial evidence, freshness, and errors |
 
 Run `npx aibill --help` for the full list. Workspace commands and their consent
-boundaries are documented in [Workspace sharing](WORKSPACE.md).
+boundaries are documented in [Workspace sharing](WORKSPACE.md); that page also
+documents `AIBILL_NO_PLAN_TIER=1`, which keeps this machine's subscription tier
+out of `workspace push`.
 
 ### The guided token-reduction test
 
