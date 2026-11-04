@@ -4,6 +4,7 @@ import {
   sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, workspaceCanonicalJson, WorkspaceEnrollmentRefusal,
   type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
 } from "./workspaceConnect.js";
+import { resolveRepositoryRoot } from "./repositoryRoot.js";
 import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -351,6 +352,8 @@ export type CliRuntimeOptions = {
   workspaceExchangeTransport?: WorkspaceExchangeTransport;
   workspaceDisconnectTransport?: WorkspaceDisconnectTransport;
   workspaceLoadCalls?: () => Promise<Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>>;
+  /** Test seam for the checkout lookup behind repository-named facts. */
+  workspaceRepositoryRoot?: (directory: string) => string | undefined;
   /** Test/embedding override. Production always defaults to the OS home. */
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
@@ -1757,6 +1760,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         "Share these diagnostic counts for help before retrying. Do not delete logs or reconnect this machine."].join("\n"));
     }
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
+      resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot,
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
         ...(representedUnknowns ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),

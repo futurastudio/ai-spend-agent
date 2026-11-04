@@ -7,6 +7,7 @@ historical untagged exception.
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Price Gemini 2.5 Pro (`gemini-2.5-pro`) by the UTC day of each call. Google
   has deprecated the model: from 2026-12-01 every request to it is routed to
   Gemini 3.8 Flash and billed at that model's rates, $0.75 input, $3.75 output
@@ -19,6 +20,30 @@ historical untagged exception.
   instead of estimated at the old rate. Evidence:
   `provider-contracts/model-pricing-2026-11-04.json`, taken from the pricing
   page's new home at aistudio.google.com.
+=======
+- Treat two copies of one Claude Code response that carry the same evidence
+  as one call. A sub-agent transcript opens with the parent turn it was forked
+  from, written seconds later; earlier versions compared timestamps too and
+  marked the pair `conflicting-local-evidence`, and that one pair made
+  `workspace push` refuse to send anything. The copy from the originating
+  transcript is kept, then the earliest. Copies whose evidence differs still
+  fail closed.
+- Read `usage.iterations` on a Claude Code message that took several API
+  requests (a model fallback after a failed attempt). The top-level counts
+  describe the served request while the top-level cache-write split can sum
+  every attempt, so earlier versions marked the line `unsupported_token_shape`
+  and `workspace push` represented it as unknown tokens. The served request's
+  own split is read instead, and the line prices as that request. A line whose
+  top level does not match its served request stays unsupported.
+- `workspace push` names a day's session facts after the repository instead of
+  the session folder: the checkout that holds the folder, or the main checkout
+  for a linked worktree, found from `.git` without running git. Worktrees,
+  sub-folders and clones of one repository therefore land in one Workspace
+  project. Only days this machine has never sent change; a day already sent
+  keeps its folder names, because the server keys facts on the name and never
+  deletes, so a renamed day would sit beside the old one. Folders outside any
+  checkout, the home directory and unknown paths keep the folder name.
+>>>>>>> origin/main
 
 ## 0.9.14 (published on npm)
 

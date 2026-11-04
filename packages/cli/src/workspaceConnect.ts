@@ -4,7 +4,7 @@ import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { dedupeCumulativeSessionCalls, type LocalAgentCall } from "@agent-finops/core";
 
 export const WORKSPACE_ORIGIN = "https://app.asktilden.com";
@@ -26,6 +26,8 @@ export type WorkspaceFact = {
   sessionCount: string; sessionRefs: string[]; tokens: WorkspaceTokens; sessionsHash: string; factRevision: string;
 };
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
+/** The fields that form a fact's key. */
+export type WorkspaceFactIdentity = Pick<WorkspaceFact, "day" | "agent" | "provider" | "model" | "projectName" | "directoryRef" | "apiKeyRef" | "workspaceRef">;
 export type WorkspaceDevice = {
   origin: typeof WORKSPACE_ORIGIN; grantId: string; keyId: string; grantRevision: string;
   connectionEpoch: string; token: string; privateKeyPem: string; sequence: string;
@@ -64,7 +66,7 @@ export const workspaceDomainHash = (domain: string, value: Json): string => {
   if (!/^[a-z][a-z0-9-]*(?::[a-z0-9-]+)+:v[1-9][0-9]*$/.test(domain)) throw Error("Workspace hash domain is invalid.");
   return sha(`${domain}\0${workspaceCanonicalJson(value)}`);
 };
-export function workspaceFactKey(fact: WorkspaceFact): string {
+export function workspaceFactKey(fact: WorkspaceFactIdentity): string {
   const { day, agent, provider, model, projectName, directoryRef, apiKeyRef, workspaceRef } = fact;
   return workspaceDomainHash("tilden:local-session-fact-key:v1", { day, agent, provider, model, projectName, directoryRef, apiKeyRef, workspaceRef });
 }
@@ -108,6 +110,53 @@ function tokenComponents(call: LocalAgentCall): Record<keyof WorkspaceTokens, bi
   };
 }
 
+/** The key-forming fields of a call's daily fact. Throws the reason the aggregate reports for an unusable call. */
+function workspaceFactIdentity(call: LocalAgentCall): WorkspaceFactIdentity {
+  if (call.agent !== "claude-code" && call.agent !== "codex") throw Error("agent_unsupported");
+  const day = utcDay(call.timestamp);
+  if (!call.sessionId) throw Error("session_identity_missing");
+  if (call.usageScope === "session_cumulative") {
+    if (!call.startedAt || utcDay(call.startedAt) !== day || Date.parse(call.startedAt) > Date.parse(call.timestamp))
+      throw Error("cumulative_day_unresolved");
+  } else if (call.usageScope !== "turn") throw Error("call_scope_unresolved");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(call.model)) throw Error("model_invalid");
+  let projectName = call.project && call.project !== "(home)" ? call.project : null;
+  if (projectName && (projectName.length > 120 || /[/\\\u0000-\u001f\u007f@]/.test(projectName) || [".", ".."].includes(projectName)))
+    projectName = null;
+  return { day, agent: call.agent, provider: call.agent === "claude-code" ? "anthropic" : "openai",
+    model: call.model, projectName, directoryRef: safeDirectoryRef(call), apiKeyRef: null, workspaceRef: null };
+}
+
+/**
+ * Facts for days this machine has not sent yet name the repository (the main
+ * checkout, found from the session folder) instead of the folder itself, so
+ * worktrees, sub-folders and clones land in one project. A day already sent
+ * keeps its folder names: its facts are keyed on them, and a renamed key
+ * would sit beside the old one on the server.
+ */
+export function collapseRepositoryProjects(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
+  resolveRoot: (directory: string) => string | undefined): LocalAgentCall[] {
+  const sentDays = new Set<string>();
+  for (const call of calls) {
+    try {
+      const shape = workspaceFactIdentity(call);
+      if (previous[workspaceFactKey(shape)]) sentDays.add(shape.day);
+    } catch { /* the aggregate reports unusable calls */ }
+  }
+  const roots = new Map<string, string | undefined>(), home = resolve(homedir());
+  return calls.map(call => {
+    if (!call.workingDirectory || !isAbsolute(call.workingDirectory)) return call;
+    let day: string;
+    try { day = utcDay(call.timestamp); } catch { return call; }
+    if (sentDays.has(day)) return call;
+    if (!roots.has(call.workingDirectory)) roots.set(call.workingDirectory, resolveRoot(call.workingDirectory));
+    const root = roots.get(call.workingDirectory);
+    if (!root || resolve(root) === home) return call;
+    const name = basename(root);
+    return name.length ? { ...call, project: name } : call;
+  });
+}
+
 /** Caller supplies approved numeric-only calls; this function never opens local logs. */
 export function aggregateWorkspaceFacts(calls: readonly LocalAgentCall[], previous: WorkspaceFactState = {}, deviceKeyId?: string): WorkspaceAggregate {
   if (!deviceKeyId || !REF.test(deviceKeyId)) throw Error("A retained device key is required for private session identities.");
@@ -117,21 +166,11 @@ export function aggregateWorkspaceFacts(calls: readonly LocalAgentCall[], previo
   for (const call of dedupeCumulativeSessionCalls([...calls])) {
     if (call.agent !== "claude-code" && call.agent !== "codex") continue;
     try {
-      const day = utcDay(call.timestamp);
-      if (!call.sessionId) throw Error("session_identity_missing");
-      if (call.usageScope === "session_cumulative") {
-        if (!call.startedAt || utcDay(call.startedAt) !== day || Date.parse(call.startedAt) > Date.parse(call.timestamp))
-          throw Error("cumulative_day_unresolved");
-      } else if (call.usageScope !== "turn") throw Error("call_scope_unresolved");
-      if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(call.model)) throw Error("model_invalid");
-      let projectName = call.project && call.project !== "(home)" ? call.project : null;
-      if (projectName && (projectName.length > 120 || /[/\\\u0000-\u001f\u007f@]/.test(projectName) || [".", ".."].includes(projectName)))
-        projectName = null;
-      const fact: WorkspaceFact = { day, agent: call.agent, provider: call.agent === "claude-code" ? "anthropic" : "openai",
-        model: call.model, projectName, directoryRef: safeDirectoryRef(call), apiKeyRef: null, workspaceRef: null,
+      const fact: WorkspaceFact = { ...workspaceFactIdentity(call),
         sessionCount: "1", sessionRefs: [], tokens: { uncachedInputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, outputTokens: null },
         sessionsHash: sha(""), factRevision: "1" };
       const key = workspaceFactKey(fact), tokens = tokenComponents(call), group = groups.get(key);
+      if (!call.sessionId) throw Error("session_identity_missing");
       const identity = workspaceDomainHash("tilden:local-session-identity:v1", [deviceKeyId, call.agent, call.sessionId, call.subagentId ?? null]);
       if (group) {
         group.sessions.add(identity);
@@ -384,6 +423,8 @@ function workspaceNativeRequest(path: string, payload: string, token?: string): 
 export async function prepareWorkspacePush(options: {
   home?: string; calls: readonly LocalAgentCall[]; generatedAt: string;
   confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean>;
+  /** Finds a session folder's checkout; absent, facts keep the folder name. */
+  resolveRepositoryRoot?: (directory: string) => string | undefined;
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state) throw Error("This machine is not connected to a Workspace.");
@@ -396,7 +437,9 @@ export async function prepareWorkspacePush(options: {
       if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
       return { state: "prepared", coverage };
     }
-    const coverage = aggregateWorkspaceFacts(options.calls, state.facts, state.device.keyId);
+    const calls = options.resolveRepositoryRoot
+      ? collapseRepositoryProjects(options.calls, state.facts, options.resolveRepositoryRoot) : options.calls;
+    const coverage = aggregateWorkspaceFacts(calls, state.facts, state.device.keyId);
     if (coverage.excludedCalls) throw Error("Incomplete source identities cannot replace complete daily facts.");
     const today = utcDay(options.generatedAt), authority = Math.max(Date.parse(state.device.collectionNotBefore), Date.parse(state.device.authorityStartsAt));
     const eligible = coverage.facts.filter(fact => fact.day < today && Date.parse(`${fact.day}T00:00:00.000Z`) >= authority
