@@ -7,6 +7,21 @@ historical untagged exception.
 
 ## Unreleased
 
+- Fix the qualitative reader's undercount of tool invocations on streamed
+  Claude Code transcripts (2.1.221 onwards). Claude Code writes an assistant
+  message on several lines, one content block per line, so no single line
+  carries every `tool_use` block; the reader kept one line per message and
+  counted its blocks only. A message now counts once, from the line carrying
+  its final state (the selection the financial reader uses since #121, now
+  shared in `claudeResponseLines.ts`), with the union of the `tool_use`
+  blocks over all of its lines. Context Health's tool counts, file reads and
+  repeated reads, Glance's activity tool counts and the session vitals follow.
+  A response copied into several transcripts of one session (a sub-agent
+  transcript opens with the parent turn it was forked from; a copied or
+  resumed session repeats its history) counts once, in the originating
+  transcript, with the blocks every copy saw. `localAgentQualitativeParserVersion`
+  is 8 so cached evidence is recomputed. Measured on 804 local transcripts:
+  tool invocations 12,603 -> 70,959; single-line messages unchanged.
 - Add `aibill guard`: a committed per-repository policy for coding agents,
   enforced where Claude Code runs. `.aibill/policy.json` (version 1) declares
   allowed and denied models, a daily budget per UTC day in tokens (every
