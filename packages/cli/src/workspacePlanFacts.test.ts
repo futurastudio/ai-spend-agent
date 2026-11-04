@@ -1,4 +1,4 @@
-import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -110,10 +110,6 @@ const accepting = (requests: string[], options: { capabilities?: unknown } = { c
 const lost = (requests: string[]) => async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); };
 const readState = async (statePath: string) => JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
 const parse = (body: string) => JSON.parse(body) as WorkspaceEnvelope;
-const verifies = (envelope: WorkspaceEnvelope, device: WorkspaceDevice) => {
-  const { signature, ...unsigned } = envelope;
-  return verify(null, Buffer.from(workspaceCanonicalJson(unsigned as never)), createPublicKey(device.privateKeyPem), Buffer.from(signature.value, "base64url"));
-};
 
 function pushRuntime(home: string, calls: LocalAgentCall[], requests: string[], messages: string[]) {
   return { homeDirectory: home, interactive: true, workspaceNow: now, workspaceLoadCalls: loaded(calls),
@@ -242,7 +238,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const first = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: unavailable });
     expect(first.exitCode).toBe(1);
     expect(first.stderr).toContain("Push outcome is unknown");
-    expect(first.stderr).not.toContain("Subscription tier");
+    expect(first.stderr).toContain("resent identically");
     const retained = await readState(statePath);
     expect(retained.pending?.state).toBe("uncertain");
     expect(retained.pending?.envelope.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
@@ -257,40 +253,67 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect((await readState(statePath)).pending).toBeNull();
   });
 
-  it("rebuilds a retained batch without its plan facts when the opt-out is set, re-signed under the same sequence", async () => {
-    const { home, device, statePath } = await pairedHome({ planFiles: true, capability: true });
+  it("resends a committed-but-lost batch identically under the opt-out, and the replay receipt reconciles ledger and sequence", async () => {
+    const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
     const requests: string[] = [], messages: string[] = [];
+    // The Workspace admits and stores the batch, but the reply never arrives.
     const first = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, messages), workspaceTransport: lost(requests) });
-    expect(first.stderr).toContain("outcome is unknown");
+    expect(first.exitCode).toBe(1);
+    expect(first.stderr).toContain("Push outcome is unknown");
+    expect(first.stderr).toContain("keeps the subscription tier facts it was signed with and is resent identically, with or without AIBILL_NO_PLAN_TIER");
     expect((await readState(statePath)).pending?.state).toBe("uncertain");
 
     vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    // A server that already holds this sequence answers the identical envelope with its replay receipt.
+    const replay = async (_path: string, body: string) => {
+      requests.push(body);
+      expect(body).toBe(requests[0]);
+      const envelope = parse(body);
+      return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
+        factCount: envelope.facts.length, introduced: 0, replaced: 0, unchanged: envelope.facts.length, acceptedAt: "2026-09-20T12:00:30.000Z",
+        capabilities: { agentPlanFacts: true } } };
+    };
     const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
-      workspaceLoadCalls: async () => { throw Error("unexpected local read"); } });
+      workspaceLoadCalls: async () => { throw Error("unexpected local read"); }, workspaceTransport: replay });
     expect(second.exitCode).toBe(0);
-    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(second.stdout).toContain("accepted 3 local session facts");
     expect(requests).toHaveLength(2);
-    const original = parse(requests[0]!), rebuilt = parse(requests[1]!);
-    expect(original.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
-    expect(rebuilt.facts).toEqual(original.facts.filter(isWorkspaceSessionFact));
-    expect(rebuilt.sequence).toBe(original.sequence);
-    expect(rebuilt.generatedAt).toBe(original.generatedAt);
-    expect(rebuilt.deviceKeyId).toBe(original.deviceKeyId);
-    expect(rebuilt.nonce).not.toBe(original.nonce);
-    expect(rebuilt.batchId).not.toBe(original.batchId);
-    expect(rebuilt.idempotencyKey).not.toBe(original.idempotencyKey);
-    expect(rebuilt.manifestHash).not.toBe(original.manifestHash);
-    expect(verifies(rebuilt, device)).toBe(true);
-    expect(requests[1]).not.toContain("agent_plan");
-    // The preview showed the rebuilt payload and said why.
-    expect(messages[1]).toContain(requests[1]!);
-    expect(messages[1]).toContain("Subscription tier facts were removed from the retained batch because AIBILL_NO_PLAN_TIER is set");
-    expect(messages[1]).toContain("Send the rebuilt batch?");
-    expect(messages[1]).not.toContain("identical retained signed batch");
+    expect(requests[1]).toBe(requests[0]);
+    // The preview showed the signed envelope, named the tiers it carries, and said the opt-out starts with the next new batch.
+    expect(messages[1]).toContain(requests[0]!);
+    expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(messages[1]).not.toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out");
+    expect(messages[1]).toContain("The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch.");
+    expect(messages[1]).toContain("identical retained signed batch");
+    const envelope = parse(requests[0]!);
     const state = await readState(statePath);
     expect(state.pending).toBeNull();
-    expect(Object.keys(state.facts)).toEqual([workspaceFactKey(rebuilt.facts[0] as WorkspaceFact)]);
-    expect(state.device.sequence).toBe(rebuilt.sequence);
+    expect(Object.keys(state.facts)).toEqual([workspaceFactKey(envelope.facts.filter(isWorkspaceSessionFact)[0]!)]);
+    expect(state.device.sequence).toBe(envelope.sequence);
+    expect(state.lastAcceptedAt).toBe("2026-09-20T12:00:30.000Z");
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
+
+    // The opt-out applies from the next new batch.
+    const nextDay = call({ callId: "call-two", timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" });
+    const third = await runCli(["workspace", "push"], pushRuntime(home, [call(), nextDay], requests, messages));
+    expect(third.stdout).toContain("accepted 1 local session facts");
+    expect(parse(requests[2]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(messages[2]).not.toContain("Subscription tier");
+  });
+
+  it("treats a malformed capabilities field as advisory: the push is accepted and the capability is off", async () => {
+    for (const malformed of ["yes", null, ["agentPlanFacts"], 7]) {
+      const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
+      const requests: string[] = [];
+      const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []),
+        workspaceTransport: accepting(requests, { capabilities: malformed }) });
+      expect(result.exitCode, JSON.stringify(malformed)).toBe(0);
+      expect(result.stdout).toContain("accepted 3 local session facts");
+      const state = await readState(statePath);
+      expect(state.pending).toBeNull();
+      expect(state.device.sequence).toBe("1");
+      expect(state.capabilities).toEqual({ agentPlanFacts: false });
+    }
   });
 
   it("keeps a retained batch identical when the opt-out is not set, reading no files again", async () => {

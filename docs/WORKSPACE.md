@@ -97,10 +97,11 @@ whether it has); the first push after that announcement carries none and the
 next one does. While a batch is pending, `~/.aibill/workspace-device.json`
 retains the exact signed envelope, tier facts (those seven fields) included,
 until the Workspace accepts it. Set `AIBILL_NO_PLAN_TIER=1` to leave plan
-tiers out of every push; if a retained batch carries them when the opt-out is
-set, the CLI rebuilds that batch without them under the same sequence with a
-fresh nonce, re-signs it and says so before sending. Workspace then costs those
-sessions at a tier the owner types by hand.
+tiers out of every new batch; a retained batch is never rebuilt and is resent
+exactly as signed, tier facts included, because only the identical envelope can
+be reconciled by the Workspace's replay receipt, so the opt-out applies from
+the next new batch and the preview says so. Workspace then costs those sessions
+at a tier the owner types by hand.
 
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local

@@ -1802,14 +1802,13 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       confirm: (payload, coverage) => consent(["Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
         `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
         ...(coverage.agentPlanFacts?.length
-          ? [`Subscription tier included for ${coverage.agentPlanFacts.map(fact => `${fact.agent} (${fact.tier})`).join(", ")}: the tier id and raw tier string only, no account, email or token. Set ${AGENT_PLAN_TIER_OPT_OUT}=1 to leave it out.`]
+          ? [`Subscription tier included for ${coverage.agentPlanFacts.map(fact => `${fact.agent} (${fact.tier})`).join(", ")}: the tier id and raw tier string only, no account, email or token.${planFactsOptOut ? "" : ` Set ${AGENT_PLAN_TIER_OPT_OUT}=1 to leave it out.`}`]
           : []),
-        ...(coverage.planFactsRemoved
-          ? [`Subscription tier facts were removed from the retained batch because ${AGENT_PLAN_TIER_OPT_OUT} is set; it was re-signed under the same sequence with a fresh nonce.`]
+        ...(coverage.agentPlanFacts?.length && planFactsOptOut && status.pending
+          ? ["The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch."]
           : []),
         ...(representedUnknowns ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),
-        coverage.planFactsRemoved ? "Send the rebuilt batch? [y/N] "
-          : status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
+        status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
           : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n")) });
     if (prepared.state === "unchanged") return ok(prepared.coverage?.excludedCalls
       ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
@@ -1819,7 +1818,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
     return sent.state === "accepted" ? ok(`Workspace accepted ${sent.factCount} local session facts. These are attribution inputs, not billed costs.`)
       : sent.state === "refused" ? fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.")
-        : fail("Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.");
+        : fail(["Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.",
+          ...(prepared.coverage?.agentPlanFacts?.length
+            ? [`It keeps the subscription tier facts it was signed with and is resent identically, with or without ${AGENT_PLAN_TIER_OPT_OUT}; the Workspace's replay receipt reconciles a batch it already holds.`]
+            : [])].join("\n"));
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
     if (error instanceof WorkspaceEnrollmentRefusal) return fail(error.reason === "connected"

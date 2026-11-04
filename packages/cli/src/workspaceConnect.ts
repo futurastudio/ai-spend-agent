@@ -61,10 +61,8 @@ export type WorkspaceState = {
 };
 export type WorkspaceAggregate = {
   facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
-  /** Plan facts prepared beside the session facts; absent from a bare aggregate. */
+  /** Plan facts prepared beside the session facts (or signed into a retained batch); absent from a bare aggregate. */
   agentPlanFacts?: WorkspaceAgentPlanFact[];
-  /** True when a retained batch was rebuilt without its plan facts because the opt-out is set. */
-  planFactsRemoved?: boolean;
 };
 
 export function workspaceCanonicalJson(value: Json): string {
@@ -488,7 +486,11 @@ export async function prepareWorkspacePush(options: {
    * beside changed session facts, never alone.
    */
   readAgentPlanFacts?: () => Promise<readonly WorkspaceAgentPlanFact[]>;
-  /** AIBILL_NO_PLAN_TIER: read no plan facts, and strip them from a retained batch before it is sent again. */
+  /**
+   * AIBILL_NO_PLAN_TIER: read no plan facts into a new envelope. A retained batch
+   * is never rebuilt: it was dispatched once, the Workspace may hold it, and only
+   * the identical resend reconciles through the replay receipt.
+   */
   planFactsOptOut?: boolean;
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
   return withState(options.home ?? homedir(), async (state, save) => {
@@ -496,20 +498,16 @@ export async function prepareWorkspacePush(options: {
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
     if (state.pending) {
       if (state.pending.state === "refused") return { state: "pending" };
-      let envelope = state.pending.envelope, planFactsRemoved = false;
-      if (options.planFactsOptOut && envelope.facts.some(isWorkspaceAgentPlanFact)) {
-        // Rebuilt here, before anything is dispatched: the same session facts under the
-        // same sequence and time, re-signed with a fresh nonce and batch identity. A
-        // failure surfaces as this command's error, never as an unconfirmed send.
-        envelope = buildWorkspaceEnvelope(state.device, envelope.facts.filter(isWorkspaceSessionFact), envelope.generatedAt);
-        planFactsRemoved = true;
-      }
+      // A retained batch is resent exactly as signed, plan facts included: it may already
+      // sit on the Workspace with its sequence, and only the identical envelope can be
+      // reconciled by the replay receipt. The opt-out applies from the next new batch.
+      const envelope = state.pending.envelope;
       const coverage: WorkspaceAggregate = { facts: envelope.facts.filter(isWorkspaceSessionFact),
-        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch", ...(planFactsRemoved ? ["plan_facts_removed_by_opt_out"] : [])],
-        agentPlanFacts: envelope.facts.filter(isWorkspaceAgentPlanFact), planFactsRemoved };
+        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"],
+        agentPlanFacts: envelope.facts.filter(isWorkspaceAgentPlanFact) };
       if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
-      // Explicit consent permits only the identical retained envelope (or its opt-out rebuild) to be attempted again.
-      if (planFactsRemoved || state.pending.state === "uncertain") await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
+      // Explicit consent permits only the identical retained envelope to be attempted again.
+      if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
       return { state: "prepared", coverage };
     }
     const calls = options.resolveRepositoryRoot
@@ -534,10 +532,13 @@ export async function prepareWorkspacePush(options: {
   });
 }
 
-/** The capabilities an accepted-push receipt announces; a receipt that names none leaves the Workspace at none. */
+/**
+ * The capabilities an accepted-push receipt announces. Advisory: a receipt that
+ * names none, or a malformed field, leaves the Workspace at none; it never turns
+ * an accepted push into an uncertain one.
+ */
 function receiptCapabilities(value: unknown): WorkspaceCapabilities {
-  if (value === undefined) return { agentPlanFacts: false };
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("receipt_capabilities");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { agentPlanFacts: false };
   return { agentPlanFacts: (value as Record<string, unknown>).agentPlanFacts === true };
 }
 /** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */

@@ -65,9 +65,10 @@ historical untagged exception.
   carries none and the next one does; `workspace status` shows which. The
   push preview names the tiers included; plan facts never travel without
   session facts and are not counted against the retained fact keys.
-  `AIBILL_NO_PLAN_TIER=1` leaves them out and, when a retained batch carries
-  them, rebuilds that batch without them under the same sequence with a
-  fresh nonce before it is sent again. Core gains `readAgentPlanFacts`, the
+  `AIBILL_NO_PLAN_TIER=1` leaves them out of every new batch; a retained
+  batch is never rebuilt and is resent exactly as signed, tier facts
+  included, so the opt-out applies from the next new batch. Core gains
+  `readAgentPlanFacts`, the
   tier normalizers and two gated synthetic fixtures (`claude-code-plan-v1`,
   `codex-plan-v1`); the Codex fixture keeps its synthetic id token as decoded
   parts that tests assemble, so no token-shaped string is committed, and the
