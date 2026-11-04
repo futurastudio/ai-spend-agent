@@ -59,10 +59,12 @@ historical untagged exception.
   email, name, account id, organization name or uuid is read into the fact,
   cached or sent; a missing or unreadable file, a malformed token or an
   unexpected shape yields no fact and no error, and an API-key Codex sign-in
-  has no tier. The fact is sent only once the Workspace has announced, in an
-  accepted push's receipt, that it accepts it (`capabilities.agentPlanFacts`,
-  kept in the private pairing state), so the first push after that upgrade
-  carries none and the next one does; `workspace status` shows which. The
+  has no tier. The fact is sent only once the Workspace has announced, on an
+  accepted push, that it accepts it (the `x-tilden-push-capabilities`
+  response header, `agentPlanFacts=1`, kept in the private pairing state; the
+  receipt body stays the strict shape 0.9.15 checks), so the first push after
+  that upgrade carries none and the next one does; `workspace status` shows
+  which. The
   push preview names the tiers included; plan facts never travel without
   session facts and are not counted against the retained fact keys.
   `AIBILL_NO_PLAN_TIER=1` leaves them out of every new batch; a retained

@@ -91,10 +91,10 @@ locally without any network call), the instant it was read, and the UTC day
 the subscription runs to when the agent recorded one. Nothing else from those files is
 read into the fact: no token, email, name, account id, organization name or
 uuid. A missing or unreadable file yields no fact. The preview names the tiers
-included. Tier facts are sent only after this Workspace has announced, in the
-receipt of an accepted push, that it accepts them (`workspace status` shows
-whether it has); the first push after that announcement carries none and the
-next one does. While a batch is pending, `~/.aibill/workspace-device.json`
+included. Tier facts are sent only after this Workspace has announced, on an
+accepted push (a response header, never the receipt body), that it accepts them
+(`workspace status` shows whether it has); the first push after that
+announcement carries none and the next one does. While a batch is pending, `~/.aibill/workspace-device.json`
 retains the exact signed envelope, tier facts (those seven fields) included,
 until the Workspace accepts it. Set `AIBILL_NO_PLAN_TIER=1` to leave plan
 tiers out of every new batch; a retained batch is never rebuilt and is resent

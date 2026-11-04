@@ -98,14 +98,19 @@ async function fixtureSecrets(): Promise<string[]> {
   return values as string[];
 }
 
-/** A Workspace that accepts everything and announces the plan-fact capability unless told otherwise. */
-const accepting = (requests: string[], options: { capabilities?: unknown } = { capabilities: { agentPlanFacts: true } }) =>
+/**
+ * A Workspace that accepts everything and, unless told otherwise, announces the
+ * plan-fact capability the way the deployed one does: on a response header,
+ * never in the receipt body a released CLI checks strictly.
+ */
+const accepting = (requests: string[], options: { header?: string | string[]; bodyExtra?: Record<string, unknown> } = { header: "agentPlanFacts=1" }) =>
   async (_path: string, body: string) => {
     requests.push(body);
     const envelope = JSON.parse(body) as { batchId: string; manifestHash: string; facts: unknown[] };
     return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
       factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: "2026-09-20T12:01:00.000Z",
-      ...("capabilities" in options ? { capabilities: options.capabilities } : {}) } };
+      ...(options.bodyExtra ?? {}) },
+      headers: { "content-type": "application/json", ...(options.header === undefined ? {} : { "x-tilden-push-capabilities": options.header }) } };
   };
 const lost = (requests: string[]) => async (_path: string, body: string) => { requests.push(body); throw Error("lost reply"); };
 const readState = async (statePath: string) => JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
@@ -183,7 +188,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(parse(requests[1]!).facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
     expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
 
-    // Push 3: a receipt that announces nothing takes the capability away again.
+    // Push 3: an ACCEPT without the header takes the capability away again.
     const third = await runCli(["workspace", "push"], { ...pushRuntime(fresh.home, [call(), nextDay,
       call({ callId: "call-three", model: "gpt-5-mini" })], requests, messages), workspaceTransport: accepting(requests, {}) });
     expect(third.exitCode).toBe(0);
@@ -270,8 +275,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
       expect(body).toBe(requests[0]);
       const envelope = parse(body);
       return { status: 200, body: { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash,
-        factCount: envelope.facts.length, introduced: 0, replaced: 0, unchanged: envelope.facts.length, acceptedAt: "2026-09-20T12:00:30.000Z",
-        capabilities: { agentPlanFacts: true } } };
+        factCount: envelope.facts.length, introduced: 0, replaced: 0, unchanged: envelope.facts.length, acceptedAt: "2026-09-20T12:00:30.000Z" },
+        headers: { "x-tilden-push-capabilities": "agentPlanFacts=1" } };
     };
     const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
       workspaceLoadCalls: async () => { throw Error("unexpected local read"); }, workspaceTransport: replay });
@@ -301,19 +306,38 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(messages[2]).not.toContain("Subscription tier");
   });
 
-  it("treats a malformed capabilities field as advisory: the push is accepted and the capability is off", async () => {
-    for (const malformed of ["yes", null, ["agentPlanFacts"], 7]) {
+  it("reads the capability only from the header, advisory: absent, zero, garbage or repeated values leave it off", async () => {
+    for (const header of [undefined, "agentPlanFacts=0", "???", "agentPlanFacts", "agentPlanFacts=true", "agentPlanFacts=1=1", "AGENTPLANFACTS=1", "x".repeat(300), ["agentPlanFacts=0", "agentPlanFacts=1"]]) {
       const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
       const requests: string[] = [];
       const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []),
-        workspaceTransport: accepting(requests, { capabilities: malformed }) });
-      expect(result.exitCode, JSON.stringify(malformed)).toBe(0);
+        workspaceTransport: accepting(requests, header === undefined ? {} : { header }) });
+      expect(result.exitCode, JSON.stringify(header)).toBe(0);
       expect(result.stdout).toContain("accepted 3 local session facts");
       const state = await readState(statePath);
       expect(state.pending).toBeNull();
       expect(state.device.sequence).toBe("1");
-      expect(state.capabilities).toEqual({ agentPlanFacts: false });
+      expect(state.capabilities, JSON.stringify(header)).toEqual({ agentPlanFacts: false });
     }
+    for (const header of ["agentPlanFacts=1", "agentPlanFacts=1; other=0", "other=1, agentPlanFacts=1", ["agentPlanFacts=1"]]) {
+      const { home, statePath } = await pairedHome({ planFiles: true });
+      const requests: string[] = [];
+      await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []), workspaceTransport: accepting(requests, { header }) });
+      expect((await readState(statePath)).capabilities, JSON.stringify(header)).toEqual({ agentPlanFacts: true });
+    }
+  });
+
+  it("keeps 0.9.15 parity on the receipt body: an unexpected key is still receipt_mismatch", async () => {
+    const { home, statePath } = await pairedHome({ planFiles: true, capability: true });
+    const requests: string[] = [];
+    const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []),
+      workspaceTransport: accepting(requests, { header: "agentPlanFacts=1", bodyExtra: { capabilities: { agentPlanFacts: true } } }) });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Push outcome is unknown");
+    const state = await readState(statePath);
+    expect(state.pending?.state).toBe("uncertain");
+    expect(state.device.sequence).toBe("0");
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
   });
 
   it("keeps a retained batch identical when the opt-out is not set, reading no files again", async () => {

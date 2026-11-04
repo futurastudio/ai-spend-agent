@@ -32,7 +32,7 @@ export type WorkspaceFact = {
  * no revision and is replaced on every push.
  */
 export type WorkspaceAgentPlanFact = AgentPlanFact;
-/** What the Workspace accepts, as its last accepted-push receipt announced it; absent until the first accepted push. */
+/** What the Workspace accepts, as the header on its last ACCEPT announced it; absent until the first accepted push. */
 export type WorkspaceCapabilities = { agentPlanFacts: boolean };
 export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
@@ -428,7 +428,10 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
       factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null };
 }
 
-export type WorkspaceTransportResult = { status: number; body: unknown };
+/** Response headers travel lower-cased, as Node delivers them; tests may omit them. */
+export type WorkspaceTransportResult = { status: number; body: unknown; headers?: Record<string, string | string[] | undefined> };
+/** The Workspace advertises what it accepts on every ACCEPT in this header, never in the receipt body a released CLI checks strictly. */
+export const WORKSPACE_PUSH_CAPABILITIES_HEADER = "x-tilden-push-capabilities";
 export type WorkspaceTransport = (path: typeof WORKSPACE_FACTS_PATH, payload: string, token: string) => Promise<WorkspaceTransportResult>;
 /** HTTPS native transport avoids browser Origin/Sec-Fetch headers and never follows redirects. */
 export const workspaceTransport: WorkspaceTransport = (path, payload, token) => workspaceNativeRequest(path, payload, token);
@@ -463,7 +466,7 @@ function workspaceNativeRequest(path: string, payload: string, token?: string): 
       if (settled) return;
       const status = response.statusCode ?? 0;
       if (status >= 300 && status < 400) { finish(Error("Workspace redirect refused.")); return; }
-      try { finish(undefined, { status, body: JSON.parse(Buffer.concat(parts).toString("utf8")) }); }
+      try { finish(undefined, { status, body: JSON.parse(Buffer.concat(parts).toString("utf8")), headers: response.headers }); }
       catch { finish(Error("Workspace response was not valid JSON.")); }
     });
   });
@@ -481,9 +484,9 @@ export async function prepareWorkspacePush(options: {
   resolveRepositoryRoot?: (directory: string) => string | undefined;
   /**
    * Reads this machine's subscription tier per agent. Called only when the
-   * Workspace announced `agentPlanFacts` in its last accepted-push receipt, the
-   * opt-out is not set, and a new envelope is being built; the facts ride
-   * beside changed session facts, never alone.
+   * Workspace announced `agentPlanFacts` on its last ACCEPT, the opt-out is not
+   * set, and a new envelope is being built; the facts ride beside changed
+   * session facts, never alone.
    */
   readAgentPlanFacts?: () => Promise<readonly WorkspaceAgentPlanFact[]>;
   /**
@@ -520,8 +523,8 @@ export async function prepareWorkspacePush(options: {
     if (eligible.length !== coverage.facts.length) coverage.reasons.push("outside_closed_authorized_days");
     coverage.facts = eligible;
     if (!coverage.facts.length) return { state: "unchanged", coverage };
-    // Capability gating: a Workspace that has not announced agentPlanFacts in an accepted
-    // receipt gets none, so the first push after its upgrade carries none and the next does.
+    // Capability gating: a Workspace that has not announced agentPlanFacts on an ACCEPT
+    // gets none, so the first push after its upgrade carries none and the next does.
     coverage.agentPlanFacts = state.capabilities?.agentPlanFacts === true && !options.planFactsOptOut && options.readAgentPlanFacts
       ? [...await options.readAgentPlanFacts()] : [];
     const envelope = buildWorkspaceEnvelope(state.device,
@@ -533,13 +536,17 @@ export async function prepareWorkspacePush(options: {
 }
 
 /**
- * The capabilities an accepted-push receipt announces. Advisory: a receipt that
- * names none, or a malformed field, leaves the Workspace at none; it never turns
- * an accepted push into an uncertain one.
+ * The capabilities an ACCEPT announces in `x-tilden-push-capabilities`
+ * (`agentPlanFacts=0|1`). Advisory: an absent, malformed or `0` header leaves the
+ * Workspace at none; it never turns an accepted push into an uncertain one. The
+ * receipt body itself stays the strict eight keys 0.9.15 checks.
  */
-function receiptCapabilities(value: unknown): WorkspaceCapabilities {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { agentPlanFacts: false };
-  return { agentPlanFacts: (value as Record<string, unknown>).agentPlanFacts === true };
+export function workspacePushCapabilities(headers: WorkspaceTransportResult["headers"]): WorkspaceCapabilities {
+  const raw = headers?.[WORKSPACE_PUSH_CAPABILITIES_HEADER];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.length > 256) return { agentPlanFacts: false };
+  const pairs = value.split(/[;,\s]+/).filter(Boolean).map(pair => pair.split("="));
+  return { agentPlanFacts: pairs.some(([key, flag, ...rest]) => key === "agentPlanFacts" && flag === "1" && rest.length === 0) };
 }
 /** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */
 export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
@@ -556,14 +563,14 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
     try {
       const receipt = result.body;
       if (result.status === 200) {
-        exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"], ["capabilities"]);
+        exactKeys(receipt, ["state", "batchId", "manifestHash", "factCount", "introduced", "replaced", "unchanged", "acceptedAt"]);
         if (receipt.state !== "accepted" || receipt.batchId !== envelope.batchId || receipt.manifestHash !== envelope.manifestHash
           || receipt.factCount !== envelope.facts.length || typeof receipt.acceptedAt !== "string") throw Error("receipt_mismatch");
         utcDay(receipt.acceptedAt);
         const counts = [receipt.introduced, receipt.replaced, receipt.unchanged];
         if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
           || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
-        const capabilities = receiptCapabilities(receipt.capabilities);
+        const capabilities = workspacePushCapabilities(result.headers);
         const facts = { ...state.facts };
         for (const fact of envelope.facts)
           if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
