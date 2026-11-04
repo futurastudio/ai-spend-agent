@@ -51,8 +51,10 @@ browser enrollment and sharing consent, then run
 does not need to stay open for later pushes while the machine’s grant and
 sharing consent remain valid. Shared facts include eligible
 Claude Code/Codex sessions, tokens and project labels where available, plus
-hashed identities; they exclude raw prompts, transcript contents, full paths,
-raw session IDs and dollar amounts. Local provider records are not uploaded.
+hashed identities and the subscription tier each agent is signed in with
+(`AIBILL_NO_PLAN_TIER=1` leaves the tier out); they exclude raw prompts,
+transcript contents, full paths, raw session IDs, dollar amounts, tokens and
+account identities. Local provider records are not uploaded.
 Hosted provider connections are set up separately.
 
 Read [Workspace setup and limits](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/WORKSPACE.md)

@@ -57,6 +57,39 @@ historical untagged exception.
   and whether managed settings override, never a person. Core gains the
   policy schema and an incremental transcript tally that keeps the same lines
   as the whole-file reader.
+- `workspace push` sends one subscription-tier fact per agent signed in on the
+  machine beside the day's session facts, so Workspace can cost Claude Code
+  and Codex sessions at the plan that ran them instead of a tier the owner
+  types by hand. The fact is `{ kind: "agent_plan", agent, tier, tierRaw,
+  source, observedAt, activeUntil }`: the agent, a normalized tier id
+  (`claude_pro`, `claude_max_5x`, `claude_max_20x`, `claude_team`,
+  `claude_enterprise`, `chatgpt_plus`, `chatgpt_pro`, `chatgpt_business`,
+  `chatgpt_enterprise`, or `unknown` with the raw string kept), the raw tier
+  string, where it was read (`~/.claude.json` →
+  `oauthAccount.organizationRateLimitTier`, or `oauthAccount.organizationType`
+  when that names a Team or Enterprise organization rather than a consumer
+  plan; the `chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`,
+  whose payload is decoded locally without verification or network), when,
+  and the UTC day the subscription runs to when Codex records one. No token,
+  email, name, account id, organization name or uuid is read into the fact,
+  cached or sent; a missing or unreadable file, a malformed token or an
+  unexpected shape yields no fact and no error, and an API-key Codex sign-in
+  has no tier. The fact is sent only once the Workspace has announced, on an
+  accepted push, that it accepts it (the `x-tilden-push-capabilities`
+  response header, `agentPlanFacts=1`, kept in the private pairing state; the
+  receipt body stays the strict shape 0.9.15 checks), so the first push after
+  that upgrade carries none and the next one does; `workspace status` shows
+  which. The
+  push preview names the tiers included; plan facts never travel without
+  session facts and are not counted against the retained fact keys.
+  `AIBILL_NO_PLAN_TIER=1` leaves them out of every new batch; a retained
+  batch is never rebuilt and is resent exactly as signed, tier facts
+  included, so the opt-out applies from the next new batch. Core gains
+  `readAgentPlanFacts`, the
+  tier normalizers and two gated synthetic fixtures (`claude-code-plan-v1`,
+  `codex-plan-v1`); the Codex fixture keeps its synthetic id token as decoded
+  parts that tests assemble, so no token-shaped string is committed, and the
+  fixture check pins those parts claim by claim.
 
 ## 0.9.15 (unreleased)
 

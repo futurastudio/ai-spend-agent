@@ -79,6 +79,30 @@ identities used to distinguish records. Project labels can identify work;
 this is not an anonymous activity feed. Unsupported token components remain
 unknown rather than zero. Gemini activity is not part of this upload.
 
+Each push also carries one subscription-tier fact per agent signed in on the
+machine, so Workspace can cost Claude Code and Codex sessions at the plan that
+ran them: the agent (`claude_code` or `codex`), a normalized tier id such as
+`claude_max_20x`, `claude_team` or `chatgpt_pro` (`unknown` when the CLI does
+not recognize the string), the raw tier string exactly as the agent stored it,
+where it was read (`~/.claude.json` → `oauthAccount.organizationRateLimitTier`,
+or `oauthAccount.organizationType` for a Team or Enterprise organization, or
+the `chatgpt_plan_type` claim of the id token in `~/.codex/auth.json`, decoded
+locally without any network call), the instant it was read, and the UTC day
+the subscription runs to when the agent recorded one. Nothing else from those files is
+read into the fact: no token, email, name, account id, organization name or
+uuid. A missing or unreadable file yields no fact. The preview names the tiers
+included. Tier facts are sent only after this Workspace has announced, on an
+accepted push (a response header, never the receipt body), that it accepts them
+(`workspace status` shows whether it has); the first push after that
+announcement carries none and the next one does. While a batch is pending, `~/.aibill/workspace-device.json`
+retains the exact signed envelope, tier facts (those seven fields) included,
+until the Workspace accepts it. Set `AIBILL_NO_PLAN_TIER=1` to leave plan
+tiers out of every new batch; a retained batch is never rebuilt and is resent
+exactly as signed, tier facts included, because only the identical envelope can
+be reconciled by the Workspace's replay receipt, so the opt-out applies from
+the next new batch and the preview says so. Workspace then costs those sessions
+at a tier the owner types by hand.
+
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local
 experiment/approval records. The local provider ledger is not part of the
