@@ -5,6 +5,18 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- Price a Claude Code assistant message that was served by several API
+  requests from its `usage.iterations`. Claude Code records each request there
+  but writes only the last request's counts at the top level while summing the
+  cache-write split over every request, so the top level contradicts itself and
+  earlier versions marked the line `unsupported_token_shape`; one such line
+  anywhere in the scanned transcripts made `workspace push` refuse to send
+  anything. The message now costs the sum of its requests, its context size is
+  the last request's, and a message with no readable iterations is priced from
+  the top level exactly as before.
+
 ## 0.9.14 (published on npm)
 
 The CLI email ask now offers team access. The during-scan ask reads "Want

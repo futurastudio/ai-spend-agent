@@ -127,6 +127,110 @@ describe("parseClaudeCodeTranscript", () => {
     }
   });
 
+  it("prices a Claude Code message served by several requests as the sum of its iterations", () => {
+    // Claude Code wrote the last request's counts at the top level but summed
+    // the cache_creation split over both requests, so the top level contradicts
+    // itself (seen in real transcripts, 2026-08-24).
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const [call] = parseClaudeCodeTranscript(claudeLine({}, {
+      input_tokens: 2,
+      output_tokens: 4750,
+      cache_read_input_tokens: 686_903,
+      cache_creation_input_tokens: 0,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 874 },
+      iterations: [
+        {
+          type: "message",
+          input_tokens: 2,
+          output_tokens: 254,
+          cache_read_input_tokens: 883_323,
+          cache_creation_input_tokens: 874,
+          cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 874 }
+        },
+        {
+          type: "message",
+          input_tokens: 2,
+          output_tokens: 4750,
+          cache_read_input_tokens: 686_903,
+          cache_creation_input_tokens: 0,
+          cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }
+        }
+      ]
+    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(diagnostics).toEqual([]);
+    expect(call?.usageSupport).toBeUndefined();
+    expect(call?.usage).toEqual({
+      inputTokens: 4,
+      outputTokens: 5004,
+      cacheReadTokens: 1_570_226,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 874
+    });
+    // The context window holds the last request, not the sum of both.
+    expect(call?.latestTurnUsage).toMatchObject({
+      contextTokens: 2 + 686_903,
+      source: "assistant_message_usage"
+    });
+    expect(call?.tokenComponentEvidence).toMatchObject({
+      cacheReadTokens: "observed",
+      cacheWriteTokens: "observed",
+      calculatedTotalTokens: "calculated_complete"
+    });
+    expect(aggregateCalls([call!])[0]?.amountUsd).toBeGreaterThan(0);
+  });
+
+  it("prices a Claude Code message whose top-level total went stale from its one iteration", () => {
+    // Seen 2026-09: every top-level count is 0 except the 1h cache split, while
+    // the single iteration carries the full request.
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const [call] = parseClaudeCodeTranscript(claudeLine({}, {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 },
+      iterations: [{
+        type: "message",
+        input_tokens: 3,
+        output_tokens: 310,
+        cache_read_input_tokens: 90_000,
+        cache_creation_input_tokens: 2083,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 2083 }
+      }]
+    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(diagnostics).toEqual([]);
+    expect(call?.usage).toEqual({
+      inputTokens: 3,
+      outputTokens: 310,
+      cacheReadTokens: 90_000,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 2083
+    });
+    expect(call?.usageSupport).toBeUndefined();
+  });
+
+  it("keeps the top-level usage when iterations are empty or unreadable", () => {
+    const diagnostics: Array<{ code: string; count: number }> = [];
+    const [empty] = parseClaudeCodeTranscript(claudeLine({}, { iterations: [] }), "", undefined,
+      diagnostic => diagnostics.push(diagnostic));
+    expect(empty?.usage).toMatchObject({ inputTokens: 100, outputTokens: 200, cacheWrite1hTokens: 500 });
+    expect(empty?.usageSupport).toBeUndefined();
+    const [unreadable] = parseClaudeCodeTranscript(claudeLine({}, {
+      iterations: [{ input_tokens: "2", output_tokens: 254 }]
+    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(unreadable?.usage).toMatchObject({ inputTokens: 100, outputTokens: 200, cacheWrite1hTokens: 500 });
+    expect(unreadable?.usageSupport).toBeUndefined();
+    expect(diagnostics).toEqual([]);
+    // Unreadable iterations plus a contradictory top level is still one
+    // unsupported shape, reported once.
+    const [invalid] = parseClaudeCodeTranscript(claudeLine({}, {
+      cache_creation: { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 201 },
+      iterations: [{ input_tokens: "2", output_tokens: 254 }]
+    }), "", undefined, diagnostic => diagnostics.push(diagnostic));
+    expect(invalid?.usageSupport).toBe("unsupported_token_shape");
+    expect(diagnostics).toEqual([{ code: "unsupported_token_shape", count: 1 }]);
+  });
+
   it("distinguishes a provider total from a partial calculated Claude component total", () => {
     const [withoutTotal] = parseClaudeCodeTranscript(claudeLine({}, {
       cache_read_input_tokens: undefined,

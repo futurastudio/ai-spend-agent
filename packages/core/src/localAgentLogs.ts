@@ -859,6 +859,21 @@ function parseClaudeFinancialUsage(
   value: Record<string, unknown>,
   onDiagnostic?: TranscriptParseDiagnosticHandler
 ): ParsedClaudeFinancialUsage {
+  // Claude Code can serve one assistant message with several API requests
+  // (retries, continuations) and records each under `usage.iterations`. The
+  // top-level counts then describe only the last request while the
+  // cache_creation split sums every request, so the two disagree. Each
+  // iteration is a billed request: when every one prices on its own, the
+  // message costs their sum and its context is the last request's.
+  const iterations = Array.isArray(value.iterations) ? (value.iterations as unknown[]) : undefined;
+  if (iterations && iterations.length > 0 && iterations.every(isRecord)) {
+    const parts = iterations.map((iteration) => parseClaudeFinancialUsage(iteration));
+    if (parts.every((part) => part.usageSupport === undefined)) {
+      return sumClaudeIterationUsage(parts);
+    }
+    // An iteration the parser can't price leaves the top-level fields as the
+    // only evidence; they are judged below like any other message.
+  }
   const inputTokens = tokenComponentOf(value.input_tokens);
   const outputTokens = tokenComponentOf(value.output_tokens);
   const cacheReadField = optionalTokenComponent(value, "cache_read_input_tokens");
@@ -946,6 +961,62 @@ function parseClaudeFinancialUsage(
     usage,
     usageSupport: "unsupported_token_shape",
     ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {})
+  };
+}
+
+/**
+ * One assistant message served by several API requests: money is the sum of
+ * the requests, and the context size is the last request's.
+ */
+function sumClaudeIterationUsage(
+  parts: readonly ParsedClaudeFinancialUsage[]
+): ParsedClaudeFinancialUsage {
+  const usage: TokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWrite5mTokens: 0,
+    cacheWrite1hTokens: 0
+  };
+  for (const part of parts) {
+    usage.inputTokens += part.usage.inputTokens;
+    usage.outputTokens += part.usage.outputTokens;
+    usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (part.usage.cacheReadTokens ?? 0);
+    usage.cacheWrite5mTokens = (usage.cacheWrite5mTokens ?? 0) + (part.usage.cacheWrite5mTokens ?? 0);
+    usage.cacheWrite1hTokens = (usage.cacheWrite1hTokens ?? 0) + (part.usage.cacheWrite1hTokens ?? 0);
+  }
+  // A component is observed only when every request reported it; a sum with a
+  // request missing stays partial, never a complete source-faithful total.
+  const evidence = parts.map((part) => part.tokenComponentEvidence);
+  const cacheReadTokens = evidence.every((item) => item?.cacheReadTokens === "observed")
+    ? "observed" as const
+    : "not_separately_reported" as const;
+  const cacheWriteTokens = evidence.every((item) => item?.cacheWriteTokens === "observed")
+    ? "observed" as const
+    : evidence.some((item) => item?.cacheWriteTokens !== "not_separately_reported")
+      ? "partial" as const
+      : "not_separately_reported" as const;
+  const reportedTotals = parts.map((part) => part.reportedTotalTokens);
+  const reportedTotalTokens = reportedTotals.every((total) => total !== undefined)
+    ? reportedTotals.reduce((sum, total) => sum + (total ?? 0), 0)
+    : undefined;
+  const last = parts[parts.length - 1];
+  return {
+    usage,
+    ...(last?.latestTurnUsage ? { latestTurnUsage: last.latestTurnUsage } : {}),
+    ...(reportedTotalTokens !== undefined ? { reportedTotalTokens } : {}),
+    tokenComponentEvidence: {
+      inputTokens: "observed",
+      outputTokens: "observed",
+      cacheReadTokens,
+      cacheWriteTokens,
+      thoughtTokens: "not_separately_reported",
+      toolTokens: "not_separately_reported",
+      calculatedTotalTokens: cacheReadTokens === "observed" && cacheWriteTokens === "observed"
+        ? "calculated_complete"
+        : "calculated_partial",
+      reportedTotalTokens: reportedTotalTokens === undefined ? "not_reported" : "provider_reported"
+    }
   };
 }
 
