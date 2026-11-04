@@ -14,6 +14,11 @@ Command details for [aibill, Tilden’s free CLI](../README.md). Start with the
 | `statusline install [--replace]` | Reversibly install the standalone Claude Code runner; replacement of another status line requires the explicit flag |
 | `statusline uninstall` | Remove only the owned setting and restore the preserved predecessor without rolling back unrelated settings |
 | `statusline expand` | Print every subscription with committed price, runways, and 7-day API-equivalent value |
+| `guard install [--path <dir>]` | Write the repository's committed `.aibill/policy.json` into Claude Code shared project settings (`availableModels` from `models.allow`, one command hook on `UserPromptSubmit` and `PreToolUse`) and the `.aibill/guard-hook.mjs` launcher; other settings keys are kept, rerunning changes nothing |
+| `guard install --managed` | Print the same policy as a managed-settings document (adds `deniedModels`) for organizations that enforce centrally; writes nothing |
+| `guard install --uninstall` | Remove exactly the settings and launcher that install added; an edited `availableModels` and the policy file stay |
+| `guard check` | The hook: read today's Claude Code usage for this repository from local transcripts and exit 2 with the policy message when a daily budget is spent; missing or unreadable evidence exits 0 with one warning (fail open) |
+| `guard status` | Show the policy in force, today's usage against it, what is installed where, and whether managed settings override; never a person |
 | `quickstart [--sample]` | Same readout; `--sample` forces demo data |
 | `connect <provider>` | Register an admin-gated local connector stub and print the required `sync-provider` command; does not fetch billing data |
 | `sync-provider` | Pull provider cost/usage through a local `env:` reference; confidence follows the source |
@@ -149,3 +154,31 @@ transcripts or contact a provider—so the line says `updated`, `stale`, or
 `update error` rather than claiming to be live. Run `/status` inside Claude
 Code after installation to verify the effective user/project/local/managed
 setting sources on that host.
+
+## Guard: repository policy for Claude Code
+
+`.aibill/policy.json` is committed per repository (version 1, strict keys):
+
+| Key | Meaning |
+| --- | --- |
+| `models.allow` | Written to Claude Code `availableModels`; the project allowlist applies as soon as the settings load |
+| `models.deny` | Written to `deniedModels` by `--managed` only; Claude Code ignores the key outside managed settings, so project scope reports it |
+| `budget.perDay.tokens` | Input + output + cache read + cache write tokens of Claude Code sessions in this repository per UTC day |
+| `budget.perDay.sessions` | Distinct Claude Code sessions with a call in this repository per UTC day; the current session is never counted against itself |
+| `message` | Shown first when the guard blocks; at most 240 characters, no control characters |
+| `codex.model` | Reported by `guard status`; Codex is not enforced in this version |
+
+```bash
+npx aibill guard install          # writes .claude/settings.json + .aibill/guard-hook.mjs; commit both
+npx aibill guard status           # policy in force, today's figures, installed where, managed override
+npx aibill guard install --managed > managed-settings.json   # the enforced form for an organization
+npx aibill guard install --uninstall
+```
+
+`guard check` is what the hook runs. It resolves the repository from the hook's
+`cwd` (a linked worktree resolves to its main checkout), reads only the bytes
+transcripts gained since its last run from a private cache under
+`~/.aibill/cache/guard-usage-v1/`, and blocks only when the figure is certain.
+Project settings are a convention a developer can edit, and Claude Code runs
+project hooks after the folder is trusted; managed settings are the enforced
+form.

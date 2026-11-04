@@ -31,6 +31,10 @@ each number’s financial label and coverage.
   of cash savings or ROI.
 - `npx aibill@latest statusline install`: optionally install the cache-only
   Claude Code status line. Remove it with `statusline uninstall`.
+- `npx aibill@latest guard install`: turn a committed `.aibill/policy.json`
+  (model allowlist, daily token and session budget per repository) into Claude
+  Code project settings and a hook that fails open on uncertain evidence.
+  Remove it with `guard install --uninstall`.
 - `npx aibill@latest connect openai` or `connect anthropic`: register local
   provider setup and print the separate `sync-provider` command. Only an
   explicit sync reads the provider, using the required admin environment

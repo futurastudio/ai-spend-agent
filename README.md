@@ -144,6 +144,7 @@ Workspace. Local estimates do not become invoice line items after connecting.
 | Prepare an inspection and approval plan | `npx aibill@latest apply` writes local artifacts; it does not execute the change. |
 | Test one reversible change | `npx aibill@latest improve`; practice with `improve --sample`, which writes nothing. You type approval, perform the change and supply the quality check. |
 | Keep a compact view in Claude Code | `npx aibill@latest statusline install`; uninstall with `statusline uninstall`. Installation is optional; the runner only rereads a private cache. |
+| Keep a repository inside a daily agent budget | Commit `.aibill/policy.json`, then `npx aibill@latest guard install`; see [Guard](#guard-policy-for-coding-agents). |
 | Save a local report | `npx aibill@latest report --no-open` |
 | Prepare a redacted receipt for sharing | `npx aibill@latest report-card`; inspect the output before sharing. |
 | Explore a native monitor | [Glance for macOS](apps/glance-macos/README.md), a source-built preview; no signed public download yet. |
@@ -154,6 +155,68 @@ snapshots and requires declared quality. It does not automatically optimize
 requests, certify outcomes or prove ROI. Ownership and GitHub outcome commands
 record explicitly supplied or narrowly checked evidence, not company approval
 routing or automated business-value measurement.
+
+## Guard: policy for coding agents
+
+`aibill guard` turns a committed policy file into Claude Code settings and a
+hook, per repository and never per person. Write `.aibill/policy.json` at the
+checkout root:
+
+```json
+{
+  "version": 1,
+  "models": { "allow": ["sonnet", "haiku"] },
+  "budget": { "perDay": { "tokens": 1500000, "sessions": 20 } },
+  "message": "This repository's daily agent budget is spent. Ask the platform team for an exception."
+}
+```
+
+Then run `npx aibill@latest guard install` from the checkout and commit what it
+writes. Two files change:
+
+- `.claude/settings.json` (Claude Code shared project settings) gains
+  `availableModels` from `models.allow` and one command hook on
+  `UserPromptSubmit` and on `PreToolUse`. Keys that were already there stay as
+  they were; rerunning install changes nothing; `guard install --uninstall`
+  removes exactly what install added.
+- `.aibill/guard-hook.mjs`, the hook the settings point at with
+  `node "${CLAUDE_PROJECT_DIR}/.aibill/guard-hook.mjs"`. It runs
+  `aibill guard check` from the `ai-spend-agent` package installed for the
+  repository (`npm install --save-dev aibill`), without `npx` or any network.
+
+What it enforces: the model allowlist applies as soon as Claude Code loads the
+project settings. The hook reads today's Claude Code usage for this repository
+from the transcripts already on the machine (the UTC day's input, output and
+cache tokens, and distinct sessions; a linked worktree counts toward its main
+checkout) and exits 2 with the policy message and the figure when a budget is
+spent, which blocks the prompt or tool call:
+
+```
+This repository's daily agent budget is spent. Ask the platform team for an exception.
+checkout-api used 1.9M tokens of its 1.5M daily budget (UTC 2026-11-04); paused until 00:00 UTC (in 5h12m). aibill guard
+```
+
+The hook fails open. On a missing or invalid policy, a transcript directory it
+cannot read, or an index still catching up with a large day, it exits 0 with
+one warning line and the developer continues. It blocks only when the local
+transcripts make the spent budget certain; a line whose token shape the parser
+does not support counts its present components only, so the figure is a lower
+bound. A warm run reads only the bytes transcripts gained since the last run
+and finishes in about a tenth of a second.
+
+`npx aibill@latest guard status` prints the policy in force, today's figures
+against it, what is installed where, and whether managed settings override.
+
+Honest limits. Project settings are a convention: a developer can edit
+`.claude/settings.json`, and Claude Code runs project hooks only after the
+developer trusts the folder. Organizations that need enforcement deploy the
+same policy as managed settings, which win over every other scope:
+`npx aibill@latest guard install --managed` prints that document, including
+`deniedModels` from `models.deny` (a managed-only key that project scope can
+only report). Model lists match the way Claude Code documents (`opus` covers
+the family, `claude-opus-5` covers later minor versions). `codex.model` is
+reported, not enforced. Nothing here reads provider billing or acts on a
+provider account; that half lives in Tilden Workspace.
 
 ## Optional Workspace connection
 
