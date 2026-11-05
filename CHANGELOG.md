@@ -5,7 +5,7 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
-## Unreleased
+## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
   Claude Code transcripts (2.1.221 onwards). Claude Code writes an assistant
