@@ -666,7 +666,11 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
   const records: UsageRecord[] = [];
   for (const row of rows) {
     if (!isRecord(row)) continue;
-    const date = stringValue(row.date) ?? new Date(0).toISOString().slice(0, 10);
+    // A row whose date cannot be read is left out and reported by markMalformedUsageRows. It must
+    // not fail the whole Anthropic sync, and it must not be filed under some other day.
+    const timestamp = anthropicClaudeCodeTimestamp(row.date);
+    if (!timestamp) continue;
+    const date = timestamp.slice(0, 10);
     const actor = isRecord(row.actor) ? row.actor : {};
     const userId = stringValue(actor.email_address) ?? stringValue(actor.api_key_name) ?? stringValue(actor.id) ?? "unknown-claude-code-actor";
     const core = isRecord(row.core_metrics) ? row.core_metrics : {};
@@ -677,6 +681,7 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
     const commits = nonNegativeIntegerValue(core.commits_by_claude_code) ?? 0;
     const prs = nonNegativeIntegerValue(core.pull_requests_by_claude_code) ?? 0;
     const organizationId = stringValue(row.organization_id) ?? options.accountId;
+    const identityDimensions = anthropicClaudeCodeIdDimensions(row);
     const modelBreakdown = Array.isArray(row.model_breakdown) ? row.model_breakdown : [];
     for (const item of modelBreakdown) {
       if (!isRecord(item)) continue;
@@ -687,8 +692,8 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
       const amountUsd = currency === "usd" ? parseMinorUsd(cost.amount) : undefined;
       if (typeof amountUsd !== "number") continue;
       records.push({
-        id: slugifySourceId(["anthropic-claude-code", date, userId, model].filter(Boolean).join("-")),
-        timestamp: new Date(`${date}T00:00:00Z`).toISOString(),
+        id: slugifySourceId(["anthropic-claude-code", date, userId, model, ...identityDimensions].filter(Boolean).join("-")),
+        timestamp,
         source: { id: options.sourceId, name: "Anthropic Claude Code Usage Report", provider: "anthropic", confidence: "estimated", observedFrom: options.observedFrom },
         model,
         inputTokens: (nonNegativeIntegerValue(tokens.input) ?? 0) + (nonNegativeIntegerValue(tokens.cache_read) ?? 0) + (nonNegativeIntegerValue(tokens.cache_creation) ?? 0),
@@ -705,6 +710,33 @@ export function normalizeAnthropicClaudeCodeUsageResponse(response: unknown, opt
     }
   }
   return records;
+}
+
+/** Anthropic documents a UTC-midnight RFC 3339 date on each row. The older date-only form stays readable. */
+function anthropicClaudeCodeTimestamp(value: unknown): string | undefined {
+  const raw = stringValue(value);
+  if (!raw) return undefined;
+  const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : raw;
+  if (!/^\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?Z$/i.test(candidate)) return undefined;
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+/**
+ * Id segments for the dimensions Anthropic documents on a Claude Code row. One actor can have
+ * several rows for a model and day, one per terminal, local or remote, and so on. Rows sharing an
+ * id would all be dropped from the activity snapshot.
+ */
+function anthropicClaudeCodeIdDimensions(row: Record<string, unknown>): string[] {
+  const terminalType = stringValue(row.terminal_type);
+  const customerType = stringValue(row.customer_type);
+  const subscriptionType = stringValue(row.subscription_type);
+  return [
+    typeof row.is_remote === "boolean" ? `remote-${row.is_remote ? "yes" : "no"}` : undefined,
+    terminalType ? `terminal-${terminalType}` : undefined,
+    customerType ? `customer-${customerType}` : undefined,
+    subscriptionType ? `subscription-${subscriptionType}` : undefined
+  ].filter((segment): segment is string => segment !== undefined);
 }
 
 export function normalizeGitHubCopilotSeatResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
@@ -2340,6 +2372,9 @@ function markMalformedUsageRows(
           report(rowPath, "Claude Code usage response contained a non-object row");
           continue;
         }
+        if (!anthropicClaudeCodeTimestamp(rowValue.date)) {
+          report(`${rowPath}.date`, "Claude Code date must be a UTC-midnight RFC 3339 timestamp or a YYYY-MM-DD date; the row was excluded");
+        }
         const core = isRecord(rowValue.core_metrics) ? rowValue.core_metrics : {};
         const lines = isRecord(core.lines_of_code) ? core.lines_of_code : {};
         checkInteger(core.num_sessions, `${rowPath}.core_metrics.num_sessions`, "quantity");
@@ -2411,9 +2446,14 @@ function markMalformedUsageRows(
 
 function detectResponseDrift(payload: unknown, provider: string, label: string): ProviderQaDriftIssue[] {
   const known = knownProviderFields(provider, label);
+  const claudeCode = provider === "anthropic" && label.toLowerCase().includes("claude code");
   const issues: ProviderQaDriftIssue[] = [];
   walkProviderFields(payload, "", (path) => {
-    if (path && !known.has(path.replace(/\[\d+\]/g, "[]"))) {
+    const shape = path.replace(/\[\d+\]/g, "[]");
+    // `tool_actions` is keyed by tool name, and the set of tools is open. Only the name is a
+    // wildcard: a new field under a tool is still drift.
+    const field = claudeCode ? shape.replace(/^(data\[\]\.tool_actions\.)[a-z][a-z0-9_]{0,63}(?=\.|$)/, "$1*") : shape;
+    if (path && !known.has(field)) {
       issues.push({ label, field: path, issue: "unknown field observed in provider response" });
     }
   });
@@ -2455,7 +2495,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo", "data[].results[].speed"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("claude code")) {
-    return new Set([...common, "data[].date", "data[].is_remote", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
+    return new Set([...common, "data[].date", "data[].is_remote", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]", "data[].tool_actions.*", "data[].tool_actions.*.accepted", "data[].tool_actions.*.rejected"]);
   }
   if (provider === "github-copilot" && label.toLowerCase().includes("metrics")) {
     return new Set([...common, "download_links", "download_links[]", "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.prompt_count", "day_totals[].totals_by_cli.session_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.token_usage.avg_tokens_per_request", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "created_at", "generated_at", "etl_id", "day_partition", "entity_id_partition", "enterprise_id", "organization_id"]);
