@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-04";
+export const PRICING_TABLE_AS_OF = "2026-11-06";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -85,7 +85,9 @@ const pricingRules: PricingRule[] = [
     }
   },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
-  { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },
+  // Exact and dated IDs of Opus 4 and 4.1: the deprecations page lists claude-opus-4-20250514
+  // and claude-opus-4-1-20250805. Both models are retired; older transcripts still carry them.
+  { match: /^claude-opus-4(-[01])?(-\d{8})?$/i, inputPerM: 15, outputPerM: 75 },
   { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
@@ -141,7 +143,18 @@ const pricingRules: PricingRule[] = [
   // "Prompts with >272K input tokens are priced at 2x input and 1.5x output for
   // the full request." Cached input scales with the 2x input leg.
   {
-    // developers.openai.com/api/docs/models/gpt-5.6-sol, 2026-08-25
+    // developers.openai.com/api/docs/models/gpt-5.6-sol, 2026-08-25.
+    // Reviewed 2026-11-06. Retained evidence:
+    // provider-contracts/model-pricing-2026-11-06.json. $4 / $0.40 / $20 are
+    // promotional: "available until November 30, 2026" (it read "at least
+    // through November 21" until November 2026). OpenAI names no rate for
+    // afterwards, so the schedule returns to the rates published before the
+    // promotion, $5 / $0.50 / $30, which are also what its stated 20% input and
+    // 33% output reductions give. OpenAI names no time zone and "until" does not
+    // settle November 30 itself: that day stays promotional, and the change
+    // applies from the next UTC day, as usage is bucketed. The later rates are an
+    // inference, not a published price: the evidence names a re-check by
+    // 2026-12-01, and a release test goes red the next day until it is done.
     match: /^gpt-5\.6-sol$/i,
     inputPerM: 4,
     outputPerM: 20,
@@ -151,7 +164,21 @@ const pricingRules: PricingRule[] = [
       inputPerM: 8,
       outputPerM: 30,
       cacheReadPerM: 0.8
-    }
+    },
+    scheduledRates: [
+      {
+        from: "2026-12-01",
+        inputPerM: 5,
+        outputPerM: 30,
+        cacheReadPerM: 0.5,
+        abovePromptTokens: {
+          threshold: 272_000,
+          inputPerM: 10,
+          outputPerM: 45,
+          cacheReadPerM: 1
+        }
+      }
+    ]
   },
   {
     // developers.openai.com/api/docs/models/gpt-5.6-terra, 2026-08-25
@@ -313,11 +340,16 @@ const pricingRules: PricingRule[] = [
   //   rule does apply. Access is gated behind the Daybreak program, so the
   //   cost of leaving it unpriced is near zero and a coin-flip on the tier
   //   would be a real number that is wrong on long requests.
-  // - gpt-5.5-pro / gpt-5.4-pro: listed as long-context-capable but no
-  //   per-model rate is published on either canonical source.
-  // - bare gpt-5.1 / gpt-5.3: the pricing page quotes the 5/5.1/5.2 group as a
-  //   RANGE ($1.25-$1.75) and neither has a resolved per-model figure. Their
-  //   -codex and -mini variants keep their own verified rules above.
+  // - bare gpt-5.3: the pricing page has no row for it. Its -codex and -mini
+  //   variants keep their own verified rules above.
+  //
+  // Published and not priced yet (2026-11-06 pricing page), so they count as
+  // missing until the table fix scheduled with 0.9.17. No rate here is in doubt:
+  // - gpt-5.5-pro / gpt-5.4-pro: $30/$180, and $60/$270 above 272K input tokens.
+  // - o3-pro: $20/$80.
+  // - bare gpt-5.1: $1.25/$10/$0.125. Its -codex and -mini variants keep their
+  //   own verified rules above.
+  // - gpt-6.1-terra: $1/$5/$0.05, with a long-context column.
   // - gpt-5.6-codex / gpt-5.5-mini: NOT OpenAI model ids (both 404 on the model
   //   docs and are absent from developers.openai.com/api/docs/models). They
   //   appear only in this repo's fixtures and sample CSVs.
