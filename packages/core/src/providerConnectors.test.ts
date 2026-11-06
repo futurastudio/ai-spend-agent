@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { buildActivitySnapshot } from "./activitySnapshot.js";
 import { generateCutList } from "./cutList.js";
 import {
   AGENT_ECONOMICS_RECEIPT_KIND,
@@ -1575,6 +1576,74 @@ describe("real provider connector implementations", () => {
     expect(nullSpeed.id).toBe(legacy.id);
     expect(fast.id).toBe(`${legacy.id}-speed-fast`);
     expect([legacy, standard, fast].map((record) => record.amountUsd)).toEqual([10, 10, 10]);
+  });
+
+  it("keeps default Anthropic cost ids unchanged and gives other tiers, context windows and regions their own id", () => {
+    const options = { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Admin Cost Report" };
+    const row = (extra: Record<string, unknown> = {}) => ({ amount: "1000", currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens",
+      model: "claude-opus-5-5", workspace_id: "wrk_eng", token_type: "uncached_input_tokens", ...extra });
+    const defaults = { service_tier: "standard", context_window: "0-200k", inference_geo: "global", speed: "standard" };
+    const [legacy, documentedDefaults, noRegion, nulls, batch, longContext, regional, fastBatch] = normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-10-19T00:00:00Z",
+      ending_at: "2026-10-20T00:00:00Z", results: [
+        row(),
+        row(defaults),
+        row({ ...defaults, inference_geo: "not_available" }),
+        row({ service_tier: null, context_window: null, inference_geo: null, speed: null }),
+        row({ ...defaults, service_tier: "batch" }),
+        row({ ...defaults, context_window: "200k-1M" }),
+        row({ ...defaults, inference_geo: "us" }),
+        row({ ...defaults, service_tier: "batch", speed: "fast" })
+      ] }] }, options);
+    expect(legacy.id).toBe("anthropic-costs-2026-10-19t00-00-00z-wrk-eng-claude-opus-5-5-uncached-input-tokens");
+    expect(documentedDefaults.id).toBe(legacy.id);
+    expect(noRegion.id).toBe(legacy.id);
+    expect(nulls.id).toBe(legacy.id);
+    expect(batch.id).toBe(`${legacy.id}-tier-batch`);
+    expect(longContext.id).toBe(`${legacy.id}-context-200k-1m`);
+    expect(regional.id).toBe(`${legacy.id}-geo-us`);
+    expect(fastBatch.id).toBe(`${legacy.id}-speed-fast-tier-batch`);
+  });
+
+  it("carries every Anthropic cost row that differs only by tier, context window or region into the snapshot", () => {
+    const row = (amount: string, extra: Record<string, unknown>) => ({ amount, currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens",
+      model: "claude-opus-5-5", workspace_id: "wrk_eng", token_type: "uncached_input_tokens",
+      service_tier: "standard", context_window: "0-200k", inference_geo: "global", speed: "standard", ...extra });
+    const records = normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-08-09T00:00:00Z", ending_at: "2026-08-10T00:00:00Z", results: [
+      row("123.78912", {}),
+      row("50.5", { service_tier: "batch" }),
+      row("7", { context_window: "200k-1M" }),
+      row("3", { inference_geo: "us" })
+    ] }] }, { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Admin Cost Report" });
+    expect(new Set(records.map((record) => record.id)).size).toBe(4);
+    const snapshot = buildActivitySnapshot({
+      asOf: "2026-08-10T12:00:00.000Z",
+      generatedAt: "2026-08-10T12:00:00.000Z",
+      records,
+      trustedProviderRecordIds: records.map((record) => record.id)
+    });
+    expect(snapshot.coverage).toMatchObject({ recordsParsed: 4 });
+    expect(snapshot.coverage.validationStatus).not.toBe("partial");
+  });
+
+  it("reads the documented Claude Code is_remote field without response drift", async () => {
+    const read = (extra: Record<string, unknown>) => fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: Date.parse("2026-10-19T00:00:00.000Z") / 1_000,
+      endTime: Date.parse("2026-10-20T00:00:00.000Z") / 1_000,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("claude_code")
+          ? { data: [{ date: "2026-10-19T00:00:00Z", actor: { type: "user_actor", email_address: "dev@example.com" }, organization_id: "org_1", customer_type: "api", terminal_type: "vscode",
+              core_metrics: { num_sessions: 1, lines_of_code: { added: 1, removed: 0 }, commits_by_claude_code: 0, pull_requests_by_claude_code: 0 }, model_breakdown: [], tool_actions: {}, ...extra }], has_more: false }
+          : { data: [], has_more: false }
+      })
+    });
+    expect((await read({ is_remote: false })).qa.responseDrift).toEqual([]);
+    expect((await read({ is_elsewhere: false })).qa.responseDrift).toEqual(expect.arrayContaining([expect.objectContaining({ field: expect.stringContaining("is_elsewhere") })]));
   });
 
   it("reads Anthropic cost rows that carry the documented speed field without response drift", async () => {

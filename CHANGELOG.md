@@ -5,6 +5,15 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- Give every Anthropic cost row its own id. Rows that differ only by service
+  tier, context window or region used to share an id, which left the provider
+  total right but dropped all of them from the activity snapshot and marked it
+  partial. A row at the documented defaults keeps the id it always had.
+- Accept `is_remote` on Claude Code usage rows, which Anthropic now documents, so
+  it no longer shows up as a response drift note.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed

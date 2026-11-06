@@ -407,6 +407,9 @@ type AnthropicCostBucket = {
     model?: string | null;
     workspace_id?: string | null;
     token_type?: string | null;
+    service_tier?: string | null;
+    context_window?: string | null;
+    inference_geo?: string | null;
     speed?: string | null;
   }>;
 };
@@ -762,13 +765,9 @@ export function normalizeAnthropicCostResponse(response: unknown, options: Norma
       const model = stringValue(resultValue.model) ?? description;
       const workspaceId = stringValue(resultValue.workspace_id);
       const tokenType = stringValue(resultValue.token_type);
-      // Anthropic documents `speed` on cost results ("standard" or "fast"). A standard
-      // row keeps the id it always had; any other speed gets its own segment so a
-      // fast-mode row never collides with the standard row for the same model and type.
-      const speed = stringValue(resultValue.speed)?.trim().toLowerCase();
       records.push({
         id: slugifySourceId(["anthropic-costs", timestamp, workspaceId, model, tokenType ?? costType,
-          speed && speed !== "standard" ? `speed-${speed}` : undefined].filter(Boolean).join("-")),
+          ...anthropicCostIdDimensions(resultValue)].filter(Boolean).join("-")),
         timestamp: new Date(timestamp).toISOString(),
         source: {
           id: options.sourceId,
@@ -792,6 +791,26 @@ export function normalizeAnthropicCostResponse(response: unknown, options: Norma
   }
 
   return records;
+}
+
+/**
+ * Id segments for the dimensions Anthropic documents on a cost row. A row at the documented
+ * default keeps the id it always had; any other value gets its own segment, so a fast, batch,
+ * long-context or regional row never collides with the default row for the same model and
+ * type. Colliding ids would drop every one of those rows from the activity snapshot.
+ */
+function anthropicCostIdDimensions(result: Record<string, unknown>): string[] {
+  const dimension = (field: string, prefix: string, defaults: readonly string[]): string | undefined => {
+    const value = stringValue(result[field])?.trim().toLowerCase();
+    return value && !defaults.includes(value) ? `${prefix}-${value}` : undefined;
+  };
+  return [
+    dimension("speed", "speed", ["standard"]),
+    dimension("service_tier", "tier", ["standard"]),
+    dimension("context_window", "context", ["0-200k"]),
+    // "not_available" marks a model that does not support choosing a region.
+    dimension("inference_geo", "geo", ["global", "not_available"])
+  ].filter((segment): segment is string => segment !== undefined);
 }
 
 export function normalizeGitHubCopilotMetricsResponse(response: unknown, options: NormalizerOptions): UsageRecord[] {
@@ -2436,7 +2455,7 @@ function knownProviderFields(provider: string, label: string): Set<string> {
     return new Set([...common, "data[].starting_at", "data[].ending_at", "data[].results", "data[].results[]", "data[].results[].amount", "data[].results[].currency", "data[].results[].cost_type", "data[].results[].description", "data[].results[].model", "data[].results[].workspace_id", "data[].results[].token_type", "data[].results[].service_tier", "data[].results[].context_window", "data[].results[].inference_geo", "data[].results[].speed"]);
   }
   if (provider === "anthropic" && label.toLowerCase().includes("claude code")) {
-    return new Set([...common, "data[].date", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
+    return new Set([...common, "data[].date", "data[].is_remote", "data[].actor", "data[].actor.email_address", "data[].actor.api_key_name", "data[].actor.id", "data[].actor.type", "data[].organization_id", "data[].customer_type", "data[].terminal_type", "data[].subscription_type", "data[].core_metrics", "data[].core_metrics.num_sessions", "data[].core_metrics.lines_of_code", "data[].core_metrics.lines_of_code.added", "data[].core_metrics.lines_of_code.removed", "data[].core_metrics.commits_by_claude_code", "data[].core_metrics.pull_requests_by_claude_code", "data[].model_breakdown", "data[].model_breakdown[]", "data[].model_breakdown[].model", "data[].model_breakdown[].tokens", "data[].model_breakdown[].tokens.input", "data[].model_breakdown[].tokens.output", "data[].model_breakdown[].tokens.cache_read", "data[].model_breakdown[].tokens.cache_creation", "data[].model_breakdown[].estimated_cost", "data[].model_breakdown[].estimated_cost.currency", "data[].model_breakdown[].estimated_cost.amount", "data[].tool_actions", "data[].tool_actions[]"]);
   }
   if (provider === "github-copilot" && label.toLowerCase().includes("metrics")) {
     return new Set([...common, "download_links", "download_links[]", "day_totals", "day_totals[]", "day_totals[].day", "day_totals[].daily_active_users", "day_totals[].totals_by_model_feature", "day_totals[].totals_by_model_feature[]", "day_totals[].totals_by_model_feature[].model", "day_totals[].totals_by_model_feature[].feature", "day_totals[].totals_by_model_feature[].engaged_users", "day_totals[].totals_by_model_feature[].total_requests", "day_totals[].totals_by_model_feature[].user_initiated_interaction_count", "day_totals[].totals_by_cli", "day_totals[].totals_by_cli.request_count", "day_totals[].totals_by_cli.prompt_count", "day_totals[].totals_by_cli.session_count", "day_totals[].totals_by_cli.token_usage", "day_totals[].totals_by_cli.token_usage.prompt_tokens_sum", "day_totals[].totals_by_cli.token_usage.output_tokens_sum", "day_totals[].totals_by_cli.token_usage.avg_tokens_per_request", "day_totals[].totals_by_cli.engaged_users", "day_totals[].totals_by_cli.total_requests", "report_start_day", "report_end_day", "created_at", "generated_at", "etl_id", "day_partition", "entity_id_partition", "enterprise_id", "organization_id"]);
