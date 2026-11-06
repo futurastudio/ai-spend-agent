@@ -38,7 +38,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Prepaid credit application, tax, refunds, discounts and final cash settlement
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
-  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `eba7ed3ebea5a51600f6fd0c15b91532419e90242eedc24100a979adaab52c4b`; reviewed content `4554594e094c3d1f46db39fd92f858305d1a3d25204632cb987e06568e2cc7d6`
+  - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4`; reviewed content `7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `d505ff35639b3e9687d7ccd0186cc09892b99c806a56e0fa154d53eccea9cd7a`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `3481d521be9c350577fe865c424ebab59cc5b8adddf972f5c4a766aad5b9c916`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `5869cf610d86542111cf994e4ebe3b48fac6788b296c57777a7b94bbd10541eb`
@@ -75,10 +75,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Official sources:
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `e63c8cac8705feb389ba7335f010bb2aa99b73914ba8c2620228a40c14af6797`; reviewed content `e7f7f2ad1e11beaa4a8c64b45a561d506eb45d6ad5408c280f4fef41132cc6f9`
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-analytics-api) — semantic `ac73794c732b77194f55d85be507329c7f8e816a1dfebb30825cbf9ba4859b30`; reviewed content `ff0ccb808ee291b7f5474ce26349f77b5677dae6da192dacb6b5e5d7bc39d808`
-  - [contract-cost-report](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve) — semantic `1b89c7bec3dc4e62a000dc94e45bffb69ece201d51db0994499e026ff743b9f2`; reviewed content `b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7`
-  - [contract-usage-messages](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages) — semantic `f2a93d7e9449d94df204c0498811aaf8123c70e71f47375f3dbdd54e122429b9`; reviewed content `c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8`
-  - [contract-claude-code](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code) — semantic `296c1cab0bad6d4c7ce98ea24de67352197de34b0bae9f8303635c4e929f2489`; reviewed content `dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `3f93e65c1ee0212ee63bec3d47f19fe337dc40191b0068262bd88249883b513c`; reviewed content `d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c`
+  - [contract-cost-report](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve) — semantic `cead7c2245d82f0b7f60a0dfe01390c412c6e09b360a288d89d6c159f13b4abd`; reviewed content `b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7`
+  - [contract-usage-messages](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages) — semantic `6c718a86d49a55d881dc2e26d57775330e872e94913c450f17a006e8b61394a0`; reviewed content `c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8`
+  - [contract-claude-code](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code) — semantic `9806b7ee41ef3bfea69353fb3b9110189b0e488e5fd90814109599c0e9c50072`; reviewed content `dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `9fee3d1943df2f37ff877659fff7625fa20ef52ff37cd3846da182c760eff09e`; reviewed content `d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c`
 
 ## Claude Enterprise Analytics
 

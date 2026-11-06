@@ -119,25 +119,27 @@ test("financial-schema markers catch one added OpenAI Costs result field", async
     "across text, audio, and image outputs",
     "GET /organization/costs"
   ];
-  for (const marker of [...endpointMarkers, "OrganizationCostsResult object {", "OrganizationUsageCompletionsResult object {"]) {
+  for (const marker of [...endpointMarkers, "OrganizationCostsResult", "OrganizationUsageCompletionsResult"]) {
     assert.ok(resource.requiredMarkers.includes(marker), `missing required marker: ${marker}`);
   }
-  // The reference page summarizes each result object as `{ first three fields, N more }`
-  // before documenting its fields. The padding keeps each result object outside the
-  // endpoint-list windows, as on the real page.
+  // The reference page lists the usage result objects, then summarizes each one as
+  // `{ first three fields, N more }` before documenting its fields. The markers first match
+  // in that list, and the summary has to stay inside their window. The padding keeps each
+  // result object outside the endpoint-list windows, as on the real page.
   const padding = "unchanged ".repeat(40);
   const costFields = ["object", "amount", "api_key_id", "api_source", "line_item", "project_id", "quantity", "quantity_unit", "user_id"];
-  const page = (fields) => [
+  const page = (fields, completionsMore = 22) => [
     "<nav><li>Completions GET /organization/usage/completions</li><li>Costs GET /organization/costs</li><li>Embeddings GET /organization/usage/embeddings</li></nav>",
     `<main>${padding}`,
-    "<h4>OrganizationUsageCompletionsResult object { input_tokens, num_model_requests, object, 22 more }</h4>",
+    "<p>results: array of OrganizationUsageCompletionsResult or OrganizationUsageEmbeddingsResult or OrganizationUsageModerationsResult or 8 more. One of the following:</p>",
+    `<h4>OrganizationUsageCompletionsResult { input_tokens, num_model_requests, object, ${completionsMore} more }</h4>`,
     "<p>input_tokens: integer, including cached and cache-write tokens.</p>",
     "<p>output_tokens: integer, across text, audio, and image outputs.</p>",
     // The connector reads these fields, so each one is a reviewed claim.
     "<p>api_source: optional string or null. input_cache_write_12h_tokens: optional integer. input_cache_write_30m_tokens: optional integer or null.</p>",
     padding,
-    `<h4>OrganizationCostsResult object { ${fields.slice(0, 3).join(", ")}, ${fields.length - 3} more }</h4>`,
-    "<p>amount: optional object { currency, value }. currency: optional string Lowercase ISO-4217 currency. value : optional number The numeric value of the cost.</p>",
+    `<h4>OrganizationCostsResult { ${fields.slice(0, 3).join(", ")}, ${fields.length - 3} more }</h4>`,
+    "<p>amount: optional { currency, value }. currency: optional string Lowercase ISO-4217 currency. value: optional number The numeric value of the cost.</p>",
     ...fields.map((field) => `<p>${field}: documented field of the grouped costs result.</p>`),
     "<p>user_id: optional string or null. When group_by=user_id, this field provides the user ID of the grouped costs result.</p>",
     "</main>"
@@ -145,6 +147,7 @@ test("financial-schema markers catch one added OpenAI Costs result field", async
   const reviewed = normalizeDocument(page(costFields));
   const oneMoreField = normalizeDocument(page([...costFields, "region"]));
   assert.notEqual(semanticFingerprint(oneMoreField, resource.requiredMarkers), semanticFingerprint(reviewed, resource.requiredMarkers));
+  assert.notEqual(semanticFingerprint(normalizeDocument(page(costFields, 23)), resource.requiredMarkers), semanticFingerprint(reviewed, resource.requiredMarkers));
   // The endpoint-list markers alone never see a new result field.
   assert.equal(semanticFingerprint(oneMoreField, endpointMarkers), semanticFingerprint(reviewed, endpointMarkers));
 
@@ -266,6 +269,51 @@ test("reference markers catch one added Anthropic result field, on the cost repo
     assert.notEqual(semanticFingerprint(page(head, `"billing_region" : "us" , `, tail), resource.requiredMarkers), reviewed, `${resource.kind}: a field in the middle`);
     assert.notEqual(semanticFingerprint(page(head, "", `${tail} , "zone" : "us"`), resource.requiredMarkers), reviewed, `${resource.kind}: a field at the end`);
   }
+});
+
+test("no marker depends on how a docs generator spaces its punctuation", async () => {
+  // OpenAI's generator dropped the space before every colon and comma on 2026-11-06 and took `object`
+  // out of its summaries. Nothing else on the page changed, yet markers written against the old
+  // rendering went missing, which on this page raises a P0. Anchor on words.
+  const contracts = await readProviderContracts();
+  for (const contract of contracts.contracts) {
+    for (const resource of contract.resources) {
+      for (const marker of resource.requiredMarkers) {
+        assert.doesNotMatch(marker, /\s[:,]\s|\bobject \{/, `${contract.id} ${resource.kind}: ${marker}`);
+      }
+    }
+  }
+});
+
+test("reference markers catch a changed Claude Code date, money unit, row field or tool", async () => {
+  const contracts = await readProviderContracts();
+  const resource = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
+    .resources.find((entry) => entry.url.endsWith("/usage_report/retrieve_claude_code"));
+  const padding = "unchanged ".repeat(40);
+  const row = ({ date = "2025-08-08T00:00:00Z", amount = "186", middle = "", tools = "", end = "" } = {}) =>
+    `"actor" : { "email_address" : "user@example.com" , "type" : "user_actor" }, "core_metrics" : { "commits_by_claude_code" : 8 , "lines_of_code" : { "added" : 342 , "removed" : 128 }, "num_sessions" : 15 , "pull_requests_by_claude_code" : 2 }, "customer_type" : "api" , "date" : "${date}" , "is_remote" : false , ${middle}"model_breakdown" : [ { "estimated_cost" : { "amount" : ${amount} , "currency" : "USD" }, "model" : "sample-model" , "tokens" : { "cache_creation" : 2340 , "cache_read" : 8790 , "input" : 45230 , "output" : 12450 } } ], "organization_id" : "org_sample" , "terminal_type" : "iterm.app" , "tool_actions" : { "edit_tool" : { "accepted" : 25 , "rejected" : 3 }, ${tools}"write_tool" : { "accepted" : 8 , "rejected" : 0 } }, "subscription_type" : "enterprise"${end}`;
+  const page = (options) => normalizeDocument(`<main>${padding} returns betaclaudecodeusagereport object { data , has_more , next_page } ${padding} response 200 { "data" : [ { ${row(options)} } ], "has_more" : true } ${padding}</main>`);
+  const reviewed = semanticFingerprint(page(), resource.requiredMarkers);
+  for (const [label, options] of [
+    ["the date form the reader depends on", { date: "2025-08-08" }],
+    ["the money unit", { amount: "\"1.86\"" }],
+    ["a field in the middle of the row", { middle: "\"billing_region\" : \"us\" , " }],
+    ["a new tool", { tools: "\"web_tool\" : { \"accepted\" : 1 , \"rejected\" : 0 }, " }],
+    ["a field at the end of the row", { end: " , \"zone\" : \"us\"" }]
+  ]) {
+    assert.notEqual(semanticFingerprint(page(options), resource.requiredMarkers), reviewed, label);
+  }
+});
+
+test("the rule that Claude bills the full context window flat is a reviewed claim", async () => {
+  // The estimator's flat Claude rates depend on this sentence, which sat outside every window.
+  const contracts = await readProviderContracts();
+  const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
+    .resources.find((entry) => entry.kind === "pricing");
+  const padding = "unchanged ".repeat(40);
+  const page = (rule) => normalizeDocument(`<main>${padding} Claude 4.6 and later models include the full 1M token context window ${rule}. ${padding}</main>`);
+  assert.notEqual(semanticFingerprint(page("at a premium"), requiredMarkers), semanticFingerprint(page("at standard pricing"), requiredMarkers));
+  assert.ok(requiredMarkers.includes("include the full 1M token context window at standard pricing"));
 });
 
 test("every rate the Anthropic pricing page publishes for a priced model sits inside a semantic window", async () => {

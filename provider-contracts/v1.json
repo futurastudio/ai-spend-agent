@@ -47,17 +47,17 @@
             "including cached and cache-write tokens",
             "across text, audio, and image outputs",
             "GET /organization/costs",
-            "OrganizationCostsResult object {",
-            "OrganizationUsageCompletionsResult object {",
             "input_cache_write_30m_tokens",
             "input_cache_write_12h_tokens",
             "api_source",
             "this field provides the user ID of the grouped costs result",
-            "value : optional number The numeric value of the cost",
-            "Lowercase ISO-4217 currency"
+            "Lowercase ISO-4217 currency",
+            "OrganizationCostsResult",
+            "OrganizationUsageCompletionsResult",
+            "The numeric value of the cost"
           ],
-          "semanticSha256": "eba7ed3ebea5a51600f6fd0c15b91532419e90242eedc24100a979adaab52c4b",
-          "contentSha256": "4554594e094c3d1f46db39fd92f858305d1a3d25204632cb987e06568e2cc7d6"
+          "semanticSha256": "b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4",
+          "contentSha256": "7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e"
         },
         {
           "kind": "pricing",
@@ -192,12 +192,12 @@
           "requiredMarkers": [
             "GET /v1/organizations/cost_report [legacy]",
             "this endpoint is part of the legacy usage and cost api",
-            "group_by : optional array of \"description\" or \"workspace_id\"",
-            "betacostreport object { data , has_more , next_page }",
-            "\"results\" : [ { \"amount\" : \"123.78912\" , \"context_window\" : \"0-200k\" , \"cost_type\" : \"tokens\" , \"currency\" : \"USD\"",
-            "\"service_tier\" : \"standard\" , \"speed\" : \"standard\" , \"token_type\""
+            "optional array of \"description\" or \"workspace_id\"",
+            "betacostreport",
+            "context_window",
+            "token_type"
           ],
-          "semanticSha256": "1b89c7bec3dc4e62a000dc94e45bffb69ece201d51db0994499e026ff743b9f2",
+          "semanticSha256": "cead7c2245d82f0b7f60a0dfe01390c412c6e09b360a288d89d6c159f13b4abd",
           "contentSha256": "b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7"
         },
         {
@@ -206,13 +206,13 @@
           "requiredMarkers": [
             "GET /v1/organizations/usage_report/messages [legacy]",
             "this endpoint is part of the legacy usage and cost api",
-            "group_by : optional array of \"account_id\" or \"api_key_id\" or \"context_window\" or 6 more",
-            "service_tiers : optional array of betaanalyticsservicetier",
-            "betamessagesusagereport object { data , has_more , next_page }",
-            "\"cache_read_input_tokens\" : 200 , \"context_window\" : \"0-200k\" , \"inference_geo\" : \"global\"",
-            "\"service_tier\" : \"standard\" , \"speed\" : \"standard\" , \"uncached_input_tokens\" : 1500"
+            "optional array of \"account_id\" or \"api_key_id\" or \"context_window\" or 6 more",
+            "array of betaanalyticsservicetier",
+            "betamessagesusagereport",
+            "cache_read_input_tokens",
+            "uncached_input_tokens"
           ],
-          "semanticSha256": "f2a93d7e9449d94df204c0498811aaf8123c70e71f47375f3dbdd54e122429b9",
+          "semanticSha256": "6c718a86d49a55d881dc2e26d57775330e872e94913c450f17a006e8b61394a0",
           "contentSha256": "c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8"
         },
         {
@@ -221,13 +221,15 @@
           "requiredMarkers": [
             "GET /v1/organizations/usage_report/claude_code",
             "UTC date in YYYY-MM-DD format. Returns metrics for this single day only.",
-            "\"date\" : \"2025-08-08T00:00:00Z\"",
-            "\"is_remote\" : false",
-            "\"estimated_cost\" : { \"amount\" : 186 , \"currency\" : \"USD\" }",
-            "\"subscription_type\" : \"enterprise\"",
-            "\"has_more\" : true"
+            "betaclaudecodeusagereport",
+            "core_metrics",
+            "2025-08-08T00:00:00Z",
+            "is_remote",
+            "estimated_cost",
+            "tool_actions",
+            "subscription_type"
           ],
-          "semanticSha256": "296c1cab0bad6d4c7ce98ea24de67352197de34b0bae9f8303635c4e929f2489",
+          "semanticSha256": "9806b7ee41ef3bfea69353fb3b9110189b0e488e5fd90814109599c0e9c50072",
           "contentSha256": "dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0"
         },
         {
@@ -249,9 +251,10 @@
             "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
             "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok",
             "Claude Opus 4.5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
-            "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok"
+            "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok",
+            "include the full 1M token context window at standard pricing"
           ],
-          "semanticSha256": "3f93e65c1ee0212ee63bec3d47f19fe337dc40191b0068262bd88249883b513c",
+          "semanticSha256": "9fee3d1943df2f37ff877659fff7625fa20ef52ff37cd3846da182c760eff09e",
           "contentSha256": "d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c"
         }
       ]
