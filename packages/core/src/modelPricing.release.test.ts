@@ -61,6 +61,21 @@ describe("2026-11-06 reviewed GPT-5.6 Sol prices", () => {
     }
     expect(solEvidence.basis).toContain("has NOT published the rate that follows the promotion");
   });
+
+  it("cites the Codex pricing page, which still says at least through November 21", () => {
+    expect(solEvidence.sources).toContain("https://learn.chatgpt.com/docs/pricing.md");
+    expect(solEvidence.pageContentSha256["https://learn.chatgpt.com/docs/pricing.md"]).toMatch(/^[a-f0-9]{64}$/);
+    expect(solEvidence.basis).toContain("at least through November 21, 2026, and lists 100, 10 and 500 credits");
+  });
+
+  // Dated on purpose. Reports print these rates under "published API rates", and OpenAI has not
+  // published them, so a person has to look again by the date the evidence names. From the next
+  // UTC day this fails in every run until the inference is replaced or a new date is recorded.
+  it("has its inferred later rates re-checked by the date the evidence names", () => {
+    const { by, action } = solEvidence.laterRatesRecheck as { by: string; action: string };
+    expect(by).toBe("2026-12-01");
+    expect(new Date().toISOString().slice(0, 10) <= by, `The re-check of gpt-5.6-sol was due by ${by}. ${action}`).toBe(true);
+  });
 });
 
 describe("2026-11-04 reviewed Gemini 2.5 Pro prices", () => {

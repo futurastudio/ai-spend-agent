@@ -85,7 +85,9 @@ const pricingRules: PricingRule[] = [
     }
   },
   { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
-  { match: /^claude-opus-4(-[01])?$/i, inputPerM: 15, outputPerM: 75 },
+  // Exact and dated IDs of Opus 4 and 4.1: the deprecations page lists claude-opus-4-20250514
+  // and claude-opus-4-1-20250805. Both models are retired; older transcripts still carry them.
+  { match: /^claude-opus-4(-[01])?(-\d{8})?$/i, inputPerM: 15, outputPerM: 75 },
   { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
@@ -150,7 +152,9 @@ const pricingRules: PricingRule[] = [
     // promotion, $5 / $0.50 / $30, which are also what its stated 20% input and
     // 33% output reductions give. OpenAI names no time zone and "until" does not
     // settle November 30 itself: that day stays promotional, and the change
-    // applies from the next UTC day, as usage is bucketed.
+    // applies from the next UTC day, as usage is bucketed. The later rates are an
+    // inference, not a published price: the evidence names a re-check by
+    // 2026-12-01, and a release test goes red the next day until it is done.
     match: /^gpt-5\.6-sol$/i,
     inputPerM: 4,
     outputPerM: 20,

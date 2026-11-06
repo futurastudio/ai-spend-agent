@@ -49,6 +49,26 @@ describe("model pricing coverage", () => {
     }
   );
 
+  // Official Anthropic pricing reviewed 2026-11-06. The dated IDs are the ones its deprecations
+  // page lists; Opus 4.5 and later keep their own rule, and an unknown suffix stays unpriced.
+  it.each(["claude-opus-4", "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-20250514", "claude-opus-4-1-20250805"])(
+    "%s uses the published Opus 4 and 4.1 prices",
+    (model) => {
+      expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 0 })).toBe(15);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(75);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000 })).toBe(18.75);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000 })).toBe(30);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(1.5);
+    }
+  );
+
+  it("does not stretch the Opus 4 and 4.1 prices to other IDs", () => {
+    expect(estimateTokenCostUsd("claude-opus-4-5-20251101", usage)).toBe(7.5);
+    expect(estimateTokenCostUsd("claude-opus-4-2", usage)).toBeUndefined();
+    expect(estimateTokenCostUsd("claude-opus-4-1-preview", usage)).toBeUndefined();
+    expect(estimateTokenCostUsd("claude-opus-4-1-2025", usage)).toBeUndefined();
+  });
+
   it.each([
     ["claude-sonnet-5", 0.2],
     ["claude-sonnet-5-20261001", 0.2],

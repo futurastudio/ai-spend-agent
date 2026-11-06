@@ -3545,6 +3545,8 @@ describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
     expect(amount(sessionOn("2026-12-01T00:00:00.000Z", "2026-12-01T10:20:00.000Z"))).toBeCloseTo(0.73, 4);
     // One cumulative slice, dated at its last activity: a session running across the change takes the later rates.
     expect(amount(sessionOn("2026-11-30T23:50:00.000Z", "2026-12-01T00:10:00.000Z"))).toBeCloseTo(0.73, 4);
+    // So does a session resumed in December: weeks of November tokens take the later rates whole.
+    expect(amount(sessionOn("2026-11-09T10:00:00.000Z", "2026-12-01T08:00:00.000Z"))).toBeCloseTo(0.73, 4);
   });
 
   it("prices a >272K cumulative Codex session at the base tier when every request stayed under the threshold", () => {

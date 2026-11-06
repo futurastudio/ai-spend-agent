@@ -16,13 +16,18 @@ historical untagged exception.
   cache-heavy Codex day. OpenAI has not published the rate that follows the
   promotion: these are the rates it listed before the promotion, which match
   the 20% input and 33% output reductions it describes, and they will be
-  revisited if it says otherwise. These are API-equivalent estimates of local
-  usage; provider-reported cost is unaffected. As with Gemini 4 Argon and
-  Gemini 2.5 Pro, the estimator never prices `gpt-5.6-sol` without a usage date.
-  Codex calls always carry one, their last activity, so a session running
-  across midnight into December takes the later rates as one slice.
-  `PRICING_TABLE_AS_OF` moves to 2026-11-06, with evidence in
-  `provider-contracts/model-pricing-2026-11-06.json`.
+  re-checked by December 1 and replaced if it says otherwise. These are
+  API-equivalent estimates of local usage; provider-reported cost is unaffected.
+  As with Gemini 4 Argon and Gemini 2.5 Pro, the estimator never prices
+  `gpt-5.6-sol` without a usage date. Codex calls always carry one, their last
+  activity, and a report prices a session as one slice at that date, so a session
+  still active on December 1 takes the later rates whole, including one resumed
+  that day with weeks of November tokens. `PRICING_TABLE_AS_OF` moves to
+  2026-11-06, with evidence in `provider-contracts/model-pricing-2026-11-06.json`.
+- Price the dated IDs of Claude Opus 4 and 4.1 (`claude-opus-4-20250514`,
+  `claude-opus-4-1-20250805`) at their published $15 input and $75 output per
+  million tokens, as their aliases already were. Older transcripts carrying
+  those IDs used to count as missing.
 
 ## 0.9.16 (unreleased)
 
