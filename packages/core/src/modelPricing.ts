@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-04";
+export const PRICING_TABLE_AS_OF = "2026-11-06";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -141,7 +141,16 @@ const pricingRules: PricingRule[] = [
   // "Prompts with >272K input tokens are priced at 2x input and 1.5x output for
   // the full request." Cached input scales with the 2x input leg.
   {
-    // developers.openai.com/api/docs/models/gpt-5.6-sol, 2026-08-25
+    // developers.openai.com/api/docs/models/gpt-5.6-sol, 2026-08-25.
+    // Reviewed 2026-11-06. Retained evidence:
+    // provider-contracts/model-pricing-2026-11-06.json. $4 / $0.40 / $20 are
+    // promotional: "available until November 30, 2026" (it read "at least
+    // through November 21" until November 2026). OpenAI names no rate for
+    // afterwards, so the schedule returns to the rates published before the
+    // promotion, $5 / $0.50 / $30, which are also what its stated 20% input and
+    // 33% output reductions give. OpenAI names no time zone and "until" does not
+    // settle November 30 itself: that day stays promotional, and the change
+    // applies from the next UTC day, as usage is bucketed.
     match: /^gpt-5\.6-sol$/i,
     inputPerM: 4,
     outputPerM: 20,
@@ -151,7 +160,21 @@ const pricingRules: PricingRule[] = [
       inputPerM: 8,
       outputPerM: 30,
       cacheReadPerM: 0.8
-    }
+    },
+    scheduledRates: [
+      {
+        from: "2026-12-01",
+        inputPerM: 5,
+        outputPerM: 30,
+        cacheReadPerM: 0.5,
+        abovePromptTokens: {
+          threshold: 272_000,
+          inputPerM: 10,
+          outputPerM: 45,
+          cacheReadPerM: 1
+        }
+      }
+    ]
   },
   {
     // developers.openai.com/api/docs/models/gpt-5.6-terra, 2026-08-25

@@ -6,6 +6,62 @@ const evidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/mo
 const sonnetEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-08.json", import.meta.url), "utf8"));
 const reviewedEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-18.json", import.meta.url), "utf8"));
 const geminiEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-04.json", import.meta.url), "utf8"));
+const solEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-06.json", import.meta.url), "utf8"));
+
+describe("2026-11-06 reviewed GPT-5.6 Sol prices", () => {
+  type Rates = {
+    from?: string; input: number; output: number; cacheRead: number;
+    abovePromptTokens: number; aboveInput: number; aboveOutput: number; aboveCacheRead: number;
+  };
+  const model = solEvidence.models.find((entry: { id: string }) => entry.id === "gpt-5.6-sol");
+  const [change] = model.scheduledRates as Rates[];
+  const firstDay = `${change!.from}T00:00:00.000Z`;
+  // The last UTC millisecond of the promotion.
+  const lastBefore = new Date(Date.parse(firstDay) - 1).toISOString();
+  // One million tokens of one component, with the request tier fixed by the given prompt.
+  const price = (component: Partial<TokenUsage>, usageAt: string, tierPromptTokens: number) =>
+    estimateTokenCostsUsd(model.id, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], usageAt);
+
+  it("is the review date of the price table", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(solEvidence.retrievedAt);
+  });
+
+  it.each([
+    ["through", lastBefore, model as Rates],
+    ["after", firstDay, change!]
+  ])("matches the retained rates and long-context tier %s the promotion", (_side, usageAt, rates) => {
+    expect(promptTierThreshold(model.id, usageAt)).toBe(rates.abovePromptTokens);
+    const base = rates.abovePromptTokens;
+    const above = rates.abovePromptTokens + 1;
+    expect(price({ inputTokens: 1_000_000 }, usageAt, base)).toBe(rates.input);
+    expect(price({ outputTokens: 1_000_000 }, usageAt, base)).toBe(rates.output);
+    expect(price({ cacheReadTokens: 1_000_000 }, usageAt, base)).toBe(rates.cacheRead);
+    expect(price({ inputTokens: 1_000_000 }, usageAt, above)).toBe(rates.aboveInput);
+    expect(price({ outputTokens: 1_000_000 }, usageAt, above)).toBe(rates.aboveOutput);
+    expect(price({ cacheReadTokens: 1_000_000 }, usageAt, above)).toBe(rates.aboveCacheRead);
+  });
+
+  it("carries exactly the retained schedule", () => {
+    const rule = findPricingRule(model.id)!;
+    expect(rule.scheduledRates?.map(({ from, inputPerM, outputPerM, cacheReadPerM, abovePromptTokens: tier }) => ({
+      from, input: inputPerM, output: outputPerM, cacheRead: cacheReadPerM, abovePromptTokens: tier?.threshold,
+      aboveInput: tier?.inputPerM, aboveOutput: tier?.outputPerM, aboveCacheRead: tier?.cacheReadPerM
+    }))).toEqual(model.scheduledRates);
+  });
+
+  it("holds the published relations the inferred later rates rest on", () => {
+    // "a 20% reduction in input pricing and a 33% reduction in output pricing".
+    expect(1 - model.input / change!.input).toBeCloseTo(0.2, 5);
+    expect(1 - model.output / change!.output).toBeCloseTo(0.33, 2);
+    // ">272K input tokens are priced at 2x input and 1.5x output for the full request".
+    for (const rates of [model as Rates, change!]) {
+      expect(rates.aboveInput).toBe(rates.input * 2);
+      expect(rates.aboveOutput).toBe(rates.output * 1.5);
+      expect(rates.aboveCacheRead).toBe(rates.cacheRead * 2);
+    }
+    expect(solEvidence.basis).toContain("has NOT published the rate that follows the promotion");
+  });
+});
 
 describe("2026-11-04 reviewed Gemini 2.5 Pro prices", () => {
   type Rates = { from?: string; input: number; output: number; cacheRead: number };
@@ -17,8 +73,7 @@ describe("2026-11-04 reviewed Gemini 2.5 Pro prices", () => {
   const price = (component: Partial<TokenUsage>, usageAt: string, tierPromptTokens: number) =>
     estimateTokenCostsUsd(model.id, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], usageAt);
 
-  it("matches the retained official-price evidence and review date before the first change", () => {
-    expect(PRICING_TABLE_AS_OF).toBe(geminiEvidence.retrievedAt);
+  it("matches the retained official-price evidence before the first change", () => {
     const before = lastBefore(changes[0]!.from!);
     expect(promptTierThreshold(model.id, before)).toBe(model.abovePromptTokens);
     const base = model.abovePromptTokens;

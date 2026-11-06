@@ -3525,6 +3525,28 @@ describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
     }))
   ].join("\n");
 
+  it("prices a Codex session by the UTC day of its last activity across the end of Sol's promotion", () => {
+    const sessionOn = (first: string, second: string) => codexRollout([
+      {
+        at: first,
+        total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+        last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+      },
+      {
+        at: second,
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const amount = (rollout: string) => aggregateCalls(parseCodexRollout(rollout))[0]!.amountUsd;
+    // 100000*4 + 1000*20 + 400000*0.4, per million.
+    expect(amount(sessionOn("2026-11-30T10:10:00.000Z", "2026-11-30T23:59:59.000Z"))).toBeCloseTo(0.58, 4);
+    // 100000*5 + 1000*30 + 400000*0.5, per million.
+    expect(amount(sessionOn("2026-12-01T00:00:00.000Z", "2026-12-01T10:20:00.000Z"))).toBeCloseTo(0.73, 4);
+    // One cumulative slice, dated at its last activity: a session running across the change takes the later rates.
+    expect(amount(sessionOn("2026-11-30T23:50:00.000Z", "2026-12-01T00:10:00.000Z"))).toBeCloseTo(0.73, 4);
+  });
+
   it("prices a >272K cumulative Codex session at the base tier when every request stayed under the threshold", () => {
     // The founder's real shape: cumulative prompt (500K) clears the 272K
     // per-request tier on cache reads alone, but no single turn did — so the

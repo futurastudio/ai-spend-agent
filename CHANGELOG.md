@@ -5,6 +5,25 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- Price GPT-5.6 Sol (`gpt-5.6-sol`) by the UTC day of each call. OpenAI now
+  says Sol's promotional pricing is available until November 30, 2026; it used
+  to say at least through November 21. Usage through 2026-11-30 keeps $4 input,
+  $0.40 cached input and $20 output per million tokens ($8, $0.80 and $30 for
+  prompts over 272,000 tokens). From 2026-12-01 it is estimated at $5, $0.50
+  and $30 ($10, $1 and $45 over 272,000 tokens), about 27% more on a
+  cache-heavy Codex day. OpenAI has not published the rate that follows the
+  promotion: these are the rates it listed before the promotion, which match
+  the 20% input and 33% output reductions it describes, and they will be
+  revisited if it says otherwise. These are API-equivalent estimates of local
+  usage; provider-reported cost is unaffected. As with Gemini 4 Argon and
+  Gemini 2.5 Pro, the estimator never prices `gpt-5.6-sol` without a usage date.
+  Codex calls always carry one, their last activity, so a session running
+  across midnight into December takes the later rates as one slice.
+  `PRICING_TABLE_AS_OF` moves to 2026-11-06, with evidence in
+  `provider-contracts/model-pricing-2026-11-06.json`.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
