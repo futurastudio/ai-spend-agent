@@ -1,0 +1,723 @@
+import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
+import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAgentPlanFacts, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
+import { runCli } from "./index.js";
+import {
+  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePlanFacts, prepareWorkspacePush,
+  workspaceCanonicalJson, workspaceDomainHash, workspaceFactKey, WORKSPACE_ORIGIN, WORKSPACE_PLAN_REFRESH_DAYS,
+  type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceState, type WorkspaceTransport, type WorkspaceTransportResult
+} from "./workspaceConnect.js";
+
+/**
+ * One run of `workspace push` gets a machine's subscription tier to the
+ * Workspace. The sign-in reader stays real and is wrapped in a spy, so "reads no
+ * file" is observed where the command calls it.
+ */
+vi.mock("@agent-finops/core", async (original) => {
+  const actual = await original<typeof import("@agent-finops/core")>();
+  return { ...actual, readAgentPlanFacts: vi.fn(actual.readAgentPlanFacts) };
+});
+const readPlanFiles = vi.mocked(readAgentPlanFacts);
+
+const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "../../core/src/fixtures/local-agent-formats");
+const claudePlanFixture = join(fixtureRoot, "claude-code-plan-v1/claude.json");
+const codexPlanFixture = join(fixtureRoot, "codex-plan-v1/auth.json");
+const codexPlanTokenParts = join(fixtureRoot, "codex-plan-v1/id-token-parts.json");
+const ref = (char: string) => `oref_${char.repeat(43)}`;
+const now = "2026-09-20T12:00:00.000Z";
+const DAY = 86400000;
+const later = (from: string, ms: number) => new Date(Date.parse(from) + ms).toISOString();
+type TokenParts = { header: Record<string, unknown>; payload: Record<string, unknown>; signature: string };
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+
+/** The fixture keeps the id token as decoded parts; the assembled token exists only in a throwaway home. */
+async function assembledCodexAuth(): Promise<{ auth: { tokens: Record<string, string> }; token: string; parts: TokenParts }> {
+  const auth = JSON.parse(await readFile(codexPlanFixture, "utf8")) as { tokens: Record<string, string> };
+  const parts = JSON.parse(await readFile(codexPlanTokenParts, "utf8")) as TokenParts;
+  const token = `${encode(parts.header)}.${encode(parts.payload)}.${parts.signature}`;
+  auth.tokens.id_token = token;
+  return { auth, token, parts };
+}
+/** Every identity or credential string the fixtures carry, to grep against what leaves the sign-in files. */
+async function fixtureSecrets(): Promise<string[]> {
+  const claude = JSON.parse(await readFile(claudePlanFixture, "utf8")) as { oauthAccount: Record<string, unknown> };
+  const { auth: codex, token, parts } = await assembledCodexAuth();
+  const payload = parts.payload;
+  const authClaims = payload["https://api.openai.com/auth"] as Record<string, unknown>;
+  // Field names are checked as JSON keys: the agreed `source` string legitimately names `id_token`.
+  const keys = ["accountUuid", "emailAddress", "organizationUuid", "displayName", "id_token", "access_token", "refresh_token", "email",
+    "chatgpt_account_id", "chatgpt_user_id"].map(key => `"${key}":`);
+  const values = [
+    ...["accountUuid", "emailAddress", "organizationUuid", "displayName"].map(key => claude.oauthAccount[key]),
+    ...Object.values(codex.tokens), ...token.split("."),
+    payload.email, payload.sub, payload.iss, authClaims.chatgpt_account_id, authClaims.chatgpt_user_id,
+    ...keys, "fixture-", "eyJ", "@"
+  ];
+  expect(values.every(value => typeof value === "string" && value.length > 0)).toBe(true);
+  return values as string[];
+}
+
+const evidence = {
+  inputTokens: "observed", outputTokens: "observed", cacheReadTokens: "observed",
+  cacheWriteTokens: "not_separately_reported", thoughtTokens: "not_separately_reported", toolTokens: "not_separately_reported",
+  calculatedTotalTokens: "calculated_partial", reportedTotalTokens: "not_reported"
+} as const;
+const call = (overrides: Partial<LocalAgentCall> = {}): LocalAgentCall => ({
+  agent: "codex", sessionId: "private-session", callId: "call-one", model: "gpt-5",
+  timestamp: "2026-09-18T10:00:00.000Z", startedAt: "2026-09-18T10:00:00.000Z", usageScope: "turn",
+  workingDirectory: "/private/repo", project: "repo", usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 3 },
+  tokenComponentEvidence: evidence, ...overrides
+});
+const nextDay = call({ callId: "call-two", timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" });
+const loaded = (calls: LocalAgentCall[]) => async () => ({
+  calls, records: [], diagnostics: [], sourceScans: [], filesParsed: 1, agentsDetected: ["codex" as const]
+});
+const expectedPlanFacts = (observedAt = now): AgentPlanFact[] => [
+  { kind: "agent_plan", agent: "claude_code", tier: "claude_max_20x", tierRaw: "default_claude_max_20x",
+    source: "claude_json.oauthAccount.organizationRateLimitTier", observedAt, activeUntil: null },
+  { kind: "agent_plan", agent: "codex", tier: "chatgpt_pro", tierRaw: "pro",
+    source: "codex_auth.id_token.chatgpt_plan_type", observedAt, activeUntil: "2026-12-01T00:00:00.000Z" }
+];
+const parse = (body: string) => JSON.parse(body) as WorkspaceEnvelope;
+
+type Scripted = "pass" | "lost_before_commit" | "lost_after_commit" | { refuse: string };
+const WORKSPACE_CONTRACT_SOURCES = new Set(["claude_json.oauthAccount.organizationRateLimitTier", "codex_auth.id_token.chatgpt_plan_type"]);
+
+/**
+ * The push endpoint as a CLI meets it: the contract's shape check, the device
+ * signature, the manifest, idempotent replay before any age or sequence check, a
+ * single-use nonce, a monotonic high water that only an ACCEPT moves, the ten-minute
+ * age limit, the strict eight-key receipt, and the capability on a response header
+ * of an ACCEPT alone. A refusal writes nothing.
+ */
+function workspaceServer(device: WorkspaceDevice) {
+  const publicKey = createPublicKey(device.privateKeyPem);
+  const batches = new Map<string, { payload: string; receipt: Record<string, unknown> }>();
+  const nonces = new Set<string>(), plans = new Map<string, string>();
+  const headers = (announce: string | null): Record<string, string> => ({ "content-type": "application/json", ...(announce === null ? {} : { "x-tilden-push-capabilities": announce }) });
+  const refuse = (reason: string): WorkspaceTransportResult => ({ status: 409, body: { state: "refused", reason }, headers: headers(null) });
+  const server = {
+    requests: [] as string[], highWater: BigInt(device.sequence), clock: now, announce: "agentPlanFacts=1" as string | null, script: [] as Scripted[],
+    transport: (async (_path, payload) => {
+      server.requests.push(payload);
+      const scripted = server.script.shift() ?? "pass";
+      if (scripted === "lost_before_commit") throw Error("lost reply");
+      if (typeof scripted === "object") return refuse(scripted.refuse);
+      const reply = admit(payload);
+      if (scripted === "lost_after_commit") throw Error("lost reply");
+      return reply;
+    }) as WorkspaceTransport
+  };
+  const admit = (payload: string): WorkspaceTransportResult => {
+    const envelope = parse(payload);
+    const { signature, ...signed } = envelope, { manifestHash, ...body } = signed;
+    const agents = envelope.facts.filter(isWorkspaceAgentPlanFact).map(fact => fact.agent);
+    if (new Set(agents).size !== agents.length || envelope.facts.some(fact => isWorkspaceAgentPlanFact(fact) && !WORKSPACE_CONTRACT_SOURCES.has(fact.source))) return refuse("invalid");
+    if (!verify(null, Buffer.from(workspaceCanonicalJson(signed as never)), publicKey, Buffer.from(signature.value, "base64url")))
+      return { status: 503, body: { state: "unavailable", retry: "same_envelope_only" }, headers: headers(null) };
+    if (workspaceDomainHash("tilden:local-session-facts-manifest:v1", body as never) !== manifestHash) return refuse("invalid");
+    const prior = batches.get(envelope.idempotencyKey);
+    if (prior) return prior.payload === payload ? { status: 200, body: prior.receipt, headers: headers(server.announce) } : refuse("conflict");
+    if (BigInt(envelope.sequence) <= server.highWater || nonces.has(envelope.nonce)) return refuse("conflict");
+    const age = Date.parse(server.clock) - Date.parse(envelope.generatedAt);
+    if (age > 600000 || age < -120000) return refuse("expired");
+    let introduced = 0, replaced = 0, unchanged = 0;
+    for (const fact of envelope.facts) {
+      if (!isWorkspaceAgentPlanFact(fact)) { introduced++; continue; }
+      const stored = plans.get(fact.agent);
+      if (stored === undefined) introduced++;
+      else if (stored >= fact.observedAt) { unchanged++; continue; }
+      else replaced++;
+      plans.set(fact.agent, fact.observedAt);
+    }
+    const receipt = { state: "accepted", batchId: envelope.batchId, manifestHash, factCount: envelope.facts.length, introduced, replaced, unchanged, acceptedAt: server.clock };
+    batches.set(envelope.idempotencyKey, { payload, receipt });
+    nonces.add(envelope.nonce);
+    server.highWater = BigInt(envelope.sequence);
+    return { status: 200, body: receipt, headers: headers(server.announce) };
+  };
+  return server;
+}
+
+/** A paired machine whose home also holds the two agents' sign-in files, copied from the gated fixtures. */
+async function machine(options: { planFiles?: boolean; capability?: boolean; expiresAt?: string } = {}) {
+  const home = await mkdtemp(join(tmpdir(), "aibill-tier-first-"));
+  const key = generateKeyPairSync("ed25519");
+  const device: WorkspaceDevice = { origin: WORKSPACE_ORIGIN, grantId: ref("a"), keyId: ref("b"), grantRevision: "1", connectionEpoch: "1",
+    sequence: "0", token: Buffer.alloc(32, 1).toString("base64url"), privateKeyPem: key.privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    collectionNotBefore: "2026-09-01T00:00:00.000Z", authorityStartsAt: "2026-09-01T00:00:00.000Z", expiresAt: options.expiresAt ?? "2027-09-01T00:00:00.000Z" };
+  const state: WorkspaceState = { version: 1, device, facts: {}, pending: null, lastAcceptedAt: null, disconnect: null,
+    ...(options.capability === undefined ? {} : { capabilities: { agentPlanFacts: options.capability } }) };
+  const privateDir = join(home, ".aibill");
+  await mkdir(privateDir, { mode: 0o700 });
+  const statePath = join(privateDir, "workspace-device.json");
+  await writeFile(statePath, workspaceCanonicalJson(state as never), { mode: 0o600 });
+  if (options.planFiles !== false) {
+    await cp(claudePlanFixture, join(home, ".claude.json"));
+    await mkdir(join(home, ".codex"));
+    await writeFile(join(home, ".codex", "auth.json"), JSON.stringify((await assembledCodexAuth()).auth, null, 2));
+  }
+  const server = workspaceServer(device);
+  const push = async (calls: LocalAgentCall[], run: { at?: string; answers?: string[]; load?: () => Promise<never>; transport?: WorkspaceTransport } = {}) => {
+    const at = run.at ?? now, before = server.requests.length, messages: string[] = [], answers = run.answers ? [...run.answers] : undefined;
+    server.clock = at;
+    const result = await runCli(["workspace", "push"], { homeDirectory: home, interactive: true, workspaceNow: at, workspaceLoadCalls: run.load ?? loaded(calls),
+      consentRead: async (message: string) => { messages.push(message); return answers ? answers.shift() ?? "n" : "y"; },
+      workspaceTransport: run.transport ?? server.transport });
+    return { ...result, messages, sent: server.requests.slice(before) };
+  };
+  const state_ = async () => JSON.parse(await readFile(statePath, "utf8")) as WorkspaceState;
+  const status = async () => (await runCli(["workspace", "status"], { homeDirectory: home })).stdout;
+  return { home, device, statePath, server, push, state: state_, status };
+}
+const setClaudeTier = (home: string, organizationRateLimitTier: string) => writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationType: "claude_max", organizationRateLimitTier } }));
+const accepted = (sentAt: string) => ({ claude_code: { tier: "claude_max_20x", tierRaw: "default_claude_max_20x", sentAt }, codex: { tier: "chatgpt_pro", tierRaw: "pro", sentAt } });
+
+beforeEach(() => {
+  // Other suites point these at missing files; this one reads the fixture home.
+  delete process.env.AI_SPEND_CLAUDE_CONFIG;
+  delete process.env.AI_SPEND_CODEX_AUTH;
+  readPlanFiles.mockClear();
+});
+afterEach(() => vi.unstubAllEnvs());
+
+describe("the first push learns the capability and the same command sends the tier", () => {
+  it("sends the session batch, then a previewed tier-only batch at the next sequence, and records only what was accepted", async () => {
+    const m = await machine();
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(run.stdout).toContain("Workspace accepted 1 local session facts.");
+    expect(run.stdout).toContain("Workspace accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro).");
+
+    expect(run.sent).toHaveLength(2);
+    const [session, tier] = run.sent.map(parse);
+    expect(session!.sequence).toBe("1");
+    expect(session!.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(tier!.sequence).toBe("2");
+    expect(tier!.facts).toEqual(expectedPlanFacts());
+    expect(tier!.nonce).not.toBe(session!.nonce);
+
+    // The session preview names no tier: none was read when it was built. The tier has its own preview of its exact payload.
+    expect(run.messages).toHaveLength(2);
+    expect(run.messages[0]).not.toContain("Subscription tier");
+    expect(run.messages[1]).toContain(run.sent[1]!);
+    expect(run.messages[1]).toContain("Workspace accepted that batch and announced it takes subscription tier facts.");
+    expect(run.messages[1]).toContain("This batch carries only the subscription tier");
+    expect(run.messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro): the tier id and raw tier string only, no account, email or token.");
+    expect(run.messages[1]).toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out.");
+    expect(run.messages[1]).not.toContain("Machine tokens");
+    expect(run.messages[1]).not.toContain("Excluded calls");
+
+    expect(readPlanFiles).toHaveBeenCalledTimes(1);
+    const state = await m.state();
+    expect(state.pending).toBeNull();
+    expect(state.device.sequence).toBe("2");
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
+    expect(state.agentPlansAccepted).toEqual(accepted(now));
+    // Plan facts have no revision: only the session fact enters the acknowledged ledger.
+    expect(Object.keys(state.facts)).toEqual([workspaceFactKey(session!.facts.filter(isWorkspaceSessionFact)[0]!)]);
+  });
+
+  it("follows up after a retained session batch too: the ACCEPT on its identical resend is what announced the capability", async () => {
+    const m = await machine();
+    m.server.script = ["lost_before_commit"];
+    const lost = await m.push([call()]);
+    expect(lost.exitCode).toBe(1);
+    const resend = await m.push([], { load: async () => { throw Error("unexpected local read"); } });
+    expect(resend.exitCode).toBe(0);
+    expect(resend.sent[0]).toBe(lost.sent[0]);
+    expect(parse(resend.sent[1]!).facts).toEqual(expectedPlanFacts());
+    expect(resend.messages[1]).toContain("Exact outgoing subscription tier facts");
+    expect(resend.messages[1]).not.toContain("identical retained signed batch");
+  });
+
+  it("offers nothing when an announcing ACCEPT finds no sign-in file", async () => {
+    const m = await machine({ planFiles: false });
+    const run = await m.push([call()]);
+    expect(run.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    expect(run.sent).toHaveLength(1);
+    expect(run.messages).toHaveLength(1);
+    expect((await m.state()).agentPlansAccepted).toBeUndefined();
+  });
+
+  it("reports the follow-up's lost reply without taking back the accepted session batch, and resends it identically", async () => {
+    const m = await machine();
+    m.server.script = ["pass", "lost_after_commit"];
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("Workspace accepted 1 local session facts.");
+    expect(run.stdout).not.toContain("accepted the subscription tier");
+    expect(run.stderr).toContain("Push outcome is unknown");
+    const held = await m.state();
+    expect(held.pending?.state).toBe("uncertain");
+    expect(held.device.sequence).toBe("1");
+    expect(held.agentPlansAccepted).toBeUndefined();
+
+    const resend = await m.push([call()], { load: async () => { throw Error("unexpected local read"); } });
+    expect(resend.exitCode).toBe(0);
+    expect(resend.sent).toEqual([run.sent[1]]);
+    expect(resend.stdout).toContain("accepted the subscription tier");
+    expect((await m.state()).agentPlansAccepted).toEqual(accepted(now));
+  });
+});
+
+describe("consent", () => {
+  it("declining the follow-up keeps the accepted session batch, retains nothing, and the next push offers the tier again", async () => {
+    const m = await machine();
+    const declined = await m.push([call()], { answers: ["y", "n"] });
+    expect(declined.exitCode).toBe(0);
+    expect(declined.stdout).toContain("Workspace accepted 1 local session facts.");
+    expect(declined.stdout).toContain("Subscription tier not sent. The next workspace push offers it again; set AIBILL_NO_PLAN_TIER=1 to stop.");
+    expect(declined.sent).toHaveLength(1);
+    expect(declined.messages).toHaveLength(2);
+    const after = await m.state();
+    expect(after.pending).toBeNull();
+    expect(after.device.sequence).toBe("1");
+    expect(after.capabilities).toEqual({ agentPlanFacts: true });
+    expect(after.agentPlansAccepted).toBeUndefined();
+
+    const againDeclined = await m.push([call()], { answers: ["n"] });
+    expect(againDeclined.stdout).toBe("Subscription tier not sent. The next workspace push offers it again; set AIBILL_NO_PLAN_TIER=1 to stop.");
+    expect(againDeclined.sent).toEqual([]);
+    expect((await m.state()).pending).toBeNull();
+
+    const yes = await m.push([call()]);
+    expect(yes.stdout).toBe("Workspace accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro). This is a plan input, not a billed cost.");
+    expect(parse(yes.sent[0]!).facts).toEqual(expectedPlanFacts());
+    expect(parse(yes.sent[0]!).sequence).toBe("2");
+  });
+
+  it("an unanswered prompt is a no: nothing is sent or retained", async () => {
+    const m = await machine({ capability: true });
+    const run = await runCli(["workspace", "push"], { homeDirectory: m.home, interactive: true, workspaceNow: now, workspaceLoadCalls: loaded([]),
+      consentRead: async () => undefined, workspaceTransport: m.server.transport });
+    expect(run.stdout).toContain("Subscription tier not sent.");
+    expect(m.server.requests).toEqual([]);
+    expect((await m.state()).pending).toBeNull();
+  });
+});
+
+describe("a push with no changed session facts", () => {
+  it("sends nothing when the tier was accepted and has not changed: the existing message stands and the state file is untouched", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    const before = await readFile(m.statePath, "utf8");
+    const idle = await m.push([call()]);
+    expect(idle.exitCode).toBe(0);
+    expect(idle.stdout).toBe("No changed eligible local session facts to push.");
+    expect(idle.sent).toEqual([]);
+    expect(idle.messages).toEqual([]);
+    expect(await readFile(m.statePath, "utf8")).toBe(before);
+  });
+
+  it("sends the tier alone when it was never accepted, and only facts for closed days are session facts", async () => {
+    const m = await machine({ capability: true });
+    const today = call({ callId: "call-today", timestamp: "2026-09-20T09:00:00.000Z", startedAt: "2026-09-20T09:00:00.000Z" });
+    const run = await m.push([today]);
+    expect(run.stdout).toBe("Workspace accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro). This is a plan input, not a billed cost.");
+    expect(parse(run.sent[0]!).facts).toEqual(expectedPlanFacts());
+  });
+
+  it("sends the tier alone when its id or its raw string changed, naming the new tier", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await setClaudeTier(m.home, "default_claude_max_5x");
+    const changed = await m.push([call()], { at: later(now, 60000) });
+    expect(changed.sent).toHaveLength(1);
+    const facts = parse(changed.sent[0]!).facts;
+    expect(facts.every(isWorkspaceAgentPlanFact)).toBe(true);
+    expect(facts[0]).toMatchObject({ agent: "claude_code", tier: "claude_max_5x", tierRaw: "default_claude_max_5x" });
+    expect(changed.messages[0]).toContain("claude_code (claude_max_5x)");
+    expect((await m.state()).agentPlansAccepted?.claude_code).toEqual({ tier: "claude_max_5x", tierRaw: "default_claude_max_5x", sentAt: later(now, 60000) });
+
+    // The same tier id under another raw string is a change too: the Workspace keeps the raw word to add a mapping.
+    await setClaudeTier(m.home, "claude_max_5x");
+    const raw = await m.push([call()], { at: later(now, 120000) });
+    expect(parse(raw.sent[0]!).facts[0]).toMatchObject({ tier: "claude_max_5x", tierRaw: "claude_max_5x" });
+    expect(await m.push([call()], { at: later(now, 180000) })).toMatchObject({ sent: [], stdout: "No changed eligible local session facts to push." });
+  });
+
+  it("refreshes a tier last accepted more than 14 days ago, inside the device policy's retention, and not before", async () => {
+    expect(WORKSPACE_PLAN_REFRESH_DAYS).toBe(14);
+    const m = await machine();
+    await m.push([call()]);
+    expect((await m.push([call()], { at: later(now, 14 * DAY) })).sent).toEqual([]);
+    const stale = later(now, 14 * DAY + 1000);
+    const refresh = await m.push([call()], { at: stale });
+    expect(refresh.sent).toHaveLength(1);
+    expect(parse(refresh.sent[0]!).facts).toEqual(expectedPlanFacts(stale));
+    expect(refresh.stdout).toContain("Workspace accepted the subscription tier");
+    expect((await m.state()).agentPlansAccepted).toEqual(accepted(stale));
+    expect((await m.push([call()], { at: later(stale, DAY) })).sent).toEqual([]);
+  });
+
+  it("builds no batch at or past the grant's end, where the Workspace answers with no refusal it could be dropped on", async () => {
+    const m = await machine({ capability: true, expiresAt: "2026-09-20T12:00:00.000Z" });
+    const run = await m.push([]);
+    expect(run.stdout).toBe("No changed eligible local session facts to push.");
+    expect(run.sent).toEqual([]);
+    expect(readPlanFiles).not.toHaveBeenCalled();
+  });
+
+  it("fails open: a sign-in reader that throws leaves the existing message, and a session push goes on without a tier", async () => {
+    const m = await machine({ capability: true });
+    readPlanFiles.mockRejectedValueOnce(Error("unreadable"));
+    expect(await m.push([])).toMatchObject({ exitCode: 0, sent: [], stdout: "No changed eligible local session facts to push." });
+    readPlanFiles.mockRejectedValueOnce(Error("unreadable"));
+    const session = await m.push([call()]);
+    expect(session.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    expect(parse(session.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+  });
+});
+
+describe("tier facts beside changed session facts", () => {
+  it("ride beside them with one preview and no second batch, and the ACCEPT records them so an idle push sends nothing", async () => {
+    const m = await machine({ capability: true });
+    const run = await m.push([call()]);
+    expect(run.sent).toHaveLength(1);
+    expect(run.messages).toHaveLength(1);
+    const envelope = parse(run.sent[0]!);
+    expect(envelope.facts.filter(isWorkspaceSessionFact)).toHaveLength(1);
+    expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts());
+    expect(run.stdout).toContain("accepted 3 local session facts");
+    expect((await m.state()).agentPlansAccepted).toEqual(accepted(now));
+    expect(await m.push([call()])).toMatchObject({ sent: [], stdout: "No changed eligible local session facts to push." });
+  });
+
+  it("a refused batch that carries session facts stays retained, as it always has", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = [{ refuse: "stale" }];
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain("Its exact envelope and refusal are retained");
+    const state = await m.state();
+    expect(state.pending).toMatchObject({ state: "refused", refusal: "stale" });
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
+    expect((await m.push([call()])).stderr).toContain("A retained batch was refused.");
+  });
+});
+
+describe("the opt-out", () => {
+  it("suppresses the follow-up and the tier-only batch and reads no sign-in file; clearing it makes the tier due again", async () => {
+    const m = await machine();
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    const first = await m.push([call()]);
+    expect(first.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    expect(first.sent).toHaveLength(1);
+    expect(first.messages).toHaveLength(1);
+    // The ACCEPT is still remembered: the opt-out says nothing about what the Workspace accepts.
+    expect((await m.state()).capabilities).toEqual({ agentPlanFacts: true });
+
+    const idle = await m.push([call()]);
+    expect(idle).toMatchObject({ sent: [], messages: [], stdout: "No changed eligible local session facts to push." });
+    const session = await m.push([call(), nextDay]);
+    expect(parse(session.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(session.messages[0]).not.toContain("Subscription tier");
+    expect(readPlanFiles).not.toHaveBeenCalled();
+    expect((await m.state()).agentPlansAccepted).toBeUndefined();
+
+    vi.unstubAllEnvs();
+    const cleared = await m.push([call(), nextDay]);
+    expect(parse(cleared.sent[0]!).facts).toEqual(expectedPlanFacts());
+  });
+
+  it("does not rebuild a retained tier-only batch: it is resent as signed and the preview says the opt-out starts with the next batch", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([]);
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    const resend = await m.push([], { load: async () => { throw Error("unexpected local read"); } });
+    expect(resend.sent).toEqual(lost.sent);
+    expect(resend.messages[0]).toContain("The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch.");
+    expect(resend.messages[0]).not.toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out");
+    expect(resend.stdout).toContain("accepted the subscription tier");
+  });
+});
+
+describe("with no announced capability", () => {
+  it("reads no sign-in file and sends no tier on any path", async () => {
+    const m = await machine();
+    m.server.announce = null;
+    const first = await m.push([call()]);
+    expect(first.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    expect(first.sent).toHaveLength(1);
+    expect((await m.state()).capabilities).toEqual({ agentPlanFacts: false });
+    const idle = await m.push([call()]);
+    expect(idle).toMatchObject({ sent: [], messages: [], stdout: "No changed eligible local session facts to push." });
+    m.server.announce = "agentPlanFacts=0";
+    expect((await m.push([call(), nextDay])).sent).toHaveLength(1);
+    expect(readPlanFiles).not.toHaveBeenCalled();
+    expect(await m.status()).toContain("not announced by this Workspace in an accepted push yet");
+    expect(readPlanFiles).not.toHaveBeenCalled();
+
+    // The two entry points themselves, with a reader that would be seen: never called, whatever the facts.
+    const reader = vi.fn(async () => expectedPlanFacts());
+    const confirm = vi.fn(async () => true);
+    expect((await prepareWorkspacePush({ home: m.home, calls: [], generatedAt: now, readAgentPlanFacts: reader, confirm })).state).toBe("unchanged");
+    expect((await prepareWorkspacePlanFacts({ home: m.home, generatedAt: now, readAgentPlanFacts: reader, confirm })).state).toBe("unchanged");
+    expect(reader).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe("older pairing files", () => {
+  const stripped = async (statePath: string, keep: (key: string) => boolean) => {
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify(Object.fromEntries(Object.entries(state).filter(([key]) => keep(key)))), { mode: 0o600 });
+  };
+  it("reads a file with neither new key (0.9.15), says never for the tier, and adds them on the first ACCEPT", async () => {
+    const m = await machine();
+    expect(Object.keys(await m.state()).sort()).toEqual(["device", "disconnect", "facts", "lastAcceptedAt", "pending", "version"]);
+    expect(await m.status()).toContain("Subscription tier last reported: never");
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(0);
+    expect(run.sent).toHaveLength(2);
+    expect(Object.keys(await m.state()).sort()).toEqual(["agentPlansAccepted", "capabilities", "device", "disconnect", "facts", "lastAcceptedAt", "pending", "version"]);
+  });
+  it("treats a file that knows the capability but no accepted tier as never accepted", async () => {
+    const m = await machine({ capability: true });
+    await m.push([call()]);
+    await stripped(m.statePath, key => key !== "agentPlansAccepted");
+    const run = await m.push([call()]);
+    expect(parse(run.sent[0]!).facts).toEqual(expectedPlanFacts());
+  });
+  it("refuses a malformed tier record without resetting anything", async () => {
+    for (const bad of [{ claude_code: { tier: "claude_max_20x", tierRaw: "x", sentAt: now, email: "a" } }, { other: { tier: "unknown", tierRaw: "x", sentAt: now } },
+      { codex: { tier: "chatgpt_ultra", tierRaw: "x", sentAt: now } }, { codex: { tier: "unknown", tierRaw: "x y", sentAt: now } }, { codex: { tier: "unknown", tierRaw: "x", sentAt: "soon" } }]) {
+      const m = await machine({ capability: true });
+      const state = await m.state();
+      const written = JSON.stringify({ ...state, agentPlansAccepted: bad });
+      await writeFile(m.statePath, written, { mode: 0o600 });
+      const run = await m.push([call()]);
+      expect(run.exitCode, JSON.stringify(bad)).toBe(1);
+      expect(run.stderr).toContain("Local state was not reset");
+      expect(run.sent).toEqual([]);
+      expect(await readFile(m.statePath, "utf8")).toBe(written);
+    }
+  });
+});
+
+describe("a refused tier-only batch never strands a machine", () => {
+  it.each(["invalid", "conflict", "stale", "expired", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs the same sequence with a fresh nonce", async (reason) => {
+    const m = await machine({ capability: true });
+    m.server.script = [{ refuse: reason }];
+    const refused = await m.push([]);
+    expect(refused.exitCode).toBe(0);
+    expect(refused.stderr).toBe("");
+    expect(refused.stdout).toBe("Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.");
+    expect(refused.stdout.split("\n")).toHaveLength(1);
+    const dropped = await m.state();
+    expect(dropped.pending).toBeNull();
+    expect(dropped.capabilities).toEqual({ agentPlanFacts: false });
+    expect(dropped.device.sequence).toBe("0");
+    expect(dropped.lastAcceptedAt).toBeNull();
+    expect(dropped.agentPlansAccepted).toBeUndefined();
+    expect(m.server.highWater).toBe(0n);
+    expect(await m.status()).toContain("Pending batch: none");
+
+    readPlanFiles.mockClear();
+    const session = await m.push([call()]);
+    expect(session.exitCode).toBe(0);
+    const [next, tier] = session.sent.map(parse);
+    const gone = parse(refused.sent[0]!);
+    // The refused batch moved nothing on the Workspace, so its sequence is free and its nonce, batch id and idempotency key are not reused.
+    expect(next!.sequence).toBe(gone.sequence);
+    expect(next!.nonce).not.toBe(gone.nonce);
+    expect(next!.batchId).not.toBe(gone.batchId);
+    expect(next!.idempotencyKey).not.toBe(gone.idempotencyKey);
+    expect(next!.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    // That ACCEPT announces the capability again, and the same command offers the tier once more.
+    expect(tier!.facts).toEqual(expectedPlanFacts());
+    expect(tier!.sequence).toBe("2");
+    expect((await m.state()).device.sequence).toBe("2");
+  });
+
+  it("a refused follow-up leaves the accepted session batch standing, exit 0, and later pushes carry session facts alone until announced", async () => {
+    const m = await machine();
+    m.server.script = ["pass", { refuse: "invalid" }];
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.split("\n")).toEqual(["Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.",
+      "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue."]);
+    const state = await m.state();
+    expect(state).toMatchObject({ pending: null, capabilities: { agentPlanFacts: false } });
+    expect(state.device.sequence).toBe("1");
+
+    // No sign-in file is read until the Workspace announces again; a Workspace that stops announcing gets session facts alone, for ever.
+    readPlanFiles.mockClear();
+    m.server.announce = null;
+    const next = await m.push([call(), nextDay]);
+    expect(next.sent).toHaveLength(1);
+    expect(parse(next.sent[0]!).sequence).toBe("2");
+    expect(parse(next.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(readPlanFiles).not.toHaveBeenCalled();
+  });
+
+  it("a Workspace that cannot take a tier-only batch yet refuses it as invalid and costs one line, not the machine", async () => {
+    const m = await machine();
+    // The shape check of a Workspace deployed before tier-only batches: a real 409 before dispatch.
+    const older: WorkspaceTransport = async (path, payload, token) => parse(payload).facts.every(isWorkspaceAgentPlanFact)
+      ? (m.server.requests.push(payload), { status: 409, body: { state: "refused", reason: "invalid" } }) : m.server.transport(path, payload, token);
+    const run = await m.push([call()], { transport: older });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain("Workspace accepted 1 local session facts.");
+    expect(run.stdout).toContain("Workspace did not accept the subscription tier facts");
+    const again = await m.push([call(), nextDay], { transport: older });
+    expect(again.exitCode).toBe(0);
+    expect(parse(again.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect((await m.state()).pending).toBeNull();
+  });
+
+  it("a 409 that is not the Workspace's refusal shape is an unknown outcome, never a drop: the batch may be stored", async () => {
+    const m = await machine({ capability: true });
+    const proxy: WorkspaceTransport = async () => ({ status: 409, body: { error: "conflict" } });
+    const run = await m.push([], { transport: proxy });
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain("Push outcome is unknown");
+    expect((await m.state()).pending?.state).toBe("uncertain");
+    const notRefused: WorkspaceTransport = async () => ({ status: 409, body: { state: "accepted", reason: "invalid" } });
+    expect((await m.push([], { transport: notRefused })).exitCode).toBe(1);
+    expect((await m.state()).pending?.state).toBe("uncertain");
+  });
+});
+
+describe("a lost reply on a tier-only batch", () => {
+  it("retains it and resends it identically; the replay receipt reconciles the sequence and the record, and no file is read again", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([]);
+    expect(lost.exitCode).toBe(1);
+    expect(lost.stderr).toContain("Push outcome is unknown");
+    expect(lost.stderr).toContain("keeps the subscription tier facts it was signed with and is resent identically");
+    const held = await m.state();
+    expect(held.pending?.state).toBe("uncertain");
+    expect(held.device.sequence).toBe("0");
+    expect(held.agentPlansAccepted).toBeUndefined();
+    // The Workspace stored it.
+    expect(m.server.highWater).toBe(1n);
+
+    // The sign-in file changes and a day passes: a retained envelope is never rebuilt, and a stored one replays whatever its age.
+    await setClaudeTier(m.home, "default_claude_pro");
+    readPlanFiles.mockClear();
+    const resend = await m.push([call()], { at: later(now, DAY), load: async () => { throw Error("unexpected local read"); } });
+    expect(resend.exitCode).toBe(0);
+    expect(resend.sent).toEqual(lost.sent);
+    expect(resend.messages[0]).toContain(lost.sent[0]!);
+    expect(resend.messages[0]).toContain("identical retained signed batch");
+    expect(resend.messages[0]).toContain("Exact outgoing subscription tier facts");
+    expect(resend.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(readPlanFiles).not.toHaveBeenCalled();
+    const state = await m.state();
+    expect(state.pending).toBeNull();
+    expect(state.device.sequence).toBe("1");
+    expect(state.agentPlansAccepted).toEqual(accepted(now));
+  });
+
+  it("holds later session facts until the retained batch resolves, then lets them through", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_before_commit"];
+    const lost = await m.push([]);
+    const declined = await m.push([call()], { answers: ["n"], load: async () => { throw Error("unexpected local read"); } });
+    expect(declined.stdout).toBe("Not sent.");
+    expect(declined.sent).toEqual([]);
+    expect((await m.state()).pending?.state).toBe("uncertain");
+    // It never reached the Workspace and is now too old to admit: the refusal drops it, and the session facts go next.
+    const tooOld = await m.push([call()], { at: later(now, 11 * 60000), load: async () => { throw Error("unexpected local read"); } });
+    expect(tooOld.sent).toEqual(lost.sent);
+    expect(tooOld.stdout).toBe("Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.");
+    const dropped = await m.state();
+    expect(dropped.pending).toBeNull();
+    expect(dropped.device.sequence).toBe("0");
+    const session = await m.push([call()], { at: later(now, 12 * 60000) });
+    expect(session.exitCode).toBe(0);
+    expect(parse(session.sent[0]!).sequence).toBe("1");
+    expect(parse(session.sent[0]!).facts.filter(isWorkspaceSessionFact)).toHaveLength(1);
+  });
+});
+
+describe("the tier-only envelope", () => {
+  it("is signed with the device's Ed25519 key over the JCS body, and bound by its manifest", async () => {
+    const m = await machine({ capability: true });
+    const run = await m.push([]);
+    const envelope = parse(run.sent[0]!);
+    expect(envelope.signature).toMatchObject({ algorithm: "ed25519", canonicalization: "jcs-v1" });
+    const { signature, ...signed } = envelope, { manifestHash, ...body } = signed;
+    const publicKey = createPublicKey(m.device.privateKeyPem);
+    const sig = Buffer.from(signature.value, "base64url");
+    expect(sig).toHaveLength(64);
+    expect(verify(null, Buffer.from(workspaceCanonicalJson(signed as never)), publicKey, sig)).toBe(true);
+    expect(workspaceDomainHash("tilden:local-session-facts-manifest:v1", body as never)).toBe(manifestHash);
+    // Tamper with the tier and neither survives; another device's key does not verify it either.
+    const tampered = { ...signed, facts: [{ ...signed.facts[0]!, tier: "claude_pro" }, signed.facts[1]!] };
+    expect(verify(null, Buffer.from(workspaceCanonicalJson(tampered as never)), publicKey, sig)).toBe(false);
+    const { manifestHash: _kept, ...tamperedBody } = tampered;
+    expect(workspaceDomainHash("tilden:local-session-facts-manifest:v1", tamperedBody as never)).not.toBe(manifestHash);
+    expect(verify(null, Buffer.from(workspaceCanonicalJson(signed as never)), generateKeyPairSync("ed25519").publicKey, sig)).toBe(false);
+    // One key once: two facts for one agent cannot be built.
+    const facts = expectedPlanFacts();
+    expect(() => buildWorkspaceEnvelope(m.device, [facts[0]!, { ...facts[0]!, tierRaw: "default_claude_max_5x", tier: "claude_max_5x" }], now)).toThrow("Duplicate Workspace fact key.");
+  });
+
+  it("holds exactly the seven fields, and nothing from the sign-in files reaches the wire, the preview, the output, the status or the pairing record", async () => {
+    const m = await machine();
+    const run = await m.push([call()]);
+    for (const fact of parse(run.sent[1]!).facts)
+      expect(Object.keys(fact).sort()).toEqual(["activeUntil", "agent", "kind", "observedAt", "source", "tier", "tierRaw"]);
+    const state = await m.state();
+    for (const plan of Object.values(state.agentPlansAccepted!)) expect(Object.keys(plan).sort()).toEqual(["sentAt", "tier", "tierRaw"]);
+    const status = await m.status();
+    const surfaces = { wire: run.sent.join("\n"), preview: run.messages.join("\n"), stdout: run.stdout, status, record: JSON.stringify(state.agentPlansAccepted) };
+    for (const secret of await fixtureSecrets())
+      for (const [surface, text] of Object.entries(surfaces)) expect(text, `${surface}: ${secret}`).not.toContain(secret);
+  });
+});
+
+describe("a tier source the Workspace does not accept yet", () => {
+  const claudeTeam = (home: string) => writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationType: "claude_team", organizationRateLimitTier: "default_claude_max_5x" } }));
+
+  it("stays on the machine: a Team seat beside changed session facts cannot get the batch refused and retained, and the other agent's tier still goes", async () => {
+    const m = await machine({ capability: true });
+    await claudeTeam(m.home);
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(0);
+    const envelope = parse(run.sent[0]!);
+    expect(envelope.facts.filter(isWorkspaceAgentPlanFact).map(fact => fact.agent)).toEqual(["codex"]);
+    expect(run.messages[0]).not.toContain("claude_code");
+    const state = await m.state();
+    expect(state.pending).toBeNull();
+    expect(Object.keys(state.agentPlansAccepted!)).toEqual(["codex"]);
+    // The next push has nothing due: the held tier never makes a prompt of its own.
+    expect(await m.push([call()])).toMatchObject({ sent: [], messages: [], stdout: "No changed eligible local session facts to push." });
+  });
+
+  it("offers no follow-up when it is the only tier on the machine", async () => {
+    const m = await machine({ planFiles: false });
+    await claudeTeam(m.home);
+    const run = await m.push([call()]);
+    expect(run.sent).toHaveLength(1);
+    expect(run.messages).toHaveLength(1);
+    expect((await m.state()).capabilities).toEqual({ agentPlanFacts: true });
+    expect(await m.status()).toContain("Subscription tier last reported: never");
+  });
+});
+
+describe("workspace status", () => {
+  it("shows when each agent's tier was last reported, ids only, and reads no sign-in file", async () => {
+    const m = await machine();
+    expect(await m.status()).toContain("Subscription tier last reported: never");
+    await m.push([call()]);
+    readPlanFiles.mockClear();
+    const status = await m.status();
+    expect(status).toContain(`Subscription tier last reported for claude_code: claude_max_20x at ${now}`);
+    expect(status).toContain(`Subscription tier last reported for codex: chatgpt_pro at ${now}`);
+    expect(status).not.toContain("default_claude_max_20x");
+    expect(status).not.toContain("Subscription tier last reported: never");
+    expect(status).toContain("alone when never accepted, changed or over 14 days old");
+    expect(readPlanFiles).not.toHaveBeenCalled();
+  });
+});
