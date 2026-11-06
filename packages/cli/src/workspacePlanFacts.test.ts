@@ -134,7 +134,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const requests: string[] = [], messages: string[] = [];
     const result = await runCli(["workspace", "push"], pushRuntime(home, [call()], requests, messages));
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("accepted 3 local session facts");
+    expect(result.stdout).toContain("accepted 1 local session facts");
+    expect(result.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
 
     const envelope = parse(requests[0]!);
     const plans = envelope.facts.filter(isWorkspaceAgentPlanFact);
@@ -187,7 +188,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     // Push 2: the stored capability admits the plan facts beside the changed session fact.
     const nextDay = call({ callId: "call-two", timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" });
     const second = await runCli(["workspace", "push"], pushRuntime(fresh.home, [call(), nextDay], requests, messages));
-    expect(second.stdout).toContain("accepted 3 local session facts");
+    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(second.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect(parse(requests[2]!).facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
     expect(messages[2]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
 
@@ -202,7 +204,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(fourth.stdout).toContain("accepted 1 local session facts");
     expect(parse(requests[4]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     expect(messages[4]).not.toContain("Subscription tier");
-    expect((await runCli(["workspace", "status"], { homeDirectory: fresh.home })).stdout).toContain("not announced by this Workspace in an accepted push yet");
+    expect((await runCli(["workspace", "status"], { homeDirectory: fresh.home })).stdout).toContain("off until an accepted push announces them");
   });
 
   it("leaves the tiers out under AIBILL_NO_PLAN_TIER and when the machine has no sign-in files", async () => {
@@ -284,7 +286,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
       workspaceLoadCalls: async () => { throw Error("unexpected local read"); }, workspaceTransport: replay });
     expect(second.exitCode).toBe(0);
-    expect(second.stdout).toContain("accepted 3 local session facts");
+    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(second.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect(requests).toHaveLength(2);
     expect(requests[1]).toBe(requests[0]);
     // The preview showed the signed envelope, named the tiers it carries, and said the opt-out starts with the next new batch.
@@ -316,7 +319,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
       const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []),
         workspaceTransport: accepting(requests, header === undefined ? {} : { header }) });
       expect(result.exitCode, JSON.stringify(header)).toBe(0);
-      expect(result.stdout).toContain("accepted 3 local session facts");
+      expect(result.stdout).toContain("accepted 1 local session facts");
       const state = await readState(statePath);
       expect(state.pending).toBeNull();
       expect(state.device.sequence).toBe("1");

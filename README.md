@@ -276,7 +276,7 @@ and recovery steps.
 - **Workspace:** pairing is optional; each explicit push requires consent to
   the outgoing facts. Project labels may be shared, and a push previews and can
   send the subscription tier each agent is signed in with, in its own batch when
-  no session fact changed (the tier id and raw tier string only;
+  no session fact changed (seven fields, never an account, email or token;
   `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
   in private local pairing state. Disconnect revokes future machine access;
   previously accepted records follow hosted retention rules.

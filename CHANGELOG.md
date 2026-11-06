@@ -18,7 +18,7 @@ historical untagged exception.
     them again.
   - With the capability known and no changed session facts, a push sends the tier
     alone only if it was never accepted, it changed, or it was last accepted more
-    than 14 days ago, well inside the Workspace's retention. Otherwise the existing
+    than 14 days ago, inside the device policy's retention. Otherwise the existing
     "No changed eligible local session facts" message stands. Tier facts still ride
     beside session facts when session facts changed.
   - `~/.aibill/workspace-device.json` gains an optional `agentPlansAccepted` key
@@ -29,10 +29,12 @@ historical untagged exception.
   - A refused tier-only batch never strands a machine. On a 409 with any reason it
     is dropped rather than retained, the stored capability goes false until a later
     ACCEPT announces it, one line says the tier facts were not accepted, and session
-    pushes continue. The refusal moved no sequence, so the next batch signs the same
-    one with a fresh nonce. A lost reply still retains the exact envelope and resends
-    it identically; a retained envelope is never rebuilt. A refused batch that holds
-    session facts stays retained, as before.
+    pushes continue. Any drop moves the local sequence past the batch, because the
+    Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
+    still retains the exact envelope, and a retained envelope is never rebuilt: yes
+    resends it identically, while no, or `AIBILL_NO_PLAN_TIER`, drops it, so session
+    facts never wait on a yes. A refused or retained batch that holds session facts
+    stays retained, as before.
   - A Claude Team or Enterprise seat's tier (`oauthAccount.organizationType`) is now
     held on the machine rather than sent: the Workspace does not accept that source
     yet, and beside session facts its refusal would have retained the batch and
@@ -43,6 +45,11 @@ historical untagged exception.
     the tier id and the time. The seven fields and what is never read into them are
     unchanged. No batch is built at or past the grant's end, where the Workspace gives
     no refusal to drop it on.
+  - The accepted line counts session facts only and names the tier in words, and the
+    preview says the tier goes as seven fields, not two. A batch with one session fact
+    and two tiers used to print `accepted 3 local session facts`.
+  - `workspace status` says a Claude Team or Enterprise seat does not report its tier
+    yet while no Claude tier has been reported, and reads no sign-in file to say it.
   - This needs the Workspace release that accepts tier-only envelopes. Against one
     that does not, the batch is refused as `invalid` and dropped as above.
 

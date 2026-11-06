@@ -176,6 +176,13 @@ async function machine(options: { planFiles?: boolean; capability?: boolean; exp
 }
 const setClaudeTier = (home: string, organizationRateLimitTier: string) => writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationType: "claude_max", organizationRateLimitTier } }));
 const accepted = (sentAt: string) => ({ claude_code: { tier: "claude_max_20x", tierRaw: "default_claude_max_20x", sentAt }, codex: { tier: "chatgpt_pro", tierRaw: "pro", sentAt } });
+const sessionsAcceptedLine = "Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.";
+const tierAcceptedLine = "Workspace accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro). This is a plan input, not a billed cost.";
+const tierRefusedLine = "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.";
+const tierDroppedLine = "Retained subscription tier batch dropped; nothing was sent. If it had already reached the Workspace, the Workspace keeps that tier. The next workspace push sends any changed session facts and offers the tier again; set AIBILL_NO_PLAN_TIER=1 to stop.";
+const tierOptedOutLine = "Retained subscription tier batch dropped because AIBILL_NO_PLAN_TIER is set. If it had already reached the Workspace, the Workspace keeps that tier.";
+const teamSeatLine = "A Claude Team or Enterprise seat does not report its tier yet: Workspace does not accept that source.";
+const unexpectedRead = async (): Promise<never> => { throw Error("unexpected local read"); };
 
 beforeEach(() => {
   // Other suites point these at missing files; this one reads the fixture home.
@@ -208,7 +215,7 @@ describe("the first push learns the capability and the same command sends the ti
     expect(run.messages[1]).toContain(run.sent[1]!);
     expect(run.messages[1]).toContain("Workspace accepted that batch and announced it takes subscription tier facts.");
     expect(run.messages[1]).toContain("This batch carries only the subscription tier");
-    expect(run.messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro): the tier id and raw tier string only, no account, email or token.");
+    expect(run.messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro): seven fields each (kind, agent, tier id, raw tier string, where it was read, when, and the subscription's end date if recorded), no account, email or token.");
     expect(run.messages[1]).toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out.");
     expect(run.messages[1]).not.toContain("Machine tokens");
     expect(run.messages[1]).not.toContain("Excluded calls");
@@ -410,7 +417,8 @@ describe("tier facts beside changed session facts", () => {
     const envelope = parse(run.sent[0]!);
     expect(envelope.facts.filter(isWorkspaceSessionFact)).toHaveLength(1);
     expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts());
-    expect(run.stdout).toContain("accepted 3 local session facts");
+    // One session fact and two tiers: the count is the session facts, and the tiers are named, never counted as session facts.
+    expect(run.stdout.split("\n")).toEqual([sessionsAcceptedLine, tierAcceptedLine]);
     expect((await m.state()).agentPlansAccepted).toEqual(accepted(now));
     expect(await m.push([call()])).toMatchObject({ sent: [], stdout: "No changed eligible local session facts to push." });
   });
@@ -425,6 +433,25 @@ describe("tier facts beside changed session facts", () => {
     expect(state.pending).toMatchObject({ state: "refused", refusal: "stale" });
     expect(state.capabilities).toEqual({ agentPlanFacts: true });
     expect((await m.push([call()])).stderr).toContain("A retained batch was refused.");
+  });
+
+  it("a lost batch that carries session facts stays retained on a no and under the opt-out: those facts must reconcile, and only the identical resend does", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([call()]);
+    const held = await m.state();
+    const declined = await m.push([call()], { answers: ["n"], load: unexpectedRead });
+    expect(declined).toMatchObject({ exitCode: 0, stdout: "Not sent.", sent: [] });
+    expect(declined.messages[0]).not.toContain("drops this batch");
+    // A retained batch is not rebuilt, so no line offers a way to leave its tier out.
+    expect(declined.messages[0]).not.toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out");
+    expect(await m.state()).toEqual(held);
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    const resend = await m.push([call()], { load: unexpectedRead });
+    expect(resend.sent).toEqual(lost.sent);
+    expect(resend.messages[0]).toContain("The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch.");
+    expect(resend.stdout.split("\n")).toEqual([sessionsAcceptedLine, tierAcceptedLine]);
+    expect((await m.state()).device.sequence).toBe("1");
   });
 });
 
@@ -452,16 +479,41 @@ describe("the opt-out", () => {
     expect(parse(cleared.sent[0]!).facts).toEqual(expectedPlanFacts());
   });
 
-  it("does not rebuild a retained tier-only batch: it is resent as signed and the preview says the opt-out starts with the next batch", async () => {
+  it.each(["lost_before_commit", "lost_after_commit"] as const)("drops a retained tier-only batch without asking or sending it, and the same push goes on with session facts alone (%s)", async (lostWhen) => {
     const m = await machine({ capability: true });
-    m.server.script = ["lost_after_commit"];
+    m.server.script = [lostWhen];
     const lost = await m.push([]);
+    expect((await m.state()).pending?.state).toBe("uncertain");
     vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
-    const resend = await m.push([], { load: async () => { throw Error("unexpected local read"); } });
-    expect(resend.sent).toEqual(lost.sent);
-    expect(resend.messages[0]).toContain("The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch.");
-    expect(resend.messages[0]).not.toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out");
-    expect(resend.stdout).toContain("accepted the subscription tier");
+    readPlanFiles.mockClear();
+    const run = await m.push([call()]);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.split("\n")).toEqual([tierOptedOutLine, sessionsAcceptedLine]);
+    // The session preview is the only question, and the only batch: the retained one never goes.
+    expect(run.messages).toHaveLength(1);
+    expect(run.messages[0]).not.toContain("Subscription tier");
+    expect(run.sent).toHaveLength(1);
+    expect(run.sent).not.toContain(lost.sent[0]);
+    const session = parse(run.sent[0]!);
+    expect(session.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(session.sequence).toBe("2");
+    expect(m.server.highWater).toBe(2n);
+    expect(readPlanFiles).not.toHaveBeenCalled();
+    const state = await m.state();
+    expect(state).toMatchObject({ pending: null, capabilities: { agentPlanFacts: true } });
+    expect(state.device.sequence).toBe("2");
+    expect(state.agentPlansAccepted).toBeUndefined();
+  });
+
+  it("says so when the drop leaves nothing else to send, and sends nothing", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_before_commit"];
+    await m.push([]);
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    const run = await m.push([]);
+    expect(run).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(run.stdout.split("\n")).toEqual([tierOptedOutLine, "No changed eligible local session facts to push."]);
+    expect(await m.state()).toMatchObject({ pending: null, device: { sequence: "1" } });
   });
 });
 
@@ -478,7 +530,7 @@ describe("with no announced capability", () => {
     m.server.announce = "agentPlanFacts=0";
     expect((await m.push([call(), nextDay])).sent).toHaveLength(1);
     expect(readPlanFiles).not.toHaveBeenCalled();
-    expect(await m.status()).toContain("not announced by this Workspace in an accepted push yet");
+    expect(await m.status()).toContain("Subscription tier facts: off until an accepted push announces them; none are read or sent");
     expect(readPlanFiles).not.toHaveBeenCalled();
 
     // The two entry points themselves, with a reader that would be seen: never called, whatever the facts.
@@ -529,38 +581,63 @@ describe("older pairing files", () => {
 });
 
 describe("a refused tier-only batch never strands a machine", () => {
-  it.each(["invalid", "conflict", "stale", "expired", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs the same sequence with a fresh nonce", async (reason) => {
+  it.each(["invalid", "conflict", "stale", "expired", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs past its sequence with a fresh nonce", async (reason) => {
     const m = await machine({ capability: true });
     m.server.script = [{ refuse: reason }];
     const refused = await m.push([]);
     expect(refused.exitCode).toBe(0);
     expect(refused.stderr).toBe("");
-    expect(refused.stdout).toBe("Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.");
+    expect(refused.stdout).toBe(tierRefusedLine);
     expect(refused.stdout.split("\n")).toHaveLength(1);
     const dropped = await m.state();
     expect(dropped.pending).toBeNull();
     expect(dropped.capabilities).toEqual({ agentPlanFacts: false });
-    expect(dropped.device.sequence).toBe("0");
+    expect(dropped.device.sequence).toBe("1");
     expect(dropped.lastAcceptedAt).toBeNull();
     expect(dropped.agentPlansAccepted).toBeUndefined();
     expect(m.server.highWater).toBe(0n);
-    expect(await m.status()).toContain("Pending batch: none");
+    const status = await m.status();
+    expect(status).toContain("Pending batch: none");
+    // The Workspace did announce the capability, on the push before this one: the line must not say it never did.
+    expect(status).toContain("Subscription tier facts: off until an accepted push announces them; none are read or sent");
 
     readPlanFiles.mockClear();
     const session = await m.push([call()]);
     expect(session.exitCode).toBe(0);
     const [next, tier] = session.sent.map(parse);
     const gone = parse(refused.sent[0]!);
-    // The refused batch moved nothing on the Workspace, so its sequence is free and its nonce, batch id and idempotency key are not reused.
-    expect(next!.sequence).toBe(gone.sequence);
+    // Its sequence stays spent whatever the Workspace holds, the Workspace admits the gap, and its nonce, batch id and idempotency key are not reused.
+    expect(gone.sequence).toBe("1");
+    expect(next!.sequence).toBe("2");
+    expect(m.server.highWater).toBe(3n);
     expect(next!.nonce).not.toBe(gone.nonce);
     expect(next!.batchId).not.toBe(gone.batchId);
     expect(next!.idempotencyKey).not.toBe(gone.idempotencyKey);
     expect(next!.facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     // That ACCEPT announces the capability again, and the same command offers the tier once more.
     expect(tier!.facts).toEqual(expectedPlanFacts());
-    expect(tier!.sequence).toBe("2");
-    expect((await m.state()).device.sequence).toBe("2");
+    expect(tier!.sequence).toBe("3");
+    expect((await m.state()).device.sequence).toBe("3");
+  });
+
+  it("a batch the Workspace stored, then refuses on its resend, cannot leave the machine behind: the drop moves the sequence past it", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([]);
+    expect(m.server.highWater).toBe(1n);
+    // The Workspace checks an envelope's shape before it looks for a replay, so a narrower contract would refuse even this identical resend of a batch it holds.
+    m.server.script = [{ refuse: "invalid" }];
+    const refused = await m.push([], { load: unexpectedRead });
+    expect(refused.sent).toEqual(lost.sent);
+    expect(refused.stdout).toBe(tierRefusedLine);
+    expect(await m.state()).toMatchObject({ pending: null, device: { sequence: "1" }, capabilities: { agentPlanFacts: false } });
+
+    // One sequence behind, this batch would be refused as a conflict, retained, and every later push would halt.
+    const session = await m.push([call()]);
+    expect(session.exitCode).toBe(0);
+    expect(session.stdout).toContain(sessionsAcceptedLine);
+    expect(parse(session.sent[0]!).sequence).toBe("2");
+    expect((await m.state()).pending).toBeNull();
   });
 
   it("a refused follow-up leaves the accepted session batch standing, exit 0, and later pushes carry session facts alone until announced", async () => {
@@ -568,18 +645,17 @@ describe("a refused tier-only batch never strands a machine", () => {
     m.server.script = ["pass", { refuse: "invalid" }];
     const run = await m.push([call()]);
     expect(run.exitCode).toBe(0);
-    expect(run.stdout.split("\n")).toEqual(["Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.",
-      "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue."]);
+    expect(run.stdout.split("\n")).toEqual([sessionsAcceptedLine, tierRefusedLine]);
     const state = await m.state();
     expect(state).toMatchObject({ pending: null, capabilities: { agentPlanFacts: false } });
-    expect(state.device.sequence).toBe("1");
+    expect(state.device.sequence).toBe("2");
 
     // No sign-in file is read until the Workspace announces again; a Workspace that stops announcing gets session facts alone, for ever.
     readPlanFiles.mockClear();
     m.server.announce = null;
     const next = await m.push([call(), nextDay]);
     expect(next.sent).toHaveLength(1);
-    expect(parse(next.sent[0]!).sequence).toBe("2");
+    expect(parse(next.sent[0]!).sequence).toBe("3");
     expect(parse(next.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     expect(readPlanFiles).not.toHaveBeenCalled();
   });
@@ -619,7 +695,7 @@ describe("a lost reply on a tier-only batch", () => {
     const lost = await m.push([]);
     expect(lost.exitCode).toBe(1);
     expect(lost.stderr).toContain("Push outcome is unknown");
-    expect(lost.stderr).toContain("keeps the subscription tier facts it was signed with and is resent identically");
+    expect(lost.stderr).toBe("Push outcome is unknown. The exact signed subscription tier batch is retained. Run workspace push: yes resends this exact batch, no drops it, and AIBILL_NO_PLAN_TIER=1 drops it without asking. Session facts wait only until then.");
     const held = await m.state();
     expect(held.pending?.state).toBe("uncertain");
     expect(held.device.sequence).toBe("0");
@@ -636,6 +712,7 @@ describe("a lost reply on a tier-only batch", () => {
     expect(resend.messages[0]).toContain(lost.sent[0]!);
     expect(resend.messages[0]).toContain("identical retained signed batch");
     expect(resend.messages[0]).toContain("Exact outgoing subscription tier facts");
+    expect(resend.messages[0]).toContain("Answering no drops this batch, and the next workspace push goes on without it.");
     expect(resend.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect(readPlanFiles).not.toHaveBeenCalled();
     const state = await m.state();
@@ -644,25 +721,69 @@ describe("a lost reply on a tier-only batch", () => {
     expect(state.agentPlansAccepted).toEqual(accepted(now));
   });
 
-  it("holds later session facts until the retained batch resolves, then lets them through", async () => {
+  it.each(["lost_before_commit", "lost_after_commit"] as const)("a no drops it whether or not the Workspace stored it (%s): nothing waits on a yes, and session facts go on the next push", async (lostWhen) => {
+    const m = await machine({ capability: true });
+    m.server.script = [lostWhen];
+    await m.push([]);
+    const declined = await m.push([call()], { answers: ["n"], load: unexpectedRead });
+    expect(declined).toMatchObject({ exitCode: 0, sent: [], stdout: tierDroppedLine });
+    expect(declined.messages).toHaveLength(1);
+    expect(declined.messages[0]).toContain("Answering no drops this batch, and the next workspace push goes on without it.");
+    const dropped = await m.state();
+    expect(dropped.pending).toBeNull();
+    expect(dropped.device.sequence).toBe("1");
+    // A no says nothing about what the Workspace accepts.
+    expect(dropped.capabilities).toEqual({ agentPlanFacts: true });
+    expect(dropped.agentPlansAccepted).toBeUndefined();
+
+    // Whichever way it went, the next batch signs past it and is admitted, and the tier is offered again beside the session fact.
+    const next = await m.push([call()]);
+    expect(next.exitCode).toBe(0);
+    expect(next.stdout.split("\n")).toEqual([sessionsAcceptedLine, tierAcceptedLine]);
+    const envelope = parse(next.sent[0]!);
+    expect(envelope.sequence).toBe("2");
+    expect(envelope.facts.filter(isWorkspaceSessionFact)).toHaveLength(1);
+    expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts());
+    expect(m.server.highWater).toBe(2n);
+  });
+
+  it("an unanswered prompt on it is a no", async () => {
+    const m = await machine({ capability: true });
+    m.server.script = ["lost_before_commit"];
+    await m.push([]);
+    const run = await runCli(["workspace", "push"], { homeDirectory: m.home, interactive: true, workspaceNow: now, workspaceLoadCalls: unexpectedRead,
+      consentRead: async () => undefined, workspaceTransport: m.server.transport });
+    expect(run.stdout).toBe(tierDroppedLine);
+    expect(await m.state()).toMatchObject({ pending: null, device: { sequence: "1" } });
+  });
+
+  it("a yes when it never reached the Workspace and is too old to admit: the refusal drops it, and the session facts go next", async () => {
     const m = await machine({ capability: true });
     m.server.script = ["lost_before_commit"];
     const lost = await m.push([]);
-    const declined = await m.push([call()], { answers: ["n"], load: async () => { throw Error("unexpected local read"); } });
-    expect(declined.stdout).toBe("Not sent.");
-    expect(declined.sent).toEqual([]);
-    expect((await m.state()).pending?.state).toBe("uncertain");
-    // It never reached the Workspace and is now too old to admit: the refusal drops it, and the session facts go next.
-    const tooOld = await m.push([call()], { at: later(now, 11 * 60000), load: async () => { throw Error("unexpected local read"); } });
+    const tooOld = await m.push([call()], { at: later(now, 11 * 60000), load: unexpectedRead });
     expect(tooOld.sent).toEqual(lost.sent);
-    expect(tooOld.stdout).toBe("Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.");
+    expect(tooOld.stdout).toBe(tierRefusedLine);
     const dropped = await m.state();
     expect(dropped.pending).toBeNull();
-    expect(dropped.device.sequence).toBe("0");
+    expect(dropped.device.sequence).toBe("1");
     const session = await m.push([call()], { at: later(now, 12 * 60000) });
     expect(session.exitCode).toBe(0);
-    expect(parse(session.sent[0]!).sequence).toBe("1");
+    expect(parse(session.sent[0]!).sequence).toBe("2");
     expect(parse(session.sent[0]!).facts.filter(isWorkspaceSessionFact)).toHaveLength(1);
+  });
+
+  it("a batch consented to and never dispatched, a crash before the send, is treated the same: its own question, and a no drops it", async () => {
+    const m = await machine({ capability: true });
+    const prepared = await prepareWorkspacePush({ home: m.home, calls: [], generatedAt: now, readAgentPlanFacts: async () => expectedPlanFacts(), confirm: async () => true });
+    expect(prepared.state).toBe("prepared");
+    expect((await m.state()).pending?.state).toBe("ready");
+    const declined = await m.push([call()], { answers: ["n"], load: unexpectedRead });
+    expect(declined).toMatchObject({ exitCode: 0, sent: [], stdout: tierDroppedLine });
+    expect(declined.messages[0]).toContain("Answering no drops this batch");
+    expect(declined.messages[0]).toContain("Send this batch? [y/N]");
+    expect(declined.messages[0]).not.toContain("identical retained signed batch");
+    expect(await m.state()).toMatchObject({ pending: null, device: { sequence: "1" } });
   });
 });
 
@@ -728,7 +849,20 @@ describe("a tier source the Workspace does not accept yet", () => {
     expect(run.sent).toHaveLength(1);
     expect(run.messages).toHaveLength(1);
     expect((await m.state()).capabilities).toEqual({ agentPlanFacts: true });
-    expect(await m.status()).toContain("Subscription tier last reported: never");
+    const status = await m.status();
+    expect(status).toContain("Subscription tier last reported: never");
+    expect(status).toContain(teamSeatLine);
+  });
+
+  it("status says these seats do not report yet whenever no Claude tier has reached the Workspace, and reads no sign-in file to say it", async () => {
+    const m = await machine({ capability: true });
+    await claudeTeam(m.home);
+    await m.push([call()]);
+    readPlanFiles.mockClear();
+    const status = await m.status();
+    expect(status).toContain("Subscription tier last reported for codex: chatgpt_pro");
+    expect(status).toContain(teamSeatLine);
+    expect(readPlanFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -736,9 +870,11 @@ describe("workspace status", () => {
   it("shows when each agent's tier was last reported, ids only, and reads no sign-in file", async () => {
     const m = await machine();
     expect(await m.status()).toContain("Subscription tier last reported: never");
+    expect(await m.status()).toContain(teamSeatLine);
     await m.push([call()]);
     readPlanFiles.mockClear();
     const status = await m.status();
+    expect(status).not.toContain(teamSeatLine);
     expect(status).toContain(`Subscription tier last reported for claude_code: claude_max_20x at ${now}`);
     expect(status).toContain(`Subscription tier last reported for codex: chatgpt_pro at ${now}`);
     expect(status).not.toContain("default_claude_max_20x");

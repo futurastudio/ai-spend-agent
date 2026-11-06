@@ -106,7 +106,8 @@ is read into the fact: no token, email, name, account id, organization name or
 uuid. A missing or unreadable file yields no fact and no error. A Claude Team or
 Enterprise seat sends no Claude tier yet: its tier is read from
 `oauthAccount.organizationType`, a source Workspace does not accept yet, so that
-fact stays on the machine. Any other agent's tier on that machine is unaffected.
+fact stays on the machine, and `workspace status` says so while no Claude tier has
+been reported. Any other agent's tier on that machine is unaffected.
 
 **When it is sent.** Only after this Workspace has announced, on an accepted push
 (a response header, never the receipt body), that it accepts tier facts. Until
@@ -119,9 +120,9 @@ then no sign-in file is read. `workspace status` shows whether it has. After tha
   one preview and one batch.
 - **A push with no changed session facts** previews and sends the tier facts alone
   only if this Workspace has never accepted them, they changed, or it last accepted
-  them more than 14 days ago. That refresh keeps a tier readable well inside the
-  machine policy's retention. Otherwise nothing is sent and the push says
-  `No changed eligible local session facts to push.`
+  them more than 14 days ago. That refresh runs inside the device policy's retention,
+  so a machine that keeps pushing keeps its tier readable. Otherwise nothing is sent
+  and the push says `No changed eligible local session facts to push.`
 
 Declining a tier preview sends nothing and retains nothing; the next push offers
 it again. A push that has nothing else to send and no announcement yet has nothing
@@ -136,15 +137,20 @@ envelope, tier facts (those seven fields) included, until it is resolved.
 **If it does not arrive.** A batch of tier facts alone that Workspace refuses is
 dropped, not retained: one line says the tier facts were not accepted, the CLI
 sends none until a later accepted push announces them again, and session pushes
-continue. A lost reply follows the rule below for any batch: the exact signed
-envelope is retained and resent identically, because only the identical envelope
-can be reconciled by the Workspace's replay receipt.
+continue. If a reply is lost, the exact signed envelope is retained and the next push
+asks about it. Yes resends it identically, because only the identical envelope can be
+reconciled by the Workspace's replay receipt. No drops it. Session facts wait only for
+that answer, because a batch of tier facts alone holds none to reconcile. A batch that
+reached Workspace before its reply was lost stays there whichever you answer, until a
+later tier replaces it.
 
 **Leaving it out.** Set `AIBILL_NO_PLAN_TIER=1` to leave tiers out of every new
 batch: no sign-in file is read, and neither the follow-up nor a tier-only batch is
-offered. A retained batch is never rebuilt and is resent exactly as signed, tier
-facts included, so the opt-out applies from the next new batch and the preview says
-so. Workspace then costs those sessions at a tier the owner types by hand.
+offered. A retained batch of tier facts alone is dropped without asking, one line says
+so, and the push goes on. A retained batch that also holds session facts is never
+rebuilt and is resent exactly as signed, tier facts included, so the opt-out applies
+from the next new batch and the preview says so. Workspace then costs those sessions
+at a tier the owner types by hand.
 
 ## If setup or sharing does not complete
 
@@ -157,7 +163,8 @@ so. Workspace then costs those sessions at a tier the owner types by hand.
 - **Local source reading incomplete:** no new facts are sent. Use the displayed
   diagnostic counts for support; do not delete logs or reconnect as a repair.
 - **Push outcome unknown:** the exact signed batch is retained. `workspace push`
-  asks you to review and explicitly retry that same batch.
+  asks you to review and explicitly retry that same batch. For a batch of
+  subscription tier facts alone, answering no drops it and session pushes continue.
 - **Batch refused:** resolve the refusal first. Reconnecting is not a substitute
   for resolving a refused batch. A batch of subscription tier facts alone is the
   exception: it is dropped, one line says so, and session pushes continue.
