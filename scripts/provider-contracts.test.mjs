@@ -257,6 +257,10 @@ test("reference markers catch one added Anthropic result field, on the cost repo
   };
   const costReport = resources.find((entry) => entry.url.endsWith("/cost_report/retrieve"));
   const messages = resources.find((entry) => entry.url.endsWith("/usage_report/retrieve_messages"));
+  // The readers depend on these by name, so a renamed field is reported as that field going missing.
+  for (const [resource, markers] of [[costReport, ["context_window", "token_type"]], [messages, ["cache_read_input_tokens", "uncached_input_tokens"]]]) {
+    for (const marker of markers) assert.ok(resource.requiredMarkers.includes(marker), `missing required marker: ${marker}`);
+  }
   for (const [resource, head, tail] of [
     [costReport,
       `"amount" : "123.78912" , "context_window" : "0-200k" , "cost_type" : "tokens" , "currency" : "USD" , "description" : "Sample Usage - Input Tokens" , `,
@@ -289,6 +293,11 @@ test("reference markers catch a changed Claude Code date, money unit, row field 
   const contracts = await readProviderContracts();
   const resource = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
     .resources.find((entry) => entry.url.endsWith("/usage_report/retrieve_claude_code"));
+  // The reader depends on these by name, so a renamed field is reported as that field going missing,
+  // and a change to the date form as the date going missing, not only as a moved window.
+  for (const marker of ["2025-08-08T00:00:00Z", "core_metrics", "is_remote", "estimated_cost", "tool_actions", "subscription_type"]) {
+    assert.ok(resource.requiredMarkers.includes(marker), `missing required marker: ${marker}`);
+  }
   const padding = "unchanged ".repeat(40);
   const row = ({ date = "2025-08-08T00:00:00Z", amount = "186", middle = "", tools = "", end = "" } = {}) =>
     `"actor" : { "email_address" : "user@example.com" , "type" : "user_actor" }, "core_metrics" : { "commits_by_claude_code" : 8 , "lines_of_code" : { "added" : 342 , "removed" : 128 }, "num_sessions" : 15 , "pull_requests_by_claude_code" : 2 }, "customer_type" : "api" , "date" : "${date}" , "is_remote" : false , ${middle}"model_breakdown" : [ { "estimated_cost" : { "amount" : ${amount} , "currency" : "USD" }, "model" : "sample-model" , "tokens" : { "cache_creation" : 2340 , "cache_read" : 8790 , "input" : 45230 , "output" : 12450 } } ], "organization_id" : "org_sample" , "terminal_type" : "iterm.app" , "tool_actions" : { "edit_tool" : { "accepted" : 25 , "rejected" : 3 }, ${tools}"write_tool" : { "accepted" : 8 , "rejected" : 0 } }, "subscription_type" : "enterprise"${end}`;
