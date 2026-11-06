@@ -520,8 +520,8 @@ type WorkspacePlanFactOptions = {
   /**
    * Reads this machine's subscription tier per agent. Called only when the
    * Workspace announced `agentPlanFacts` on its last ACCEPT, the opt-out is not
-   * set, and a new envelope is being built. Fails open: a reader that throws, or
-   * a fact this CLI would refuse to sign, leaves that tier out of the batch.
+   * set, and no batch is retained. Fails open: a reader that throws, or a fact
+   * this CLI would refuse to sign, leaves that tier out of the batch.
    */
   readAgentPlanFacts?: () => Promise<readonly WorkspaceAgentPlanFact[]>;
   /**

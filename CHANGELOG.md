@@ -56,7 +56,8 @@ historical untagged exception.
   - `workspace status` says a Claude Team or Enterprise seat does not report its tier
     yet while no Claude tier has been reported, and reads no sign-in file to say it.
   - This needs the Workspace release that accepts tier-only envelopes. Against one
-    that does not, the batch is refused as `invalid` and dropped as above.
+    that does not, the batch is refused as `invalid` and dropped as above, and each
+    session push repeats the second preview and the refusal line. No push halts.
 
 ## 0.9.16 (unreleased)
 
