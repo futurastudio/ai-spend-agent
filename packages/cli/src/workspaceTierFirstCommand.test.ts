@@ -219,6 +219,8 @@ describe("the first push learns the capability and the same command sends the ti
     expect(run.messages[1]).toContain("Set AIBILL_NO_PLAN_TIER=1 to leave it out.");
     expect(run.messages[1]).not.toContain("Machine tokens");
     expect(run.messages[1]).not.toContain("Excluded calls");
+    // A fresh offer drops nothing on a no: that line belongs to a retained batch.
+    expect(run.messages[1]).not.toContain("drops this batch");
 
     expect(readPlanFiles).toHaveBeenCalledTimes(1);
     const state = await m.state();
@@ -660,7 +662,7 @@ describe("a refused tier-only batch never strands a machine", () => {
     expect(readPlanFiles).not.toHaveBeenCalled();
   });
 
-  it("a Workspace that cannot take a tier-only batch yet refuses it as invalid and costs one line, not the machine", async () => {
+  it("a Workspace that cannot take a tier-only batch yet refuses it as invalid: each session push shows a second preview and a refusal line, and none halts", async () => {
     const m = await machine();
     // The shape check of a Workspace deployed before tier-only batches: a real 409 before dispatch.
     const older: WorkspaceTransport = async (path, payload, token) => parse(payload).facts.every(isWorkspaceAgentPlanFact)
@@ -672,6 +674,10 @@ describe("a refused tier-only batch never strands a machine", () => {
     const again = await m.push([call(), nextDay], { transport: older });
     expect(again.exitCode).toBe(0);
     expect(parse(again.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    // Its ACCEPT announces the capability again, so the question and the refusal come back with every session push.
+    expect(again.messages).toHaveLength(2);
+    expect(again.messages[1]).toContain("Exact outgoing subscription tier facts");
+    expect(again.stdout.split("\n").slice(-1)).toEqual([tierRefusedLine]);
     expect((await m.state()).pending).toBeNull();
   });
 
@@ -712,7 +718,7 @@ describe("a lost reply on a tier-only batch", () => {
     expect(resend.messages[0]).toContain(lost.sent[0]!);
     expect(resend.messages[0]).toContain("identical retained signed batch");
     expect(resend.messages[0]).toContain("Exact outgoing subscription tier facts");
-    expect(resend.messages[0]).toContain("Answering no drops this batch, and the next workspace push goes on without it.");
+    expect(resend.messages[0]).toContain("Answering no, or not answering, drops this batch, and the next workspace push goes on without it.");
     expect(resend.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect(readPlanFiles).not.toHaveBeenCalled();
     const state = await m.state();
@@ -728,7 +734,7 @@ describe("a lost reply on a tier-only batch", () => {
     const declined = await m.push([call()], { answers: ["n"], load: unexpectedRead });
     expect(declined).toMatchObject({ exitCode: 0, sent: [], stdout: tierDroppedLine });
     expect(declined.messages).toHaveLength(1);
-    expect(declined.messages[0]).toContain("Answering no drops this batch, and the next workspace push goes on without it.");
+    expect(declined.messages[0]).toContain("Answering no, or not answering, drops this batch, and the next workspace push goes on without it.");
     const dropped = await m.state();
     expect(dropped.pending).toBeNull();
     expect(dropped.device.sequence).toBe("1");
@@ -780,7 +786,7 @@ describe("a lost reply on a tier-only batch", () => {
     expect((await m.state()).pending?.state).toBe("ready");
     const declined = await m.push([call()], { answers: ["n"], load: unexpectedRead });
     expect(declined).toMatchObject({ exitCode: 0, sent: [], stdout: tierDroppedLine });
-    expect(declined.messages[0]).toContain("Answering no drops this batch");
+    expect(declined.messages[0]).toContain("Answering no, or not answering, drops this batch");
     expect(declined.messages[0]).toContain("Send this batch? [y/N]");
     expect(declined.messages[0]).not.toContain("identical retained signed batch");
     expect(await m.state()).toMatchObject({ pending: null, device: { sequence: "1" } });
@@ -863,6 +869,209 @@ describe("a tier source the Workspace does not accept yet", () => {
     expect(status).toContain("Subscription tier last reported for codex: chatgpt_pro");
     expect(status).toContain(teamSeatLine);
     expect(readPlanFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("a tier the Workspace accepted and this machine can no longer replace", () => {
+  const team = (home: string) => writeFile(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationType: "claude_team", organizationRateLimitTier: "default_claude_max_5x" } }));
+  const heldLine = (sentAt: string) => `Subscription tier for claude_code: this machine's Claude Team or Enterprise seat does not report yet, so Workspace keeps claude_max_20x, last accepted ${sentAt}, until its retention ends. The owner can change the seat plan in Workspace.`;
+  const goneLine = (agent: string, tier: string, sentAt: string) => `Subscription tier for ${agent}: this machine no longer reports one (signed out or on an API key, for example), so Workspace keeps ${tier}, last accepted ${sentAt}, until its retention ends. The owner can change the seat plan in Workspace.`;
+  const idleLine = "No changed eligible local session facts to push.";
+  const dayAfter = later(now, DAY);
+
+  it("a seat moved to Team: an idle push asks nothing, sends nothing, moves nothing, and names the agent, the tier the Workspace keeps and the date", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    const before = await readFile(m.statePath, "utf8");
+    const idle = await m.push([call()], { at: dayAfter });
+    expect(idle).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(idle.stdout.split("\n")).toEqual([idleLine, heldLine(now)]);
+    expect(await readFile(m.statePath, "utf8")).toBe(before);
+    // And when the seat comes back to the tier the Workspace holds, there is nothing to say.
+    await setClaudeTier(m.home, "default_claude_max_20x");
+    expect(await m.push([call()], { at: dayAfter })).toMatchObject({ sent: [], stdout: idleLine });
+  });
+
+  it.each([
+    ["the sign-in file is gone", (home: string) => rm(join(home, ".claude.json"))],
+    ["the agent signed out", (home: string) => writeFile(join(home, ".claude.json"), JSON.stringify({ numStartups: 3 }))],
+    ["the file cannot be parsed", (home: string) => writeFile(join(home, ".claude.json"), "{ not json")]
+  ])("Claude Code, %s: the same line, without calling it a Team seat", async (_case, change) => {
+    const m = await machine();
+    await m.push([call()]);
+    await change(m.home);
+    const idle = await m.push([call()], { at: dayAfter });
+    expect(idle).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(idle.stdout.split("\n")).toEqual([idleLine, goneLine("claude_code", "claude_max_20x", now)]);
+  });
+
+  it.each([
+    ["signed out", (home: string) => rm(join(home, ".codex", "auth.json"))],
+    ["on an API key", (home: string) => writeFile(join(home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey" }))]
+  ])("Codex, %s: its own line, one per agent, each with its own date", async (_case, change) => {
+    const m = await machine();
+    await m.push([call()]);
+    await change(m.home);
+    const idle = await m.push([call()], { at: dayAfter });
+    expect(idle.stdout.split("\n")).toEqual([idleLine, goneLine("codex", "chatgpt_pro", now)]);
+    await team(m.home);
+    expect((await m.push([call()], { at: dayAfter })).stdout.split("\n")).toEqual([idleLine, heldLine(now), goneLine("codex", "chatgpt_pro", now)]);
+  });
+
+  it("beside changed session facts: the other agent's tier goes, the accepted lines stand, and the line follows them", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    const run = await m.push([call(), nextDay], { at: dayAfter });
+    expect(run.exitCode).toBe(0);
+    const envelope = parse(run.sent[0]!);
+    expect(envelope.facts.filter(isWorkspaceAgentPlanFact).map(fact => fact.agent)).toEqual(["codex"]);
+    expect(run.messages).toHaveLength(1);
+    expect(run.stdout.split("\n")).toEqual([sessionsAcceptedLine,
+      "Workspace accepted the subscription tier for codex (chatgpt_pro). This is a plan input, not a billed cost.", heldLine(now)]);
+    const state = await m.state();
+    // The record moves only for what was accepted, and it is why the next push can still name the date.
+    expect(state.agentPlansAccepted?.claude_code).toEqual({ tier: "claude_max_20x", tierRaw: "default_claude_max_20x", sentAt: now });
+    expect(state.agentPlansAccepted?.codex?.sentAt).toBe(dayAfter);
+  });
+
+  it("when the other agent's tier is due, the tier-only batch holds that tier alone and the line follows", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    const due = later(now, 15 * DAY);
+    const run = await m.push([call()], { at: due });
+    expect(parse(run.sent[0]!).facts.map(fact => isWorkspaceAgentPlanFact(fact) && fact.agent)).toEqual(["codex"]);
+    expect(run.stdout.split("\n")).toEqual(["Workspace accepted the subscription tier for codex (chatgpt_pro). This is a plan input, not a billed cost.", heldLine(now)]);
+  });
+
+  it("stands whatever became of the batch: declined, its reply lost, or refused", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    const declinedSession = await m.push([call(), nextDay], { at: dayAfter, answers: ["n"] });
+    expect(declinedSession).toMatchObject({ exitCode: 0, sent: [] });
+    expect(declinedSession.stdout.split("\n")).toEqual(["Not sent.", heldLine(now)]);
+
+    const due = later(now, 15 * DAY);
+    const declinedTier = await m.push([call()], { at: due, answers: ["n"] });
+    expect(declinedTier.stdout.split("\n")).toEqual(["Subscription tier not sent. The next workspace push offers it again; set AIBILL_NO_PLAN_TIER=1 to stop.", heldLine(now)]);
+
+    m.server.script = [{ refuse: "invalid" }];
+    const refused = await m.push([call()], { at: due });
+    expect(refused.exitCode).toBe(0);
+    expect(refused.stdout.split("\n")).toEqual([tierRefusedLine, heldLine(now)]);
+
+    // A batch with session facts that exits 1 keeps its message on stderr, and the line still reaches stdout.
+    const held = await machine();
+    await held.push([call()]);
+    await team(held.home);
+    held.server.script = ["lost_before_commit"];
+    const lost = await held.push([call(), nextDay], { at: dayAfter });
+    expect(lost.exitCode).toBe(1);
+    expect(lost.stderr).toContain("Push outcome is unknown");
+    expect(lost.stdout).toBe(heldLine(now));
+
+    const refusedAlso = await machine();
+    await refusedAlso.push([call()]);
+    await team(refusedAlso.home);
+    refusedAlso.server.script = [{ refuse: "stale" }];
+    const retained = await refusedAlso.push([call(), nextDay], { at: dayAfter });
+    expect(retained.exitCode).toBe(1);
+    expect(retained.stderr).toContain("Its exact envelope and refusal are retained");
+    expect(retained.stdout).toBe(heldLine(now));
+  });
+
+  it("a follow-up reads the files too: a capability announced again after a drop names the tier it cannot replace", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    // The Workspace refuses a tier-only batch for Codex: the capability goes false, and the record stays.
+    m.server.script = [{ refuse: "invalid" }];
+    const due = later(now, 15 * DAY);
+    await m.push([call()], { at: due });
+    expect((await m.state()).capabilities).toEqual({ agentPlanFacts: false });
+    const run = await m.push([call(), nextDay], { at: later(due, 1000) });
+    expect(run.exitCode).toBe(0);
+    expect(run.sent).toHaveLength(2);
+    expect(run.stdout.split("\n")).toEqual([sessionsAcceptedLine,
+      "Workspace accepted the subscription tier for codex (chatgpt_pro). This is a plan input, not a billed cost.", heldLine(now)]);
+  });
+
+  it("a follow-up that sends nothing, or whose batch fails, says so too", async () => {
+    const offAgain = async () => {
+      const m = await machine();
+      await m.push([call()]);
+      await team(m.home);
+      await writeFile(m.statePath, workspaceCanonicalJson({ ...await m.state(), capabilities: { agentPlanFacts: false } } as never), { mode: 0o600 });
+      return m;
+    };
+    const due = later(now, 15 * DAY);
+
+    const nothingDue = await (await offAgain()).push([call(), nextDay], { at: dayAfter });
+    expect(nothingDue.sent).toHaveLength(1);
+    expect(nothingDue.stdout.split("\n")).toEqual([sessionsAcceptedLine, heldLine(now)]);
+
+    const declined = await (await offAgain()).push([call(), nextDay], { at: due, answers: ["y", "n"] });
+    expect(declined.stdout.split("\n")).toEqual([sessionsAcceptedLine, "Subscription tier not sent. The next workspace push offers it again; set AIBILL_NO_PLAN_TIER=1 to stop.", heldLine(now)]);
+
+    const refused = await offAgain();
+    refused.server.script = ["pass", { refuse: "invalid" }];
+    expect((await refused.push([call(), nextDay], { at: due })).stdout.split("\n")).toEqual([sessionsAcceptedLine, tierRefusedLine, heldLine(now)]);
+
+    const lost = await offAgain();
+    lost.server.script = ["pass", "lost_before_commit"];
+    const unknown = await lost.push([call(), nextDay], { at: due });
+    expect(unknown.exitCode).toBe(1);
+    expect(unknown.stderr).toContain("Push outcome is unknown");
+    expect(unknown.stdout.split("\n")).toEqual([sessionsAcceptedLine, heldLine(now)]);
+  });
+
+  it("says nothing it did not read: the opt-out and a capability that is off read no file, a retained batch reads none, and a reader that threw learned nothing", async () => {
+    const m = await machine();
+    await m.push([call()]);
+    await team(m.home);
+    readPlanFiles.mockClear();
+
+    vi.stubEnv("AIBILL_NO_PLAN_TIER", "1");
+    expect(await m.push([call()], { at: dayAfter })).toMatchObject({ stdout: idleLine, sent: [], messages: [] });
+    expect(readPlanFiles).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+
+    readPlanFiles.mockRejectedValueOnce(Error("unreadable"));
+    expect(await m.push([call()], { at: dayAfter })).toMatchObject({ exitCode: 0, sent: [], stdout: idleLine });
+    readPlanFiles.mockClear();
+
+    m.server.script = ["lost_before_commit"];
+    const lost = await m.push([call(), nextDay], { at: dayAfter });
+    expect(lost.exitCode).toBe(1);
+    readPlanFiles.mockClear();
+    const resend = await m.push([], { at: dayAfter, load: unexpectedRead });
+    expect(resend.exitCode).toBe(0);
+    expect(resend.stdout).not.toContain("Subscription tier for claude_code");
+    expect(readPlanFiles).not.toHaveBeenCalled();
+
+    const state = await m.state();
+    await writeFile(m.statePath, workspaceCanonicalJson({ ...state, capabilities: { agentPlanFacts: false } } as never), { mode: 0o600 });
+    readPlanFiles.mockClear();
+    expect(await m.push([call(), nextDay], { at: dayAfter })).toMatchObject({ stdout: idleLine, sent: [], messages: [] });
+    expect(readPlanFiles).not.toHaveBeenCalled();
+  });
+
+  it("names no tier that was never accepted, and carries ids and an instant only", async () => {
+    const m = await machine({ capability: true });
+    await team(m.home);
+    await rm(join(m.home, ".codex", "auth.json"));
+    expect(await m.push([])).toMatchObject({ sent: [], messages: [], stdout: idleLine });
+
+    const accepted = await machine();
+    await accepted.push([call()]);
+    await rm(join(accepted.home, ".claude.json"));
+    await rm(join(accepted.home, ".codex", "auth.json"));
+    const idle = await accepted.push([call()], { at: dayAfter });
+    expect(idle.stdout).not.toContain("default_claude_max_20x");
+    for (const secret of await fixtureSecrets()) expect(idle.stdout, secret).not.toContain(secret);
   });
 });
 

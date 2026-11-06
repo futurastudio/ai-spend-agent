@@ -32,13 +32,18 @@ historical untagged exception.
     pushes continue. Any drop moves the local sequence past the batch, because the
     Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
     still retains the exact envelope, and a retained envelope is never rebuilt: yes
-    resends it identically, while no, or `AIBILL_NO_PLAN_TIER`, drops it, so session
-    facts never wait on a yes. A refused or retained batch that holds session facts
-    stays retained, as before.
+    resends it identically, while no, no answer, or `AIBILL_NO_PLAN_TIER` drops it, so
+    session facts never wait on a yes. A refused or retained batch that holds session
+    facts stays retained, as before.
   - A Claude Team or Enterprise seat's tier (`oauthAccount.organizationType`) is now
     held on the machine rather than sent: the Workspace does not accept that source
     yet, and beside session facts its refusal would have retained the batch and
     halted that machine's pushes. The other agent's tier on that machine still goes.
+  - When a tier the Workspace accepted has nothing on the machine to replace it,
+    because the seat moved to Team or Enterprise, the agent signed out, or it moved to
+    an API key, each push that reads the sign-in files prints one line naming the
+    agent, that tier and when it was accepted. The Workspace hears nothing new and
+    keeps that tier until its retention ends.
   - `AIBILL_NO_PLAN_TIER=1` also suppresses the follow-up and tier-only batches, and
     a machine whose Workspace has not announced the capability still reads no sign-in
     file. `workspace status` shows when each agent's tier was last reported: the agent,

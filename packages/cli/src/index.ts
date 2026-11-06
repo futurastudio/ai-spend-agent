@@ -2,7 +2,7 @@
 import {
   beginWorkspaceEnrollment, finishWorkspaceEnrollment, workspaceStatus, prepareWorkspacePush, prepareWorkspacePlanFacts,
   sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, WORKSPACE_PLAN_REFRESH_DAYS, workspaceCanonicalJson, WorkspaceEnrollmentRefusal,
-  type WorkspaceAcceptedPlans, type WorkspaceAggregate, type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport,
+  type WorkspaceAcceptedPlans, type WorkspaceAggregate, type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport, type WorkspaceUnreportedPlan,
 } from "./workspaceConnect.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
 import { workspaceClock } from "./lib/clock.js";
@@ -1709,6 +1709,15 @@ function workspaceTierReportLines(accepted: WorkspaceAcceptedPlans): string[] {
 }
 
 /**
+ * A tier the Workspace accepted and this push cannot replace: the only signal there is at either
+ * end, since nothing is sent for it. Ids and an instant, like status; never the raw tier string.
+ */
+function workspaceUnreportedTierLine({ agent, tier, sentAt, held }: WorkspaceUnreportedPlan): string {
+  const reason = held ? "this machine's Claude Team or Enterprise seat does not report yet" : "this machine no longer reports one (signed out or on an API key, for example)";
+  return `Subscription tier for ${agent}: ${reason}, so Workspace keeps ${tier}, last accepted ${sentAt}, until its retention ends. The owner can change the seat plan in Workspace.`;
+}
+
+/**
  * `aibill signup <email> [--ref <token>]` — the explicit, deliberate path to
  * the launch list. Sends EXACTLY {email, ref} to the deployed waitlist route
  * after showing the literal payload JSON and receiving a typed `y` on a real
@@ -1826,7 +1835,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         ? ["The retained batch keeps the subscription tier facts it was signed with; the opt-out applies from the next new batch."]
         : []),
       ...(representedUnknowns && !planOnly(coverage) ? [`${representedUnknowns} incomplete local usage records are represented by unknown token values, never zero.`] : []),
-      ...(retained && planOnly(coverage) ? ["Answering no drops this batch, and the next workspace push goes on without it."] : []),
+      ...(retained && planOnly(coverage) ? ["Answering no, or not answering, drops this batch, and the next workspace push goes on without it."] : []),
       retained && status.pending?.state === "uncertain" ? "This retries only the identical retained signed batch with its original nonce. Send this exact batch again? [y/N] "
         : planOnly(coverage) ? "Send this batch? [y/N] "
           : "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] "].join("\n"));
@@ -1842,13 +1851,17 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         ...(coverage?.agentPlanFacts?.length
           ? [`It keeps the subscription tier facts it was signed with and is resent identically, with or without ${AGENT_PLAN_TIER_OPT_OUT}; the Workspace's replay receipt reconciles a batch it already holds.`]
           : [])].join("\n");
+    // Whatever became of the batch: nothing here depends on it, and nothing else tells the person.
+    const withUnreportedTiers = (result: CliResult, coverage: WorkspaceAggregate | undefined): CliResult =>
+      coverage?.unreportedPlans?.length ? { ...result, stdout: [result.stdout, ...coverage.unreportedPlans.map(workspaceUnreportedTierLine)].filter(Boolean).join("\n") } : result;
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
       resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, planFactsOptOut,
       readAgentPlanFacts: readPlans(now), confirm: confirmBatch(status.pending !== null) });
-    if (prepared.state === "unchanged") return ok(prepared.coverage?.excludedCalls
+    const settled = (result: CliResult): CliResult => withUnreportedTiers(result, prepared.coverage);
+    if (prepared.state === "unchanged") return settled(ok(prepared.coverage?.excludedCalls
       ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
-      : "No changed eligible local session facts to push.");
-    if (prepared.state === "cancelled") return ok(planOnly(prepared.coverage) ? tierDeclined : "Not sent.");
+      : "No changed eligible local session facts to push."));
+    if (prepared.state === "cancelled") return settled(ok(planOnly(prepared.coverage) ? tierDeclined : "Not sent."));
     // A no ends the command, like any no. The opt-out asked nothing, so the push goes on: nothing is retained now, so this runs once.
     if (prepared.state === "dropped") {
       if (!planFactsOptOut) return ok(tierDropped);
@@ -1857,24 +1870,24 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     }
     if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
-    if (sent.state === "refused") return sent.planOnlyDropped ? ok(tierRefused)
-      : fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.");
-    if (sent.state === "unconfirmed") return fail(unknownOutcome(prepared.coverage));
+    if (sent.state === "refused") return settled(sent.planOnlyDropped ? ok(tierRefused)
+      : fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created."));
+    if (sent.state === "unconfirmed") return settled(fail(unknownOutcome(prepared.coverage)));
     const accepted = [...(sent.sessionFactCount ? [`Workspace accepted ${sent.sessionFactCount} local session facts. These are attribution inputs, not billed costs.`] : []),
       ...(prepared.coverage?.agentPlanFacts?.length ? [tierAccepted(prepared.coverage)] : [])].join("\n");
-    if (!sent.capabilityAnnounced || planFactsOptOut) return ok(accepted);
+    if (!sent.capabilityAnnounced || planFactsOptOut) return settled(ok(accepted));
     // The ACCEPT that first announced the capability: the tier goes in this same command, in its
     // own previewed batch, and whatever happens to it the accepted line above stays true.
     try {
       const at = runtime.workspaceNow ?? workspaceClock.now();
       const followUp = await prepareWorkspacePlanFacts({ home: runtime.homeDirectory, generatedAt: at, planFactsOptOut, readAgentPlanFacts: readPlans(at),
         confirm: confirmBatch(false, ["Workspace accepted that batch and announced it takes subscription tier facts. One more batch to review:"]) });
-      if (followUp.state === "unchanged") return ok(accepted);
-      if (followUp.state === "cancelled") return ok(`${accepted}\n${tierDeclined}`);
+      if (followUp.state === "unchanged") return withUnreportedTiers(ok(accepted), followUp.coverage);
+      if (followUp.state === "cancelled") return withUnreportedTiers(ok(`${accepted}\n${tierDeclined}`), followUp.coverage);
       const tier = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
-      return tier.state === "accepted" ? ok(`${accepted}\n${tierAccepted(followUp.coverage)}`)
+      return withUnreportedTiers(tier.state === "accepted" ? ok(`${accepted}\n${tierAccepted(followUp.coverage)}`)
         : tier.state === "refused" ? ok(`${accepted}\n${tierRefused}`)
-          : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage) };
+          : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage) }, followUp.coverage);
     } catch {
       return { exitCode: 1, stdout: accepted, stderr: "The subscription tier batch stopped safely. Local state was not reset; run workspace status, then workspace push." };
     }

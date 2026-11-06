@@ -70,10 +70,18 @@ export type WorkspaceState = {
   capabilities?: WorkspaceCapabilities;
   agentPlansAccepted?: WorkspaceAcceptedPlans;
 };
+/**
+ * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
+ * reports none now (a sign-out, an API key), or one the Workspace does not accept yet (`held`). The
+ * Workspace hears nothing new and keeps the old fact until its retention ends. Ids and an instant only.
+ */
+export type WorkspaceUnreportedPlan = { agent: WorkspaceAgentPlanFact["agent"]; tier: WorkspaceAgentPlanFact["tier"]; sentAt: string; held: boolean };
 export type WorkspaceAggregate = {
   facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
   /** Plan facts prepared beside the session facts (or signed into a retained batch); absent from a bare aggregate. */
   agentPlanFacts?: WorkspaceAgentPlanFact[];
+  /** Set when this push read the sign-in files; nothing is sent for these, so the push says so in words. */
+  unreportedPlans?: WorkspaceUnreportedPlan[];
 };
 
 export function workspaceCanonicalJson(value: Json): string {
@@ -524,15 +532,22 @@ type WorkspacePlanFactOptions = {
    */
   planFactsOptOut?: boolean;
 };
-async function offerablePlanFacts(state: WorkspaceState, options: WorkspacePlanFactOptions): Promise<WorkspaceAgentPlanFact[]> {
+/** A reader that threw says nothing about the seat, so it names no tier as no longer reported. */
+async function offerablePlanFacts(state: WorkspaceState, options: WorkspacePlanFactOptions): Promise<{ facts: WorkspaceAgentPlanFact[]; unreported: WorkspaceUnreportedPlan[] }> {
   // Capability gating: a Workspace that has not announced agentPlanFacts on an ACCEPT gets none, and no sign-in file is read for it.
-  if (state.capabilities?.agentPlanFacts !== true || options.planFactsOptOut || !options.readAgentPlanFacts) return [];
+  if (state.capabilities?.agentPlanFacts !== true || options.planFactsOptOut || !options.readAgentPlanFacts) return { facts: [], unreported: [] };
   let read: readonly WorkspaceAgentPlanFact[];
-  try { read = await options.readAgentPlanFacts(); } catch { return []; }
-  return read.filter(fact => {
-    try { validateAgentPlanFact(fact); } catch { return false; }
-    return WORKSPACE_ACCEPTED_PLAN_SOURCES.has(fact.source);
+  try { read = await options.readAgentPlanFacts(); } catch { return { facts: [], unreported: [] }; }
+  const wellFormed = read.filter(fact => {
+    try { validateAgentPlanFact(fact); return true; } catch { return false; }
   });
+  const facts = wellFormed.filter(fact => WORKSPACE_ACCEPTED_PLAN_SOURCES.has(fact.source));
+  const unreported = (["claude_code", "codex"] as const).flatMap(agent => {
+    const last = state.agentPlansAccepted?.[agent];
+    return last && !facts.some(fact => fact.agent === agent)
+      ? [{ agent, tier: last.tier, sentAt: last.sentAt, held: wellFormed.some(fact => fact.agent === agent) }] : [];
+  });
+  return { facts, unreported };
 }
 /**
  * A batch of tier facts alone, no longer retained. The local sequence moves past
@@ -559,7 +574,8 @@ function agentPlanFactsDue(facts: readonly WorkspaceAgentPlanFact[], accepted: W
 async function offerPlanOnlyBatch(state: WorkspaceState, save: (state: WorkspaceState) => Promise<void>, coverage: WorkspaceAggregate,
   options: WorkspacePlanFactOptions): Promise<{ state: "prepared" | "unchanged" | "cancelled"; coverage: WorkspaceAggregate }> {
   if (Date.parse(options.generatedAt) >= Date.parse(state.device.expiresAt)) return { state: "unchanged", coverage };
-  const plans = await offerablePlanFacts(state, options);
+  const { facts: plans, unreported } = await offerablePlanFacts(state, options);
+  coverage.unreportedPlans = unreported;
   if (!plans.length || !agentPlanFactsDue(plans, state.agentPlansAccepted, options.generatedAt)) return { state: "unchanged", coverage };
   coverage.agentPlanFacts = plans;
   const envelope = buildWorkspaceEnvelope(state.device, plans, options.generatedAt);
@@ -619,7 +635,9 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
     if (eligible.length !== coverage.facts.length) coverage.reasons.push("outside_closed_authorized_days");
     coverage.facts = eligible;
     if (!coverage.facts.length) return offerPlanOnlyBatch(state, save, coverage, options);
-    coverage.agentPlanFacts = await offerablePlanFacts(state, options);
+    const plans = await offerablePlanFacts(state, options);
+    coverage.agentPlanFacts = plans.facts;
+    coverage.unreportedPlans = plans.unreported;
     const envelope = buildWorkspaceEnvelope(state.device,
       [...coverage.facts.slice(0, MAX_FACTS - coverage.agentPlanFacts.length), ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };

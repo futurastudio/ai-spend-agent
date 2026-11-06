@@ -109,6 +109,13 @@ Enterprise seat sends no Claude tier yet: its tier is read from
 fact stays on the machine, and `workspace status` says so while no Claude tier has
 been reported. Any other agent's tier on that machine is unaffected.
 
+If Workspace already accepted a tier for that agent and the seat then moves to Team
+or Enterprise, the agent signs out, or it moves to an API key, Workspace hears nothing
+new. It keeps the last tier until that fact's retention ends and can cost sessions at
+it until then; the owner can change the seat plan in Workspace. Each push that reads
+the sign-in files prints one line naming the agent, that tier and when it was accepted.
+`workspace status` reads no sign-in file, so it still shows that tier as last reported.
+
 **When it is sent.** Only after this Workspace has announced, on an accepted push
 (a response header, never the receipt body), that it accepts tier facts. Until
 then no sign-in file is read. `workspace status` shows whether it has. After that:
@@ -139,10 +146,10 @@ dropped, not retained: one line says the tier facts were not accepted, the CLI
 sends none until a later accepted push announces them again, and session pushes
 continue. If a reply is lost, the exact signed envelope is retained and the next push
 asks about it. Yes resends it identically, because only the identical envelope can be
-reconciled by the Workspace's replay receipt. No drops it. Session facts wait only for
-that answer, because a batch of tier facts alone holds none to reconcile. A batch that
-reached Workspace before its reply was lost stays there whichever you answer, until a
-later tier replaces it.
+reconciled by the Workspace's replay receipt. No, or no answer, drops it. Session
+facts wait only for that answer, because a batch of tier facts alone holds none to
+reconcile. A batch that reached Workspace before its reply was lost stays there
+whichever you answer, until a later tier replaces it.
 
 **Leaving it out.** Set `AIBILL_NO_PLAN_TIER=1` to leave tiers out of every new
 batch: no sign-in file is read, and neither the follow-up nor a tier-only batch is
@@ -164,7 +171,8 @@ at a tier the owner types by hand.
   diagnostic counts for support; do not delete logs or reconnect as a repair.
 - **Push outcome unknown:** the exact signed batch is retained. `workspace push`
   asks you to review and explicitly retry that same batch. For a batch of
-  subscription tier facts alone, answering no drops it and session pushes continue.
+  subscription tier facts alone, answering no, or not answering, drops it and session
+  pushes continue.
 - **Batch refused:** resolve the refusal first. Reconnecting is not a substitute
   for resolving a refused batch. A batch of subscription tier facts alone is the
   exception: it is dropped, one line says so, and session pushes continue.
