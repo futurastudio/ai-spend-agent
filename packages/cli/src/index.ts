@@ -1710,11 +1710,13 @@ function workspaceTierReportLines(accepted: WorkspaceAcceptedPlans): string[] {
 
 /**
  * A tier the Workspace accepted and this push cannot replace: the only signal there is at either
- * end, since nothing is sent for it. Ids and an instant, like status; never the raw tier string.
+ * end, since nothing is sent for it. It speaks of the seat plan, not the fact: a plan set from the fact
+ * has no end month and no later report moves it, so the fact's retention says nothing about what the
+ * owner sees. Ids and an instant, like status; never the raw tier string.
  */
 function workspaceUnreportedTierLine({ agent, tier, sentAt, held }: WorkspaceUnreportedPlan): string {
   const reason = held ? "this machine's Claude Team or Enterprise seat does not report yet" : "this machine no longer reports one (signed out or on an API key, for example)";
-  return `Subscription tier for ${agent}: ${reason}, so Workspace keeps ${tier}, last accepted ${sentAt}, until its retention ends. The owner can change the seat plan in Workspace.`;
+  return `Subscription tier for ${agent}: ${reason}, so Workspace hears nothing new. A seat plan set from ${tier}, last accepted ${sentAt}, stays until the owner changes it in Workspace.`;
 }
 
 /**
@@ -1842,6 +1844,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const tierAccepted = (coverage: WorkspaceAggregate | undefined) => `Workspace accepted the subscription tier for ${tierNames(coverage)}. This is a plan input, not a billed cost.`;
     const tierDeclined = `Subscription tier not sent. The next workspace push offers it again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierRefused = "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.";
+    const tierWaits = "Subscription tier: not sent yet. It goes right after this machine's next batch of session facts, from a UTC day that has closed, because only an accepted batch tells this CLI that Workspace takes it. No sign-in file was read.";
     const tierKept = "If it had already reached the Workspace, the Workspace keeps that tier.";
     const tierDropped = `Retained subscription tier batch dropped; nothing was sent. ${tierKept} The next workspace push sends any changed session facts and offers the tier again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierOptedOut = `Retained subscription tier batch dropped because ${AGENT_PLAN_TIER_OPT_OUT} is set. ${tierKept}`;
@@ -1858,9 +1861,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, planFactsOptOut,
       readAgentPlanFacts: readPlans(now), confirm: confirmBatch(status.pending !== null) });
     const settled = (result: CliResult): CliResult => withUnreportedTiers(result, prepared.coverage);
-    if (prepared.state === "unchanged") return settled(ok(prepared.coverage?.excludedCalls
+    if (prepared.state === "unchanged") return settled(ok([prepared.coverage?.excludedCalls
       ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
-      : "No changed eligible local session facts to push."));
+      : "No changed eligible local session facts to push.",
+      ...(prepared.coverage?.tierAwaitsAnnouncement ? [tierWaits] : [])].join("\n")));
     if (prepared.state === "cancelled") return settled(ok(planOnly(prepared.coverage) ? tierDeclined : "Not sent."));
     // A no ends the command, like any no. The opt-out asked nothing, so the push goes on: nothing is retained now, so this runs once.
     if (prepared.state === "dropped") {

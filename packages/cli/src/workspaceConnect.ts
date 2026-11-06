@@ -72,8 +72,10 @@ export type WorkspaceState = {
 };
 /**
  * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
- * reports none now (a sign-out, an API key), or one the Workspace does not accept yet (`held`). The
- * Workspace hears nothing new and keeps the old fact until its retention ends. Ids and an instant only.
+ * reports none now (a sign-out, an API key), or sits in an organization whose source the Workspace does
+ * not accept yet; `held` says that organization is a Claude Team or Enterprise seat, the only kinds this
+ * CLI can name. The Workspace hears nothing new. It keeps the old fact until its retention ends, and a
+ * seat plan set from that fact stays after that, until the owner changes it. Ids and an instant only.
  */
 export type WorkspaceUnreportedPlan = { agent: WorkspaceAgentPlanFact["agent"]; tier: WorkspaceAgentPlanFact["tier"]; sentAt: string; held: boolean };
 export type WorkspaceAggregate = {
@@ -82,6 +84,8 @@ export type WorkspaceAggregate = {
   agentPlanFacts?: WorkspaceAgentPlanFact[];
   /** Set when this push read the sign-in files; nothing is sent for these, so the push says so in words. */
   unreportedPlans?: WorkspaceUnreportedPlan[];
+  /** A push with nothing to send, to a Workspace that has not announced plan facts: nothing else tells the person the tier waits. Reads nothing. */
+  tierAwaitsAnnouncement?: true;
 };
 
 export function workspaceCanonicalJson(value: Json): string {
@@ -313,6 +317,8 @@ function validateAcceptedPlans(plans: WorkspaceAcceptedPlans): void {
  * Workspace accepts the source; the other agent's tier is unaffected.
  */
 const WORKSPACE_ACCEPTED_PLAN_SOURCES = new Set<string>(["claude_json.oauthAccount.organizationRateLimitTier", "codex_auth.id_token.chatgpt_plan_type"]);
+/** Of the organizations that source reports, the ones this CLI can call a seat; any other type normalizes to `unknown` and names none. */
+const CLAUDE_ORGANIZATION_SEAT_TIERS = new Set<string>(["claude_team", "claude_enterprise"]);
 function validateEnvelope(envelope: WorkspaceEnvelope, device: WorkspaceDevice): void {
   exactKeys(envelope, ["schemaVersion", "deviceGrantId", "grantRevision", "deviceKeyId", "sequence", "nonce", "batchId", "idempotencyKey", "generatedAt", "facts", "manifestHash", "signature"]);
   exactKeys(envelope.signature, ["algorithm", "canonicalization", "value"]);
@@ -545,7 +551,7 @@ async function offerablePlanFacts(state: WorkspaceState, options: WorkspacePlanF
   const unreported = (["claude_code", "codex"] as const).flatMap(agent => {
     const last = state.agentPlansAccepted?.[agent];
     return last && !facts.some(fact => fact.agent === agent)
-      ? [{ agent, tier: last.tier, sentAt: last.sentAt, held: wellFormed.some(fact => fact.agent === agent) }] : [];
+      ? [{ agent, tier: last.tier, sentAt: last.sentAt, held: wellFormed.some(fact => fact.agent === agent && CLAUDE_ORGANIZATION_SEAT_TIERS.has(fact.tier)) }] : [];
   });
   return { facts, unreported };
 }
@@ -574,6 +580,7 @@ function agentPlanFactsDue(facts: readonly WorkspaceAgentPlanFact[], accepted: W
 async function offerPlanOnlyBatch(state: WorkspaceState, save: (state: WorkspaceState) => Promise<void>, coverage: WorkspaceAggregate,
   options: WorkspacePlanFactOptions): Promise<{ state: "prepared" | "unchanged" | "cancelled"; coverage: WorkspaceAggregate }> {
   if (Date.parse(options.generatedAt) >= Date.parse(state.device.expiresAt)) return { state: "unchanged", coverage };
+  if (state.capabilities?.agentPlanFacts !== true && !options.planFactsOptOut) coverage.tierAwaitsAnnouncement = true;
   const { facts: plans, unreported } = await offerablePlanFacts(state, options);
   coverage.unreportedPlans = unreported;
   if (!plans.length || !agentPlanFactsDue(plans, state.agentPlansAccepted, options.generatedAt)) return { state: "unchanged", coverage };

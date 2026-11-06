@@ -110,11 +110,13 @@ fact stays on the machine, and `workspace status` says so while no Claude tier h
 been reported. Any other agent's tier on that machine is unaffected.
 
 If Workspace already accepted a tier for that agent and the seat then moves to Team
-or Enterprise, the agent signs out, or it moves to an API key, Workspace hears nothing
-new. It keeps the last tier until that fact's retention ends and can cost sessions at
-it until then; the owner can change the seat plan in Workspace. Each push that reads
-the sign-in files prints one line naming the agent, that tier and when it was accepted.
-`workspace status` reads no sign-in file, so it still shows that tier as last reported.
+or Enterprise, the agent signs out, or it moves to an API key or another kind of
+organization, Workspace hears nothing new. It keeps the last tier until that fact's
+retention ends, and a seat plan can be set from it until then. A seat plan set from it
+stays after that, until the owner changes it in Workspace: no later report moves it.
+Each push that reads the sign-in files prints one line naming the agent, that tier and
+when it was accepted. `workspace status` reads no sign-in file, so it still shows that
+tier as last reported.
 
 **When it is sent.** Only after this Workspace has announced, on an accepted push
 (a response header, never the receipt body), that it accepts tier facts. Until
@@ -133,7 +135,8 @@ then no sign-in file is read. `workspace status` shows whether it has. After tha
 
 Declining a tier preview sends nothing and retains nothing; the next push offers
 it again. A push that has nothing else to send and no announcement yet has nothing
-to learn it from, so the tier waits for the next batch of session facts.
+to learn it from, so the tier waits for the next batch of session facts. That push
+says so in one line, and reads no sign-in file to say it.
 
 **What stays on the machine.** `~/.aibill/workspace-device.json` records, per
 agent, the tier id, the raw tier string and when Workspace last accepted them. That
@@ -149,15 +152,19 @@ asks about it. Yes resends it identically, because only the identical envelope c
 reconciled by the Workspace's replay receipt. No, or no answer, drops it. Session
 facts wait only for that answer, because a batch of tier facts alone holds none to
 reconcile. A batch that reached Workspace before its reply was lost stays there
-whichever you answer, until a later tier replaces it.
+whichever you answer, until a later tier replaces it, and a seat plan already set from
+it stays until the owner changes it.
 
 **Leaving it out.** Set `AIBILL_NO_PLAN_TIER=1` to leave tiers out of every new
 batch: no sign-in file is read, and neither the follow-up nor a tier-only batch is
 offered. A retained batch of tier facts alone is dropped without asking, one line says
 so, and the push goes on. A retained batch that also holds session facts is never
 rebuilt and is resent exactly as signed, tier facts included, so the opt-out applies
-from the next new batch and the preview says so. Workspace then costs those sessions
-at a tier the owner types by hand.
+from the next new batch and the preview says so. On a machine that never reported a
+tier, Workspace then costs those sessions at a tier the owner types by hand. The
+opt-out stops what this machine sends and withdraws nothing: a tier Workspace already
+accepted stays until its retention ends, and a seat plan set from it stays until the
+owner changes it.
 
 ## If setup or sharing does not complete
 
