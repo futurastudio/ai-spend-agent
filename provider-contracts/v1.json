@@ -95,6 +95,27 @@
           ],
           "semanticSha256": "1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af",
           "contentSha256": "5869cf610d86542111cf994e4ebe3b48fac6788b296c57777a7b94bbd10541eb"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/pricing.md",
+          "requiredMarkers": [
+            "### Standard pricing data",
+            "| gpt-6-astra | $10.00 | $50.00 | $1.00 |",
+            "| gpt-6-luna | $0.10 | $0.50 | $0.01 |",
+            "| gpt-5.6-sol | $4.00 | $20.00 | $0.40 |",
+            "| gpt-5.5 (<272K context length) | $5.00 | $30.00 | $0.50 |",
+            "| gpt-5.4-pro (<272K context length) | $30.00 | $180.00 |",
+            "| gpt-5.4-mini | $0.75 | $4.50 | $0.075 |",
+            "| gpt-5.1 | $1.25 | $10.00 | $0.125 |",
+            "| gpt-4.1 | $2.00 | $8.00 | $0.50 |",
+            "| o3-pro | $20.00 | $80.00 |",
+            "Long context: >272K input tokens.",
+            "charged a 10% uplift for models released on or after March 5, 2026",
+            "promotional pricing is available until November 30, 2026"
+          ],
+          "semanticSha256": "3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d",
+          "contentSha256": "6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce"
         }
       ]
     },
@@ -166,6 +187,50 @@
           "contentSha256": "ff0ccb808ee291b7f5474ce26349f77b5677dae6da192dacb6b5e5d7bc39d808"
         },
         {
+          "kind": "contract-cost-report",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve",
+          "requiredMarkers": [
+            "GET /v1/organizations/cost_report [legacy]",
+            "this endpoint is part of the legacy usage and cost api",
+            "group_by : optional array of \"description\" or \"workspace_id\"",
+            "betacostreport object { data , has_more , next_page }",
+            "\"results\" : [ { \"amount\" : \"123.78912\" , \"context_window\" : \"0-200k\" , \"cost_type\" : \"tokens\" , \"currency\" : \"USD\"",
+            "\"service_tier\" : \"standard\" , \"speed\" : \"standard\" , \"token_type\""
+          ],
+          "semanticSha256": "1b89c7bec3dc4e62a000dc94e45bffb69ece201d51db0994499e026ff743b9f2",
+          "contentSha256": "b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7"
+        },
+        {
+          "kind": "contract-usage-messages",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages",
+          "requiredMarkers": [
+            "GET /v1/organizations/usage_report/messages [legacy]",
+            "this endpoint is part of the legacy usage and cost api",
+            "group_by : optional array of \"account_id\" or \"api_key_id\" or \"context_window\" or 6 more",
+            "service_tiers : optional array of betaanalyticsservicetier",
+            "betamessagesusagereport object { data , has_more , next_page }",
+            "\"cache_read_input_tokens\" : 200 , \"context_window\" : \"0-200k\" , \"inference_geo\" : \"global\"",
+            "\"service_tier\" : \"standard\" , \"speed\" : \"standard\" , \"uncached_input_tokens\" : 1500"
+          ],
+          "semanticSha256": "f2a93d7e9449d94df204c0498811aaf8123c70e71f47375f3dbdd54e122429b9",
+          "contentSha256": "c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8"
+        },
+        {
+          "kind": "contract-claude-code",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code",
+          "requiredMarkers": [
+            "GET /v1/organizations/usage_report/claude_code",
+            "UTC date in YYYY-MM-DD format. Returns metrics for this single day only.",
+            "\"date\" : \"2025-08-08T00:00:00Z\"",
+            "\"is_remote\" : false",
+            "\"estimated_cost\" : { \"amount\" : 186 , \"currency\" : \"USD\" }",
+            "\"subscription_type\" : \"enterprise\"",
+            "\"has_more\" : true"
+          ],
+          "semanticSha256": "296c1cab0bad6d4c7ce98ea24de67352197de34b0bae9f8303635c4e929f2489",
+          "contentSha256": "dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0"
+        },
+        {
           "kind": "pricing",
           "url": "https://platform.claude.com/docs/en/about-claude/pricing",
           "requiredMarkers": [
@@ -182,9 +247,11 @@
             "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
             "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
             "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
-            "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok"
+            "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok",
+            "Claude Opus 4.5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+            "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok"
           ],
-          "semanticSha256": "8cb16b71482defcd1c55085d0ea974da6e547a6316d3f85ba9152e66effc8c0a",
+          "semanticSha256": "3f93e65c1ee0212ee63bec3d47f19fe337dc40191b0068262bd88249883b513c",
           "contentSha256": "d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c"
         }
       ]
@@ -451,7 +518,7 @@
         },
         {
           "kind": "pricing",
-          "url": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises",
+          "url": "https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing",
           "requiredMarkers": [
             "GitHub AI Credits are the billing unit",
             "1 AI credit = $0.01 USD",

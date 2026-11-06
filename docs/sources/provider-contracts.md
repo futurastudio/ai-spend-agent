@@ -42,6 +42,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `d505ff35639b3e9687d7ccd0186cc09892b99c806a56e0fa154d53eccea9cd7a`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `3481d521be9c350577fe865c424ebab59cc5b8adddf972f5c4a766aad5b9c916`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `5869cf610d86542111cf994e4ebe3b48fac6788b296c57777a7b94bbd10541eb`
+  - [pricing](https://developers.openai.com/api/docs/pricing.md) — semantic `3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d`; reviewed content `6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce`
 
 ## Anthropic Platform Usage and Cost Admin API
 
@@ -74,7 +75,10 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Official sources:
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) — semantic `e63c8cac8705feb389ba7335f010bb2aa99b73914ba8c2620228a40c14af6797`; reviewed content `e7f7f2ad1e11beaa4a8c64b45a561d506eb45d6ad5408c280f4fef41132cc6f9`
   - [contract](https://platform.claude.com/docs/en/manage-claude/usage-cost-analytics-api) — semantic `ac73794c732b77194f55d85be507329c7f8e816a1dfebb30825cbf9ba4859b30`; reviewed content `ff0ccb808ee291b7f5474ce26349f77b5677dae6da192dacb6b5e5d7bc39d808`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `8cb16b71482defcd1c55085d0ea974da6e547a6316d3f85ba9152e66effc8c0a`; reviewed content `d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c`
+  - [contract-cost-report](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve) — semantic `1b89c7bec3dc4e62a000dc94e45bffb69ece201d51db0994499e026ff743b9f2`; reviewed content `b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7`
+  - [contract-usage-messages](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages) — semantic `f2a93d7e9449d94df204c0498811aaf8123c70e71f47375f3dbdd54e122429b9`; reviewed content `c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8`
+  - [contract-claude-code](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code) — semantic `296c1cab0bad6d4c7ce98ea24de67352197de34b0bae9f8303635c4e929f2489`; reviewed content `dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `3f93e65c1ee0212ee63bec3d47f19fe337dc40191b0068262bd88249883b513c`; reviewed content `d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c`
 
 ## Claude Enterprise Analytics
 
@@ -191,7 +195,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Included-credit pools are plan context: a Copilot access organization has none, so discountAmount can be zero from the first credit
 - Official sources:
   - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `c6e469aa310c47a9a80d6287a9e1238c8abe32707f0093e14b87439c9ed2c8b8`
-  - [pricing](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises) — semantic `14f47855c7926d2e38d31f306eb7285bc248cb1b5112bbe8b66428708f20c9af`; reviewed content `9521ba0fd031ef7cffc209d02da9f9b05654bfaa8ebe0f5d7e462afe514ee98f`
+  - [pricing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing) — semantic `14f47855c7926d2e38d31f306eb7285bc248cb1b5112bbe8b66428708f20c9af`; reviewed content `9521ba0fd031ef7cffc209d02da9f9b05654bfaa8ebe0f5d7e462afe514ee98f`
 
 ## Drift behavior
 

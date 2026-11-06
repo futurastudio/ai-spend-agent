@@ -231,7 +231,7 @@ test("today's drift opens one P0 financial-schema issue, separate pricing issues
   assert.match(p0.body, /No pricing or financial behavior was changed automatically/);
   assert.equal(p0.state.firstObservedRun, "https://github.com/futurastudio/ai-spend-agent/actions/runs/42");
   const digest = alerts.find((issue) => issue.key === digestKey);
-  assert.equal(Object.keys(digest.state.entries).length, 11);
+  assert.equal(Object.keys(digest.state.entries).length, 15);
   assert.doesNotMatch(digest.body, /organization\/subresources\/usage/, "the financial-schema page never sits in the low-priority digest");
   assert.deepEqual([...fake.labelNames].sort(), ["provider-drift", "provider-drift:P0", "provider-drift:P2", "provider-drift:P3", "provider-drift:digest", "provider-drift:financial-schema", "provider-drift:pricing"]);
 

@@ -243,9 +243,107 @@ test("Gemini pricing markers anchor on the priced gemini-2.5-pro rows of the Mar
   assert.equal(observation.error, "reviewed semantic fingerprint changed");
 });
 
+test("every rate the Anthropic pricing page publishes for a priced model sits inside a semantic window", async () => {
+  const contracts = await readProviderContracts();
+  const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
+    .resources.find((entry) => entry.kind === "pricing");
+  // The standard table as published on 2026-11-06, in page order. A rate no window covers is
+  // a real price change the checker would file as noise: Haiku 4.5 and Opus 4.5 were, until now.
+  const rows = [
+    "Claude Fable 5.1 for demanding reasoning and long-horizon agentic work $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+    "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
+    "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
+    "Claude Haiku 5.5 for high-volume, latency-sensitive tasks such as classification, extraction, and routing",
+    "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
+    "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok",
+    "Additional models",
+    "Claude Mythos 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+    "Claude Fable 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
+    "Claude Mythos 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
+    "Claude Opus 5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+    "Claude Opus 4.8 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+    "Claude Opus 4.7 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+    "Claude Opus 4.6 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+    "Claude Opus 4.5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+    "Claude Opus 4.1 $15 / MTok $75 / MTok $18.75 / MTok $30 / MTok $1.50 / MTok",
+    "Claude Opus 4 $15 / MTok $75 / MTok $18.75 / MTok $30 / MTok $1.50 / MTok",
+    "Claude Sonnet 5 $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok",
+    "Claude Sonnet 4.6 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+    "Claude Sonnet 4.5 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+    "Claude Sonnet 4 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+    "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok"
+  ];
+  assertEveryFigureMovesTheFingerprint([
+    "Model Base tokens Prompt caching Name Input Output 5m writes 1h writes Hits and refreshes",
+    ...rows,
+    "Additional notes All other models use the standard 0.1x multiplier."
+  ].join(" "), requiredMarkers);
+});
+
+test("every standard OpenAI rate on the pricing page sits inside a semantic window", async () => {
+  const contracts = await readProviderContracts();
+  const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "openai-platform")
+    .resources.find((entry) => entry.url.endsWith("/api/docs/pricing.md"));
+  // The two standard tables as published on 2026-11-06, in page order, with their long-context columns.
+  const longContext = [
+    "| gpt-6-astra | $10.00 | $50.00 | $1.00 | $12.50 | $25.00 | $20.00 | $75.00 | $2.00 | $25.00 | $50.00 |",
+    "| gpt-6.1-sol | $2.00 | $10.00 | $0.10 | $2.50 | $5.00 | $4.00 | $15.00 | $0.20 | $5.00 | $10.00 |",
+    "| gpt-6.1-terra | $1.00 | $5.00 | $0.05 | $1.25 | $2.50 | $2.00 | $7.50 | $0.10 | $2.50 | $5.00 |",
+    "| gpt-6-luna | $0.10 | $0.50 | $0.01 | $0.125 | $0.25 | $0.20 | $0.75 | $0.02 | $0.25 | $0.50 |",
+    "| gpt-6-sol | $2.00 | $10.00 | $0.20 | $2.50 | $5.00 | $4.00 | $15.00 | $0.40 | $5.00 | $10.00 |",
+    "| gpt-5.6-sol | $4.00 | $20.00 | $0.40 | $5.00 | $10.00 | $8.00 | $30.00 | $0.80 | $10.00 | $20.00 |",
+    "| gpt-5.6-terra | $2.00 | $12.00 | $0.20 | $2.50 | $5.00 | $4.00 | $18.00 | $0.40 | $5.00 | $10.00 |",
+    "| gpt-5.6-luna | $0.20 | $1.20 | $0.02 | $0.25 | $0.50 | $0.40 | $1.80 | $0.04 | $0.50 | $1.00 |",
+    "| gpt-5.5 (<272K context length) | $5.00 | $30.00 | $0.50 | - | - | $10.00 | $45.00 | $1.00 | - | - |",
+    "| gpt-5.5-pro (<272K context length) | $30.00 | $180.00 | - | - | - | $60.00 | $270.00 | - | - | - |",
+    "| gpt-5.4 (<272K context length) | $2.50 | $15.00 | $0.25 | - | - | $5.00 | $22.50 | $0.50 | - | - |",
+    "| gpt-5.4-pro (<272K context length) | $30.00 | $180.00 | - | - | - | $60.00 | $270.00 | - | - | - |"
+  ];
+  const flat = [
+    "| gpt-5.4-mini | $0.75 | $4.50 | $0.075 |",
+    "| gpt-5.4-nano | $0.20 | $1.25 | $0.02 |",
+    "| gpt-5.2 | $1.75 | $14.00 | $0.175 |",
+    "| gpt-5.2-pro | $21.00 | $168.00 | - |",
+    "| gpt-5.1 | $1.25 | $10.00 | $0.125 |",
+    "| gpt-5 | $1.25 | $10.00 | $0.125 |",
+    "| gpt-5-mini | $0.25 | $2.00 | $0.025 |",
+    "| gpt-5-nano | $0.05 | $0.40 | $0.005 |",
+    "| gpt-5-pro | $15.00 | $120.00 | - |",
+    "| gpt-4.1 | $2.00 | $8.00 | $0.50 |",
+    "| gpt-4.1-mini | $0.40 | $1.60 | $0.10 |",
+    "| gpt-4o | $2.50 | $10.00 | $1.25 |",
+    "| gpt-4o-mini | $0.15 | $0.60 | $0.075 |",
+    "| o3-pro | $20.00 | $80.00 | - |",
+    "| o3 | $2.00 | $8.00 | $0.50 |"
+  ];
+  assertEveryFigureMovesTheFingerprint([
+    "### Standard pricing data",
+    "| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...longContext,
+    "| Model | Input | Output | Cached input |",
+    "| --- | --- | --- | --- |",
+    ...flat,
+    "Batch ### Batch pricing data"
+  ].join("\n"), requiredMarkers);
+});
+
+function assertEveryFigureMovesTheFingerprint(page, requiredMarkers) {
+  const normalized = normalizeDocument(page);
+  const reviewed = semanticFingerprint(normalized, requiredMarkers);
+  let figures = 0;
+  for (const { 0: figure, index } of normalized.matchAll(/\$[0-9.]+/g)) {
+    figures += 1;
+    const changed = `${normalized.slice(0, index)}$99.99${normalized.slice(index + figure.length)}`;
+    assert.notEqual(semanticFingerprint(changed, requiredMarkers), reviewed, `no window sees ${figure} in ...${normalized.slice(Math.max(0, index - 40), index + 20)}...`);
+  }
+  assert.ok(figures > 60, `the fixture lost its table: ${figures} figures`);
+}
+
 test("alert classes default from the resource kind and are rendered when declared", async () => {
   const contracts = await readProviderContracts();
   assert.equal(resourceAlertClass({ kind: "contract" }), "api_contract");
+  assert.equal(resourceAlertClass({ kind: "contract-cost-report" }), "api_contract");
   assert.equal(resourceAlertClass({ kind: "pricing" }), "pricing");
   assert.equal(resourceAlertClass({ kind: "reconciliation" }), "reconciliation");
   assert.equal(resourceAlertClass({ kind: "contract", alertClass: "financial_schema" }), "financial_schema");
