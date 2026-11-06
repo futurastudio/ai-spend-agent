@@ -128,9 +128,9 @@ it again. A push that has nothing else to send and no announcement yet has nothi
 to learn it from, so the tier waits for the next batch of session facts.
 
 **What stays on the machine.** `~/.aibill/workspace-device.json` records, per
-agent, the tier id, the raw tier string and when Workspace last accepted them. It
-changes only on an accepted push. `workspace status` shows the agent, the tier id
-and the time. While a batch is pending, the same file retains the exact signed
+agent, the tier id, the raw tier string and when Workspace last accepted them. That
+record changes only on an accepted push. `workspace status` shows the agent, the tier
+id and the time. While a batch is pending, the same file retains the exact signed
 envelope, tier facts (those seven fields) included, until it is resolved.
 
 **If it does not arrive.** A batch of tier facts alone that Workspace refuses is
