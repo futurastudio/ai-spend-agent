@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { PRICING_TABLE_AS_OF, canPriceTokenUsageAtScope, estimateTokenCostUsd, estimateTokenCostsUsd, findPricingRule, promptTierThreshold, type TokenUsage } from "./modelPricing.js";
 
 const evidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-10-07.json", import.meta.url), "utf8"));
@@ -71,10 +71,37 @@ describe("2026-11-06 reviewed GPT-5.6 Sol prices", () => {
   // Dated on purpose. Reports print these rates under "published API rates", and OpenAI has not
   // published them, so a person has to look again by the date the evidence names. From the next
   // UTC day this fails in every run until the inference is replaced or a new date is recorded.
-  it("has its inferred later rates re-checked by the date the evidence names", () => {
-    const { by, action } = solEvidence.laterRatesRecheck as { by: string; action: string };
-    expect(by).toBe("2026-12-01");
-    expect(new Date().toISOString().slice(0, 10) <= by, `The re-check of gpt-5.6-sol was due by ${by}. ${action}`).toBe(true);
+  // The newest evidence file that lists the model decides, so following the evidence's own action
+  // turns this green without editing the test.
+  type Recheck = { by: string; action: string };
+  type EvidenceFile = { name: string; models?: { id: string }[]; laterRatesRecheck?: Recheck };
+  const evidenceDirectory = new URL("../../../provider-contracts/", import.meta.url);
+  const evidenceFiles = (): EvidenceFile[] => readdirSync(evidenceDirectory)
+    .filter((name) => /^model-pricing-\d{4}-\d{2}-\d{2}\.json$/.test(name))
+    .sort()
+    .map((name) => ({ name, ...JSON.parse(readFileSync(new URL(name, evidenceDirectory), "utf8")) }));
+  const recheckDue = (files: EvidenceFile[], today: string): Recheck | undefined => {
+    const recheck = files.filter((file) => file.models?.some((entry) => entry.id === "gpt-5.6-sol")).at(-1)?.laterRatesRecheck;
+    return recheck && today > recheck.by ? recheck : undefined;
+  };
+
+  it("has its inferred later rates re-checked by the date the newest evidence names", () => {
+    const due = recheckDue(evidenceFiles(), new Date().toISOString().slice(0, 10));
+    expect(due, due && `The re-check of gpt-5.6-sol was due by ${due.by}. ${due.action}`).toBeUndefined();
+  });
+
+  it("names December 1 for the re-check, and either outcome of it clears the test", () => {
+    const today = [{ name: "model-pricing-2026-11-06.json", ...solEvidence }];
+    expect(solEvidence.laterRatesRecheck.by).toBe("2026-12-01");
+    expect(recheckDue(today, "2026-12-01")).toBeUndefined();
+    expect(recheckDue(today, "2026-12-02")).toMatchObject({ by: "2026-12-01" });
+    const solFile = (name: string, extra: object) => ({ name, models: [{ id: "gpt-5.6-sol" }], ...extra });
+    // OpenAI still has not published: a new date.
+    expect(recheckDue([...today, solFile("model-pricing-2026-12-01.json", { laterRatesRecheck: { by: "2027-01-15", action: "look again" } })], "2026-12-02")).toBeUndefined();
+    // OpenAI published: the inference is replaced, and nothing is left to re-check.
+    expect(recheckDue([...today, solFile("model-pricing-2026-12-01.json", {})], "2026-12-02")).toBeUndefined();
+    // Evidence about another model settles nothing.
+    expect(recheckDue([...today, { name: "model-pricing-2026-12-01.json", models: [{ id: "gpt-6-sol" }] }], "2026-12-02")).toMatchObject({ by: "2026-12-01" });
   });
 });
 

@@ -340,11 +340,16 @@ const pricingRules: PricingRule[] = [
   //   rule does apply. Access is gated behind the Daybreak program, so the
   //   cost of leaving it unpriced is near zero and a coin-flip on the tier
   //   would be a real number that is wrong on long requests.
-  // - gpt-5.5-pro / gpt-5.4-pro: listed as long-context-capable but no
-  //   per-model rate is published on either canonical source.
-  // - bare gpt-5.1 / gpt-5.3: the pricing page quotes the 5/5.1/5.2 group as a
-  //   RANGE ($1.25-$1.75) and neither has a resolved per-model figure. Their
-  //   -codex and -mini variants keep their own verified rules above.
+  // - bare gpt-5.3: the pricing page has no row for it. Its -codex and -mini
+  //   variants keep their own verified rules above.
+  //
+  // Published and not priced yet (2026-11-06 pricing page), so they count as
+  // missing until the table fix scheduled with 0.9.17. No rate here is in doubt:
+  // - gpt-5.5-pro / gpt-5.4-pro: $30/$180, and $60/$270 above 272K input tokens.
+  // - o3-pro: $20/$80.
+  // - bare gpt-5.1: $1.25/$10/$0.125. Its -codex and -mini variants keep their
+  //   own verified rules above.
+  // - gpt-6.1-terra: $1/$5/$0.05, with a long-context column.
   // - gpt-5.6-codex / gpt-5.5-mini: NOT OpenAI model ids (both 404 on the model
   //   docs and are absent from developers.openai.com/api/docs/models). They
   //   appear only in this repo's fixtures and sample CSVs.
