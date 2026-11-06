@@ -243,6 +243,31 @@ test("Gemini pricing markers anchor on the priced gemini-2.5-pro rows of the Mar
   assert.equal(observation.error, "reviewed semantic fingerprint changed");
 });
 
+test("reference markers catch one added Anthropic result field, on the cost report and on Messages usage", async () => {
+  const contracts = await readProviderContracts();
+  const resources = contracts.contracts.find((entry) => entry.id === "anthropic-platform").resources;
+  const padding = "unchanged ".repeat(40);
+  // The reference shows one example result, twice. `speed` reached production as one more line of it.
+  const page = (head, middle, tail) => {
+    const example = `{ "data" : [ { "ending_at" : "2025-08-02T00:00:00Z" , "results" : [ { ${head}${middle}${tail} } ], "starting_at" : "2025-08-01T00:00:00Z" } ], "has_more" : true }`;
+    return normalizeDocument(`<main>${padding} response 200 ${example} returns examples response 200 ${example} ${padding}</main>`);
+  };
+  const costReport = resources.find((entry) => entry.url.endsWith("/cost_report/retrieve"));
+  const messages = resources.find((entry) => entry.url.endsWith("/usage_report/retrieve_messages"));
+  for (const [resource, head, tail] of [
+    [costReport,
+      `"amount" : "123.78912" , "context_window" : "0-200k" , "cost_type" : "tokens" , "currency" : "USD" , "description" : "Sample Usage - Input Tokens" , `,
+      `"inference_geo" : "global" , "model" : "sample-model" , "service_tier" : "standard" , "speed" : "standard" , "token_type" : "uncached_input_tokens" , "workspace_id" : "wrkspc_sample"`],
+    [messages,
+      `"account_id" : "user_sample" , "api_key_id" : "apikey_sample" , "cache_creation" : { "ephemeral_1h_input_tokens" : 0 , "ephemeral_5m_input_tokens" : 0 }, "cache_read_input_tokens" : 200 , "context_window" : "0-200k" , `,
+      `"inference_geo" : "global" , "model" : "sample-model" , "output_tokens" : 500 , "server_tool_use" : { "web_search_requests" : 10 }, "service_account_id" : "svac_sample" , "service_tier" : "standard" , "speed" : "standard" , "uncached_input_tokens" : 1500 , "workspace_id" : "wrkspc_sample"`]
+  ]) {
+    const reviewed = semanticFingerprint(page(head, "", tail), resource.requiredMarkers);
+    assert.notEqual(semanticFingerprint(page(head, `"billing_region" : "us" , `, tail), resource.requiredMarkers), reviewed, `${resource.kind}: a field in the middle`);
+    assert.notEqual(semanticFingerprint(page(head, "", `${tail} , "zone" : "us"`), resource.requiredMarkers), reviewed, `${resource.kind}: a field at the end`);
+  }
+});
+
 test("every rate the Anthropic pricing page publishes for a priced model sits inside a semantic window", async () => {
   const contracts = await readProviderContracts();
   const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
