@@ -1,5 +1,5 @@
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -263,6 +263,32 @@ describe("the first push learns the capability and the same command sends the ti
     expect(resend.sent).toEqual([run.sent[1]]);
     expect(resend.stdout).toContain("accepted the subscription tier");
     expect((await m.state()).agentPlansAccepted).toEqual(accepted(now));
+  });
+
+  it("keeps the accepted line when the follow-up cannot start because another command holds the pairing lock, and nothing is lost", async () => {
+    const m = await machine();
+    const lockPath = join(m.home, ".aibill", ".workspace-device.lock");
+    // Another Workspace command takes the lock the moment this one's first batch is answered.
+    const contended: WorkspaceTransport = async (path, payload, token) => {
+      const reply = await m.server.transport(path, payload, token);
+      await rm(lockPath);
+      await writeFile(lockPath, "", { mode: 0o600 });
+      return reply;
+    };
+    const run = await m.push([call()], { transport: contended });
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    expect(run.stderr).toBe("The subscription tier batch stopped safely. Local state was not reset; run workspace status, then workspace push.");
+    expect(run.sent).toHaveLength(1);
+    const state = await m.state();
+    expect(state).toMatchObject({ pending: null, capabilities: { agentPlanFacts: true } });
+    expect(state.device.sequence).toBe("1");
+
+    // The other command finishes; the next push offers the tier.
+    await rm(lockPath);
+    const next = await m.push([call()]);
+    expect(next.exitCode).toBe(0);
+    expect(parse(next.sent[0]!).facts).toEqual(expectedPlanFacts());
   });
 });
 
