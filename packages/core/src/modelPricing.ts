@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-06";
+export const PRICING_TABLE_AS_OF = "2026-11-07";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -26,8 +26,13 @@ type PricingRates = {
   /** USD per million tokens. */
   inputPerM: number;
   outputPerM: number;
-  /** Defaults: cache read 0.1x input; 5m cache write 1.25x; 1h write 2x. */
-  cacheReadPerM?: number;
+  /**
+   * Defaults: cache read 0.1x input; 5m cache write 1.25x; 1h write 2x.
+   * `null` on cache read: the provider publishes no cached rate for the model and
+   * does not say how cached tokens bill, so usage that reports any is unpriced. It
+   * never takes the default, which would be a rate nobody published.
+   */
+  cacheReadPerM?: number | null;
   cacheWrite5mPerM?: number;
   cacheWrite1hPerM?: number;
 };
@@ -110,6 +115,16 @@ const pricingRules: PricingRule[] = [
       inputPerM: 4, outputPerM: 15, cacheReadPerM: 0.2
     }
   },
+  // Reviewed 2026-11-07: developers.openai.com/api/docs/pricing.md. Retained
+  // evidence: provider-contracts/model-pricing-2026-11-07.json.
+  {
+    match: /^gpt-6\.1-terra$/i,
+    inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.05,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 2, outputPerM: 7.5, cacheReadPerM: 0.1
+    }
+  },
   {
     match: /^gpt-6-sol$/i,
     inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2,
@@ -133,7 +148,7 @@ const pricingRules: PricingRule[] = [
   // GPT-5.6 ships exactly three API models — sol, terra, luna
   // (developers.openai.com/api/docs/models, 2026-08-25). Each 5.6/5.5/5.4 rule
   // below is END-ANCHORED on purpose: an undocumented or future sibling
-  // (gpt-5.6-cyber, gpt-5.5-pro, gpt-5.7-sol) must fall through to
+  // (gpt-5.6-cyber, gpt-5.7-sol) must fall through to
   // honest-unpriced rather than inherit a neighbour's rate. That is the 0.9.4
   // `^kimi-k2` mistake one family up, and it is the expensive direction here —
   // the pre-0.9.6 `^gpt-5.6(?:-sol)?$` rule carried GPT-5.5's numbers, so every
@@ -219,6 +234,21 @@ const pricingRules: PricingRule[] = [
       cacheReadPerM: 1
     }
   },
+  {
+    // developers.openai.com/api/docs/pricing.md, reviewed 2026-11-07. The cached
+    // column is a dash, and the model page says "does not offer a cached input
+    // discount": a cached token costs what an uncached one costs, in either tier.
+    match: /^gpt-5\.5-pro$/i,
+    inputPerM: 30,
+    outputPerM: 180,
+    cacheReadPerM: 30,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 60,
+      outputPerM: 270,
+      cacheReadPerM: 60
+    }
+  },
   // gpt-5.5-codex bills at the 5.5 base rate but is absent from the published
   // long-context list, so it deliberately carries no >272K tier.
   { match: /^gpt-5\.5-codex$/i, inputPerM: 5, outputPerM: 30, cacheReadPerM: 0.5 },
@@ -237,25 +267,48 @@ const pricingRules: PricingRule[] = [
       cacheReadPerM: 0.5
     }
   },
+  {
+    // developers.openai.com/api/docs/pricing.md, reviewed 2026-11-07. This row and
+    // gpt-5.2-pro, gpt-5-pro and o3-pro print a dash for cached input, and their
+    // pages say nothing more, so no cached rate is assumed (see `cacheReadPerM`).
+    match: /^gpt-5\.4-pro$/i,
+    inputPerM: 30,
+    outputPerM: 180,
+    cacheReadPerM: null,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 60,
+      outputPerM: 270,
+      cacheReadPerM: null
+    }
+  },
   { match: /^gpt-5\.3-codex/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
+  // Before the gpt-5.2 prefix below, which priced this model and its dated snapshot
+  // at 1/12 of the published rates until the 2026-11-07 review.
+  { match: /^gpt-5\.2-pro(?:-|$)/i, inputPerM: 21, outputPerM: 168, cacheReadPerM: null },
   { match: /^gpt-5\.2(?:-codex)?/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
+  { match: /^gpt-5\.1$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-5(?:\.1)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-5(?:\.1)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
   // developers.openai.com/api/docs/models/gpt-5-nano, 2026-08-25. Before 0.9.6
   // this fell through to the ^gpt-5 fallback and billed at $1.25/$10 — 25x the
   // real rate in both directions. No published long-context tier.
   { match: /^gpt-5-nano/i, inputPerM: 0.05, outputPerM: 0.4, cacheReadPerM: 0.005 },
+  // Before the fallback below, which priced this model and its dated snapshot at
+  // 1/12 of the published rates until the 2026-11-07 review.
+  { match: /^gpt-5-pro(?:-|$)/i, inputPerM: 15, outputPerM: 120, cacheReadPerM: null },
   // GPT-5 base and its dash-suffixed snapshots only. The `-|$` boundary stops
   // this fallback from swallowing dot-minor families it knows nothing about:
   // gpt-5.7-*, gpt-5.6-cyber and any future gpt-5.6-<variant> now return
   // undefined -> "missing" instead of silently billing at GPT-5's $1.25/$10.
   { match: /^gpt-5(?:-|$)/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4 },
-  { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6 },
+  { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6, cacheReadPerM: 0.1 },
   { match: /^gpt-4\.1/i, inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
-  { match: /^gpt-4o-mini/i, inputPerM: 0.15, outputPerM: 0.6 },
-  { match: /^gpt-4o/i, inputPerM: 2.5, outputPerM: 10 },
-  { match: /^o3$/i, inputPerM: 2, outputPerM: 8 },
+  { match: /^gpt-4o-mini/i, inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.075 },
+  { match: /^gpt-4o/i, inputPerM: 2.5, outputPerM: 10, cacheReadPerM: 1.25 },
+  { match: /^o3-pro$/i, inputPerM: 20, outputPerM: 80, cacheReadPerM: null },
+  { match: /^o3$/i, inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
   { match: /^o4-mini/i, inputPerM: 1.1, outputPerM: 4.4 },
   // Google (Gemini API list prices)
   // Reviewed 2026-10-18: https://ai.google.dev/gemini-api/docs/pricing.
@@ -342,14 +395,6 @@ const pricingRules: PricingRule[] = [
   //   would be a real number that is wrong on long requests.
   // - bare gpt-5.3: the pricing page has no row for it. Its -codex and -mini
   //   variants keep their own verified rules above.
-  //
-  // Published and not priced yet (2026-11-06 pricing page), so they count as
-  // missing until the table fix scheduled with 0.9.17. No rate here is in doubt:
-  // - gpt-5.5-pro / gpt-5.4-pro: $30/$180, and $60/$270 above 272K input tokens.
-  // - o3-pro: $20/$80.
-  // - bare gpt-5.1: $1.25/$10/$0.125. Its -codex and -mini variants keep their
-  //   own verified rules above.
-  // - gpt-6.1-terra: $1/$5/$0.05, with a long-context column.
   // - gpt-5.6-codex / gpt-5.5-mini: NOT OpenAI model ids (both 404 on the model
   //   docs and are absent from developers.openai.com/api/docs/models). They
   //   appear only in this repo's fixtures and sample CSVs.
@@ -476,6 +521,9 @@ function rawTokenCostUsd(
   const promptTokens = tierPromptTokens ?? effectivePromptTokens(usage);
   const tier = dated.abovePromptTokens;
   const rates: PricingRates = tier && promptTokens > tier.threshold ? tier : dated;
+  if (rates.cacheReadPerM === null && (usage.cacheReadTokens ?? 0) > 0) {
+    return undefined;
+  }
   const cacheRead = rates.cacheReadPerM ?? rates.inputPerM * 0.1;
   const write5m = rates.cacheWrite5mPerM ?? rates.inputPerM * 1.25;
   const write1h = rates.cacheWrite1hPerM ?? rates.inputPerM * 2;

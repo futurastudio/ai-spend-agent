@@ -1,0 +1,266 @@
+{
+  "retrievedAt": "2026-11-07",
+  "fetchedAt": "2026-11-07T03:07:43Z",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard API-equivalent estimates for the OpenAI API, not subscription charges, provider-reported spending or invoices. No Batch, Flex, Fast, Ultrafast, regional or negotiated adjustments. models lists every row of the two standard tables on the pricing page, read by script from the bytes whose hash is below, except gpt-5.6-sol. Sol keeps its dated rates and its re-check in model-pricing-2026-11-06.json, because the release test reads the newest evidence file that lists it; solTodayOnThisPage records what this page prints for it today. A long-context row prices prompts over 272,000 input tokens at the Long context columns for the full request. A null cacheRead or aboveCacheRead means the table prints a dash and the model's own page says nothing more, so no rate is assumed and usage that reports cached tokens on that row is unpriced. gpt-5.5-pro also prints a dash, and its model page says it does not offer a cached input discount, so its cached tokens cost its input rate. The tables' cache-write columns are not compared and this is no OpenAI cache-write price claim: the estimator keeps its generic fallback for those rates and the Codex reader does not read the cache-write count that Codex logs now carry, so written tokens price as plain input. Earlier evidence files are retained unchanged.",
+  "standardTableRows": 27,
+  "solTodayOnThisPage": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.4,
+    "abovePromptTokens": 272000,
+    "aboveInput": 8,
+    "aboveOutput": 30,
+    "aboveCacheRead": 0.8
+  },
+  "sources": [
+    "https://developers.openai.com/api/docs/pricing.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.5-pro.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-pro.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-pro.md",
+    "https://developers.openai.com/api/docs/models/gpt-5-pro.md",
+    "https://developers.openai.com/api/docs/models/o3-pro.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.1.md",
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md"
+  ],
+  "pageContentSha256": {
+    "https://developers.openai.com/api/docs/pricing.md": "f1ade44afc62fd8a12dd6e199bcecaa989a94c9b691aa620a34e1504ff62ff57",
+    "https://developers.openai.com/api/docs/models/gpt-5.5-pro.md": "12fe3cbacb51cbdd712becc7264a37385c11709f7fba96094c20988814f71ac5",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-pro.md": "c9dff72fc4859be8ada08899fb7e9843614eea041e600820f084c254c676cdcb",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-pro.md": "3ec60ee70452ff5e2349e2a8e8cbc87eb6d3aaeb5353034bb097bea7008a14ab",
+    "https://developers.openai.com/api/docs/models/gpt-5-pro.md": "ed0e0caec9df665bfe5800baeefcfea8a067597aa8c2d23702f920976d9155ac",
+    "https://developers.openai.com/api/docs/models/o3-pro.md": "3b41ae9e053c803346698ebdaf1a3cb5a02067d5f149a94681a462f361d07fed",
+    "https://developers.openai.com/api/docs/models/gpt-5.1.md": "f74abd8073ae69ffeffa8f4773ef63d9a1224badecc717682db9fb1911dcfb7e",
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md": "6a73b3e2e941fbe3813636d5bd2d653ff190e49cc3692eaf8daa3bb125c877f8"
+  },
+  "models": [
+    {
+      "id": "gpt-6-astra",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 1,
+      "abovePromptTokens": 272000,
+      "aboveInput": 20,
+      "aboveOutput": 75,
+      "aboveCacheRead": 2
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 15,
+      "aboveCacheRead": 0.2
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 1,
+      "output": 5,
+      "cacheRead": 0.05,
+      "abovePromptTokens": 272000,
+      "aboveInput": 2,
+      "aboveOutput": 7.5,
+      "aboveCacheRead": 0.1
+    },
+    {
+      "id": "gpt-6-luna",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.1,
+      "output": 0.5,
+      "cacheRead": 0.01,
+      "abovePromptTokens": 272000,
+      "aboveInput": 0.2,
+      "aboveOutput": 0.75,
+      "aboveCacheRead": 0.02
+    },
+    {
+      "id": "gpt-6-sol",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 15,
+      "aboveCacheRead": 0.4
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 12,
+      "cacheRead": 0.2,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 18,
+      "aboveCacheRead": 0.4
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.2,
+      "output": 1.2,
+      "cacheRead": 0.02,
+      "abovePromptTokens": 272000,
+      "aboveInput": 0.4,
+      "aboveOutput": 1.8,
+      "aboveCacheRead": 0.04
+    },
+    {
+      "id": "gpt-5.5",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 5,
+      "output": 30,
+      "cacheRead": 0.5,
+      "abovePromptTokens": 272000,
+      "aboveInput": 10,
+      "aboveOutput": 45,
+      "aboveCacheRead": 1
+    },
+    {
+      "id": "gpt-5.5-pro",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 30,
+      "output": 180,
+      "cacheRead": 30,
+      "abovePromptTokens": 272000,
+      "aboveInput": 60,
+      "aboveOutput": 270,
+      "aboveCacheRead": 60,
+      "cachedInputBasis": "The table prints a dash; the model page says \"GPT-5.5 Pro does not offer a cached input discount.\", so a cached token costs the input rate of its tier."
+    },
+    {
+      "id": "gpt-5.4",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2.5,
+      "output": 15,
+      "cacheRead": 0.25,
+      "abovePromptTokens": 272000,
+      "aboveInput": 5,
+      "aboveOutput": 22.5,
+      "aboveCacheRead": 0.5
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 30,
+      "output": 180,
+      "cacheRead": null,
+      "abovePromptTokens": 272000,
+      "aboveInput": 60,
+      "aboveOutput": 270,
+      "aboveCacheRead": null
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.75,
+      "output": 4.5,
+      "cacheRead": 0.075
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.2,
+      "output": 1.25,
+      "cacheRead": 0.02
+    },
+    {
+      "id": "gpt-5.2",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 1.75,
+      "output": 14,
+      "cacheRead": 0.175
+    },
+    {
+      "id": "gpt-5.2-pro",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 21,
+      "output": 168,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-5.1",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5-mini",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.25,
+      "output": 2,
+      "cacheRead": 0.025
+    },
+    {
+      "id": "gpt-5-nano",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.05,
+      "output": 0.4,
+      "cacheRead": 0.005
+    },
+    {
+      "id": "gpt-5-pro",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 15,
+      "output": 120,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4.1",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 8,
+      "cacheRead": 0.5
+    },
+    {
+      "id": "gpt-4.1-mini",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.4,
+      "output": 1.6,
+      "cacheRead": 0.1
+    },
+    {
+      "id": "gpt-4o",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": 1.25
+    },
+    {
+      "id": "gpt-4o-mini",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0.075
+    },
+    {
+      "id": "o3-pro",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 20,
+      "output": 80,
+      "cacheRead": null
+    },
+    {
+      "id": "o3",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 8,
+      "cacheRead": 0.5
+    }
+  ]
+}

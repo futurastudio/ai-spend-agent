@@ -3622,6 +3622,64 @@ describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
   });
 });
 
+describe("Codex sessions on the OpenAI rows corrected on 2026-11-07", () => {
+  const rollout = (model: string, turns: ReadonlyArray<{ total: Record<string, number>; last: Record<string, number> }>): string => [
+    JSON.stringify({
+      type: "session_meta",
+      payload: { id: "codex-rows-sess", cwd: "/Users/testuser/agent-finops", timestamp: "2026-11-07T10:00:00.000Z" }
+    }),
+    JSON.stringify({ type: "turn_context", payload: { model } }),
+    ...turns.map((turn, index) => JSON.stringify({
+      type: "event_msg",
+      timestamp: `2026-11-07T10:${10 + index}:00.000Z`,
+      payload: { type: "token_count", info: { total_token_usage: turn.total, last_token_usage: turn.last } }
+    }))
+  ].join("\n");
+  // Cumulative 500K prompt on cache reads alone, and no single request over 272K.
+  const cumulative = [
+    {
+      total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+      last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+    },
+    {
+      total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+      last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+    }
+  ];
+  const record = (model: string, turns: typeof cumulative) => aggregateCalls(parseCodexRollout(rollout(model, turns)))[0]!;
+  const noCache = [{
+    total: { input_tokens: 100_000, cached_input_tokens: 0, output_tokens: 1_000 },
+    last: { input_tokens: 100_000, cached_input_tokens: 0, output_tokens: 1_000, total_tokens: 101_000 }
+  }];
+
+  it("prices gpt-6.1-terra at its base tier when every request stayed under 272K", () => {
+    // 100000*1 + 1000*5 + 400000*0.05, per million.
+    expect(record("gpt-6.1-terra", cumulative)).toMatchObject({ amountUsd: 0.125, costConfidence: "estimated" });
+  });
+
+  it("prices gpt-5.5-pro's cached tokens at its input rate, as it offers no discount", () => {
+    // 500000*30 + 1000*180, per million.
+    expect(record("gpt-5.5-pro", cumulative)).toMatchObject({ amountUsd: 15.18, costConfidence: "estimated" });
+  });
+
+  it.each(["gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "o3-pro"])("keeps a %s session with cached tokens honestly missing", (model) => {
+    expect(record(model, cumulative)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+  });
+
+  it.each([
+    // 100000*15 + 1000*120, per million.
+    ["gpt-5-pro", 1.62],
+    // 100000*21 + 1000*168, per million.
+    ["gpt-5.2-pro", 2.268],
+    // 100000*30 + 1000*180, per million.
+    ["gpt-5.4-pro", 3.18],
+    // 100000*20 + 1000*80, per million.
+    ["o3-pro", 2.08]
+  ])("prices a %s session that reports no cached tokens", (model, amountUsd) => {
+    expect(record(model, noCache)).toMatchObject({ amountUsd, costConfidence: "estimated" });
+  });
+});
+
 describe("Codex USER forks inherit a baseline, not a bill", () => {
   // Real shape from ~/.codex: a user fork carries thread_source "user", a
   // string `source` (not the subagent record), and `forked_from_id`. It then
