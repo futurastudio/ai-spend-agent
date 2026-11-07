@@ -4710,8 +4710,10 @@ async function shouldStreamFile(
  * 7 days old and gives the compressed file that mtime; a rollout is append-only and each line is written after its
  * timestamp, so no event in it is later than that mtime. Its ctime and birthtime are when it was compressed and say
  * nothing about its events: the plain-file rule would read every rollout compressed in the last 30 days.
+ *
+ * @internal Exported for its tests only; not part of the package root.
  */
-async function codexRolloutToRead(
+export async function codexRolloutToRead(
   file: string,
   sinceMs: number | undefined,
   scan: LocalAgentSourceScan,

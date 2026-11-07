@@ -4,11 +4,14 @@ import { join } from "node:path";
 import { constants, createZstdCompress, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
+  codexRolloutToRead,
   loadLocalAgentFinancialUsage,
   loadLocalAgentUsage,
   loadLocalAgentUsageWithFormats,
   SAFE_QUALITATIVE_SCAN_POLICY,
-  type LocalAgentCall
+  type LocalAgentCall,
+  type LocalAgentLogDiagnostic,
+  type LocalAgentSourceScan
 } from "./localAgentLogs.js";
 import { localAgentFormatRuntimeRegistry } from "./localAgentFormats/runtimeRegistry.js";
 
@@ -88,6 +91,27 @@ describe("compressed Codex rollouts", () => {
     const loaded = await daily(dirs);
     expect(numbers(loaded.calls).map(row => row[1])).toEqual([400, 600, 500]);
     expect(loaded.sourceScans.find(scan => scan.agent === "codex")).toMatchObject({ filesDiscovered: 1, filesParsed: 1 });
+  });
+
+  it("reads a rollout in whichever form it has when read, the plain one first, as Codex moves it between them", async () => {
+    const dirs = await sessionsDir();
+    const scan = (): LocalAgentSourceScan => ({ agent: "codex", directoryStatus: "readable", filesDiscovered: 0, filesParsed: 0, malformedLines: 0, unreadableFiles: 0, unsupportedUsageSnapshots: 0 });
+    const plain = join(dirs.codex, name("s-1")), compressed = `${plain}.zst`;
+    const resolve = async (listed: string) => {
+      const diagnostics: LocalAgentLogDiagnostic[] = [], counted = scan();
+      return { path: await codexRolloutToRead(listed, Date.parse(since), counted, diagnostics), diagnostics, counted };
+    };
+    // Listed plain, compressed since: the compressed form is read.
+    await writeCompressed(dirs.codex, "s-1", session());
+    expect((await resolve(plain)).path).toBe(compressed);
+    // Listed compressed, restored to plain since for an append: the plain form wins.
+    await writePlain(dirs.codex, "s-1", session());
+    expect((await resolve(compressed)).path).toBe(plain);
+    // Gone in both forms: unreadable, as a plain file gone since the listing always was.
+    const gone = await resolve(join(dirs.codex, name("gone")));
+    expect(gone.path).toBeUndefined();
+    expect(gone.diagnostics).toEqual([expect.objectContaining({ code: "file_unreadable", message: "Codex transcript file could not be read (ENOENT)." })]);
+    expect(gone.counted.unreadableFiles).toBe(1);
   });
 
   it("skips a compressed rollout before the window by its mtime, though Codex compressed it today", async () => {

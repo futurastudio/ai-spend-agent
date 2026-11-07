@@ -104,6 +104,14 @@ the labels each folder's facts went out under, keyed by the hashed folder, and t
 stays on this machine. A folder with no checkout left to find keeps the label it last
 went out under on its later days.
 
+A session's folder is where each of its turns ran: the working directory on each Claude
+Code log line, and for Codex the latest `turn_context` before each token count. Earlier
+versions filed a Codex session wholly under the folder it started in, so a Codex day one of
+them sent keeps that folder, and only days not yet sent take each turn's own.
+`~/.aibill/workspace-device.json` keeps hashes of those sent days and folders, read once
+before this version's first batch. A push also reads the sessions Codex compressed into
+`.jsonl.zst` after 7 idle days, which needs Node.js 22.15 or later.
+
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local
 experiment/approval records. The local provider ledger is not part of the
@@ -246,6 +254,11 @@ That seat plan stays until the owner changes it.
   the 30-day window a push reads. No facts are replaced or sent until then, and days that
   leave the window meanwhile stay out of Workspace. Share the line for help; do not delete
   logs or reconnect as a repair.
+- **Compressed Codex sessions on an older Node.js:** Codex compresses a session it has not
+  written to for 7 days, and reading it needs Node.js 22.15 or later. On an older one, a
+  push with such a session inside its 30-day window stops before any batch exists, with one
+  line that names the Node.js it needs: a day built without that session would go out short.
+  Update Node.js and push again.
 - **Calls with no usable day or identity:** a daily fact built without such a call would
   undercount its day, so one call in the window stops the push before any batch exists,
   for example a log line with no working directory or session. The line counts them by
