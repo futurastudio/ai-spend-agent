@@ -719,7 +719,10 @@ function anthropicClaudeCodeTimestamp(value: unknown): string | undefined {
   const candidate = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00Z` : raw;
   if (!/^\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?Z$/i.test(candidate)) return undefined;
   const parsed = new Date(candidate);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  const timestamp = parsed.toISOString();
+  // The clock accepts February 30 and rolls it to March 2. Such a row is unreadable, not March 2.
+  return timestamp.slice(0, 10) === candidate.slice(0, 10) ? timestamp : undefined;
 }
 
 /**

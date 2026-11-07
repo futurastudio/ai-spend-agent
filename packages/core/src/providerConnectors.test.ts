@@ -1678,12 +1678,22 @@ describe("real provider connector implementations", () => {
       ["missing", undefined],
       ["not midnight", "2026-10-19T12:00:00Z"],
       ["not a date", "yesterday"],
-      ["an impossible day", "2026-13-45T00:00:00Z"]
+      ["an impossible day", "2026-13-45T00:00:00Z"],
+      ["February 30, which the clock rolls to March 2", "2026-02-30T00:00:00Z"],
+      ["February 30 in the date-only form", "2026-02-30"],
+      ["February 29 in a year without one", "2026-02-29T00:00:00Z"],
+      ["April 31", "2026-04-31T00:00:00Z"]
     ])("excludes a row whose date is %s and marks the fetch partial, keeping the other rows", async (_label, date) => {
       const result = await read([documentedRow({ date }), documentedRow({ terminal_type: "vscode" })]);
       expect(result.records.map((record) => record.timestamp)).toEqual(["2026-10-19T00:00:00.000Z", "2026-10-19T00:00:00.000Z"]);
       expect(result.coverage).toBe("partial");
       expect(result.qa.responseDrift).toEqual(expect.arrayContaining([expect.objectContaining({ field: "data[0].date" })]));
+    });
+
+    it("reads a real leap day as itself, and does not file February 30 under March 2", () => {
+      const [leapDay] = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow({ date: "2028-02-29T00:00:00Z" })] }, options);
+      expect(leapDay.timestamp).toBe("2028-02-29T00:00:00.000Z");
+      expect(normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow({ date: "2026-02-30T00:00:00Z" })] }, options)).toEqual([]);
     });
 
     it.each([
