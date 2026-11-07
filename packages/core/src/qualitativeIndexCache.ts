@@ -204,6 +204,9 @@ const callSchema = z.object({
   geminiTokenEvidence: geminiEvidenceSchema.optional(),
   usage: tokenUsageSchema,
   sessionId: opaqueIdentifier.optional(),
+  // The transcript's first dated line (Claude Code): the cross-session rule
+  // tells a fork from its original with it, so a cached call must keep it.
+  transcriptStartedAt: isoTimestamp.optional(),
   subagentId: opaqueIdentifier.optional(),
   subagentCompletions: z.array(subagentCompletionSchema).max(10_000).optional(),
   rateLimits: rateLimitsSchema.optional(),

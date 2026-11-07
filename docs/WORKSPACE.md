@@ -115,6 +115,19 @@ and last day decided and hashes of the sent folders on them. A push also reads t
 Codex compressed into `.jsonl.zst` after 7 idle days, which needs Node.js 22.15 or later
 (23.8 or later on Node.js 23).
 
+A Claude Code response counts once, however many session files hold it. Forking or
+handing off a conversation copies its earlier responses into a new session file,
+sometimes in another folder, under a new session id with the same request id, usage
+and timestamp. Within one read, such a response counts under the original session:
+the copy outside a sub-agent transcript, else the earliest, else the one in the
+transcript that started earlier (a fork's file opens at fork time, after every
+response it copied), else the first file read. The fact it lands in keeps its day,
+model, project and folder; only the copies' counts go. A copy whose usage differs is
+not the same response and counts on its own. Versions before this one removed copies
+only within one session, so a machine whose earlier push counted a forked copy sends
+the corrected, smaller fact on its next push as a revision of the same fact; days
+outside the 30-day window are not read again, so facts sent for them do not change.
+
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local
 experiment/approval records. The local provider ledger is not part of the
