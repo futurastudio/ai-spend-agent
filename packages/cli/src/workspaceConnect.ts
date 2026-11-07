@@ -256,11 +256,13 @@ export function aggregateWorkspaceFacts(calls: readonly LocalAgentCall[], previo
   return { facts, excludedCalls, incompleteComponents, reasons: [...reasons].sort() };
 }
 
+/** A key this version does not know. Refused like any other bad shape; named apart so a state file can say a newer aibill wrote it. */
+class WorkspaceUnknownKey extends Error {}
 function exactKeys(value: unknown, keys: string[], optional: string[] = []): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Workspace state or receipt has an invalid shape.");
   const present = Object.keys(value), allowed = new Set([...keys, ...optional]);
-  if (keys.some(key => !present.includes(key)) || present.some(key => !allowed.has(key)))
-    throw Error("Workspace state or receipt has an invalid shape.");
+  if (present.some(key => !allowed.has(key))) throw new WorkspaceUnknownKey("Workspace state or receipt has an invalid shape.");
+  if (keys.some(key => !present.includes(key))) throw Error("Workspace state or receipt has an invalid shape.");
 }
 function bytes(value: unknown, count: number): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value) && Buffer.from(value, "base64url").length === count
@@ -375,6 +377,13 @@ async function privateDirectory(home: string, create: boolean): Promise<string> 
     throw Error("Workspace private directory is unavailable.");
   return path;
 }
+/**
+ * A private state file that carries keys this version does not know: a newer aibill wrote it, and a stale
+ * npx cache is the usual way to meet this. It is refused as any unknown key is, and left exactly as it is.
+ */
+export class WorkspaceStateFromNewerCli extends Error {
+  constructor() { super("Workspace state was written by a newer aibill; it was not changed."); }
+}
 async function readState(path: string): Promise<WorkspaceState | null> {
   let file;
   try { file = await open(join(path, STATE_FILE), constants.O_RDONLY | noFollow); }
@@ -412,7 +421,10 @@ async function readState(path: string): Promise<WorkspaceState | null> {
       if (state.disconnect.revokedAt !== null) utcDay(state.disconnect.revokedAt);
     }
     return state;
-  } catch { throw Error("Workspace state is unreadable or invalid; it was not reset."); }
+  } catch (error) {
+    if (error instanceof WorkspaceUnknownKey) throw new WorkspaceStateFromNewerCli();
+    throw Error("Workspace state is unreadable or invalid; it was not reset.");
+  }
   finally { await file.close(); }
 }
 async function atomicState(path: string, state: WorkspaceState): Promise<void> {
@@ -452,7 +464,7 @@ async function withState<T>(home: string, callback: (state: WorkspaceState | nul
 export type WorkspaceStatus = { state: "not_connected" } | {
   state: "enrollment_pending"; enrollment: "prepared" | "exchange_uncertain"; requestId: string;
 } | {
-  state: "connected"; origin: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
+  state: "connected"; origin: string; expiresAt: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
   disconnect: "uncertain" | "revoked" | null; capabilities: WorkspaceCapabilities; agentPlansAccepted: WorkspaceAcceptedPlans;
   pending: null | { state: WorkspacePending["state"]; factCount: number; generatedAt: string; refusal: WorkspacePending["refusal"] };
 };
@@ -466,13 +478,15 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
     return enrollment ? { state: "enrollment_pending", enrollment: enrollment.state, requestId: enrollment.request.requestId }
       : { state: "not_connected" };
   }
-  return { state: "connected", origin: state.device.origin, lastAcceptedAt: state.lastAcceptedAt,
+  return { state: "connected", origin: state.device.origin, expiresAt: state.device.expiresAt, lastAcceptedAt: state.lastAcceptedAt,
     acknowledgedFacts: Object.keys(state.facts).length, disconnect: state.disconnect?.state ?? null,
     capabilities: state.capabilities ?? { agentPlanFacts: false }, agentPlansAccepted: state.agentPlansAccepted ?? {},
     pending: state.pending ? { state: state.pending.state,
       factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null };
 }
 
+/** SQL's age limit: a batch signed longer ago than this is refused as `expired` unless the Workspace already holds it. */
+export const WORKSPACE_BATCH_MAX_AGE_MS = 10 * 60 * 1000;
 /** Response headers travel lower-cased, as Node delivers them; tests may omit them. */
 export type WorkspaceTransportResult = { status: number; body: unknown; headers?: Record<string, string | string[] | undefined> };
 /** The Workspace advertises what it accepts on every ACCEPT in this header, never in the receipt body a released CLI checks strictly. */
@@ -557,12 +571,14 @@ async function offerablePlanFacts(state: WorkspaceState, options: WorkspacePlanF
   return { facts, unreported };
 }
 /**
- * A batch of tier facts alone, no longer retained. The local sequence moves past
- * it: whatever answer this machine saw, the Workspace may hold that batch, and a
- * machine one sequence behind would have its next batch refused and retained. The
- * Workspace admits the gap this leaves when it does not hold the batch.
+ * A batch no longer retained: tier facts alone, or a batch refused as `expired`. The
+ * local sequence moves past it. For tier facts alone, whatever answer this machine
+ * saw, the Workspace may hold that batch, and a machine one sequence behind would have
+ * its next batch refused and retained. The Workspace admits the gap this leaves when it
+ * does not hold the batch. The fact ledger does not move, so session facts in a dropped
+ * batch are rebuilt into the next one, under a new preview and a new consent.
  */
-function withoutPlanOnlyBatch(state: WorkspaceState, envelope: WorkspaceEnvelope): WorkspaceState {
+function withoutBatch(state: WorkspaceState, envelope: WorkspaceEnvelope): WorkspaceState {
   return { ...state, device: { ...state.device, sequence: envelope.sequence }, pending: null };
 }
 function agentPlanFactsDue(facts: readonly WorkspaceAgentPlanFact[], accepted: WorkspaceAcceptedPlans | undefined, now: string): boolean {
@@ -576,7 +592,8 @@ function agentPlanFactsDue(facts: readonly WorkspaceAgentPlanFact[], accepted: W
  * A batch of tier facts and nothing else, offered only when the tier was never
  * accepted, changed, or is due a refresh. The same consent path as any batch,
  * and durable only after consent. Past the grant's end the Workspace answers
- * with no refusal a batch could be dropped on, so none is built.
+ * with no refusal a batch could be dropped on, so none is built: the push stops
+ * before this at that point, and this holds for a follow-up that crosses the end.
  */
 async function offerPlanOnlyBatch(state: WorkspaceState, save: (state: WorkspaceState) => Promise<void>, coverage: WorkspaceAggregate,
   options: WorkspacePlanFactOptions): Promise<{ state: "prepared" | "unchanged" | "cancelled"; coverage: WorkspaceAggregate }> {
@@ -608,9 +625,17 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
   /** Finds a session folder's checkout; absent, facts keep the folder name. */
   resolveRepositoryRoot?: (directory: string) => string | undefined;
 }): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled" | "dropped"; coverage?: WorkspaceAggregate }> {
-  return withState(options.home ?? homedir(), async (state, save) => {
-    if (!state) throw Error("This machine is not connected to a Workspace.");
-    if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
+  return withState(options.home ?? homedir(), async (held, save) => {
+    if (!held) throw Error("This machine is not connected to a Workspace.");
+    if (held.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
+    // A CLI before this one kept a batch refused as `expired` and stopped every later push on it. The Workspace
+    // answered `expired` only after its replay lookup found nothing, so it does not hold that batch: it goes now,
+    // durably, whatever the person answers below, and the same facts are rebuilt under a new preview.
+    let state = held;
+    if (held.pending?.state === "refused" && held.pending.refusal === "expired") {
+      state = withoutBatch(held, held.pending.envelope);
+      await save(state);
+    }
     if (state.pending) {
       if (state.pending.state === "refused") return { state: "pending" };
       // A retained batch is resent exactly as signed, plan facts included: it may already
@@ -630,7 +655,7 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
         return { state: "prepared", coverage };
       }
       if (!planOnly) return { state: "cancelled", coverage };
-      await save(withoutPlanOnlyBatch(state, envelope));
+      await save(withoutBatch(state, envelope));
       return { state: "dropped", coverage };
     }
     const calls = options.resolveRepositoryRoot
@@ -668,13 +693,20 @@ export function workspacePushCapabilities(headers: WorkspaceTransportResult["hea
   return { agentPlanFacts: pairs.some(([key, flag, ...rest]) => key === "agentPlanFacts" && flag === "1" && rest.length === 0) };
 }
 /**
- * One attempt. Uncertain and refused session batches remain retained and cannot
- * silently be resubmitted. A batch of tier facts alone must never strand a
- * machine: no session fact waits behind it, so any refusal drops it, and the
- * capability goes false until a later ACCEPT announces it again. A refusal does not
- * prove the Workspace never stored the batch: a reply lost earlier leaves it stored,
- * and a resend the Workspace's shape check turns away never reaches its replay
- * lookup. So the drop moves the local sequence past the batch, as any drop does.
+ * One attempt. Uncertain session batches, and those refused as `invalid`, `conflict`
+ * or `stale`, remain retained and cannot silently be resubmitted. A batch of tier facts
+ * alone must never strand a machine: no session fact waits behind it, so any refusal
+ * drops it, and the capability goes false until a later ACCEPT announces it again. A
+ * refusal does not prove the Workspace never stored the batch: a reply lost earlier
+ * leaves it stored, and a resend the Workspace's shape check turns away never reaches
+ * its replay lookup. So the drop moves the local sequence past the batch, as any drop does.
+ *
+ * `expired` is the one refusal that does prove it, so it drops a batch with session
+ * facts too. SQL decides `expired` only after its replay lookup found no such batch and
+ * its sequence is above the high water, and writes nothing on the way to it, so a batch
+ * the Workspace holds gets its receipt and never this. Past the grant's end the handler
+ * answers 403 before any of that, which stays an unknown outcome. Nothing is resent here,
+ * so a clock that keeps being refused cannot loop: each new batch takes a new command and a yes.
  */
 export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{
   state: "accepted" | "refused" | "unconfirmed";
@@ -684,6 +716,8 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
   capabilityAnnounced?: boolean;
   /** The refused batch held tier facts alone and was dropped, not retained. */
   planOnlyDropped?: boolean;
+  /** The refused batch was too old or too far ahead for the Workspace, so it was dropped; this is when it was signed, by this machine's clock. */
+  expiredSignedAt?: string;
 }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state?.pending) throw Error("No prepared Workspace batch exists.");
@@ -717,10 +751,14 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
       if (result.status === 409) {
         exactKeys(receipt, ["state", "reason"]);
         if (receipt.state === "refused" && typeof receipt.reason === "string" && envelope.facts.every(isWorkspaceAgentPlanFact)) {
-          await save({ ...withoutPlanOnlyBatch(dispatched, envelope), capabilities: { agentPlanFacts: false } });
+          await save({ ...withoutBatch(dispatched, envelope), capabilities: { agentPlanFacts: false } });
           return { state: "refused", planOnlyDropped: true };
         }
         if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
+        if (receipt.reason === "expired") {
+          await save(withoutBatch(dispatched, envelope));
+          return { state: "refused", expiredSignedAt: envelope.generatedAt };
+        }
         await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
         return { state: "refused" };
       }
@@ -782,7 +820,10 @@ async function readEnrollment(path: string): Promise<WorkspaceEnrollmentState | 
       || createPublicKey(state.privateKeyPem).export({ format: "jwk" }).x !== state.request.publicKey)
       throw Error("Workspace enrollment state is invalid.");
     return state;
-  } catch { throw Error("Workspace enrollment state is unreadable or invalid; it was not reset."); }
+  } catch (error) {
+    if (error instanceof WorkspaceUnknownKey) throw new WorkspaceStateFromNewerCli();
+    throw Error("Workspace enrollment state is unreadable or invalid; it was not reset.");
+  }
   finally { await handle.close(); }
 }
 export class WorkspaceEnrollmentRefusal extends Error {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {
   beginWorkspaceEnrollment, finishWorkspaceEnrollment, workspaceStatus, prepareWorkspacePush, prepareWorkspacePlanFacts,
-  sendWorkspacePending, disconnectWorkspace, WORKSPACE_ORIGIN, WORKSPACE_PLAN_REFRESH_DAYS, workspaceCanonicalJson, WorkspaceEnrollmentRefusal,
+  sendWorkspacePending, disconnectWorkspace, WORKSPACE_BATCH_MAX_AGE_MS, WORKSPACE_ORIGIN, WORKSPACE_PLAN_REFRESH_DAYS, workspaceCanonicalJson, WorkspaceEnrollmentRefusal, WorkspaceStateFromNewerCli,
   type WorkspaceAcceptedPlans, type WorkspaceAggregate, type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport, type WorkspaceUnreportedPlan,
 } from "./workspaceConnect.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
@@ -1719,6 +1719,13 @@ function workspaceUnreportedTierLine({ agent, tier, sentAt, held }: WorkspaceUnr
   return `Subscription tier for ${agent}: ${reason}, so Workspace hears nothing new. A seat plan set from ${tier}, last accepted ${sentAt}, stays until the owner changes it in Workspace.`;
 }
 
+/** The Workspace's own rule: a grant is over at its end, so that instant is already past it. */
+const workspaceConnectionEnded = (expiresAt: string, now: string): boolean => Date.parse(now) >= Date.parse(expiresAt);
+const WORKSPACE_ENDED_STOPS = "Pushes stop there: Workspace refuses every push from this machine after that end.";
+/** The one way back: a grant has no renewal, a lapsed one still blocks a new one on this machine's source until it is revoked, and a disconnect revokes it. */
+const WORKSPACE_ENDED_RECONNECT = "To connect again, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect.";
+const WORKSPACE_ENDED_CLOCK = "If that time has not passed, check this machine's clock first: a disconnect cannot be undone.";
+
 /**
  * `aibill signup <email> [--ref <token>]` — the explicit, deliberate path to
  * the launch list. Sends EXACTLY {email, ref} to the deployed waitlist route
@@ -1731,7 +1738,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
   const fail = (message: string): CliResult => ({ exitCode: 1, stdout: "", stderr: message });
   const action = args.workspaceAction;
   if (!["connect", "push", "status", "disconnect"].includes(action ?? ""))
-    return fail("Use npx aibill workspace connect [response-bundle], push, status, or disconnect.");
+    return fail("Use npx aibill@latest workspace connect [response-bundle], push, status, or disconnect.");
   if (action !== "status" && (runtime.interactive !== true || !runtime.consentRead && !runtime.prompt))
     return fail("Workspace changes require an interactive terminal and explicit consent. Status remains available without a terminal.");
   const consent = async (message: string): Promise<boolean> => {
@@ -1751,8 +1758,11 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           : `The exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`,
         "No logs or network were read."
       ].join("\n"));
+      const ended = workspaceConnectionEnded(status.expiresAt, runtime.workspaceNow ?? workspaceClock.now());
       return ok([`Workspace: ${status.origin}`, `Last accepted push: ${status.lastAcceptedAt ?? "no push yet"}`,
         `Pairing state: local record present; disconnect ${status.disconnect ?? "not requested"}`,
+        `Connection ${ended ? "ended" : "ends"}: ${status.expiresAt}`,
+        ...(ended && !status.disconnect ? [WORKSPACE_ENDED_STOPS, WORKSPACE_ENDED_RECONNECT, WORKSPACE_ENDED_CLOCK] : []),
         `Acknowledged fact keys: ${status.acknowledgedFacts}`, `Pending batch: ${status.pending?.state ?? "none"}`,
         `Subscription tier facts: ${status.capabilities.agentPlanFacts
           ? `announced by this Workspace; sent beside changed session facts, or alone when never accepted, changed or over ${WORKSPACE_PLAN_REFRESH_DAYS} days old, unless ${AGENT_PLAN_TIER_OPT_OUT} is set`
@@ -1769,14 +1779,14 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         return ok([`${prepared.disposition === "reused" ? "Reused" : "New"} connection request: ${prepared.request.requestId.slice(-8)}`,
           ...(prepared.disposition === "reused" ? ["This is the same unfinished request. If it expired or was cancelled in the browser, run npx aibill@latest workspace connect --restart."] : []),
           `Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
-          "Then run: npx aibill workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
+          "Then run: npx aibill@latest workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
         now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,
         confirm: details => consent([`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}?`,
           `Selected tenant: ${details.tenantId}`, `Reviewed source: ${details.localSourceInstanceRef}`, `Project: ${details.projectId}`, `Source project: ${details.sourceProjectRef}`,
           `Exact enrollment policy: ${workspaceCanonicalJson(details.policy)}`, "Sign this enrollment exchange? [y/N] "].join("\n")) });
-      return result.state === "connected" ? ok(`Paired. Finish all-repository consent at ${WORKSPACE_ORIGIN}/settings/machines before your first push. Then run npx aibill workspace push to preview local session facts.`)
+      return result.state === "connected" ? ok(`Paired. Finish all-repository consent at ${WORKSPACE_ORIGIN}/settings/machines before your first push. Then run npx aibill@latest workspace push to preview local session facts.`)
         : result.state === "cancelled" ? ok("Pairing exchange not sent.")
           : fail("Pairing outcome is unknown. Do not replay this response bundle; inspect and revoke the enrollment in Settings before starting another.");
     }
@@ -1787,18 +1797,25 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           : action === "retry_revoke"
             ? "Repeat the identical retained disconnect request once? If already revoked, Tilden returns that outcome; otherwise this revokes the same grant. No session facts are sent. Local pairing is removed only after a matching receipt. [y/N] "
             : "Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? [y/N] ") });
-      return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run workspace disconnect without --retry to start a new disconnect.")
+      return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run npx aibill@latest workspace disconnect without --retry to start a new disconnect.")
         : result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
-        : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill workspace connect to start a new request.")
+        : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill@latest workspace connect to start a new request.")
         : result.state === "cancelled" ? fail("Pairing kept. Disconnect was not confirmed; no request or key was removed.") : result.state === "not_paired" ? ok("No completed local pairing exists.")
           : fail(`Disconnect outcome is unknown. Local keys remain and uploads are blocked. Run npx aibill@latest workspace disconnect --retry to review and explicitly repeat the identical retained request once, or inspect this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
     }
     const status = await workspaceStatus(runtime.homeDirectory);
     if (status.state !== "connected") return fail("Connect this machine before pushing local facts.");
     if (status.disconnect) return fail("Disconnect is pending or complete. No session facts were read or sent.");
-    if (status.pending?.state === "refused") return fail("A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.");
     const now = runtime.workspaceNow ?? workspaceClock.now();
-    const loaded = status.pending ? undefined : runtime.workspaceLoadCalls ? await runtime.workspaceLoadCalls()
+    // Past the grant's end the Workspace refuses every push before it looks for a replay, so a resend cannot reconcile and a new batch cannot land.
+    if (workspaceConnectionEnded(status.expiresAt, now)) return fail([`This machine's Workspace connection ended at ${status.expiresAt}, so no session facts were read or sent.`,
+      ...(status.pending ? ["A retained batch cannot be resent after that end, and the disconnect removes it."] : []),
+      WORKSPACE_ENDED_RECONNECT, WORKSPACE_ENDED_CLOCK].join("\n"));
+    // A CLI before this one kept a batch refused as expired and stopped here for good; prepareWorkspacePush drops it.
+    const heldExpired = status.pending?.state === "refused" && status.pending.refusal === "expired";
+    if (status.pending?.state === "refused" && !heldExpired) return fail("A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.");
+    const retainedBatch = status.pending !== null && !heldExpired;
+    const loaded = retainedBatch ? undefined : runtime.workspaceLoadCalls ? await runtime.workspaceLoadCalls()
       : await loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, sinceIso: workspaceClock.daysBefore(now, 30),
         untilIso: `${now.slice(0, 10)}T00:00:00.000Z` });
     const representedUnknowns = loaded?.diagnostics.filter(item => item.code === "unsupported_token_shape"
@@ -1846,11 +1863,18 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const tierRefused = "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.";
     const tierWaits = "Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.";
     const tierKept = "If it had already reached the Workspace, the Workspace keeps that tier.";
+    const expiredNotStored = "Workspace did not store it, so nothing was counted, and this machine dropped it.";
+    const heldExpiredDropped = "A retained batch Workspace had refused as too old was dropped. Workspace did not store it, so nothing was counted.";
+    const nextPush = "Run npx aibill@latest workspace push to rebuild its session facts into a new batch, with a new preview; nothing goes without your yes.";
+    const expiredRefused = (signedAt: string) => Date.parse(runtime.workspaceNow ?? workspaceClock.now()) - Date.parse(signedAt) < WORKSPACE_BATCH_MAX_AGE_MS
+      ? [`Workspace refused this batch as out of date, though this machine signed it under 10 minutes ago, at ${signedAt} by its clock. ${expiredNotStored}`,
+        "This machine's clock looks ahead of Workspace's, or more than 10 minutes behind it: check it.", nextPush].join("\n")
+      : [`Workspace refused this batch because it was signed at ${signedAt}, more than 10 minutes ago. ${expiredNotStored}`, nextPush].join("\n");
     const tierDropped = `Retained subscription tier batch dropped; nothing was sent. ${tierKept} The next workspace push sends any changed session facts and offers the tier again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierOptedOut = `Retained subscription tier batch dropped because ${AGENT_PLAN_TIER_OPT_OUT} is set. ${tierKept}`;
     const unknownOutcome = (coverage: WorkspaceAggregate | undefined) => planOnly(coverage)
-      ? `Push outcome is unknown. The exact signed subscription tier batch is retained. Run workspace push: yes resends this exact batch, no drops it, and ${AGENT_PLAN_TIER_OPT_OUT}=1 drops it without asking. Session facts wait only until then.`
-      : ["Push outcome is unknown. The exact signed envelope is retained; run workspace push to review and explicitly retry this exact batch.",
+      ? `Push outcome is unknown. The exact signed subscription tier batch is retained. Run npx aibill@latest workspace push: yes resends this exact batch, no drops it, and ${AGENT_PLAN_TIER_OPT_OUT}=1 drops it without asking. Session facts wait only until then.`
+      : ["Push outcome is unknown. The exact signed envelope is retained; run npx aibill@latest workspace push to review and explicitly retry this exact batch.",
         ...(coverage?.agentPlanFacts?.length
           ? [`It keeps the subscription tier facts it was signed with and is resent identically, with or without ${AGENT_PLAN_TIER_OPT_OUT}; the Workspace's replay receipt reconciles a batch it already holds.`]
           : [])].join("\n");
@@ -1859,9 +1883,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       coverage?.unreportedPlans?.length ? { ...result, stdout: [result.stdout, ...coverage.unreportedPlans.map(workspaceUnreportedTierLine)].filter(Boolean).join("\n") } : result;
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
       resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, planFactsOptOut,
-      readAgentPlanFacts: readPlans(now), confirm: confirmBatch(status.pending !== null) });
+      readAgentPlanFacts: readPlans(now), confirm: confirmBatch(retainedBatch, heldExpired ? [heldExpiredDropped, "This is a new batch:"] : []) });
     const settled = (result: CliResult): CliResult => withUnreportedTiers(result, prepared.coverage);
-    if (prepared.state === "unchanged") return settled(ok([prepared.coverage?.excludedCalls
+    if (prepared.state === "unchanged") return settled(ok([...(heldExpired ? [heldExpiredDropped] : []), prepared.coverage?.excludedCalls
       ? "No complete changed facts are available. Some local calls lack a usable day or identity; absence is not zero usage."
       : "No changed eligible local session facts to push.",
       ...(prepared.coverage?.tierAwaitsAnnouncement ? [tierWaits] : [])].join("\n")));
@@ -1875,7 +1899,8 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
     if (sent.state === "refused") return settled(sent.planOnlyDropped ? ok(tierRefused)
-      : fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created."));
+      : sent.expiredSignedAt ? fail(expiredRefused(sent.expiredSignedAt))
+        : fail("Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created."));
     if (sent.state === "unconfirmed") return settled(fail(unknownOutcome(prepared.coverage)));
     const accepted = [...(sent.sessionFactCount ? [`Workspace accepted ${sent.sessionFactCount} local session facts. These are attribution inputs, not billed costs.`] : []),
       ...(prepared.coverage?.agentPlanFacts?.length ? [tierAccepted(prepared.coverage)] : [])].join("\n");
@@ -1893,10 +1918,14 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         : tier.state === "refused" ? ok(`${accepted}\n${tierRefused}`)
           : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage) }, followUp.coverage);
     } catch {
-      return { exitCode: 1, stdout: accepted, stderr: "The subscription tier batch stopped safely. Local state was not reset; run workspace status, then workspace push." };
+      return { exitCode: 1, stdout: accepted, stderr: "The subscription tier batch stopped safely. Local state was not reset; run npx aibill@latest workspace status, then npx aibill@latest workspace push." };
     }
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
+    if (error instanceof WorkspaceStateFromNewerCli) {
+      const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceRestart ? " --restart" : args.workspaceDisconnectRetry ? " --retry" : "";
+      return fail(`This machine's Workspace state was written by a newer aibill: it carries keys this version does not know, so this version stopped and nothing was changed. Run npx aibill@latest workspace ${action}${flag}.`);
+    }
     if (error instanceof WorkspaceEnrollmentRefusal) return fail(error.reason === "connected"
       ? "This machine is already connected. Disconnect it before starting another connection request."
       : `The earlier exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`);
@@ -9083,13 +9112,13 @@ function helpText(telemetryDisclosure?: boolean): string {
     `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
     "",
     "Optional Workspace machine attribution (explicit consent, no provider calls):",
-    "  npx aibill workspace connect         Prepare this machine's public pairing request",
-    "  npx aibill workspace connect --restart Replace an unused request after browser expiry or cancellation",
-    "  npx aibill workspace connect <code>  Finish the browser-confirmed pairing",
-    "  npx aibill workspace push            Preview and send local session facts",
-    "  npx aibill workspace status          Read local pairing/pending status only",
-    "  npx aibill workspace disconnect      Revoke the grant or abandon an unused pairing key",
-    "  npx aibill workspace disconnect --retry  Confirm one identical uncertain disconnect attempt",
+    "  npx aibill@latest workspace connect            Prepare this machine's public pairing request",
+    "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation",
+    "  npx aibill@latest workspace connect <code>     Finish the browser-confirmed pairing",
+    "  npx aibill@latest workspace push               Preview and send local session facts",
+    "  npx aibill@latest workspace status             Read local pairing/pending status only",
+    "  npx aibill@latest workspace disconnect         Revoke the grant or abandon an unused pairing key",
+    "  npx aibill@latest workspace disconnect --retry Confirm one identical uncertain disconnect attempt",
     "",
     "Add official provider-reported cost (ADMIN/owner-gated):",
     "  npx aibill connect openai            Requires an org-owner Admin credential reference",

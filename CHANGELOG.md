@@ -33,8 +33,8 @@ historical untagged exception.
     Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
     still retains the exact envelope, and a retained envelope is never rebuilt: yes
     resends it identically, while no, no answer, or `AIBILL_NO_PLAN_TIER` drops it, so
-    session facts never wait on a yes. A refused or retained batch that holds session
-    facts stays retained, as before.
+    session facts never wait on a yes. A batch that holds session facts and is refused
+    as `invalid`, `conflict` or `stale`, or whose reply was lost, stays retained, as before.
   - A Claude Team or Enterprise seat's tier (`oauthAccount.organizationType`) is now
     held on the machine rather than sent: the Workspace does not accept that source
     yet, and beside session facts its refusal would have retained the batch and
@@ -66,6 +66,37 @@ historical untagged exception.
   - This needs the Workspace release that accepts tier-only envelopes. Against one
     that does not, the batch is refused as `invalid` and dropped as above, and each
     session push repeats the second preview and the refusal line. No push halts.
+
+- A push can no longer stall without saying so.
+  - A batch with session facts that Workspace refuses as `expired` is dropped instead of
+    retained for good. That refusal is decided after Workspace's replay lookup, so it
+    means Workspace does not hold the batch. The way there was ordinary: a dropped
+    connection or a closed laptop, then a resend more than 10 minutes after signing.
+    Before this, every later push stopped at `A retained batch was refused` and no
+    command resolved it. The local sequence moves past the batch, the fact ledger does
+    not move, and the next push rebuilds the same session facts into a new batch with a
+    new preview and a new yes. Nothing is resent in the same command, and nothing goes
+    without consent. A machine an earlier CLI already stopped this way recovers on its
+    next push. `invalid`, `conflict` and `stale` stay as they were, and a batch that did
+    land, its reply lost, still replays its receipt however late it is resent.
+  - A machine whose clock is more than 2 minutes ahead of Workspace's, or more than 10
+    minutes behind it, gets that refusal on a first send. A batch refused under 10
+    minutes after it was signed, by this machine's clock, says this machine's clock looks
+    ahead of Workspace's, or more than 10 minutes behind it, and to check it. It does not loop.
+  - Past the connection's end, `workspace push` stops with exit 1, reads no session facts,
+    sends nothing, resends no retained batch, and says what to run:
+    `npx aibill@latest workspace disconnect`, then `npx aibill@latest workspace connect`.
+    It used to print `No changed eligible local session facts to push.` and exit 0, or
+    build a batch that could only come back unknown. `workspace status` shows when the
+    connection ends and, past that, says it ended. Nothing renews a connection, and the
+    new one starts no earlier than the UTC day after the disconnect.
+  - Where this CLI tells a person what to type for a Workspace command, it says
+    `npx aibill@latest`: the help, the pairing lines and the recovery lines. A stale npx
+    cache meets a state file it cannot read.
+  - A state file refused because it carries keys this version does not know now says a
+    newer aibill wrote it, to run `npx aibill@latest`, and that nothing was changed. The
+    refusal itself is unchanged and nothing is reset. Versions already published keep
+    their general words.
 
 ## 0.9.16 (unreleased)
 
