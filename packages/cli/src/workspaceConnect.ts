@@ -4,7 +4,7 @@ import { lstat, mkdir, open, realpath, rename, rmdir, unlink, type FileHandle } 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { homedir, hostname } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { AGENT_PLAN_FACT_SOURCES, AGENT_PLAN_TIER_IDS, dedupeCumulativeSessionCalls, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
 
 export const WORKSPACE_ORIGIN = "https://app.asktilden.com";
@@ -48,6 +48,12 @@ export type WorkspaceAcceptedPlans = Partial<Record<WorkspaceAgentPlanFact["agen
 export const WORKSPACE_PLAN_REFRESH_DAYS = 14;
 export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
+/**
+ * The project names each folder's session facts went out under, last used last, keyed by directory ref. The ledger holds
+ * keys and no names, and a fact's key holds its name, so this is what finds a fact's row again once the folder's checkout
+ * has changed or gone. Stays on this machine and is never sent.
+ */
+export type WorkspaceFactNames = Record<string, (string | null)[]>;
 /** The fields that form a fact's key. */
 export type WorkspaceFactIdentity = Pick<WorkspaceFact, "day" | "agent" | "provider" | "model" | "projectName" | "directoryRef" | "apiKeyRef" | "workspaceRef">;
 export type WorkspaceDevice = {
@@ -71,6 +77,7 @@ export type WorkspaceState = {
   disconnect: null | { state: "uncertain" | "revoked"; requestId: string; revokedAt: string | null };
   capabilities?: WorkspaceCapabilities;
   agentPlansAccepted?: WorkspaceAcceptedPlans;
+  factNames?: WorkspaceFactNames;
 };
 /**
  * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
@@ -87,6 +94,8 @@ export type WorkspaceAggregate = {
   excludedByReason?: Record<string, number>;
   /** Changed facts this batch has no room for; the next preview carries them. Absent when the batch holds them all. */
   factsWaiting?: number;
+  /** With `factsWaiting`: the one day with more changed facts than this batch can carry, so it holds part of that day. Every other batch holds whole days. */
+  partDay?: string;
   /** Plan facts prepared beside the session facts (or signed into a retained batch); absent from a bare aggregate. */
   agentPlanFacts?: WorkspaceAgentPlanFact[];
   /** Set when this push read the sign-in files; nothing is sent for these, so the push says so in words. */
@@ -168,6 +177,15 @@ function tokenComponents(call: LocalAgentCall): Record<keyof WorkspaceTokens, bi
   };
 }
 
+/**
+ * What a project label becomes in a fact. A name no fact may carry goes as none. That includes text that is not well
+ * formed (a lone surrogate, which only a hand-made log can hold): the contract passes it, the Workspace's database cannot
+ * store it, and the batch would come back unknown on every retry.
+ */
+function factProjectName(project: string | undefined): string | null {
+  const name = project && project !== "(home)" ? project : null;
+  return name && (name.length > 120 || /[/\\\u0000-\u001f\u007f@]/.test(name) || [".", ".."].includes(name) || /[\uD800-\uDFFF]/u.test(name)) ? null : name;
+}
 /** The key-forming fields of a call's daily fact. Throws the reason the aggregate reports for an unusable call. */
 function workspaceFactIdentity(call: LocalAgentCall): WorkspaceFactIdentity {
   if (call.agent !== "claude-code" && call.agent !== "codex") throw Error("agent_unsupported");
@@ -178,41 +196,66 @@ function workspaceFactIdentity(call: LocalAgentCall): WorkspaceFactIdentity {
       throw Error("cumulative_day_unresolved");
   } else if (call.usageScope !== "turn") throw Error("call_scope_unresolved");
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(call.model)) throw Error("model_invalid");
-  let projectName = call.project && call.project !== "(home)" ? call.project : null;
-  if (projectName && (projectName.length > 120 || /[/\\\u0000-\u001f\u007f@]/.test(projectName) || [".", ".."].includes(projectName)))
-    projectName = null;
   return { day, agent: call.agent, provider: call.agent === "claude-code" ? "anthropic" : "openai",
-    model: call.model, projectName, directoryRef: safeDirectoryRef(call), apiKeyRef: null, workspaceRef: null };
+    model: call.model, projectName: factProjectName(call.project), directoryRef: safeDirectoryRef(call), apiKeyRef: null, workspaceRef: null };
 }
 
+/** The names of the folders above a directory, nearest first. */
+function foldersAbove(directory: string | undefined): string[] {
+  const above: string[] = [];
+  if (!directory || !isAbsolute(directory)) return above;
+  for (let current = dirname(resolve(directory)); basename(current); current = dirname(current)) above.push(basename(current));
+  return above;
+}
 /**
- * Facts for days this machine has not sent yet name the repository (the main
- * checkout, found from the session folder) instead of the folder itself, so
- * worktrees, sub-folders and clones land in one project. A day already sent
- * keeps its folder names: its facts are keyed on them, and a renamed key
- * would sit beside the old one on the server.
+ * Names each call's fact. One day, agent, model and folder is one place, and a fact's key also holds its name. The server
+ * keys on that and never deletes, so a second name for one place is a second row that counts the same sessions twice. So
+ * a place the ledger already holds keeps the name it went out under, whatever the folder's checkout says now. The ledger
+ * holds keys and no names, so each name the place could have gone out under is tried against it: the folder's own, those
+ * this machine remembers for the folder, its repository's, those of the folders above it and those used elsewhere on this
+ * machine. A key found there can only mean this place went out under that name.
+ *
+ * Any other place names the repository (the main checkout, found from the session folder), so worktrees, sub-folders and
+ * clones land in one project. With no checkout to find, it takes the name the folder last went out under, or its own.
+ * `names` is `remembered` plus any name the ledger proved here that the folder's own name would not have told.
  */
 export function collapseRepositoryProjects(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
-  resolveRoot: (directory: string) => string | undefined): LocalAgentCall[] {
-  const sentDays = new Set<string>();
-  for (const call of calls) {
-    try {
-      const shape = workspaceFactIdentity(call);
-      if (previous[workspaceFactKey(shape)]) sentDays.add(shape.day);
-    } catch { /* the aggregate reports unusable calls */ }
-  }
-  const roots = new Map<string, string | undefined>(), home = resolve(homedir());
-  return calls.map(call => {
-    if (!call.workingDirectory || !isAbsolute(call.workingDirectory)) return call;
-    let day: string;
-    try { day = utcDay(call.timestamp); } catch { return call; }
-    if (sentDays.has(day)) return call;
-    if (!roots.has(call.workingDirectory)) roots.set(call.workingDirectory, resolveRoot(call.workingDirectory));
-    const root = roots.get(call.workingDirectory);
-    if (!root || resolve(root) === home) return call;
-    const name = basename(root);
-    return name.length ? { ...call, project: name } : call;
+  resolveRoot: (directory: string) => string | undefined, remembered: WorkspaceFactNames = {}): { calls: LocalAgentCall[]; names: WorkspaceFactNames } {
+  const roots = new Map<string, string | undefined>(), home = resolve(homedir()), names = { ...remembered };
+  const anySent = Object.keys(previous).length > 0, decided = new Map<string, string | null>();
+  const repositoryName = (directory: string | undefined): string | undefined => {
+    if (!directory || !isAbsolute(directory)) return undefined;
+    if (!roots.has(directory)) roots.set(directory, resolveRoot(directory));
+    const root = roots.get(directory);
+    return root && resolve(root) !== home ? basename(root) || undefined : undefined;
+  };
+  let elsewhere: (string | null)[] | undefined;
+  const namesElsewhere = () => elsewhere ??= [...new Set([...Object.values(remembered).flat(),
+    ...calls.flatMap(call => [factProjectName(call.project), factProjectName(repositoryName(call.workingDirectory))])])];
+  const nameFor = (call: LocalAgentCall, shape: WorkspaceFactIdentity): string | null => {
+    const repository = repositoryName(call.workingDirectory), kept = remembered[shape.directoryRef] ?? [];
+    if (anySent) {
+      const inLedger = (name: string | null) => previous[workspaceFactKey({ ...shape, projectName: name })] !== undefined;
+      let sent = [shape.projectName, ...[...kept].reverse(), ...(repository ? [factProjectName(repository)] : []),
+        ...foldersAbove(call.workingDirectory).map(factProjectName)].find(inLedger);
+      if (sent === undefined) sent = namesElsewhere().find(inLedger);
+      if (sent !== undefined) {
+        // Older than anything an ACCEPT wrote, so the name last used stays last.
+        if (sent !== shape.projectName && !names[shape.directoryRef]?.includes(sent)) names[shape.directoryRef] = [sent, ...names[shape.directoryRef] ?? []];
+        return sent;
+      }
+    }
+    return repository ? factProjectName(repository) : kept.length ? kept.at(-1)! : shape.projectName;
+  };
+  const named = calls.map(call => {
+    let shape: WorkspaceFactIdentity;
+    try { shape = workspaceFactIdentity(call); } catch { return call; } // the aggregate reports unusable calls
+    const place = JSON.stringify([shape.day, shape.agent, shape.model, shape.directoryRef, shape.projectName]);
+    let name = decided.get(place);
+    if (name === undefined) decided.set(place, name = nameFor(call, shape));
+    return name === shape.projectName ? call : { ...call, project: name ?? undefined };
   });
+  return { calls: named, names };
 }
 
 /**
@@ -334,6 +377,12 @@ function validateAcceptedPlans(plans: WorkspaceAcceptedPlans): void {
     utcDay(plan.sentAt);
   }
 }
+function validateFactNames(names: WorkspaceFactNames): void {
+  if (!names || typeof names !== "object" || Array.isArray(names)) throw Error("Workspace fact name state is invalid.");
+  for (const [directoryRef, used] of Object.entries(names))
+    if (!HASH.test(directoryRef) || !Array.isArray(used) || !used.length
+      || used.some(name => name !== null && (typeof name !== "string" || factProjectName(name) !== name))) throw Error("Workspace fact name state is invalid.");
+}
 /**
  * The tier sources the Workspace accepts today. Core also reads a Claude Team
  * or Enterprise organization's type, a source the Workspace still refuses as
@@ -392,21 +441,27 @@ export function buildWorkspaceEnvelope(device: WorkspaceDevice, facts: Workspace
   return envelope;
 }
 /**
- * The session facts one batch has room for, in key order, beside the tier facts: at most MAX_FACTS of them, and at
- * most MAX_BYTES once signed, the bound the Workspace also holds a batch to. The rest wait for the next preview: the
- * ledger moves on the ACCEPT, so each accepted batch leaves less. A batch's ids and signature have fixed lengths, so
- * the bytes counted here are the bytes sent, and any one fact fits: a fact's session identities are bounded far below this.
+ * The session facts one batch has room for, beside the tier facts: at most MAX_FACTS of them, and at most MAX_BYTES once
+ * signed, the bound the Workspace also holds a batch to. Whole days, oldest first. Workspace reads what it holds of a day
+ * as that day, with nothing to mark a part, so a batch stops at the last day it can carry whole: the days that wait are
+ * absent, not short, and fewer leave the window while they wait. A first day with more than the batch can carry goes in part,
+ * and `partDay` names it. The rest wait for the next preview: the ledger moves on the ACCEPT, so each accepted batch leaves less.
+ * A batch's ids and signature have fixed lengths, so the bytes counted here are the bytes sent, and any one fact fits: a
+ * fact's session identities are bounded far below this.
  */
-function sessionFactsThatFit(device: WorkspaceDevice, facts: readonly WorkspaceFact[], plans: WorkspaceAgentPlanFact[], generatedAt: string): WorkspaceFact[] {
+function sessionFactsThatFit(device: WorkspaceDevice, facts: readonly WorkspaceFact[], plans: WorkspaceAgentPlanFact[], generatedAt: string): { fitted: WorkspaceFact[]; partDay?: string } {
+  const ordered = [...facts].sort((a, b) => a.day.localeCompare(b.day));
   let size = Buffer.byteLength(workspaceCanonicalJson(signWorkspaceEnvelope(device, plans, generatedAt)));
-  const fitted: WorkspaceFact[] = [];
-  for (const fact of facts) {
-    const grown = size + Buffer.byteLength(workspaceCanonicalJson(fact)) + (fitted.length + plans.length > 0 ? 1 : 0);
-    if (fitted.length + plans.length >= MAX_FACTS || grown > MAX_BYTES) break;
-    fitted.push(fact);
+  const room: WorkspaceFact[] = [];
+  for (const fact of ordered) {
+    const grown = size + Buffer.byteLength(workspaceCanonicalJson(fact)) + (room.length + plans.length > 0 ? 1 : 0);
+    if (room.length + plans.length >= MAX_FACTS || grown > MAX_BYTES) break;
+    room.push(fact);
     size = grown;
   }
-  return fitted;
+  if (room.length === ordered.length) return { fitted: room };
+  const cut = ordered[room.length]!.day, whole = room.filter(fact => fact.day !== cut);
+  return whole.length ? { fitted: whole } : { fitted: room, partDay: cut };
 }
 
 const noFollow = constants.O_NOFOLLOW ?? 0;
@@ -435,7 +490,7 @@ async function readState(path: string): Promise<WorkspaceState | null> {
     if (!info.isFile() || info.nlink !== 1 || info.mode & 0o077 || info.size > MAX_STATE_BYTES || process.getuid && info.uid !== process.getuid())
       throw Error("Workspace state is not a private regular file.");
     const state = JSON.parse(await file.readFile("utf8")) as WorkspaceState;
-    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities", "agentPlansAccepted"]);
+    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities", "agentPlansAccepted", "factNames"]);
     if (state.version !== 1 || !state.facts || typeof state.facts !== "object" || Array.isArray(state.facts)) throw Error("Workspace state is invalid.");
     validateDevice(state.device);
     if (state.capabilities !== undefined) {
@@ -443,6 +498,7 @@ async function readState(path: string): Promise<WorkspaceState | null> {
       if (typeof state.capabilities.agentPlanFacts !== "boolean") throw Error("Workspace capability state is invalid.");
     }
     if (state.agentPlansAccepted !== undefined) validateAcceptedPlans(state.agentPlansAccepted);
+    if (state.factNames !== undefined) validateFactNames(state.factNames);
     if (state.lastAcceptedAt !== null) utcDay(state.lastAcceptedAt);
     for (const [key, value] of Object.entries(state.facts)) {
       exactKeys(value, ["revision", "contentHash"]);
@@ -514,7 +570,8 @@ function lockAbandoned(owner: { pid: number; host: string } | null): boolean {
  * Removes a lock whose holder is gone. A kill leaves its lock behind: a closed terminal or a dropped SSH session is
  * enough, and what it left in the state file is safe, because a batch is marked uncertain before it is sent. The gate
  * is why two commands reclaiming at once cannot each remove the lock the other just took: only its holder checks and
- * removes. A command killed inside the gate leaves it, and reclaiming stops; the person then deletes the lock by hand.
+ * removes. A command killed inside the gate leaves it, and reclaiming stops until the person deletes the lock by hand; the
+ * next command to take a free lock then clears the gate.
  */
 async function reclaimAbandonedLock(path: string): Promise<boolean> {
   if (!lockAbandoned(await lockOwner(path))) return false;
@@ -530,8 +587,12 @@ async function reclaimAbandonedLock(path: string): Promise<boolean> {
 async function takeLock(path: string): Promise<FileHandle> {
   const create = () => open(join(path, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
   const held = (error: unknown) => (error as NodeJS.ErrnoException).code === "EEXIST";
-  try { return await create(); }
-  catch (error) { if (!held(error)) throw Error("Workspace lock could not be created."); }
+  try {
+    const lock = await create();
+    // With the lock absent, no reclaim can be between its check and its removal, so a gate here is one a kill left shut.
+    await rmdir(join(path, LOCK_RECLAIM_GATE)).catch(() => undefined);
+    return lock;
+  } catch (error) { if (!held(error)) throw Error("Workspace lock could not be created."); }
   if (!await reclaimAbandonedLock(path)) throw new WorkspaceStateLocked();
   try { return await create(); }
   catch (error) { if (held(error)) throw new WorkspaceStateLocked(); throw Error("Workspace lock could not be created."); }
@@ -759,14 +820,15 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
       await save(withoutBatch(state, envelope));
       return { state: "dropped", coverage };
     }
-    const calls = options.resolveRepositoryRoot
-      ? collapseRepositoryProjects(options.calls, held.facts, options.resolveRepositoryRoot) : options.calls;
-    const coverage = aggregateWorkspaceFacts(calls, held.facts, held.device.keyId);
+    const naming = options.resolveRepositoryRoot
+      ? collapseRepositoryProjects(options.calls, held.facts, options.resolveRepositoryRoot, held.factNames) : { calls: options.calls, names: held.factNames ?? {} };
+    const coverage = aggregateWorkspaceFacts(naming.calls, held.facts, held.device.keyId);
     if (coverage.excludedCalls) throw new WorkspaceCallsExcluded(coverage.excludedCalls, coverage.excludedByReason ?? {});
     // A CLI before this one kept a batch refused as `expired` and stopped every later push on it. The Workspace
     // answered `expired` only after its replay lookup found nothing, so it does not hold that batch: it goes now,
     // durably, whatever the person answers below, and the same facts are rebuilt under a new preview.
-    const state = heldExpired ? withoutBatch(held, heldExpired) : held;
+    // A name the ledger proved stays with whatever is saved next, so it outlives the checkout that told it. A push with nothing to save leaves the file as it is.
+    const state = { ...(heldExpired ? withoutBatch(held, heldExpired) : held), ...(Object.keys(naming.names).length ? { factNames: naming.names } : {}) };
     if (heldExpired) await save(state);
     const today = utcDay(options.generatedAt), authority = Math.max(Date.parse(state.device.collectionNotBefore), Date.parse(state.device.authorityStartsAt));
     const eligible = coverage.facts.filter(fact => fact.day < today && Date.parse(`${fact.day}T00:00:00.000Z`) >= authority
@@ -777,8 +839,9 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
     const plans = await offerablePlanFacts(state, options);
     coverage.agentPlanFacts = plans.facts;
     coverage.unreportedPlans = plans.unreported;
-    const fitted = sessionFactsThatFit(state.device, coverage.facts, coverage.agentPlanFacts, options.generatedAt);
+    const { fitted, partDay } = sessionFactsThatFit(state.device, coverage.facts, coverage.agentPlanFacts, options.generatedAt);
     if (fitted.length < coverage.facts.length) coverage.factsWaiting = coverage.facts.length - fitted.length;
+    if (partDay) coverage.partDay = partDay;
     const envelope = buildWorkspaceEnvelope(state.device, [...fitted, ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
     await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
@@ -852,12 +915,16 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
         if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
           || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
         const capabilities = workspacePushCapabilities(result.headers);
-        const facts = { ...state.facts }, agentPlansAccepted = { ...state.agentPlansAccepted };
+        const facts = { ...state.facts }, agentPlansAccepted = { ...state.agentPlansAccepted }, factNames = { ...state.factNames };
         for (const fact of envelope.facts)
           if (isWorkspaceAgentPlanFact(fact)) agentPlansAccepted[fact.agent] = { tier: fact.tier, tierRaw: fact.tierRaw, sentAt: receipt.acceptedAt };
-          else facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+          else {
+            facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+            const used = factNames[fact.directoryRef] ?? [];
+            if (used.at(-1) !== fact.projectName) factNames[fact.directoryRef] = [...used.filter(name => name !== fact.projectName), fact.projectName];
+          }
         await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt, capabilities,
-          ...(Object.keys(agentPlansAccepted).length ? { agentPlansAccepted } : {}) });
+          ...(Object.keys(agentPlansAccepted).length ? { agentPlansAccepted } : {}), ...(Object.keys(factNames).length ? { factNames } : {}) });
         return { state: "accepted", sessionFactCount: envelope.facts.filter(isWorkspaceSessionFact).length, capabilityAnnounced: capabilities.agentPlanFacts && state.capabilities?.agentPlanFacts !== true };
       }
       if (result.status === 409) {

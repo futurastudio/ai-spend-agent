@@ -669,7 +669,7 @@ describe("older pairing files", () => {
     const run = await m.push([call()]);
     expect(run.exitCode).toBe(0);
     expect(run.sent).toHaveLength(2);
-    expect(Object.keys(await m.state()).sort()).toEqual(["agentPlansAccepted", "capabilities", "device", "disconnect", "facts", "lastAcceptedAt", "pending", "version"]);
+    expect(Object.keys(await m.state()).sort()).toEqual(["agentPlansAccepted", "capabilities", "device", "disconnect", "factNames", "facts", "lastAcceptedAt", "pending", "version"]);
   });
   it("treats a file that knows the capability but no accepted tier as never accepted", async () => {
     const m = await machine({ capability: true });

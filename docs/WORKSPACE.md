@@ -78,9 +78,13 @@ run the same command with `npx aibill@latest`.
    Confirming sends that batch. Connection, a normal receipt, statusline
    refresh and the local `watch` command do not schedule Workspace pushes.
    A batch contains at most 256 changed facts and 262,144 bytes, so a successful
-   push is not a promise that all eligible history has been uploaded. When a batch
-   holds only part of it, its preview says so and the accepted line says how many
-   facts wait. Run the push again and follow the next preview.
+   push is not a promise that all eligible history has been uploaded. A batch carries
+   whole days, oldest first, because Workspace reads what it holds of a day as that
+   day, so the days that wait are absent from Workspace, not short. When a new batch
+   holds only part of the changed facts, its preview says so and the accepted line
+   says how many wait. A day with more changed facts than its batch can carry goes in
+   part, and both lines name it. A retained batch is resent as it was signed and says
+   nothing of what waits behind it. Run the push again and follow the next preview.
 
 ## What is shared
 
@@ -89,6 +93,16 @@ components, a project label where available, and hashed directory/session
 identities used to distinguish records. Project labels can identify work;
 this is not an anonymous activity feed. Unsupported token components remain
 unknown rather than zero. Gemini activity is not part of this upload.
+
+The project label names the repository a session's folder belongs to: the checkout
+that holds the folder, or the main checkout for a linked worktree, found from `.git`
+without running git, so worktrees and sub-folders land in one project. A folder
+outside any checkout keeps its own name. Workspace keys a fact on its label and keeps
+what it accepts, so a fact that has gone out keeps the label it went out under,
+whatever later happens to the folder. `~/.aibill/workspace-device.json` remembers
+the labels each folder's facts went out under, keyed by the hashed folder, and that
+stays on this machine. A folder with no checkout left to find keeps the label it last
+went out under on its later days.
 
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local
@@ -202,10 +216,10 @@ That seat plan stays until the owner changes it.
 - **Batch too old:** a batch Workspace does not hold, resent more than 10 minutes after
   it was signed, is refused as `expired`. Workspace did not store it, so this machine
   drops it. The next `npx aibill@latest workspace push` rebuilds its session facts into
-  a new batch, with a new preview and your yes, and sends nothing without it. Days that
-  have left that push's 30-day window are not rebuilt and stay out of Workspace, and the
-  line says where the window starts. A machine an earlier CLI stopped on such a batch
-  drops it on its next push, the same way.
+  a new batch, with a new preview and your yes, and sends nothing without it. What it
+  held for days that have left that push's 30-day window is not rebuilt and stays out of
+  Workspace, and the line says where the window starts. A machine an earlier CLI stopped
+  on such a batch drops it on its next push, the same way.
 - **This machine's clock is off:** a clock more than 2 minutes ahead of Workspace's, or
   more than 10 minutes behind it, gets the same refusal on a first send. The batch is
   dropped in the same way and the line says to check the clock. Nothing retries by

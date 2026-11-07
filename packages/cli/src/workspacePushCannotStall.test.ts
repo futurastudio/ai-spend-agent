@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { chmod, cp, link, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { readAgentPlanFacts, type LocalAgentCall } from "@agent-finops/core";
 import { runCli } from "./index.js";
 import { workspaceClock } from "./lib/clock.js";
 import {
-  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePlanFacts, prepareWorkspacePush, workspaceCanonicalJson, workspaceDomainHash, WorkspaceStateLocked, WORKSPACE_ORIGIN,
+  aggregateWorkspaceFacts, buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePlanFacts, prepareWorkspacePush, workspaceCanonicalJson, workspaceDomainHash, workspaceFactContentHash, workspaceFactKey, WorkspaceStateLocked, WORKSPACE_ORIGIN,
   type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceFact, type WorkspaceState, type WorkspaceTransport, type WorkspaceTransportResult
 } from "./workspaceConnect.js";
 
@@ -54,7 +54,7 @@ function workspaceServer(device: WorkspaceDevice) {
   const batches = new Map<string, { payload: string; receipt: Record<string, unknown> }>();
   const refuse = (reason: string): WorkspaceTransportResult => ({ status: 409, body: { state: "refused", reason }, headers: {} });
   const server = {
-    requests: [] as string[], replays: 0, sessionFacts: new Map<string, string>(), highWater: 0n, clock: now, script: [] as Scripted[],
+    requests: [] as string[], replays: 0, sessionFacts: new Map<string, string>(), rows: new Map<string, WorkspaceFact>(), highWater: 0n, clock: now, script: [] as Scripted[],
     transport: (async (_path, payload) => {
       server.requests.push(payload);
       const scripted = server.script.shift() ?? "pass";
@@ -75,7 +75,7 @@ function workspaceServer(device: WorkspaceDevice) {
     if (BigInt(envelope.sequence) <= server.highWater) return refuse("conflict");
     const age = Date.parse(server.clock) - Date.parse(envelope.generatedAt);
     if (age > 10 * MINUTE || age < -2 * MINUTE) return refuse("expired");
-    for (const fact of envelope.facts.filter(isWorkspaceSessionFact)) server.sessionFacts.set(fact.day, fact.factRevision);
+    for (const fact of envelope.facts.filter(isWorkspaceSessionFact)) { server.sessionFacts.set(fact.day, fact.factRevision); server.rows.set(workspaceFactKey(fact), fact); }
     const receipt = { state: "accepted", batchId: envelope.batchId, manifestHash: envelope.manifestHash, factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: server.clock };
     batches.set(envelope.idempotencyKey, { payload, receipt });
     server.highWater = BigInt(envelope.sequence);
@@ -146,7 +146,7 @@ const CLOCK_OFF = "This machine's clock looks ahead of Workspace's, or more than
 const LOCKED = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file and run this command again.";
 const LOCKED_STATUS = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file before the next connect, push or disconnect.";
 const MACHINE_REFUSED = `Workspace answered 403: it will not take a push from this machine right now. Open ${WORKSPACE_ORIGIN}/settings/machines. If it asks for this machine's sharing consent, finish that and push again. If it shows this machine disconnected or expired, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect; that disconnect removes this retained batch.`;
-const windowLine = (start: string) => `Its days before ${start} have left the 30-day window a push reads and stay out of Workspace.`;
+const windowLine = (start: string) => `What it held for days before ${start} has left the 30-day window a push reads and stays out of Workspace.`;
 const REBUILD_THE_REST = "Run npx aibill@latest workspace push to rebuild the rest of its session facts into a new batch, with a new preview; nothing goes without your yes.";
 const ANYTHING_NEWER = "Run npx aibill@latest workspace push to send anything newer, with a new preview; nothing goes without your yes.";
 const endedLine = (end: string) => `This machine's Workspace connection ended at ${end}, so no session facts were read or sent.`;
@@ -679,6 +679,7 @@ describe("a command that was killed", { timeout: 60_000 }, () => {
     ["a gone process on another host", () => `${deadPid()} another-host\n`],
     ["a pid that is not one", () => `0 ${hostname().replace(/\s+/g, "-")}\n`],
     ["something else", () => "not a lock this CLI wrote\n"],
+    ["half an owner, torn before its end", () => `${deadPid()} ${hostname().replace(/\s+/g, "-")}`],
   ])("a lock naming %s stops each command with its own line, reads nothing, asks nothing, and is left where it is", async (_name, body) => {
     const m = await machine();
     const text = body();
@@ -722,6 +723,24 @@ describe("a command that was killed", { timeout: 60_000 }, () => {
     expect((await lstat(lockPath(m.home))).isDirectory()).toBe(true);
   });
 
+  it("a lock with a second name is not trusted, and neither name is removed", async () => {
+    const m = await machine();
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    const other = join(m.home, "other-name");
+    await link(lockPath(m.home), other);
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect((await lstat(lockPath(m.home))).nlink).toBe(2);
+    expect((await lstat(other)).nlink).toBe(2);
+  });
+
+  it("status on a machine with no ~/.aibill at all names no lock", async () => {
+    const fresh = await mkdtemp(join(tmpdir(), "aibill-cannot-stall-fresh-"));
+    const run = await runCli(["workspace", "status"], { homeDirectory: fresh, workspaceNow: now });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).not.toContain("workspace-device.lock");
+    await expect(lstat(join(fresh, ".aibill"))).rejects.toThrow();
+  });
+
   it("a lock another user could write is not trusted", async () => {
     const m = await machine();
     await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o644 });
@@ -746,13 +765,28 @@ describe("a command that was killed", { timeout: 60_000 }, () => {
     }
   });
 
-  it("a command killed inside the takeover leaves it shut: the lock stays until deleted by hand, and that is enough", async () => {
+  it("a command killed inside the takeover leaves it shut: the lock stays until deleted by hand, and that clears the gate, so a later kill is taken over again", async () => {
     const m = await machine();
     await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
     await mkdir(`${lockPath(m.home)}.reclaim`, { mode: 0o700 });
     expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
     await rm(lockPath(m.home));
     expect(await m.push([call])).toMatchObject({ exitCode: 0, stdout: SESSIONS_ACCEPTED });
+    await expect(lstat(`${lockPath(m.home)}.reclaim`)).rejects.toThrow();
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    const next = await m.push([call]);
+    expect(next.exitCode).toBe(0);
+    expect(next.stderr).toBe("");
+  });
+
+  it.each([["still held", () => owner(process.pid)], ["left by a kill", () => owner(deadPid())]])("a gate whose lock is %s is left shut, on a command that goes as far as taking the lock: only a free lock clears it", async (_name, body) => {
+    const m = await machine();
+    await writeFile(lockPath(m.home), body(), { mode: 0o600 });
+    await mkdir(`${lockPath(m.home)}.reclaim`, { mode: 0o700 });
+    const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async () => "y" });
+    expect(run).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect((await lstat(`${lockPath(m.home)}.reclaim`)).isDirectory()).toBe(true);
+    await expect(lstat(lockPath(m.home))).resolves.toBeDefined();
   });
 
   it.runIf(process.getuid?.() !== 0)("a lock that cannot be created is not called held: it keeps the general words", async () => {
@@ -775,13 +809,17 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
   });
   const sessionFacts = (body: string) => parse(body).facts.filter(isWorkspaceSessionFact);
   const size = (body: string) => Buffer.byteLength(body);
+  const wholeDays = (held: number, of: number) => `This batch holds ${held} of ${of} changed local session facts, in whole days, oldest first, as many as one batch can carry. The next push previews the rest.`;
+  const partDay = (held: number, of: number, day: string) => `This batch holds ${held} of ${of} changed local session facts, because ${day} has more of them than this batch can carry. The next push previews the rest; until it lands, Workspace reads only part of that day.`;
+  /** Two names a byte count and a character count disagree on, then one they agree on. */
+  const names = ["\u00e9", "\u{1F600}", "p"];
 
-  it("gets a preview, and the batch stops at the last fact that fits; the next preview carries the rest until none are left", async () => {
+  it("gets a preview, and the batch stops at the last whole day that fits; the next preview carries the rest until none are left", async () => {
     const m = await machine();
     const calls = heavy(19, 9, 25);
     const total = 19 * 9;
     const seen = new Set<string>();
-    let pushes = 0, sent = 0, previous = 0;
+    let pushes = 0, sent = 0, previous = 0, newest = "";
     for (;;) {
       const run = await m.push(calls);
       pushes++;
@@ -802,11 +840,17 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
       expect(accepted[0]).toBe(`Workspace accepted ${facts.length} local session facts. These are attribution inputs, not billed costs.`);
       if (waiting) {
         expect(accepted).toContain(`${waiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`);
-        expect(lines(run.messages[0]!)).toContain(`This batch holds ${facts.length} of ${total - previous} changed local session facts, as many as one batch can carry. The next push previews the rest.`);
+        expect(lines(run.messages[0]!)).toContain(wholeDays(facts.length, total - previous));
       } else {
         expect(run.stdout).not.toContain("more changed local session facts wait");
         expect(run.messages[0]).not.toContain("as many as one batch can carry");
       }
+      // Whole days, oldest first: every day this batch touches goes whole, and nothing older is left behind.
+      const perDay = new Map<string, number>();
+      for (const fact of facts) perDay.set(fact.day, (perDay.get(fact.day) ?? 0) + 1);
+      expect([...perDay.values()].every(count => count === 9)).toBe(true);
+      expect([...perDay.keys()].every(day => day >= newest)).toBe(true);
+      newest = [...perDay.keys()].sort().at(-1) ?? newest;
       previous = sent;
       expect(pushes).toBeLessThan(10);
     }
@@ -817,12 +861,13 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
     expect(state.pending).toBeNull();
   });
 
-  it("fills a batch to the last byte the bound allows and not one past it", async () => {
+  it("fills a batch to the last byte the bound allows and not one past it, when one day alone passes it", async () => {
     const m = await machine();
-    const calls = heavy(19, 9, 25);
-    let held: WorkspaceFact[] = [], body = "";
-    await prepareWorkspacePush({ home: m.home, calls, generatedAt: now, confirm: async (payload, coverage) => { body = payload; held = coverage.facts; return false; } });
+    const calls = heavy(1, 171, 25);
+    let held: WorkspaceFact[] = [], body = "", day: string | undefined;
+    await prepareWorkspacePush({ home: m.home, calls, generatedAt: now, confirm: async (payload, coverage) => { body = payload; held = coverage.facts; day = coverage.partDay; return false; } });
     const facts = sessionFacts(body);
+    expect(day).toBe("2026-09-01");
     expect(facts.length).toBeLessThan(held.length);
     expect(facts).toEqual(held.slice(0, facts.length));
     const next = held[facts.length]!;
@@ -830,11 +875,11 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
     expect(size(body) + size(workspaceCanonicalJson(next as never)) + 1).toBeGreaterThan(MAX_BYTES);
   });
 
-  it("counts its bytes exactly, wherever the facts happen to fall against the bound", async () => {
+  it("counts its bytes exactly, wherever the facts happen to fall against the bound, and in bytes where a name's characters are wider", async () => {
     let tightest = Infinity;
-    for (const plans of [false, true]) for (let padding = 1; padding <= 40; padding++) {
+    for (const plans of [false, true]) for (const name of names) for (let padding = 1; padding <= 40; padding++) {
       const m = await machine({ capability: plans, planFiles: plans });
-      const calls = heavy(19, 9, 25).map(item => ({ ...item, project: "p".repeat(padding * 2) }));
+      const calls = heavy(1, 171, 25).map(item => ({ ...item, project: name.repeat(padding) }));
       let body = "", held: WorkspaceFact[] = [];
       const prepared = await prepareWorkspacePush({ home: m.home, calls, generatedAt: now, confirm: async (payload, coverage) => { body = payload; held = coverage.facts; return false; },
         ...(plans ? { readAgentPlanFacts: async () => [{ kind: "agent_plan" as const, agent: "claude_code" as const, tier: "claude_max_20x" as const, tierRaw: "default_claude_max_20x", source: "claude_json.oauthAccount.organizationRateLimitTier" as const, observedAt: now, activeUntil: null }] } : {}) });
@@ -862,7 +907,91 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
     const envelope = parse(lines(counted.messages[0]!).find(line => line.startsWith("{"))!);
     expect(envelope.facts).toHaveLength(256);
     expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
-    expect(lines(counted.messages[0]!)).toContain("This batch holds 255 of 300 changed local session facts, as many as one batch can carry. The next push previews the rest.");
+    expect(lines(counted.messages[0]!)).toContain(partDay(255, 300, "2026-09-18"));
+  });
+
+  describe("what Workspace reads between one batch and the next", () => {
+    const daysOf = (body: string) => { const days = new Map<string, number>(); for (const fact of sessionFacts(body)) days.set(fact.day, (days.get(fact.day) ?? 0) + 1); return days; };
+
+    it("cut by bytes: whole days, oldest first, and the days that wait are absent, not short", async () => {
+      const m = await machine();
+      const run = await m.push(heavy(24, 9, 20), { at: "2026-09-29T12:00:00.000Z", serverAt: "2026-09-29T12:00:00.000Z" });
+      const days = daysOf(run.sent[0]!), held = sessionFacts(run.sent[0]!).length;
+      expect(held).toBeLessThan(216);
+      expect(held % 9).toBe(0);
+      expect([...days.values()].every(count => count === 9)).toBe(true);
+      expect([...days.keys()]).toEqual([...days.keys()].sort());
+      expect([...days.keys()][0]).toBe("2026-09-01");
+      expect(lines(run.messages[0]!)).toContain(wholeDays(held, 216));
+      expect(lines(run.stdout)).toContain(`${216 - held} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`);
+      const rest = await m.push(heavy(24, 9, 20), { at: "2026-09-29T12:00:00.000Z", serverAt: "2026-09-29T12:00:00.000Z" });
+      expect(sessionFacts(rest.sent[0]!)).toHaveLength(216 - held);
+      expect([...daysOf(rest.sent[0]!).values()].every(count => count === 9)).toBe(true);
+      expect(rest.stdout).not.toContain("wait");
+      expect(rest.messages[0]).not.toContain("This batch holds");
+    });
+
+    it("cut by count: the same, and a batch that fits whole is not cut", async () => {
+      const m = await machine();
+      const moment = "2026-09-29T12:00:00.000Z";
+      const calls = heavy(27, 12, 1);
+      const run = await m.push(calls, { at: moment, serverAt: moment });
+      expect(sessionFacts(run.sent[0]!)).toHaveLength(252);
+      expect(lines(run.messages[0]!)).toContain(wholeDays(252, 324));
+      const rest = await m.push(calls, { at: moment, serverAt: moment });
+      expect(sessionFacts(rest.sent[0]!)).toHaveLength(72);
+      expect(rest.messages[0]).not.toContain("This batch holds");
+      expect((await m.push(calls, { at: moment, serverAt: moment })).sent).toEqual([]);
+      expect(m.server.rows.size).toBe(324);
+    });
+
+    it("a day that alone passes the bound goes in part, named before the yes and after it, and the next batch starts with what is left of it", async () => {
+      const m = await machine();
+      const big = Array.from({ length: 300 }, (_, index) => ({ ...call, sessionId: `big-${index}`, callId: `big-${index}`, model: `gpt-5.${index}` }));
+      const small = Array.from({ length: 3 }, (_, index) => ({ ...call, sessionId: `small-${index}`, callId: `small-${index}`, model: `gpt-4.${index}`, timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" }));
+      const calls = [...small, ...big];
+      const first = await m.push(calls);
+      expect(new Set(sessionFacts(first.sent[0]!).map(fact => fact.day))).toEqual(new Set(["2026-09-18"]));
+      expect(lines(first.messages[0]!)).toContain(partDay(256, 303, "2026-09-18"));
+      expect(lines(first.stdout)).toContain("47 more changed local session facts wait. Run npx aibill@latest workspace push to preview them. Until they land, Workspace reads only part of 2026-09-18.");
+      const second = await m.push(calls);
+      expect(sessionFacts(second.sent[0]!).filter(fact => fact.day === "2026-09-18")).toHaveLength(44);
+      expect(sessionFacts(second.sent[0]!).filter(fact => fact.day === "2026-09-19")).toHaveLength(3);
+      expect(second.messages[0]).not.toContain("This batch holds");
+      expect(m.server.rows.size).toBe(303);
+    });
+
+    it("the tier facts beside it are counted, and the cut still falls between days", async () => {
+      const m = await machine({ capability: true, planFiles: true });
+      const moment = "2026-09-29T12:00:00.000Z";
+      const run = await m.push(heavy(27, 12, 1), { at: moment, serverAt: moment });
+      const envelope = parse(run.sent[0]!);
+      expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
+      expect(envelope.facts.filter(isWorkspaceSessionFact)).toHaveLength(252);
+      expect(lines(run.messages[0]!)).toContain(wholeDays(252, 324));
+    });
+
+    it("a cut that falls exactly between two days keeps both sides of it", async () => {
+      const m = await machine();
+      const moment = "2026-09-29T12:00:00.000Z";
+      const run = await m.push(heavy(20, 16, 1), { at: moment, serverAt: moment });
+      expect(sessionFacts(run.sent[0]!)).toHaveLength(256);
+      expect(lines(run.messages[0]!)).toContain(wholeDays(256, 320));
+      expect(run.stdout).not.toContain("reads only part");
+    });
+
+    it("a day the ledger already holds in part goes first, at the next revision where it changed", async () => {
+      const m = await machine();
+      const moment = "2026-09-29T12:00:00.000Z";
+      const calls = heavy(27, 12, 1);
+      await m.push(calls, { at: moment, serverAt: moment });
+      // A session more on the oldest day, beside days never sent: the changed fact goes with the oldest days.
+      const later = { ...calls[0]!, sessionId: "one-more", callId: "one-more" };
+      const next = await m.push([...calls, later], { at: moment, serverAt: moment });
+      const facts = sessionFacts(next.sent[0]!);
+      expect(facts[0]).toMatchObject({ day: "2026-09-01", factRevision: "2" });
+      expect(facts.slice(1).every(fact => fact.factRevision === "1")).toBe(true);
+    });
   });
 
   it("a batch that fits whole says nothing about room, whatever its size", async () => {
@@ -974,6 +1103,33 @@ describe("the days a dropped batch cannot get back", () => {
     expect(lines(next.stdout)[0]).toBe(IDLE);
   });
 
+  it("all of them, beside tier facts: the tier says nothing of a rebuild, and the line promises only what is newer", async () => {
+    const m = await machine();
+    const device = (await m.read()).device;
+    const plan: WorkspaceEnvelope["facts"][number] = { kind: "agent_plan", agent: "claude_code", tier: "claude_max_20x", tierRaw: "default_claude_max_20x", source: "claude_json.oauthAccount.organizationRateLimitTier", observedAt: signed, activeUntil: null };
+    const sessionsOnly = await machineEnvelope(device, signed, ["2026-09-02"]);
+    const mixed = buildWorkspaceEnvelope(device, [...sessionsOnly.facts, plan], signed);
+    await m.edit(held => { held.pending = { envelope: mixed, state: "uncertain", refusal: null }; });
+    m.server.clock = moment;
+    const run = await m.push([], { at: moment, serverAt: moment, load: unexpectedRead });
+    expect(run.exitCode).toBe(1);
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch because it was signed at ${signed}, more than 10 minutes ago. ${NOT_STORED}`, windowLine(start), ANYTHING_NEWER]);
+  });
+
+  it("the words hold for a day Workspace already has: what the dropped batch held stays out, and the earlier revision stays where it is", async () => {
+    const m = await machine();
+    const day = "2026-09-02", first = { ...call, timestamp: `${day}T10:00:00.000Z`, startedAt: `${day}T10:00:00.000Z` };
+    const at1 = "2026-09-03T12:00:00.000Z";
+    expect((await m.push([first], { at: at1, serverAt: at1 })).exitCode).toBe(0);
+    const row = [...m.server.rows.values()][0]!;
+    m.server.script = ["lost_before_commit"];
+    const at2 = "2026-09-04T12:00:00.000Z", more = { ...first, sessionId: "another", callId: "another" };
+    expect((await m.push([first, more], { at: at2, serverAt: at2 })).exitCode).toBe(1);
+    const run = await m.push([], { at: moment, serverAt: moment, load: unexpectedRead });
+    expect(lines(run.stderr)).toContain(windowLine(start));
+    expect([...m.server.rows.values()]).toEqual([row]);
+  });
+
   it("a day the window still reads, even on its first day, keeps the plain line", async () => {
     const { run } = await resend([start, "2026-09-18"], "uncertain", null);
     expect(lines(run.stderr)).toEqual(lateLines(signed));
@@ -1022,7 +1178,7 @@ describe("what the way back costs", () => {
     const asked: string[] = [];
     const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async (message: string) => { asked.push(message); return "n"; } });
     expect(run.exitCode).toBe(1);
-    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} [y/N] `]);
+    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} If this machine was already disconnected in the browser, that has already happened. [y/N] `]);
   });
 
   it("the connection ending while a batch is on its way: the refusal says so, and promises no rebuild it could not land", async () => {
@@ -1072,6 +1228,17 @@ describe("a Workspace that will not take a push from this machine", () => {
     const lost = await machine();
     lost.server.script = ["lost_before_commit"];
     expect(await lost.push([call])).toMatchObject({ exitCode: 1, stderr: UNKNOWN_OUTCOME });
+  });
+
+  it("a follow-up tier batch that meets it: the session facts' accepted line stands beside it", async () => {
+    const m = await machine({ planFiles: true });
+    m.server.script = ["pass", denied];
+    const run = await m.push([call]);
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toBe(SESSIONS_ACCEPTED);
+    expect(lines(run.stderr)[1]).toBe(MACHINE_REFUSED);
+    expect(run.stderr).toContain("The exact signed subscription tier batch is retained.");
+    expect((await m.read()).facts).not.toEqual({});
   });
 
   it("says so for a batch of tier facts alone, with the words that batch has", async () => {
@@ -1174,5 +1341,377 @@ describe("a state file with one key missing and one this version does not know",
     const before = await m.raw();
     expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: newerState("push"), sent: [], messages: [] });
     expect(await m.raw()).toBe(before);
+  });
+});
+
+describe("one folder and day, one row", () => {
+  // Real folders and the real checkout finder. Every test before these used a folder with no trace on disk, where the finder answers nothing.
+  const session = (id: string, directory: string, day = "2026-09-18"): LocalAgentCall => ({ ...call, sessionId: id, callId: id, timestamp: `${day}T10:00:00.000Z`, startedAt: `${day}T10:00:00.000Z`, workingDirectory: directory, project: basename(directory) });
+  const checkout = async (...parts: string[]) => {
+    const home = await mkdtemp(join(tmpdir(), "aibill-one-row-")), root = join(home, ...parts);
+    await mkdir(join(root, ".git"), { recursive: true });
+    return { home, root };
+  };
+  const linkedWorktree = async (main: string, worktree: string) => {
+    const admin = join(main, ".git", "worktrees", basename(worktree));
+    await mkdir(admin, { recursive: true });
+    await mkdir(worktree, { recursive: true });
+    await writeFile(join(worktree, ".git"), `gitdir: ${admin}\n`);
+  };
+  type Machine = Awaited<ReturnType<typeof machine>>;
+  const rows = (m: Machine) => [...m.server.rows.values()];
+  const named = (m: Machine) => rows(m).map(fact => fact.projectName).sort();
+  /** The one thing that must hold: a place has one row, however many pushes and however the folder fares. */
+  const onePerPlace = (m: Machine) => {
+    const places = rows(m).map(fact => JSON.stringify([fact.day, fact.agent, fact.model, fact.directoryRef]));
+    expect(new Set(places).size).toBe(places.length);
+  };
+  const idle = async (m: Machine, calls: LocalAgentCall[]) => {
+    const run = await m.push(calls);
+    expect(run).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(lines(run.stdout)[0]).toBe(IDLE);
+  };
+
+  describe("a day whose folders share a key under either name", () => {
+    it("a checkout's root and a sub-folder: the second push finds nothing changed and sends nothing", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const calls = [session("a", root), session("b", sub)];
+      expect((await m.push(calls)).stdout).toBe("Workspace accepted 2 local session facts. These are attribution inputs, not billed costs.");
+      expect(named(m)).toEqual(["repo", "repo"]);
+      await idle(m, calls);
+      await idle(m, calls);
+      expect(rows(m)).toHaveLength(2);
+      expect(Object.values((await m.read()).factNames ?? {})).toEqual([["repo"], ["repo"]]);
+    });
+
+    it("a later session in that sub-folder moves its one row to the next revision", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const calls = [session("a", root), session("b", sub)];
+      await m.push(calls);
+      await idle(m, calls);
+      const later = await m.push([...calls, session("c", sub)]);
+      expect(parse(later.sent[0]!).facts).toMatchObject([{ projectName: "repo", factRevision: "2", sessionCount: "2" }]);
+      expect(rows(m)).toHaveLength(2);
+      onePerPlace(m);
+    });
+
+    it("a worktree beside a folder with no checkout", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(root, ".worktrees", "wt-a"), scratch = join(home, "scratch");
+      await linkedWorktree(root, worktree);
+      await mkdir(scratch);
+      const m = await machine();
+      const calls = [session("a", worktree), session("b", scratch)];
+      await m.push(calls);
+      expect(named(m)).toEqual(["main", "scratch"]);
+      await idle(m, calls);
+      onePerPlace(m);
+    });
+
+    it("a heavy machine, root and four sub-folders over 27 days, arrives as itself, and the count of what waits is what the next push sends", async () => {
+      const { root } = await checkout("code", "repo");
+      const folders = [root, ...[0, 1, 2, 3].map(index => join(root, "packages", `p${index}`))];
+      for (const folder of folders) await mkdir(folder, { recursive: true });
+      const calls = Array.from({ length: 27 }, (_, day) => folders.flatMap((folder, index) => Array.from({ length: 21 }, (_, sessionIndex) =>
+        session(`${day}-${index}-${sessionIndex}`, folder, `2026-09-${String(day + 1).padStart(2, "0")}`)))).flat();
+      const m = await machine();
+      const moment = "2026-09-29T12:00:00.000Z";
+      let waiting: number | undefined, pushes = 0;
+      for (;;) {
+        const run = await m.push(calls, { at: moment, serverAt: moment });
+        if (!run.sent.length) break;
+        const held = parse(run.sent[0]!).facts.filter(isWorkspaceSessionFact).length;
+        if (waiting !== undefined) expect(held).toBe(waiting);
+        const line = /^(\d+) more changed local session facts wait/m.exec(run.stdout);
+        waiting = line ? Number(line[1]) : undefined;
+        expect(++pushes).toBeLessThan(5);
+      }
+      expect(pushes).toBeGreaterThan(1);
+      expect(rows(m)).toHaveLength(135);
+      expect(rows(m).reduce((sum, fact) => sum + Number(fact.sessionCount), 0)).toBe(2835);
+      onePerPlace(m);
+    }, 60_000);
+  });
+
+  describe("a folder whose checkout changes between pushes", () => {
+    it("a linked worktree outside its repository, removed after merge: nothing goes, a later session moves its row, and a new day keeps the name", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-x");
+      await linkedWorktree(root, worktree);
+      const m = await machine();
+      await m.push([session("a", worktree)]);
+      expect(named(m)).toEqual(["main"]);
+      await rm(worktree, { recursive: true });
+      await idle(m, [session("a", worktree)]);
+      const later = await m.push([session("a", worktree), session("b", worktree)]);
+      expect(parse(later.sent[0]!).facts).toMatchObject([{ projectName: "main", factRevision: "2", sessionCount: "2" }]);
+      const nextDay = await m.push([session("a", worktree), session("b", worktree), session("c", worktree, "2026-09-19")]);
+      expect(parse(nextDay.sent[0]!).facts).toMatchObject([{ day: "2026-09-19", projectName: "main", factRevision: "1" }]);
+      expect(rows(m)).toHaveLength(2);
+      onePerPlace(m);
+    });
+
+    it("a repository removed or moved, with a session in its sub-folder", async () => {
+      const { root } = await checkout("code", "gone-repo");
+      const sub = join(root, "apps", "web");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      await m.push([session("a", sub)]);
+      expect(named(m)).toEqual(["gone-repo"]);
+      await rm(root, { recursive: true });
+      await idle(m, [session("a", sub)]);
+      onePerPlace(m);
+    });
+
+    it("a sub-folder that becomes a checkout of its own: the day sent keeps its name, and a new day names the new checkout", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      await m.push([session("a", sub)]);
+      await mkdir(join(sub, ".git"));
+      await idle(m, [session("a", sub)]);
+      const next = await m.push([session("a", sub), session("b", sub, "2026-09-19")]);
+      expect(parse(next.sent[0]!).facts).toMatchObject([{ day: "2026-09-19", projectName: "sub" }]);
+      expect(Object.values((await m.read()).factNames ?? {})).toEqual([["repo", "sub"]]);
+      onePerPlace(m);
+    });
+
+    it("the same day sent under a name that came back: the earlier name is still tried", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const day1 = session("a", sub), day2 = session("b", sub, "2026-09-19");
+      await m.push([day1]);
+      await mkdir(join(sub, ".git"));
+      await m.push([day1, day2]);
+      await rm(join(sub, ".git"), { recursive: true });
+      await rm(root, { recursive: true });
+      await idle(m, [day1, day2]);
+      expect(rows(m).map(fact => [fact.day, fact.projectName])).toEqual([["2026-09-18", "repo"], ["2026-09-19", "sub"]]);
+    });
+
+    it("the name a folder last went out under is the one its next day keeps, even if it used that name before", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const day1 = session("a", sub), day2 = session("b", sub, "2026-09-19"), day3 = session("c", sub, "2026-09-20"), day4 = session("d", sub, "2026-09-21");
+      const late = "2026-09-25T12:00:00.000Z";
+      await m.push([day1], { at: late, serverAt: late });
+      await mkdir(join(sub, ".git"));
+      await m.push([day1, day2], { at: late, serverAt: late });
+      await rm(join(sub, ".git"), { recursive: true });
+      await m.push([day1, day2, day3], { at: late, serverAt: late });
+      expect(Object.values((await m.read()).factNames ?? {})).toEqual([["sub", "repo"]]);
+      await rm(root, { recursive: true });
+      const next = await m.push([day1, day2, day3, day4], { at: late, serverAt: late });
+      expect(parse(next.sent[0]!).facts).toMatchObject([{ day: "2026-09-21", projectName: "repo" }]);
+      onePerPlace(m);
+    });
+
+    it("a main checkout renamed, with its worktree repointed", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-y"), renamed = join(home, "code", "renamed");
+      await linkedWorktree(root, worktree);
+      const m = await machine();
+      await m.push([session("a", worktree)]);
+      await rename(root, renamed);
+      await writeFile(join(worktree, ".git"), `gitdir: ${join(renamed, ".git", "worktrees", "feature-y")}\n`);
+      await idle(m, [session("a", worktree)]);
+      const next = await m.push([session("a", worktree), session("b", worktree, "2026-09-19")]);
+      expect(parse(next.sent[0]!).facts).toMatchObject([{ day: "2026-09-19", projectName: "renamed" }]);
+      onePerPlace(m);
+    });
+
+    it("a folder that gains a checkout above it: the day sent keeps the folder's name", async () => {
+      const home = await mkdtemp(join(tmpdir(), "aibill-one-row-")), repo = join(home, "later-repo"), tool = join(repo, "tool");
+      await mkdir(tool, { recursive: true });
+      const m = await machine();
+      await m.push([session("a", tool)]);
+      expect(named(m)).toEqual(["tool"]);
+      await mkdir(join(repo, ".git"));
+      await idle(m, [session("a", tool)]);
+      onePerPlace(m);
+    });
+
+    it("a folder whose fact goes with no name keeps none", async () => {
+      const { root } = await checkout("code", "name@host");
+      const sub = join(root, "tool");
+      await mkdir(sub);
+      const m = await machine();
+      await m.push([session("a", sub)]);
+      expect(named(m)).toEqual([null]);
+      expect(Object.values((await m.read()).factNames ?? {})).toEqual([[null]]);
+      await rm(root, { recursive: true });
+      await idle(m, [session("a", sub)]);
+      onePerPlace(m);
+    });
+
+    it("a batch retained across pushes remembers its names when it lands", async () => {
+      const { root } = await checkout("code", "main");
+      const sub = join(root, "tool");
+      await mkdir(sub);
+      const m = await machine();
+      m.server.script = ["lost_before_commit"];
+      await m.push([session("a", sub)]);
+      expect((await m.read()).factNames).toBeUndefined();
+      expect((await m.push([], { load: unexpectedRead })).exitCode).toBe(0);
+      await rm(root, { recursive: true });
+      await idle(m, [session("a", sub)]);
+      onePerPlace(m);
+    });
+
+    it("a batch of tier facts alone writes no names", async () => {
+      const m = await machine({ capability: true, planFiles: true });
+      await m.push([]);
+      expect(rows(m)).toEqual([]);
+      expect(Object.keys(await m.read())).not.toContain("factNames");
+    });
+  });
+
+  describe("a ledger an earlier CLI wrote, with no names beside it", () => {
+    /** What a released CLI leaves: the ledger and the sequence, with no names and no capability. */
+    const earlier = (m: Machine) => m.edit(held => { delete held.factNames; delete held.capabilities; });
+    it("finds its repository's name while the checkout stands", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const calls = [session("a", root), session("b", sub)];
+      await m.push(calls);
+      await earlier(m);
+      await idle(m, calls);
+      onePerPlace(m);
+    });
+
+    it("an idle push and a no leave the file byte for byte, whatever the ledger proved", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const calls = [session("a", sub)];
+      await m.push(calls);
+      await earlier(m);
+      const before = await m.raw();
+      await idle(m, calls);
+      expect(await m.raw()).toBe(before);
+      const declined = await m.push([...calls, session("b", sub, "2026-09-19")], { answers: ["n"] });
+      expect(declined.stdout).toBe("Not sent.");
+      expect(await m.raw()).toBe(before);
+    });
+
+    it("what a yes saves keeps the name the ledger proved, even if that batch never lands, so it outlives the checkout", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-x"), scratch = join(home, "scratch");
+      await linkedWorktree(root, worktree);
+      await mkdir(scratch);
+      const m = await machine();
+      const sent = session("a", worktree);
+      await m.push([sent]);
+      await earlier(m);
+      m.server.script = ["lost_before_commit"];
+      await m.push([sent, session("b", scratch)]);
+      expect(Object.values((await m.read()).factNames ?? {})).toEqual([["main"]]);
+      await m.edit(held => { held.pending = null; });
+      await rm(worktree, { recursive: true });
+      const next = await m.push([sent, session("b", scratch)]);
+      expect(parse(next.sent[0]!).facts).toMatchObject([{ projectName: "scratch" }]);
+      onePerPlace(m);
+    });
+
+    it("the checkout gone, a sub-folder's repository is found in its path", async () => {
+      const { root } = await checkout("code", "gone-repo");
+      const sub = join(root, "apps", "web");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      await m.push([session("a", sub)]);
+      await earlier(m);
+      await rm(root, { recursive: true });
+      await idle(m, [session("a", sub)]);
+      onePerPlace(m);
+    });
+
+    it("the checkout gone, a worktree's repository is found among the names used elsewhere on this machine", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-x");
+      await linkedWorktree(root, worktree);
+      const m = await machine();
+      const calls = [session("a", worktree), session("b", root)];
+      await m.push(calls);
+      await earlier(m);
+      await rm(worktree, { recursive: true });
+      await idle(m, calls);
+      onePerPlace(m);
+    });
+
+    it("a main checkout renamed with its worktree repointed: the old name is found among those used elsewhere, though a checkout answers", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-y"), renamed = join(home, "code", "renamed");
+      await linkedWorktree(root, worktree);
+      const m = await machine();
+      const calls = [session("a", worktree), session("b", root)];
+      await m.push(calls);
+      await earlier(m);
+      await rename(root, renamed);
+      await writeFile(join(worktree, ".git"), `gitdir: ${join(renamed, ".git", "worktrees", "feature-y")}\n`);
+      await idle(m, calls);
+      onePerPlace(m);
+    });
+
+    it("what it cannot find: a lone worktree outside its repository, gone before this version's first batch, with that name nowhere on the machine, goes again under the folder's", async () => {
+      const { home, root } = await checkout("code", "main");
+      const worktree = join(home, "worktrees", "feature-x");
+      await linkedWorktree(root, worktree);
+      const m = await machine();
+      await m.push([session("a", worktree)]);
+      await earlier(m);
+      await rm(worktree, { recursive: true });
+      const run = await m.push([session("a", worktree)]);
+      expect(parse(run.sent[0]!).facts).toMatchObject([{ projectName: "feature-x", factRevision: "1" }]);
+    });
+
+    it("a day it already doubled: both names in the ledger, nothing goes, and a later session moves the folder's own", async () => {
+      const { root } = await checkout("code", "repo");
+      const sub = join(root, "packages", "sub");
+      await mkdir(sub, { recursive: true });
+      const m = await machine();
+      const calls = [session("a", root), session("b", sub)];
+      await m.push(calls);
+      // The row a released CLI added on its second push: the same folder, under its own name.
+      const own = aggregateWorkspaceFacts([session("b", sub)], {}, m.device.keyId).facts[0]!;
+      expect(own.projectName).toBe("sub");
+      await m.edit(held => { delete held.factNames; held.facts[workspaceFactKey(own)] = { revision: "1", contentHash: workspaceFactContentHash(own) }; });
+      await idle(m, calls);
+      const later = await m.push([...calls, session("c", sub)]);
+      expect(parse(later.sent[0]!).facts).toMatchObject([{ projectName: "sub", factRevision: "2", sessionCount: "2" }]);
+    });
+  });
+
+  describe("the names a state file holds", () => {
+    it.each([
+      ["not an object", ["repo"]],
+      ["an empty list for the object", []],
+      ["nothing at all", null],
+      ["a key that is no folder's", { "not-a-ref": ["repo"] }],
+      ["no list", { [`sha256_${"0".repeat(64)}`]: "repo" }],
+      ["an empty list", { [`sha256_${"0".repeat(64)}`]: [] }],
+      ["a name no fact may carry", { [`sha256_${"0".repeat(64)}`]: ["a/b"] }],
+      ["the home label", { [`sha256_${"0".repeat(64)}`]: ["(home)"] }],
+      ["a number", { [`sha256_${"0".repeat(64)}`]: [7] }],
+    ])("%s: refused like any bad shape, and left as it is", async (_name, value) => {
+      const m = await machine();
+      await m.edit(held => { held.factNames = value; });
+      const before = await m.raw();
+      expect(await m.push([call])).toMatchObject({ exitCode: 1, stderr: GENERAL_STOP, sent: [], messages: [] });
+      expect(await m.raw()).toBe(before);
+    });
   });
 });

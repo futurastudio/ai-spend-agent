@@ -81,9 +81,9 @@ historical untagged exception.
     without consent. A machine an earlier CLI already stopped this way recovers on its
     next push. `invalid`, `conflict` and `stale` stay as they were, and a batch that did
     land, its reply lost, still replays its receipt however late it is resent.
-  - A dropped batch's days that have left the 30-day window a push reads cannot be rebuilt.
-    The line says where the window starts and that they stay out of Workspace, and it
-    promises a rebuild only of the rest. A batch an earlier CLI retained says the same.
+  - What a dropped batch held for days that have left the 30-day window a push reads cannot
+    be rebuilt. The line says where the window starts and that this stays out of Workspace,
+    and it promises a rebuild only of the rest. A batch an earlier CLI retained says the same.
   - A machine whose clock is more than 2 minutes ahead of Workspace's, or more than 10
     minutes behind it, gets that refusal on a first send. A batch refused under 10
     minutes after it was signed, by this machine's clock, says this machine's clock looks
@@ -109,7 +109,12 @@ historical untagged exception.
     bound, which stopped every push with the general words and nothing sent, for as long
     as the history stayed that large. A batch is now cut by bytes too, its preview says when
     it holds only part of the changed facts, the accepted line says how many wait, and the
-    next preview carries them.
+    next preview carries them. It is cut between days, oldest first, by count as well as by
+    bytes. Workspace reads what it holds of a day as that day, with nothing to mark a part,
+    so a cut in hash order left most days short until someone ran the next push, while
+    Workspace called them complete. The days that wait are now absent, not short. A day
+    with more changed facts than its batch can carry goes in part, and the preview and the
+    accepted line name it.
   - One fact over its 1,024 session identities, and any call with no usable day or identity,
     still stop a push, and nothing is sent. Each now says so in its own line: the day and the
     count, or the calls per reason, and how long it lasts. The line written for those calls
@@ -120,6 +125,9 @@ historical untagged exception.
   - A batch of tier facts alone refused as `expired` keeps the announced capability, since
     that refusal says nothing about what Workspace accepts, and the next push offers the tier
     again. If it was signed under 10 minutes ago the line also says to check the clock.
+  - A project name that is not well formed goes as no name, as a name with control
+    characters already did. Only a hand-made log can hold one, and a batch with it came
+    back unknown on every retry, because the Workspace's database cannot store it.
   - Where this CLI tells a person what to type for a Workspace command, it says
     `npx aibill@latest`: the help, the pairing lines and the recovery lines. A stale npx
     cache meets a state file it cannot read.
@@ -127,6 +135,32 @@ historical untagged exception.
     newer aibill wrote it, to run `npx aibill@latest`, and that nothing was changed. The
     refusal itself is unchanged and nothing is reset. Versions already published keep
     their general words.
+
+- One folder's day goes out under one name, so a second push can no longer count it twice.
+  A fact's key holds its name and Workspace keeps every key it accepts, so a second name is
+  a second row beside the first, and Workspace counted those sessions twice, in its token
+  counts and in how a seat's cost splits. Two things could send one:
+  - A day counted as already sent under folder names once any of its facts was in the
+    ledger, and a repository's root folder, or a folder with no checkout, has the same key
+    under either name. So after the first push of such a day, the next push sent each
+    sub-folder and worktree of that day again under its own name. 0.9.15 does this.
+  - A folder whose checkout had changed by the next push: a linked worktree removed after
+    merge, a repository removed, moved or renamed, a sub-folder that became its own checkout.
+
+  A fact that has gone out now keeps the name it went out under, and a folder new to a day
+  names its repository whatever the day's other folders went out under.
+  `~/.aibill/workspace-device.json` gains an optional `factNames` key: per hashed folder,
+  the names its facts went out under, no other data, and it is never sent. 0.9.15 refuses a
+  file that holds it, as it refuses any unknown key. A folder with no checkout left to find
+  keeps the name it last went out under on its later days.
+
+  A ledger an earlier version wrote holds keys and no names, so each name the folder could
+  have gone out under is tried against it: its own, its repository's, those of the folders
+  above it, and those used elsewhere on this machine. A name found is kept from the next
+  batch on. One case is out of reach: a linked worktree outside its repository, removed or
+  repointed at a renamed repository before this version's first batch, with the old name
+  nowhere else on the machine, goes once more under another name. Rows already in Workspace
+  stay: no CLI can remove one.
 
 ## 0.9.16 (unreleased)
 
@@ -237,7 +271,9 @@ historical untagged exception.
   project. Only days this machine has never sent change; a day already sent
   keeps its folder names, because the server keys facts on the name and never
   deletes, so a renamed day would sit beside the old one. Folders outside any
-  checkout, the home directory and unknown paths keep the folder name.
+  checkout, the home directory and unknown paths keep the folder name. This release
+  did not keep that promise for every folder: see "One folder's day goes out under one
+  name" in the release after it.
 - Count a streamed Claude Code message once, from the line that carries its
   final state. Claude Code 2.1.221–2.1.295 writes an assistant message several
   times while streaming: a placeholder first (2–3 output tokens), the final

@@ -1801,7 +1801,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           ? "This native request has never attempted exchange. Destroy its unused private pairing key so it can no longer complete enrollment? Cancel any browser challenge in Settings as well. [y/N] "
           : action === "retry_revoke"
             ? "Repeat the identical retained disconnect request once? If already revoked, Tilden returns that outcome; otherwise this revokes the same grant. No session facts are sent. Local pairing is removed only after a matching receipt. [y/N] "
-            : `Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${WORKSPACE_DISCONNECT_COST} [y/N] `) });
+            : `Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${WORKSPACE_DISCONNECT_COST} If this machine was already disconnected in the browser, that has already happened. [y/N] `) });
       return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run npx aibill@latest workspace disconnect without --retry to start a new disconnect.")
         : result.state === "revoked" ? ok("Workspace revoked this machine grant. Local pairing was removed.")
         : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill@latest workspace connect to start a new request.")
@@ -1854,7 +1854,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         : "Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
       planOnly(coverage) ? "This batch carries only the subscription tier, so Workspace can cost this machine's sessions at the plan that ran them."
         : `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
-      ...(coverage.factsWaiting ? [`This batch holds ${coverage.facts.length - coverage.factsWaiting} of ${coverage.facts.length} changed local session facts, as many as one batch can carry. The next push previews the rest.`] : []),
+      ...(coverage.factsWaiting ? [`This batch holds ${coverage.facts.length - coverage.factsWaiting} of ${coverage.facts.length} changed local session facts, ${coverage.partDay
+        ? `because ${coverage.partDay} has more of them than this batch can carry. The next push previews the rest; until it lands, Workspace reads only part of that day.`
+        : "in whole days, oldest first, as many as one batch can carry. The next push previews the rest."}`] : []),
       ...(coverage.agentPlanFacts?.length
         ? [`Subscription tier included for ${tierNames(coverage)}: seven fields each (kind, agent, tier id, raw tier string, where it was read, when, and the subscription's end date if recorded), no account, email or token.${planFactsOptOut || retained ? "" : ` Set ${AGENT_PLAN_TIER_OPT_OUT}=1 to leave it out.`}`]
         : []),
@@ -1878,7 +1880,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     /** A push reads these 30 days and no earlier, so a day a dropped batch held from before them cannot be rebuilt. */
     const daysPastWindow = (days: readonly string[], at: string) => {
       const start = workspaceClock.daysBefore(at, 30).slice(0, 10);
-      return { past: days.filter(day => day < start).length, line: `Its days before ${start} have left the 30-day window a push reads and stay out of Workspace.` };
+      return { past: days.filter(day => day < start).length, line: `What it held for days before ${start} has left the 30-day window a push reads and stays out of Workspace.` };
     };
     const heldDroppedLines = (at: string) => {
       const { past, line } = daysPastWindow(status.pending?.sessionFactDays ?? [], at);
@@ -1934,7 +1936,8 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (sent.state === "unconfirmed") return settled(fail(unknownOutcome(prepared.coverage, sent.authorityRefused)));
     const accepted = [...(sent.sessionFactCount ? [`Workspace accepted ${sent.sessionFactCount} local session facts. These are attribution inputs, not billed costs.`] : []),
       ...(prepared.coverage?.agentPlanFacts?.length ? [tierAccepted(prepared.coverage)] : []),
-      ...(prepared.coverage?.factsWaiting ? [`${prepared.coverage.factsWaiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`] : [])].join("\n");
+      ...(prepared.coverage?.factsWaiting ? [`${prepared.coverage.factsWaiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.${prepared.coverage.partDay
+        ? ` Until they land, Workspace reads only part of ${prepared.coverage.partDay}.` : ""}`] : [])].join("\n");
     if (!sent.capabilityAnnounced || planFactsOptOut) return settled(ok(accepted));
     // The ACCEPT that first announced the capability: the tier goes in this same command, in its
     // own previewed batch, and whatever happens to it the accepted line above stays true.
