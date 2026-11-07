@@ -249,6 +249,33 @@ historical untagged exception.
   `claude-opus-4-1-20250805`) at their published $15 input and $75 output per
   million tokens, as their aliases already were. Older transcripts carrying
   those IDs used to count as missing.
+- Correct the OpenAI rows of the price table against OpenAI's pricing page of
+  2026-11-07, compared row by row. `gpt-5-pro` and `gpt-5.2-pro`, with their dated
+  snapshots, were priced through the `gpt-5` and `gpt-5.2` rules at 1/12 of their
+  published rates; they now use $15 input and $120 output, and $21 and $168, per
+  million tokens. Cached input moves from the 0.1x default to the published rate
+  on `gpt-4o` ($1.25, 5x), `gpt-4o-mini` ($0.075, 5x), `gpt-4.1-mini` ($0.10,
+  2.5x) and `o3` ($0.50, 2.5x). Five published models that counted as missing now
+  price: `gpt-6.1-terra` ($1 input, $5 output, $0.05 cached; $2, $7.50 and $0.10
+  for prompts over 272,000 tokens), `gpt-5.1` ($1.25, $10, $0.125), `gpt-5.5-pro`
+  and `gpt-5.4-pro` ($30 and $180; $60 and $270 over 272,000 tokens) and `o3-pro`
+  ($20 and $80). OpenAI's table prints a dash for cached input on `gpt-5-pro`,
+  `gpt-5.2-pro`, `gpt-5.4-pro` and `o3-pro`, so usage that reports cached tokens
+  on them counts as missing rather than take a rate nobody published. `gpt-5.5-pro`
+  prints the dash too, but its page says it offers no cached input discount, so
+  its cached tokens cost its input rate. These are API-equivalent estimates of
+  local usage; provider-reported cost and invoices are unaffected.
+  `PRICING_TABLE_AS_OF` moves to 2026-11-07, with evidence in
+  `provider-contracts/model-pricing-2026-11-07.json`.
+- Check the same rules against every model page OpenAI lists, not only the two
+  standard tables. `gpt-5.1-codex-mini` now uses its published $0.25 input, $2
+  output and $0.025 cached; a prefix priced it 5x high. Cached input moves to the
+  published rate on `gpt-4.1-nano` ($0.025) and `o4-mini` ($0.275), 2.5x. Rules
+  that were prefixes now name their IDs, so these count as missing rather than
+  take a rate their pages contradict or do not print: the realtime, audio, search,
+  transcribe and speech variants of `gpt-4o` and `gpt-4o-mini`,
+  `o4-mini-deep-research`, `gpt-5-codex-mini` and any other `gpt-5-` variant no page
+  prices, and `gpt-4o-2024-05-13`, a shut-down snapshot with rates of its own.
 
 ## 0.9.16 (unreleased)
 
