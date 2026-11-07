@@ -289,6 +289,19 @@ test("no marker depends on how a docs generator spaces its punctuation", async (
   }
 });
 
+test("no marker carries an icon glyph", async () => {
+  // Anthropic's pricing page changed one on 2026-11-06. A marker holding a glyph goes missing when only
+  // the icon changes, so a rendering change looks like a removed row. It belongs in a window, not a marker.
+  const contracts = await readProviderContracts();
+  for (const contract of contracts.contracts) {
+    for (const resource of contract.resources) {
+      for (const marker of resource.requiredMarkers) {
+        assert.doesNotMatch(marker, /\p{Co}/u, `${contract.id} ${resource.kind}: ${marker}`);
+      }
+    }
+  }
+});
+
 test("reference markers catch a changed Claude Code date, money unit, row field or tool", async () => {
   const contracts = await readProviderContracts();
   const resource = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
