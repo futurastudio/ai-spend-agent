@@ -101,17 +101,37 @@ export function finalClaudeResponseLines(lines: readonly string[]): Map<string, 
 /**
  * Of two copies of one response, the originating one: the copy outside a
  * sub-agent transcript (a sub-agent transcript opens with the parent turn it
- * was forked from), else the earlier; equal copies keep the prior. The
- * financial reader (`dedupeCumulativeSessionCalls`) and the qualitative reader
- * (`loadToolInvocations`) both pick with this, so money and counts agree on
- * which transcript owns a turn.
+ * was forked from), else the earlier, else the one in the transcript that
+ * started earlier; equal copies keep the prior.
+ *
+ * The third step tells a session from its fork. Forking or handing off a
+ * Claude Code conversation writes the parent's earlier lines into a new
+ * session file (a new session id on every line, sometimes a new working
+ * directory) with their original timestamps, so the copy and the original
+ * share a timestamp. The fork's file opens with a line written at fork time,
+ * after every response it copied, while the original's file opens at or
+ * before its first response: the transcript that started earlier holds the
+ * original. When neither start is known, or both are equal, the prior copy
+ * stays; both readers fold a group in session id order, so the lower session
+ * id wins and the choice is the same on every run, in every reader, whatever
+ * order the files were read in.
+ *
+ * The financial reader (`dedupeCumulativeSessionCalls`) and the qualitative
+ * reader (`loadToolInvocations`) both pick with this, so money and counts
+ * agree on which transcript owns a turn.
  */
-export function preferredClaudeResponseCopy<T extends { subagent: boolean; timestamp: string }>(
+export function preferredClaudeResponseCopy<T extends { subagent: boolean; timestamp: string; transcriptStartedAt?: string }>(
   prior: T,
   candidate: T
 ): T {
   if (prior.subagent !== candidate.subagent) return prior.subagent ? candidate : prior;
-  return candidate.timestamp.localeCompare(prior.timestamp) < 0 ? candidate : prior;
+  const byTimestamp = candidate.timestamp.localeCompare(prior.timestamp);
+  if (byTimestamp !== 0) return byTimestamp < 0 ? candidate : prior;
+  if (prior.transcriptStartedAt && candidate.transcriptStartedAt &&
+      candidate.transcriptStartedAt.localeCompare(prior.transcriptStartedAt) < 0) {
+    return candidate;
+  }
+  return prior;
 }
 
 /**

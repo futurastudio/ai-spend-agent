@@ -164,12 +164,16 @@ type ClaudeToolUse = {
 
 /** One Claude Code response (native identity) as one transcript shows it. */
 type ClaudeResponseEvidence = {
-  /** Session + native identity when the counted line proves both; the cross-file dedupe key. */
+  /** Native identity when the counted line carries one; the cross-file dedupe key. */
   crossFileKey?: string;
   /** The line carrying the response's final state fell inside the selected window. */
   inWindow: boolean;
   /** That line's timestamp (epoch when undated), for the cross-file owner rule. */
   timestamp: string;
+  /** The transcript's first dated line, for the cross-file owner rule: a fork's file opens at fork time. */
+  transcriptStartedAt?: string;
+  /** The transcript's session id: the group is folded in its order, so the owner never depends on read order. */
+  sessionId?: string;
   /** The transcript sits under a `subagents/` directory. */
   subagent: boolean;
   /** Rank of the counted line so far; undefined while no line carried usage. */
@@ -215,6 +219,7 @@ function collectClaudeCodeInvocations(
   let lastActivityAt: string | undefined;
   let isSubagent = false;
   let parentSessionId: string | undefined;
+  let transcriptStartedAt: string | undefined;
   const newResponse = (): ClaudeResponseEvidence => ({
     inWindow: false,
     timestamp: EPOCH_ISO,
@@ -246,6 +251,11 @@ function collectClaudeCodeInvocations(
     // coverage by accident.
     const timestampMs = Date.parse(timestamp ?? "");
     const inWindow = typeof sinceMs !== "number" || (Number.isFinite(timestampMs) && timestampMs >= sinceMs);
+    // The file's first dated line, whatever its kind: a fork's file opens at
+    // fork time, after every response it copied.
+    if (!transcriptStartedAt && Number.isFinite(timestampMs)) {
+      transcriptStartedAt = new Date(timestampMs).toISOString();
+    }
 
     if (entry.type === "assistant") {
       const message = isRecord(entry.message) ? entry.message : undefined;
@@ -274,10 +284,9 @@ function collectClaudeCodeInvocations(
       if (rank) response.rank = rank;
       response.inWindow = inWindow;
       response.timestamp = Number.isFinite(timestampMs) ? new Date(timestampMs).toISOString() : EPOCH_ISO;
-      const entrySessionId = stringOf(entry.sessionId);
-      response.crossFileKey = identity && entrySessionId
-        ? `${entrySessionId}\u0000${identity.localDedupeKey}`
-        : undefined;
+      // The native identity alone: a fork writes the parent's responses under
+      // a new session id, and the financial reader counts such a copy once.
+      response.crossFileKey = identity?.localDedupeKey;
       continue;
     }
 
@@ -287,6 +296,10 @@ function collectClaudeCodeInvocations(
     if (entry.type === "user") {
       for (const cmd of slashCommandsFrom(entry)) commands.add(cmd);
     }
+  }
+  for (const response of responses) {
+    if (transcriptStartedAt) response.transcriptStartedAt = transcriptStartedAt;
+    if (sessionId) response.sessionId = sessionId;
   }
 
   return {
@@ -318,14 +331,20 @@ function claudeToolUseOf(block: Record<string, unknown>, key: string): ClaudeToo
 }
 
 /**
- * One message, one count. The same response (same session, same native
- * identity) can sit in several transcripts: a sub-agent transcript opens with
- * the parent turn it was forked from, and a copied or resumed session repeats
- * its history. The copy the financial reader's stable-turn dedupe keeps
- * (`preferredClaudeResponseCopy`: outside a sub-agent transcript, else the
- * earliest, else the first in path order) owns the turn, with the union of
- * the tool_use blocks every copy saw, and its own line decides the window;
- * the other copies are not counted.
+ * One message, one count. The same response (same native identity) can sit
+ * in several transcripts: a sub-agent transcript opens with the parent turn
+ * it was forked from, a copied or resumed session repeats its history, and a
+ * forked or handed-off conversation writes the parent's responses under a new
+ * session id, sometimes in another folder. The copy the financial reader's
+ * cross-session dedupe keeps (`preferredClaudeResponseCopy`: outside a
+ * sub-agent transcript, else the earliest, else in the transcript that
+ * started earlier, else the lower session id) owns the turn, with the union
+ * of the tool_use blocks every copy saw, and its own line decides the window;
+ * the other copies are not counted. Each group is folded in session id
+ * order, as the financial reader folds it, so the two never disagree in a
+ * tie whatever order the files were read in. This reader sees no usage, so
+ * it cannot keep the rare copy whose usage differs; the financial reader
+ * keeps that one as its own call.
  */
 function dedupeClaudeResponsesAcrossFiles(collections: ClaudeInvocationCollection[]): void {
   const copies = new Map<string, ClaudeResponseEvidence[]>();
@@ -337,8 +356,9 @@ function dedupeClaudeResponsesAcrossFiles(collections: ClaudeInvocationCollectio
       copies.set(response.crossFileKey, group);
     }
   }
-  for (const group of copies.values()) {
-    if (group.length < 2) continue;
+  for (const unordered of copies.values()) {
+    if (unordered.length < 2) continue;
+    const group = [...unordered].sort((left, right) => (left.sessionId ?? "").localeCompare(right.sessionId ?? ""));
     const owner = group.reduce((prior, candidate) => preferredClaudeResponseCopy(prior, candidate));
     for (const response of group) {
       if (response === owner) continue;
@@ -723,8 +743,9 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   let claudeCodeSessions = 0;
   let codexSessions = 0;
 
-  // Path order breaks owner ties between equal copies of a response, so the
-  // per-session counts are the same on every run and filesystem.
+  // Files are read in path order; owner ties between equal copies of a
+  // response are broken by session id (`dedupeClaudeResponsesAcrossFiles`),
+  // so the per-session counts are the same on every run and filesystem.
   const claudeCollections: ClaudeInvocationCollection[] = [];
   for (const file of (await listJsonlFiles(claudeDir)).sort()) {
     const content = await readFile(file, "utf8").catch(() => "");

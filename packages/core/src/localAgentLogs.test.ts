@@ -14,7 +14,8 @@ import {
   type LocalAgentQualitativeIndexKey,
   type LocalAgentQualitativeIndexValue,
   parseClaudeCodeTranscript,
-  parseCodexRollout
+  parseCodexRollout,
+  SAFE_QUALITATIVE_SCAN_POLICY
 } from "./localAgentLogs.js";
 import {
   createCodexInvocationCollector,
@@ -1787,6 +1788,141 @@ describe("aggregateCalls", () => {
     expect(dedupeCumulativeSessionCalls([laterPlain, parent])).toEqual([parent]);
   });
 
+  describe("a response seen in more than one session file counts once", () => {
+    // Forking or handing off a conversation copies the parent's earlier
+    // responses into a new session file: a new session id on every line, the
+    // same message id, request id, usage and timestamp. The fork's file opens
+    // with a line written at fork time, after every copied response.
+    const response = {
+      agent: "claude-code" as const,
+      callId: "callref_same-response",
+      model: "claude-opus-5-5",
+      timestamp: "2026-10-06T21:30:00.000Z",
+      project: "agent-finops",
+      workingDirectory: "/Users/testuser/agent-finops",
+      usageScope: "turn" as const,
+      usage: { inputTokens: 4, outputTokens: 1_337, cacheReadTokens: 180_000, cacheWrite5mTokens: 0, cacheWrite1hTokens: 9_000 }
+    };
+    const original = { ...response, sessionId: "original", transcriptStartedAt: "2026-10-06T21:05:14.000Z" };
+    const fork = { ...response, sessionId: "fork", transcriptStartedAt: "2026-10-07T02:29:13.000Z" };
+
+    it("keeps the original of a fork in the same folder, whichever file was read first", () => {
+      const conflicts: string[] = [];
+      expect(dedupeCumulativeSessionCalls([original, fork], (agent) => conflicts.push(agent))).toEqual([original]);
+      expect(dedupeCumulativeSessionCalls([fork, original], (agent) => conflicts.push(agent))).toEqual([original]);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("keeps the original of a fork in another folder: the tokens stay with the original's project", () => {
+      const elsewhere = { ...fork, project: "other-project", workingDirectory: "/Users/testuser/other-project" };
+      expect(dedupeCumulativeSessionCalls([elsewhere, original])).toEqual([original]);
+      expect(dedupeCumulativeSessionCalls([original, elsewhere])).toEqual([original]);
+    });
+
+    it("keeps one copy over a hand-off chain of three", () => {
+      const second = { ...fork, sessionId: "second-fork", transcriptStartedAt: "2026-10-08T21:18:41.000Z" };
+      expect(dedupeCumulativeSessionCalls([second, fork, original])).toEqual([original]);
+      expect(dedupeCumulativeSessionCalls([original, second, fork])).toEqual([original]);
+      // The fork's own later response is its own call and stays.
+      const own = { ...fork, callId: "callref_forks-own", timestamp: "2026-10-07T02:31:00.000Z" };
+      expect(dedupeCumulativeSessionCalls([second, own, fork, original])).toEqual([own, original]);
+    });
+
+    it("keeps both copies when their usage differs: they are not the same response", () => {
+      const conflicts: string[] = [];
+      const differs = { ...fork, usage: { ...fork.usage, outputTokens: 1_338 } };
+      expect(dedupeCumulativeSessionCalls([original, differs], (agent) => conflicts.push(agent))).toEqual([original, differs]);
+      // Within one session the same difference is the fail-closed conflict.
+      expect(dedupeCumulativeSessionCalls([original, { ...differs, sessionId: "original" }])).toEqual([
+        expect.objectContaining({ model: "conflicting-local-evidence", sessionId: "original" })
+      ]);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("keeps two unrelated responses that would share a call id when their usage differs", () => {
+      // A call id hashes the provider's message id and request id, both issued
+      // once by the provider, so two unrelated responses do not share one
+      // unless a transcript is corrupt. Should it happen, differing usage keeps
+      // both; identical usage under one id is read as one response.
+      const unrelated = { ...fork, model: "claude-haiku-5-5", usage: { inputTokens: 10, outputTokens: 20 } };
+      expect(dedupeCumulativeSessionCalls([original, unrelated])).toEqual([original, unrelated]);
+    });
+
+    it("falls back to the earliest timestamp, then the lower session id, and never prefers a sub-agent copy", () => {
+      const undated = (call: typeof original) => {
+        const { transcriptStartedAt: _ignored, ...rest } = call;
+        return rest;
+      };
+      // Equal timestamps, neither transcript start known: the lower session id
+      // ("fork" < "original") wins, whichever file was read first.
+      expect(dedupeCumulativeSessionCalls([undated(fork), undated(original)])).toEqual([undated(fork)]);
+      expect(dedupeCumulativeSessionCalls([undated(original), undated(fork)])).toEqual([undated(fork)]);
+      // Equal transcript starts too: still the lower session id.
+      const sameStart = { ...fork, transcriptStartedAt: original.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([original, sameStart])).toEqual([sameStart]);
+      expect(dedupeCumulativeSessionCalls([sameStart, original])).toEqual([sameStart]);
+      // An earlier timestamp wins before transcript starts are compared.
+      const laterCopy = { ...fork, timestamp: "2026-10-06T21:30:05.000Z", transcriptStartedAt: "2026-10-01T00:00:00.000Z" };
+      expect(dedupeCumulativeSessionCalls([laterCopy, original])).toEqual([original]);
+      // A sub-agent transcript's copy loses to a plain session's, even one that started later.
+      const subagentCopy = { ...original, subagentId: "agent-1" };
+      expect(dedupeCumulativeSessionCalls([subagentCopy, fork])).toEqual([fork]);
+    });
+
+    it("drops a copy with no usage at all beside a copy that has usage, and keeps it when every copy is zero", () => {
+      // Claude Code can write a zeroed copy of a response after its final line.
+      const zeroed = { ...fork, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 } };
+      expect(dedupeCumulativeSessionCalls([zeroed, original])).toEqual([original]);
+      expect(dedupeCumulativeSessionCalls([original, zeroed])).toEqual([original]);
+      // The zeroed copy goes even when it sorts first and would otherwise win the tie.
+      const zeroedLower = { ...zeroed, sessionId: "a-fork", transcriptStartedAt: original.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([zeroedLower, original])).toEqual([original]);
+      // Alone, or with every copy zero, the usual rule stands.
+      expect(dedupeCumulativeSessionCalls([zeroed])).toEqual([zeroed]);
+      const zeroedOriginal = { ...original, usage: zeroed.usage };
+      expect(dedupeCumulativeSessionCalls([zeroed, zeroedOriginal])).toEqual([zeroedOriginal]);
+      // A reported total is usage evidence, not a zeroed copy.
+      const reported = { ...zeroed, reportedTotalTokens: 1_500 };
+      expect(dedupeCumulativeSessionCalls([original, reported])).toEqual([original, reported]);
+      // A same-session conflict marker is a verdict, never dropped as a zeroed copy.
+      const differsInOriginal = { ...original, usage: { ...original.usage, outputTokens: 1 } };
+      expect(dedupeCumulativeSessionCalls([original, differsInOriginal, fork])).toEqual([
+        expect.objectContaining({ model: "conflicting-local-evidence", sessionId: "original" }),
+        fork
+      ]);
+    });
+
+    it("keeps both copies when any one evidence field differs", () => {
+      const variants: Array<[string, Parameters<typeof dedupeCumulativeSessionCalls>[0][number]]> = [
+        ["model", { ...fork, model: "claude-sonnet-5-5" }],
+        ["inputTokens", { ...fork, usage: { ...fork.usage, inputTokens: 5 } }],
+        ["cacheReadTokens", { ...fork, usage: { ...fork.usage, cacheReadTokens: 180_001 } }],
+        ["usageSupport", { ...fork, usageSupport: "unsupported_token_shape" as const }]
+      ];
+      for (const [field, variant] of variants) {
+        expect(dedupeCumulativeSessionCalls([original, variant]), field).toEqual([original, variant]);
+        expect(dedupeCumulativeSessionCalls([variant, original]), field).toEqual([variant, original]);
+      }
+    });
+
+    it("never groups two agents that share a call id", () => {
+      // Same model and usage on purpose: only the agent differs, so the agent prefix of the group key is what keeps them apart.
+      const gemini = { ...original, agent: "gemini-cli" as const, sessionId: "gemini-session" };
+      expect(dedupeCumulativeSessionCalls([original, gemini])).toEqual([original, gemini]);
+      // Within one agent the rule applies to Gemini CLI as well.
+      const geminiCopy = { ...gemini, sessionId: "gemini-fork", transcriptStartedAt: fork.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([geminiCopy, gemini])).toEqual([gemini]);
+    });
+
+    it("leaves Codex alone: its turn ids hash the session id, so two sessions never share one", () => {
+      const codex = (sessionId: string) => ({
+        agent: "codex" as const, sessionId, callId: `callref_${sessionId}`, model: "gpt-5.6",
+        timestamp: "2026-10-06T21:30:00.000Z", usageScope: "turn" as const, usage: { inputTokens: 1, outputTokens: 1 }
+      });
+      expect(dedupeCumulativeSessionCalls([codex("a"), codex("b")])).toEqual([codex("a"), codex("b")]);
+    });
+  });
+
   it("groups by day+agent+model+project, prices via the rule table, and passes schema", () => {
     const calls = [
       ...parseClaudeCodeTranscript(claudeLine()),
@@ -2259,6 +2395,52 @@ describe("Claude native response identity across transcript files", () => {
       });
     });
 
+    it(`${name} path counts a response copied by a fork or hand-off once, under the original session`, async () => {
+      // A fork writes the parent's earlier lines into a new session file: a new
+      // session id on every line, the same ids, usage and timestamps, under a
+      // file that opens with a line written at fork time. The fork's file sorts
+      // before the original's here, so path order alone would pick the copy.
+      const directories = await fixtureDirectories(`aibill-claude-${name}-session-fork-`);
+      const opening = (sessionId: string, timestamp: string) => JSON.stringify({ type: "custom-title", sessionId, timestamp });
+      const shared = (sessionId: string, cwd = "/Users/testuser/agent-finops") => claudeLine({ sessionId, cwd });
+      const own = (sessionId: string, suffix: string, timestamp: string, cwd = "/Users/testuser/agent-finops") => claudeLine({
+        sessionId, cwd, timestamp, requestId: `req-${suffix}`,
+        message: { id: `msg-${suffix}`, model: "claude-opus-4-8", usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+      });
+      await writeFile(join(directories.claudeProjectsDir, "z-original.jsonl"), [
+        opening("sess-1", "2026-06-08T09:59:00.000Z"), shared("sess-1"), own("sess-1", "own-1", "2026-06-08T10:01:00.000Z")
+      ].join("\n"), "utf8");
+      // Forked in the same folder.
+      await writeFile(join(directories.claudeProjectsDir, "a-fork.jsonl"), [
+        opening("fork-a", "2026-06-08T10:05:00.000Z"), shared("fork-a"), own("fork-a", "own-a", "2026-06-08T10:06:00.000Z")
+      ].join("\n"), "utf8");
+      // Handed off to a session in another folder: the copied lines carry that folder.
+      await mkdir(join(directories.claudeProjectsDir, "other"));
+      await writeFile(join(directories.claudeProjectsDir, "other", "b-fork.jsonl"), [
+        opening("fork-b", "2026-06-08T10:10:00.000Z"), shared("fork-b", "/Users/testuser/other-project"),
+        own("fork-b", "own-b", "2026-06-08T10:11:00.000Z", "/Users/testuser/other-project")
+      ].join("\n"), "utf8");
+      // The third link of the chain: a fork of fork-a, which copied the shared response again.
+      await writeFile(join(directories.claudeProjectsDir, "a-fork-of-fork.jsonl"), [
+        opening("fork-c", "2026-06-08T10:20:00.000Z"), shared("fork-c"), own("fork-c", "own-a", "2026-06-08T10:06:00.000Z")
+      ].join("\n"), "utf8");
+
+      const result = await load(directories);
+      const calls = result.calls.filter((call) => call.agent === "claude-code");
+      // One shared response, under the original; each session's own response; fork-a's own response once.
+      expect(calls.map((call) => [call.callId, call.sessionId, call.project]).sort()).toEqual([
+        ...parseClaudeCodeTranscript(shared("sess-1")).map((call) => [call.callId, "sess-1", "agent-finops"]),
+        ...parseClaudeCodeTranscript(own("sess-1", "own-1", "2026-06-08T10:01:00.000Z")).map((call) => [call.callId, "sess-1", "agent-finops"]),
+        ...parseClaudeCodeTranscript(own("fork-a", "own-a", "2026-06-08T10:06:00.000Z")).map((call) => [call.callId, "fork-a", "agent-finops"]),
+        ...parseClaudeCodeTranscript(own("fork-b", "own-b", "2026-06-08T10:11:00.000Z")).map((call) => [call.callId, "fork-b", "other-project"])
+      ].sort());
+      expect(calls.find((call) => call.sessionId === "sess-1" && call.usage.outputTokens === 200)?.transcriptStartedAt)
+        .toBe("2026-06-08T09:59:00.000Z");
+      expect(result.diagnostics.filter((item) => item.code === "unsupported_token_shape")).toEqual([]);
+      expect(result.records.filter((record) => record.agentId === "claude-code").map((record) => [record.projectId, record.quantity]).sort())
+        .toEqual([["agent-finops", 3], ["other-project", 1]]);
+    });
+
     it(`${name} path fails conflicting copies of one native response closed`, async () => {
       const directories = await fixtureDirectories(`aibill-claude-${name}-conflict-`);
       const original = claudeLine({}, { input_tokens: 100, output_tokens: 20 });
@@ -2287,6 +2469,32 @@ describe("Claude native response identity across transcript files", () => {
       }));
     });
   }
+
+  it("both loaders pick the same owner in an exact tie, before and after the files' recency swaps", async () => {
+    // A fork that copied the parent's first line verbatim: equal transcript
+    // starts, equal timestamps. The financial loader reads files in path
+    // order and the bounded qualitative loader by recency; the owner is the
+    // lower session id either way, so the two never disagree.
+    const directories = await fixtureDirectories("aibill-claude-owner-tie-");
+    const opening = (sessionId: string) => JSON.stringify({ type: "custom-title", sessionId, timestamp: "2026-06-08T09:59:00.000Z" });
+    const transcript = (sessionId: string, cwd: string) => [opening(sessionId), claudeLine({ sessionId, cwd })].join("\n");
+    // The higher session id sorts first by path; the lower one last.
+    const first = join(directories.claudeProjectsDir, "a-session.jsonl");
+    const last = join(directories.claudeProjectsDir, "z-session.jsonl");
+    await writeFile(first, transcript("zeta-session", "/Users/testuser/other-project"), "utf8");
+    await writeFile(last, transcript("alpha-session", "/Users/testuser/agent-finops"), "utf8");
+    const owner = (calls: readonly { agent: string; sessionId?: string; project?: string }[]) =>
+      calls.filter((call) => call.agent === "claude-code").map((call) => [call.sessionId, call.project]);
+    const qualitative = { ...directories, qualitativeScan: SAFE_QUALITATIVE_SCAN_POLICY };
+
+    expect(owner((await loadLocalAgentFinancialUsage(directories)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    expect(owner((await loadLocalAgentUsage(qualitative)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    // The first-by-path file becomes the most recently modified one.
+    await utimes(first, new Date("2026-11-07T00:00:00.000Z"), new Date("2026-11-07T00:00:00.000Z"));
+    await utimes(last, new Date("2026-11-01T00:00:00.000Z"), new Date("2026-11-01T00:00:00.000Z"));
+    expect(owner((await loadLocalAgentFinancialUsage(directories)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    expect(owner((await loadLocalAgentUsage(qualitative)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+  });
 });
 
 describe("bounded qualitative local-agent scans", () => {

@@ -861,12 +861,42 @@ describe("loadToolInvocations across parent and sub-agent transcripts", () => {
     expect(copied.sessions).toBe(1);
     expect(copied.sessionTurnCounts).toEqual([1]);
     expect(copied.invocations).toEqual([{ name: "Agent", count: 1 }]);
-    // A different session with the same message ids is separate evidence.
+    // The same message and request ids under another session id are the same
+    // response: a fork or hand-off copies the parent's responses into a new
+    // session file, with their timestamps. The copy is not counted.
     const other = await summarize({
       "session-a.jsonl": `${placeholder}\n${finalLine}\n`,
       "session-b.jsonl": `${placeholder.replace("session-a", "session-b")}\n${finalLine.replace("session-a", "session-b")}\n`
     });
-    expect(other.sessions).toBe(2);
-    expect(other.invocations).toEqual([{ name: "Agent", count: 2 }]);
+    expect(other.sessions).toBe(1);
+    expect(other.invocations).toEqual([{ name: "Agent", count: 1 }]);
+  });
+
+  it("gives a forked copy to the original session, whichever file sorts first", async () => {
+    // The fork's file sorts before the original's and opens with a line
+    // written at fork time; the copied turn keeps its timestamps. The original
+    // (the transcript that started earlier) owns the turn.
+    const forkOpening = JSON.stringify({ type: "custom-title", sessionId: "fork", timestamp: "2026-06-16T12:30:00.000Z" });
+    const fork = `${forkOpening}\n${placeholder.replace("session-a", "fork")}\n${finalLine.replace("session-a", "fork")}\n`;
+    const forked = await summarize({
+      "fork.jsonl": fork,
+      "session-a.jsonl": `${placeholder}\n${finalLine}\n`
+    });
+    expect(forked.sessions).toBe(1);
+    expect(forked.sessionSignals?.map((signal) => signal.sessionId)).toEqual(["session-a"]);
+    expect(forked.invocations).toEqual([{ name: "Agent", count: 1 }]);
+    // Alone, the fork's copy is the only evidence and counts.
+    const alone = await summarize({ "fork.jsonl": fork });
+    expect(alone.sessions).toBe(1);
+    expect(alone.invocations).toEqual([{ name: "Agent", count: 1 }]);
+    // An exact tie (the fork copied the parent's opening line verbatim): the
+    // lower session id owns the turn, as in the financial reader, whichever
+    // file sorts first.
+    const sameOpening = JSON.stringify({ type: "custom-title", sessionId: "zeta", timestamp: "2026-06-16T11:59:00.000Z" });
+    const tied = await summarize({
+      "a.jsonl": `${sameOpening}\n${placeholder.replace("session-a", "zeta")}\n${finalLine.replace("session-a", "zeta")}\n`,
+      "z.jsonl": `${sameOpening.replace("zeta", "alpha")}\n${placeholder.replace("session-a", "alpha")}\n${finalLine.replace("session-a", "alpha")}\n`
+    });
+    expect(tied.sessionSignals?.map((signal) => signal.sessionId)).toEqual(["alpha"]);
   });
 });

@@ -8,6 +8,7 @@
       "project": "sample-project",
       "workingDirectory": "/workspace/sample-project",
       "sessionId": "fixture-claude-session",
+      "transcriptStartedAt": "2026-08-10T12:00:00.000Z",
       "latestTurnUsage": {
         "inputTokens": 120,
         "outputTokens": 30,
@@ -45,6 +46,7 @@
       "project": "sample-project",
       "workingDirectory": "/workspace/sample-project",
       "sessionId": "fixture-claude-session",
+      "transcriptStartedAt": "2026-08-10T12:00:00.000Z",
       "usageScope": "turn",
       "usageSupport": "unsupported_token_shape",
       "reportedTotalTokens": 411,

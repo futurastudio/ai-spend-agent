@@ -162,6 +162,15 @@ export type LocalAgentCall = {
   usage: TokenUsage;
   sessionId?: string;
   /**
+   * When the transcript file this call was read from began: its first dated
+   * line, whatever kind of line that is. Claude Code only. A forked or handed-
+   * off conversation copies the parent's earlier responses, with their
+   * timestamps, into a file that opens at fork time, so this is what tells the
+   * original session from its copy when one response sits in both (see
+   * `dedupeCumulativeSessionCalls`). Never a transcript's content.
+   */
+  transcriptStartedAt?: string;
+  /**
    * Distinct subagent-run identity when the host shares one `sessionId`
    * across transcript files. Claude Code stores each subagent transcript
    * under `<sessionId>/subagents/agent-<agentId>.jsonl` with the parent's
@@ -516,7 +525,11 @@ export type LocalAgentStreamCheckpointAdapter = {
 // inherited baseline: v2 entries priced a fork's replayed parent history as
 // the child's own usage, so those cached amounts are overstated and must not
 // be reused.
-export const localAgentFinancialParserVersion = 4;
+// Bumped to 5 when Claude Code calls gained `transcriptStartedAt`, which the
+// cross-session rule uses to tell an original session from a fork that copied
+// it: cached v4 calls lack it, so a fork and its original could only be told
+// apart by read order.
+export const localAgentFinancialParserVersion = 5;
 
 /**
  * Qualitative parser contract version. Bumped to 2 with the checkpointed
@@ -537,8 +550,11 @@ export const localAgentFinancialParserVersion = 4;
  * a fork's replayed parent history as the child's own usage and activity.
  * Bumped to 8 when tool-use evidence became the union over a streamed
  * response's lines: v7 entries and checkpoints counted the blocks of one line.
+ * Bumped to 9 when Claude Code calls gained `transcriptStartedAt`, which the
+ * cross-session rule uses to tell an original session from a fork that copied
+ * it: v8 entries lack it.
  */
-export const localAgentQualitativeParserVersion = 8;
+export const localAgentQualitativeParserVersion = 9;
 
 /**
  * Conservative launch defaults for action-capable qualitative evidence.
@@ -751,6 +767,9 @@ type TranscriptParseDiagnosticHandler = (diagnostic: TranscriptParseDiagnostic) 
  * Glance, and project totals never add cumulative checkpoints together.
  * Turn-scoped calls with a stable session+call identity are also deduplicated
  * across copied/checkpointed files. Calls without that proof are retained.
+ *
+ * Then, across sessions: within one read, a response seen in more than one
+ * session file counts once (`dedupeResponsesAcrossSessions`).
  */
 export function dedupeCumulativeSessionCalls(
   calls: LocalAgentCall[],
@@ -799,7 +818,104 @@ export function dedupeCumulativeSessionCalls(
       cumulative.set(key, call);
     }
   }
-  return [...retained, ...stableTurns.values(), ...cumulative.values()];
+  return [...retained, ...dedupeResponsesAcrossSessions([...stableTurns.values()]), ...cumulative.values()];
+}
+
+/**
+ * The cross-session rule: within one read, a response seen in more than one
+ * session file counts once.
+ *
+ * Forking or handing off a Claude Code conversation writes the parent's
+ * earlier responses into a new session file, often in another folder: the
+ * same message id, request id and usage under a new session id, sometimes a
+ * new working directory, with the original timestamps. The same-session rule
+ * above keys on the session id, so it kept both and counted those tokens
+ * twice. Here the calls that survived it are grouped by `agent:callId`
+ * (`callId` hashes the provider's message id and request id, so it is the
+ * same in every copy), and copies that carry the same evidence (model, usage
+ * and its support) count once, under the owner: the copy outside a sub-agent
+ * transcript, else the earliest, else the one in the transcript that started
+ * earlier (`transcriptStartedAt`: the fork's file opens at fork time), else
+ * the lower session id. Each group is folded in session id order, never in
+ * read order, so the financial reader (path order), the qualitative reader
+ * (recency order) and a warm cache pick the same owner. Every key of the
+ * owner stays as it was (day, model, project, working directory): only the
+ * copies' counts go. Claude Code can also write a zeroed copy of a response
+ * after its final line; in a group where another copy carries usage, a copy
+ * whose usage totals zero and reports no total is a copy, not evidence, and
+ * goes first. Copies whose evidence differs are not the same response and are
+ * all kept: within one session that is the fail-closed conflict above, across
+ * sessions each session keeps its own. Gemini CLI responses carry a call id
+ * and follow the same rule. Codex turn ids hash the session id, so this never
+ * groups Codex events of two sessions; Codex forks reset their inherited
+ * baseline in the parsers instead.
+ */
+function dedupeResponsesAcrossSessions(calls: LocalAgentCall[]): LocalAgentCall[] {
+  const groups = new Map<string, LocalAgentCall[]>();
+  for (const call of calls) {
+    if (!call.callId) continue;
+    const key = `${call.agent}:${call.callId}`;
+    groups.set(key, [...(groups.get(key) ?? []), call]);
+  }
+  const dropped = new Set<LocalAgentCall>();
+  for (const unordered of groups.values()) {
+    if (unordered.length < 2) continue;
+    const group = [...unordered].sort((left, right) =>
+      (left.sessionId ?? "").localeCompare(right.sessionId ?? "") ||
+      (left.subagentId ?? "").localeCompare(right.subagentId ?? ""));
+    const owners = new Map<string, LocalAgentCall>();
+    const someUsage = group.some((call) => !isZeroedResponseCopy(call));
+    for (const call of group) {
+      if (someUsage && isZeroedResponseCopy(call)) {
+        dropped.add(call);
+        continue;
+      }
+      const evidence = crossSessionEvidenceFingerprint(call);
+      const prior = owners.get(evidence);
+      if (!prior) {
+        owners.set(evidence, call);
+        continue;
+      }
+      const owner = preferredStableTurnCopy(prior, call);
+      owners.set(evidence, owner);
+      dropped.add(owner === prior ? call : prior);
+    }
+  }
+  return dropped.size === 0 ? calls : calls.filter((call) => !dropped.has(call));
+}
+
+/**
+ * A copy with no usage at all: every component zero and no reported total.
+ * Never the fail-closed conflict marker, which is a verdict, not a copy.
+ */
+function isZeroedResponseCopy(call: LocalAgentCall): boolean {
+  return !isStableTurnConflict(call) &&
+    totalUsageTokens(call.usage) === 0 &&
+    call.reportedTotalTokens === undefined;
+}
+
+/**
+ * What must agree for two copies of one response in different sessions to be
+ * the same response: the evidence, not the context. A fork rewrites the
+ * session id and may rewrite the working directory and so the project; the
+ * timestamp is kept by the fork and left out as in the same-session rule.
+ */
+function crossSessionEvidenceFingerprint(call: LocalAgentCall): string {
+  return JSON.stringify({
+    model: call.model,
+    usageSupport: call.usageSupport ?? null,
+    reportedTotalTokens: call.reportedTotalTokens ?? null,
+    usage: {
+      inputTokens: call.usage.inputTokens,
+      outputTokens: call.usage.outputTokens,
+      cacheReadTokens: call.usage.cacheReadTokens ?? null,
+      cacheWrite5mTokens: call.usage.cacheWrite5mTokens ?? null,
+      cacheWrite1hTokens: call.usage.cacheWrite1hTokens ?? null,
+      thoughtTokens: call.usage.thoughtTokens ?? null,
+      toolTokens: call.usage.toolTokens ?? null
+    },
+    geminiTokenEvidence: call.geminiTokenEvidence ?? null
+  });
 }
 
 function isCompleteStableTurn(call: LocalAgentCall): boolean {
@@ -856,7 +972,12 @@ function isStableTurnConflict(call: LocalAgentCall): boolean {
 }
 
 function preferredStableTurnCopy(prior: LocalAgentCall, candidate: LocalAgentCall): LocalAgentCall {
-  const copy = (call: LocalAgentCall) => ({ subagent: Boolean(call.subagentId), timestamp: call.timestamp, call });
+  const copy = (call: LocalAgentCall) => ({
+    subagent: Boolean(call.subagentId),
+    timestamp: call.timestamp,
+    ...(call.transcriptStartedAt ? { transcriptStartedAt: call.transcriptStartedAt } : {}),
+    call
+  });
   return preferredClaudeResponseCopy(copy(prior), copy(candidate)).call;
 }
 
@@ -1258,6 +1379,7 @@ export function parseClaudeCodeTranscript(
   const observedEntryAgentIds = new Set<string>();
   const subagentCompletionsBySession = new Map<string, Map<string, string>>();
   let parentSessionId: string | undefined;
+  let transcriptStartedAt: string | undefined;
   let malformedLines = 0;
   let entryOrdinal = 0;
   let latestUnscopedWorkOrdinal = -1;
@@ -1277,6 +1399,9 @@ export function parseClaudeCodeTranscript(
     }
     if (!isRecord(entry)) continue;
     entryOrdinal += 1;
+    // The file's first dated line, whatever its kind: a fork's file opens at
+    // fork time, after every response it copied (see `transcriptStartedAt`).
+    transcriptStartedAt ??= toIso(stringOf(entry.timestamp));
     const entrySessionId = stringOf(entry.sessionId);
     if (entry.type === "user" || entry.type === "assistant") {
       if (entrySessionId) latestWorkOrdinalBySession.set(entrySessionId, entryOrdinal);
@@ -1382,6 +1507,7 @@ export function parseClaudeCodeTranscript(
       project,
       workingDirectory,
       sessionId,
+      ...(transcriptStartedAt ? { transcriptStartedAt } : {}),
       ...(entryAgentId ? { subagentId: entryAgentId } : {}),
       ...(stringOf(entry.version) ? { sourceVersion: stringOf(entry.version) } : {}),
       ...(parsedUsage.latestTurnUsage
@@ -2642,9 +2768,13 @@ export async function readClaudeCodeFinancialFileForRegistry(
   const responses = new Map<string, ClaudeFinancialCandidate>();
   const unidentified: ClaudeFinancialCandidate[] = [];
   let order = 0;
+  let transcriptStartedAt: string | undefined;
   let streamed: StreamedJsonlResult;
   try {
     streamed = await streamJsonlRecords(filePath, (entry) => {
+      // The file's first dated line, whatever its kind: a fork's file opens at
+      // fork time, after every response it copied (see `transcriptStartedAt`).
+      transcriptStartedAt ??= toIso(stringOf(entry.timestamp));
       if (workspaceDailyFacts && entry.type === "assistant" && isRecord(entry.message)
           && isRecord(entry.message.usage) && stringOf(entry.message.model) !== "<synthetic>"
           && !toIso(stringOf(entry.timestamp))) {
@@ -2688,6 +2818,7 @@ export async function readClaudeCodeFinancialFileForRegistry(
       (diagnostic) => entryDiagnostics.push(diagnostic)
     );
     if (call) {
+      if (transcriptStartedAt) call.transcriptStartedAt = transcriptStartedAt;
       if (workspaceDailyFacts) {
         const nativeAgent = stringOf(candidate.entry.agentId);
         const pathAgent = filePath.split(sep).includes("subagents")

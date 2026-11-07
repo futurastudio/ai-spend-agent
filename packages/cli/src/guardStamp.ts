@@ -18,7 +18,7 @@ import { dirname, join, posix, resolve, sep, win32 } from "node:path";
  * never trusted by a newer one. The version is part of the cache directory
  * name, which makes an old cache invisible rather than something to migrate.
  */
-export const GUARD_READER_VERSION = 4;
+export const GUARD_READER_VERSION = 5;
 export const GUARD_CACHE_DIRECTORY_NAME = `guard-usage-v1-r${GUARD_READER_VERSION}`;
 export const GUARD_STAMP_KIND = "aibill.guard_stamp";
 const STAMP_MAX_BYTES = 64 * 1_024;
