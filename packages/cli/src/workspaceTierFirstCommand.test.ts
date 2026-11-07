@@ -297,7 +297,7 @@ describe("the first push learns the capability and the same command sends the ti
     const run = await m.push([call()], { transport: contended });
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
-    expect(run.stderr).toBe("The subscription tier batch stopped safely. Local state was not reset; run workspace status, then workspace push.");
+    expect(run.stderr).toBe("The subscription tier batch stopped safely. Local state was not reset; run npx aibill@latest workspace status, then npx aibill@latest workspace push.");
     expect(run.sent).toHaveLength(1);
     const state = await m.state();
     expect(state).toMatchObject({ pending: null, capabilities: { agentPlanFacts: true } });
@@ -404,8 +404,8 @@ describe("a push with no changed session facts", () => {
   it("builds no batch at or past the grant's end, where the Workspace answers with no refusal it could be dropped on", async () => {
     const m = await machine({ capability: true, expiresAt: "2026-09-20T12:00:00.000Z" });
     const run = await m.push([]);
-    expect(run.stdout).toBe("No changed eligible local session facts to push.");
-    expect(run.sent).toEqual([]);
+    expect(run).toMatchObject({ exitCode: 1, stdout: "", sent: [], messages: [] });
+    expect(run.stderr).toContain("connection ended");
     expect(readPlanFiles).not.toHaveBeenCalled();
   });
 
@@ -639,7 +639,9 @@ describe("with no announced capability", () => {
     expect(await out.push([])).toMatchObject({ exitCode: 0, sent: [], messages: [], stdout: idleLine });
     vi.unstubAllEnvs();
     const ended = await machine({ expiresAt: now });
-    expect(await ended.push([])).toMatchObject({ exitCode: 0, sent: [], messages: [], stdout: idleLine });
+    const stopped = await ended.push([]);
+    expect(stopped).toMatchObject({ exitCode: 1, sent: [], messages: [], stdout: "" });
+    expect(stopped.stderr).not.toContain("Subscription tier");
     expect(readPlanFiles).not.toHaveBeenCalled();
   });
 
@@ -667,7 +669,7 @@ describe("older pairing files", () => {
     const run = await m.push([call()]);
     expect(run.exitCode).toBe(0);
     expect(run.sent).toHaveLength(2);
-    expect(Object.keys(await m.state()).sort()).toEqual(["agentPlansAccepted", "capabilities", "device", "disconnect", "facts", "lastAcceptedAt", "pending", "version"]);
+    expect(Object.keys(await m.state()).sort()).toEqual(["agentPlansAccepted", "capabilities", "device", "disconnect", "factNames", "facts", "lastAcceptedAt", "pending", "version"]);
   });
   it("treats a file that knows the capability but no accepted tier as never accepted", async () => {
     const m = await machine({ capability: true });
@@ -677,15 +679,16 @@ describe("older pairing files", () => {
     expect(parse(run.sent[0]!).facts).toEqual(expectedPlanFacts());
   });
   it("refuses a malformed tier record without resetting anything", async () => {
-    for (const bad of [{ claude_code: { tier: "claude_max_20x", tierRaw: "x", sentAt: now, email: "a" } }, { other: { tier: "unknown", tierRaw: "x", sentAt: now } },
-      { codex: { tier: "chatgpt_ultra", tierRaw: "x", sentAt: now } }, { codex: { tier: "unknown", tierRaw: "x y", sentAt: now } }, { codex: { tier: "unknown", tierRaw: "x", sentAt: "soon" } }]) {
+    // A key this version does not know says a newer aibill wrote it; a bad value keeps the general words. Both refuse, and neither changes the file.
+    for (const [bad, words] of [[{ claude_code: { tier: "claude_max_20x", tierRaw: "x", sentAt: now, email: "a" } }, "written by a newer aibill"], [{ other: { tier: "unknown", tierRaw: "x", sentAt: now } }, "written by a newer aibill"],
+      [{ codex: { tier: "chatgpt_ultra", tierRaw: "x", sentAt: now } }, "Local state was not reset"], [{ codex: { tier: "unknown", tierRaw: "x y", sentAt: now } }, "Local state was not reset"], [{ codex: { tier: "unknown", tierRaw: "x", sentAt: "soon" } }, "Local state was not reset"]] as const) {
       const m = await machine({ capability: true });
       const state = await m.state();
       const written = JSON.stringify({ ...state, agentPlansAccepted: bad });
       await writeFile(m.statePath, written, { mode: 0o600 });
       const run = await m.push([call()]);
       expect(run.exitCode, JSON.stringify(bad)).toBe(1);
-      expect(run.stderr).toContain("Local state was not reset");
+      expect(run.stderr).toContain(words);
       expect(run.sent).toEqual([]);
       expect(await readFile(m.statePath, "utf8")).toBe(written);
     }
@@ -693,7 +696,7 @@ describe("older pairing files", () => {
 });
 
 describe("a refused tier-only batch never strands a machine", () => {
-  it.each(["invalid", "conflict", "stale", "expired", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs past its sequence with a fresh nonce", async (reason) => {
+  it.each(["invalid", "conflict", "stale", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs past its sequence with a fresh nonce", async (reason) => {
     const m = await machine({ capability: true });
     m.server.script = [{ refuse: reason }];
     const refused = await m.push([]);
@@ -811,7 +814,7 @@ describe("a lost reply on a tier-only batch", () => {
     const lost = await m.push([]);
     expect(lost.exitCode).toBe(1);
     expect(lost.stderr).toContain("Push outcome is unknown");
-    expect(lost.stderr).toBe("Push outcome is unknown. The exact signed subscription tier batch is retained. Run workspace push: yes resends this exact batch, no drops it, and AIBILL_NO_PLAN_TIER=1 drops it without asking. Session facts wait only until then.");
+    expect(lost.stderr).toBe("Push outcome is unknown. The exact signed subscription tier batch is retained. Run npx aibill@latest workspace push: yes resends this exact batch, no drops it, and AIBILL_NO_PLAN_TIER=1 drops it without asking. Session facts wait only until then.");
     const held = await m.state();
     expect(held.pending?.state).toBe("uncertain");
     expect(held.device.sequence).toBe("0");
