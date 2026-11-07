@@ -1906,7 +1906,8 @@ describe("aggregateCalls", () => {
     });
 
     it("never groups two agents that share a call id", () => {
-      const gemini = { ...original, agent: "gemini-cli" as const, model: "gemini-2.5-pro", sessionId: "gemini-session" };
+      // Same model and usage on purpose: only the agent differs, so the agent prefix of the group key is what keeps them apart.
+      const gemini = { ...original, agent: "gemini-cli" as const, sessionId: "gemini-session" };
       expect(dedupeCumulativeSessionCalls([original, gemini])).toEqual([original, gemini]);
       // Within one agent the rule applies to Gemini CLI as well.
       const geminiCopy = { ...gemini, sessionId: "gemini-fork", transcriptStartedAt: fork.transcriptStartedAt };
