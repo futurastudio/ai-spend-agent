@@ -1892,7 +1892,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       planOnly(coverage) ? "Exact outgoing subscription tier facts (no session facts, prompts, paths, session IDs, or amounts):"
         : "Exact outgoing local facts (no prompts, paths, session IDs, or amounts):", payload,
       planOnly(coverage) ? "This batch carries only the subscription tier, so Workspace can cost this machine's sessions at the plan that ran them."
-        : `Excluded calls: ${coverage.excludedCalls}. Missing token components: ${coverage.incompleteComponents}.`,
+        : `Excluded calls: ${coverage.excludedCalls}. Missing token components in this batch: ${coverage.incompleteComponents}.`,
       ...(coverage.factsWaiting ? [`This batch holds ${coverage.facts.length - coverage.factsWaiting} of ${coverage.facts.length} changed local session facts, ${coverage.partDay
         ? `because ${coverage.partDay} has more of them than this batch can carry. The next push previews the rest; until it lands, Workspace reads only part of that day.`
         : "in whole days, oldest first, as many as one batch can carry. The next push previews the rest."}`] : []),
