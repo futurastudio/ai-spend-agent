@@ -23,13 +23,13 @@ historical untagged exception.
     beside session facts when session facts changed.
   - `~/.aibill/workspace-device.json` gains an optional `agentPlansAccepted` key
     (per agent: `tier`, `tierRaw`, `sentAt`, no other data), written only on an
-    ACCEPT. Files without it read as before. CLIs older than this one refuse a file
-    that has it, as they refuse any unknown key, so stay on `aibill@latest` once it
-    is written.
+    ACCEPT. Files without it read as before. 0.9.15 refuses a file this CLI has written
+    an accepted push to, because it knows neither that key nor `capabilities`, as it
+    refuses any unknown key. So stay on `aibill@latest` from the first accepted push on.
   - A refused tier-only batch never strands a machine. On a 409 with any reason it
     is dropped rather than retained, the stored capability goes false until a later
-    ACCEPT announces it, one line says the tier facts were not accepted, and session
-    pushes continue. Any drop moves the local sequence past the batch, because the
+    ACCEPT announces it (a refusal as `expired` leaves it, as below), one line says the
+    tier facts were not accepted, and session pushes continue. Any drop moves the local sequence past the batch, because the
     Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
     still retains the exact envelope, and a retained envelope is never rebuilt: yes
     resends it identically, while no, no answer, or `AIBILL_NO_PLAN_TIER` drops it, so
@@ -67,7 +67,9 @@ historical untagged exception.
     that does not, the batch is refused as `invalid` and dropped as above, and each
     session push repeats the second preview and the refusal line. No push halts.
 
-- A push can no longer stall without saying so.
+- A push that stops now says why. What a log line, a clock, a lost reply or a killed process
+  can do no longer ends at `Workspace operation stopped safely`, which stays for a pairing
+  file or private directory this CLI cannot read or write.
   - A batch with session facts that Workspace refuses as `expired` is dropped instead of
     retained for good. That refusal is decided after Workspace's replay lookup, so it
     means Workspace does not hold the batch. The way there was ordinary: a dropped
@@ -79,6 +81,9 @@ historical untagged exception.
     without consent. A machine an earlier CLI already stopped this way recovers on its
     next push. `invalid`, `conflict` and `stale` stay as they were, and a batch that did
     land, its reply lost, still replays its receipt however late it is resent.
+  - A dropped batch's days that have left the 30-day window a push reads cannot be rebuilt.
+    The line says where the window starts and that they stay out of Workspace, and it
+    promises a rebuild only of the rest. A batch an earlier CLI retained says the same.
   - A machine whose clock is more than 2 minutes ahead of Workspace's, or more than 10
     minutes behind it, gets that refusal on a first send. A batch refused under 10
     minutes after it was signed, by this machine's clock, says this machine's clock looks
@@ -89,7 +94,32 @@ historical untagged exception.
     It used to print `No changed eligible local session facts to push.` and exit 0, or
     build a batch that could only come back unknown. `workspace status` shows when the
     connection ends and, past that, says it ended. Nothing renews a connection, and the
-    new one starts no earlier than the UTC day after the disconnect.
+    new one starts no earlier than the UTC day after the disconnect. The stop, status and
+    the disconnect's own question all say what that disconnect costs: it takes this
+    machine's accepted session facts out of Workspace's projects and receipts, and those
+    days' shares move to unattributed cost.
+  - A command that is killed no longer stops every later one. A closed terminal or a
+    dropped SSH session left `~/.aibill/.workspace-device.lock` behind, and every push and
+    every disconnect then printed the general stop, with nothing naming the file. The lock
+    now names its process, and the next command takes over a lock whose process is gone.
+    When it cannot tell, it says another command holds that file or one was killed and left
+    it, and to delete it if none is running. `workspace status` says so too. What the killed
+    command left in the pairing file is safe: a batch on its way is retained as uncertain.
+  - A heavy machine gets its preview. A batch was cut by count and could then pass the byte
+    bound, which stopped every push with the general words and nothing sent, for as long
+    as the history stayed that large. A batch is now cut by bytes too, its preview says when
+    it holds only part of the changed facts, the accepted line says how many wait, and the
+    next preview carries them.
+  - One fact over its 1,024 session identities, and any call with no usable day or identity,
+    still stop a push, and nothing is sent. Each now says so in its own line: the day and the
+    count, or the calls per reason, and how long it lasts. The line written for those calls
+    could not be reached before, because the general stop came first.
+  - A push Workspace answers with 403 stays an unknown outcome with its batch retained, and
+    now also points at Settings → Machines: finish the sharing consent if it asks, and if it
+    shows this machine disconnected or expired, run the disconnect and connect again.
+  - A batch of tier facts alone refused as `expired` keeps the announced capability, since
+    that refusal says nothing about what Workspace accepts, and the next push offers the tier
+    again. If it was signed under 10 minutes ago the line also says to check the clock.
   - Where this CLI tells a person what to type for a Workspace command, it says
     `npx aibill@latest`: the help, the pairing lines and the recovery lines. A stale npx
     cache meets a state file it cannot read.

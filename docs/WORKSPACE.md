@@ -77,9 +77,10 @@ run the same command with `npx aibill@latest`.
    eligible. Review the exact payload, exclusions and missing components.
    Confirming sends that batch. Connection, a normal receipt, statusline
    refresh and the local `watch` command do not schedule Workspace pushes.
-   A batch contains at most 256 changed facts; a successful push is not a
-   promise that all eligible history has been uploaded. Follow the next
-   preview if more facts remain.
+   A batch contains at most 256 changed facts and 262,144 bytes, so a successful
+   push is not a promise that all eligible history has been uploaded. When a batch
+   holds only part of it, its preview says so and the accepted line says how many
+   facts wait. Run the push again and follow the next preview.
 
 ## What is shared
 
@@ -162,7 +163,8 @@ envelope, tier facts (those seven fields) included, until it is resolved.
 **If it does not arrive.** A batch of tier facts alone that Workspace refuses is
 dropped, not retained: one line says the tier facts were not accepted, the CLI
 sends none until a later accepted push announces them again, and session pushes
-continue. If a reply is lost, the exact signed envelope is retained and the next push
+continue. A refusal as `expired` speaks of the batch's age or this machine's clock and
+not of what Workspace accepts, so the next push offers them again. If a reply is lost, the exact signed envelope is retained and the next push
 asks about it. Yes resends it identically, because only the identical envelope can be
 reconciled by the Workspace's replay receipt. No, or no answer, drops it. Session
 facts wait only for that answer, because a batch of tier facts alone holds none to
@@ -201,8 +203,9 @@ That seat plan stays until the owner changes it.
   it was signed, is refused as `expired`. Workspace did not store it, so this machine
   drops it. The next `npx aibill@latest workspace push` rebuilds its session facts into
   a new batch, with a new preview and your yes, and sends nothing without it. Days that
-  have left that push's 30-day window are not rebuilt. A machine an earlier CLI stopped
-  on such a batch drops it on its next push, the same way.
+  have left that push's 30-day window are not rebuilt and stay out of Workspace, and the
+  line says where the window starts. A machine an earlier CLI stopped on such a batch
+  drops it on its next push, the same way.
 - **This machine's clock is off:** a clock more than 2 minutes ahead of Workspace's, or
   more than 10 minutes behind it, gets the same refusal on a first send. The batch is
   dropped in the same way and the line says to check the clock. Nothing retries by
@@ -212,6 +215,35 @@ That seat plan stays until the owner changes it.
   for resolving a refused batch. A batch of subscription tier facts alone is the
   exception: it is dropped on any refusal, one line says so, and session pushes
   continue.
+- **Another command holds the lock, or one was killed:** a Workspace command holds
+  `~/.aibill/.workspace-device.lock` while it works with the pairing file, through the
+  preview and the send. A command that is killed leaves the file behind, and a closed
+  terminal or a dropped SSH session is enough. The next command removes the file
+  when the process it names is gone, and goes on. When it cannot tell, because a version
+  before this one wrote no process into the file, the process ran on another host, or its
+  number is in use again, it stops with `Another aibill Workspace command holds
+  ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running,
+  delete that file and run this command again.` `workspace status` says so too. Versions
+  already published print their general stop here. Nothing is lost: a batch on its way
+  when the command died is retained as an unknown outcome, and the next push asks about it.
+- **One fact over its session bound:** a fact carries at most 1,024 session identities for
+  one day, one model and one folder, and it cannot be split. More than that stops the push
+  before any batch exists. The line names the day and the count, and when that day leaves
+  the 30-day window a push reads. No facts are replaced or sent until then, and days that
+  leave the window meanwhile stay out of Workspace. Share the line for help; do not delete
+  logs or reconnect as a repair.
+- **Calls with no usable day or identity:** a daily fact built without such a call would
+  undercount its day, so one call in the window stops the push before any batch exists,
+  for example a log line with no working directory or session. The line counts them by
+  reason, without paths or contents. No facts are replaced or sent until those calls leave
+  the 30-day window, and days that leave it meanwhile stay out of Workspace. Share the
+  counts for help; do not delete logs or reconnect as a repair.
+- **Workspace answered 403:** it will not take a push from this machine right now, and the
+  CLI cannot tell why, so the outcome stays unknown and the batch stays retained. One more
+  line points at Settings → Machines. If it asks for this machine's sharing consent, finish
+  that and push again. If it shows this machine disconnected or expired, run
+  `npx aibill@latest workspace disconnect`, then `npx aibill@latest workspace connect`; that
+  disconnect removes the retained batch.
 - **Connection ended:** a connection has an end, and `workspace status` shows it. Past
   it, Workspace refuses every push, including a resend of a retained batch, before it
   can look for a replay. So `workspace push` stops with exit 1, reads no session facts
@@ -223,8 +255,12 @@ That seat plan stays until the owner changes it.
   that, ask your Workspace administrator to admit this machine. The new connection
   starts no earlier than the UTC day after the disconnect and cannot reach back. Any
   day before that which has not reached Workspace stays out of it, and that includes a
-  retained batch, which the disconnect removes. If the time shown has not passed, check
-  this machine's clock first: a disconnect cannot be undone.
+  retained batch, which the disconnect removes. The disconnect has a second cost, and
+  the stop, `workspace status` and the disconnect's own question say so: Workspace goes on
+  reading a lapsed machine's accepted session facts, and stops reading a disconnected machine's. They leave Workspace's projects and receipts,
+  and those days' seat and API-key shares move to unattributed cost. The stored rows stay.
+  If the time shown has not passed, check this machine's clock first: a disconnect cannot
+  be undone.
 
 To stop future machine sharing:
 
@@ -237,5 +273,7 @@ matching receipt. If the outcome is uncertain, uploads are blocked and local
 keys remain. Follow the command’s guidance; `npx aibill@latest workspace disconnect --retry`
 requires confirmation to repeat the identical retained request. Abandoning an
 unused request removes its local key and does not claim remote revocation.
+Workspace stops reading a disconnected machine's accepted session facts: they leave its
+projects and receipts, and those days' seat and API-key shares move to unattributed cost.
 Disconnect does not promise deletion of previously accepted data; see the
 [hosted privacy policy](https://asktilden.com/privacy).

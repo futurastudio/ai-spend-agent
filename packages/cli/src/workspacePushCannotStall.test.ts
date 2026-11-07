@@ -1,15 +1,16 @@
+import { spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentPlanFacts, type LocalAgentCall } from "@agent-finops/core";
 import { runCli } from "./index.js";
 import { workspaceClock } from "./lib/clock.js";
 import {
-  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePush, workspaceCanonicalJson, workspaceDomainHash, WORKSPACE_ORIGIN,
-  type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceState, type WorkspaceTransport, type WorkspaceTransportResult
+  buildWorkspaceEnvelope, isWorkspaceAgentPlanFact, isWorkspaceSessionFact, prepareWorkspacePlanFacts, prepareWorkspacePush, workspaceCanonicalJson, workspaceDomainHash, WorkspaceStateLocked, WORKSPACE_ORIGIN,
+  type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceFact, type WorkspaceState, type WorkspaceTransport, type WorkspaceTransportResult
 } from "./workspaceConnect.js";
 
 /**
@@ -112,19 +113,19 @@ async function machine(options: { planFiles?: boolean; capability?: boolean; exp
   const edit = async (change: (state: Record<string, any>) => void) => { const held = JSON.parse(await raw()) as Record<string, any>; change(held); await writeFile(statePath, JSON.stringify(held), { mode: 0o600 }); };
   const status = (moment = now) => runCli(["workspace", "status"], { homeDirectory: home, workspaceNow: moment });
   /** A batch this machine already holds, as a CLI before this one leaves it. */
-  const hold = async (kind: "refused" | "uncertain", refusal: "invalid" | "conflict" | "stale" | "expired" | null, signedAt = at(-12 * MINUTE)) => {
-    const first = await machineEnvelope(device, signedAt);
+  const hold = async (kind: "refused" | "uncertain", refusal: "invalid" | "conflict" | "stale" | "expired" | null, signedAt = at(-12 * MINUTE), days?: string[]) => {
+    const first = await machineEnvelope(device, signedAt, days);
     await edit(held => { held.pending = { envelope: first, state: kind, refusal }; });
     return first;
   };
   return { home, device, statePath, server, push, raw, read, edit, status, hold };
 }
 /** One well-formed session fact, signed as a push would sign it. */
-async function machineEnvelope(device: WorkspaceDevice, signedAt: string): Promise<WorkspaceEnvelope> {
+async function machineEnvelope(device: WorkspaceDevice, signedAt: string, days: string[] = ["2026-09-18"]): Promise<WorkspaceEnvelope> {
   const refs = [`sha256_${"1".repeat(64)}`];
-  return buildWorkspaceEnvelope(device, [{ day: "2026-09-18", agent: "codex", provider: "openai", model: "gpt-5", projectName: "repo", directoryRef: `sha256_${"0".repeat(64)}`, apiKeyRef: null, workspaceRef: null,
+  return buildWorkspaceEnvelope(device, days.map(day => ({ day, agent: "codex", provider: "openai", model: "gpt-5", projectName: "repo", directoryRef: `sha256_${"0".repeat(64)}`, apiKeyRef: null, workspaceRef: null,
     sessionCount: "1", sessionRefs: refs, tokens: { uncachedInputTokens: "20", cacheReadTokens: "3", cacheWriteTokens: null, outputTokens: "5" },
-    sessionsHash: workspaceDomainHash("tilden:local-session-identities:v1", refs), factRevision: "1" }], signedAt);
+    sessionsHash: workspaceDomainHash("tilden:local-session-identities:v1", refs), factRevision: "1" })), signedAt);
 }
 
 const NOT_STORED = "Workspace did not store it, so nothing was counted, and this machine dropped it.";
@@ -132,14 +133,22 @@ const NEXT_PUSH = "Run npx aibill@latest workspace push to rebuild its session f
 const lateLines = (signedAt: string) => [`Workspace refused this batch because it was signed at ${signedAt}, more than 10 minutes ago. ${NOT_STORED}`, NEXT_PUSH];
 const clockLines = (signedAt: string) => [`Workspace refused this batch as out of date, though this machine signed it under 10 minutes ago, at ${signedAt} by its clock. ${NOT_STORED}`,
   "This machine's clock looks ahead of Workspace's, or more than 10 minutes behind it: check it.", NEXT_PUSH];
-const HELD_DROPPED = "A retained batch Workspace had refused as too old was dropped. Workspace did not store it, so nothing was counted.";
+const HELD_DROPPED = "A retained batch Workspace had refused as out of date was dropped. Workspace did not store it, so nothing was counted.";
 const REFUSED_RETAINED = "Workspace refused this batch. Its exact envelope and refusal are retained; no new nonce was created.";
 const REFUSED_STOP = "A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.";
 const UNKNOWN_OUTCOME = "Push outcome is unknown. The exact signed envelope is retained; run npx aibill@latest workspace push to review and explicitly retry this exact batch.";
 const SESSIONS_ACCEPTED = "Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.";
 const IDLE = "No changed eligible local session facts to push.";
 const RECONNECT = "To connect again, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect.";
+const DISCONNECT_COST = "The disconnect also takes this machine's accepted session facts out of Workspace's projects and receipts; those days' shares move to unattributed cost.";
 const CLOCK_FIRST = "If that time has not passed, check this machine's clock first: a disconnect cannot be undone.";
+const CLOCK_OFF = "This machine's clock looks ahead of Workspace's, or more than 10 minutes behind it: check it.";
+const LOCKED = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file and run this command again.";
+const LOCKED_STATUS = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file before the next connect, push or disconnect.";
+const MACHINE_REFUSED = `Workspace answered 403: it will not take a push from this machine right now. Open ${WORKSPACE_ORIGIN}/settings/machines. If it asks for this machine's sharing consent, finish that and push again. If it shows this machine disconnected or expired, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect; that disconnect removes this retained batch.`;
+const windowLine = (start: string) => `Its days before ${start} have left the 30-day window a push reads and stay out of Workspace.`;
+const REBUILD_THE_REST = "Run npx aibill@latest workspace push to rebuild the rest of its session facts into a new batch, with a new preview; nothing goes without your yes.";
+const ANYTHING_NEWER = "Run npx aibill@latest workspace push to send anything newer, with a new preview; nothing goes without your yes.";
 const endedLine = (end: string) => `This machine's Workspace connection ended at ${end}, so no session facts were read or sent.`;
 const RETAINED_ENDED = "A retained batch cannot be resent after that end, and the disconnect removes it.";
 const newerState = (command: string) => `This machine's Workspace state was written by a newer aibill: it carries keys this version does not know, so this version stopped and nothing was changed. Run npx aibill@latest workspace ${command}.`;
@@ -272,6 +281,7 @@ describe("a batch that never landed, resent late", () => {
     ["no reason", { status: 409, body: { state: "refused" } }],
     ["a reason this CLI has not met", { status: 409, body: { state: "refused", reason: "too_old" } }],
     ["another status", { status: 410, body: { state: "refused", reason: "expired" } }],
+    ["a status that is not a refusal", { status: 503, body: { state: "refused", reason: "expired" } }],
   ])("only the Workspace's exact refusal counts: %s stays an unknown outcome and the batch stays retained", async (_name, reply) => {
     const m = await machine();
     m.server.script = [{ reply }];
@@ -398,7 +408,7 @@ describe("a lapsed connection says so", () => {
     const before = await m.raw();
     const run = await m.push([call], { at: moment, load: unexpectedRead });
     expect(run).toMatchObject({ exitCode: 1, stdout: "", sent: [], messages: [] });
-    expect(lines(run.stderr)).toEqual([endedLine(now), RECONNECT, CLOCK_FIRST]);
+    expect(lines(run.stderr)).toEqual([endedLine(now), RECONNECT, DISCONNECT_COST, CLOCK_FIRST]);
     expect(readPlanFiles).not.toHaveBeenCalled();
     expect(await m.raw()).toBe(before);
   });
@@ -417,7 +427,7 @@ describe("a lapsed connection says so", () => {
     const before = await m.raw();
     const run = await m.push([], { at: at(2 * MINUTE), load: unexpectedRead });
     expect(run).toMatchObject({ exitCode: 1, stdout: "", sent: [], messages: [] });
-    expect(lines(run.stderr)).toEqual([endedLine(at(MINUTE)), RETAINED_ENDED, RECONNECT, CLOCK_FIRST]);
+    expect(lines(run.stderr)).toEqual([endedLine(at(MINUTE)), RETAINED_ENDED, RECONNECT, DISCONNECT_COST, CLOCK_FIRST]);
     expect(await m.raw()).toBe(before);
   });
 
@@ -427,7 +437,7 @@ describe("a lapsed connection says so", () => {
     const before = await m.raw();
     const run = await m.push([call], { at: at(2 * MINUTE), load: unexpectedRead });
     expect(run).toMatchObject({ exitCode: 1, sent: [], messages: [] });
-    expect(lines(run.stderr)).toEqual([endedLine(at(MINUTE)), RETAINED_ENDED, RECONNECT, CLOCK_FIRST]);
+    expect(lines(run.stderr)).toEqual([endedLine(at(MINUTE)), RETAINED_ENDED, RECONNECT, DISCONNECT_COST, CLOCK_FIRST]);
     expect(await m.raw()).toBe(before);
   });
 
@@ -444,6 +454,7 @@ describe("a lapsed connection says so", () => {
     expect(before.exitCode).toBe(0);
     expect(lines(before.stdout)).toContain(`Connection ends: ${at(MINUTE)}`);
     expect(before.stdout).not.toContain("workspace disconnect");
+    expect(before.stdout).not.toContain(DISCONNECT_COST);
 
     const after = await m.status(at(MINUTE));
     expect(after.exitCode).toBe(0);
@@ -452,6 +463,7 @@ describe("a lapsed connection says so", () => {
     expect(printed).not.toContain(`Connection ends: ${at(MINUTE)}`);
     expect(printed).toContain("Pushes stop there: Workspace refuses every push from this machine after that end.");
     expect(printed).toContain(RECONNECT);
+    expect(printed).toContain(DISCONNECT_COST);
     expect(printed).toContain(CLOCK_FIRST);
     expect(printed.at(-1)).toBe("Status reads local pairing state only; it does not confirm current server grant authority.");
     expect(readPlanFiles).not.toHaveBeenCalled();
@@ -611,5 +623,556 @@ describe("a state file a newer aibill wrote", () => {
     const run = await m.push([call]);
     expect(run).toMatchObject({ exitCode: 1, stderr: UNKNOWN_OUTCOME });
     expect((await m.read()).pending?.state).toBe("uncertain");
+  });
+});
+
+describe("a command that was killed", { timeout: 60_000 }, () => {
+  const lockPath = (home: string) => join(home, ".aibill", ".workspace-device.lock");
+  /** A pid no process holds any more: a child that has run and been reaped. */
+  const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid;
+  const owner = (pid: number) => `${pid} ${hostname().replace(/\s+/g, "-")}\n`;
+
+  it("names itself in its lock while it runs, and leaves none behind", async () => {
+    const m = await machine();
+    let seen = "";
+    const run = await runCli(["workspace", "push"], { homeDirectory: m.home, interactive: true, workspaceNow: now, workspaceLoadCalls: loaded([call]),
+      consentRead: async () => { seen = await readFile(lockPath(m.home), "utf8"); return "n"; } });
+    expect(run).toMatchObject({ exitCode: 0, stdout: "Not sent." });
+    expect(seen).toBe(owner(process.pid));
+    await expect(lstat(lockPath(m.home))).rejects.toThrow();
+  });
+
+  it("left a lock whose process is gone: the next push takes it over and goes on to its preview, and status says nothing of it", async () => {
+    const m = await machine();
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    expect((await m.status()).stdout).not.toContain("workspace-device.lock");
+    const run = await m.push([call]);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe(SESSIONS_ACCEPTED);
+    expect(run.sent).toHaveLength(1);
+    await expect(lstat(lockPath(m.home))).rejects.toThrow();
+  });
+
+  it("left a batch uncertain: the next push takes the lock over and asks about that exact batch", async () => {
+    const m = await machine();
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([call]);
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    const run = await m.push([], { load: unexpectedRead });
+    expect(run.sent).toEqual(lost.sent);
+    expect(run.exitCode).toBe(0);
+    expect(m.server.replays).toBe(1);
+  });
+
+  it("takes over for a disconnect too, which is the way back from a lapse", async () => {
+    const m = await machine({ expiresAt: now });
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: at(MINUTE), consentRead: async () => "n" });
+    expect(run).toMatchObject({ exitCode: 1, stderr: "Pairing kept. Disconnect was not confirmed; no request or key was removed." });
+    await expect(lstat(lockPath(m.home))).rejects.toThrow();
+  });
+
+  it.each([
+    ["this process, still running", () => owner(process.pid)],
+    ["a process this user does not own", () => owner(1)],
+    ["no owner, as a CLI before this one leaves it", () => ""],
+    ["a gone process on another host", () => `${deadPid()} another-host\n`],
+    ["a pid that is not one", () => `0 ${hostname().replace(/\s+/g, "-")}\n`],
+    ["something else", () => "not a lock this CLI wrote\n"],
+  ])("a lock naming %s stops each command with its own line, reads nothing, asks nothing, and is left where it is", async (_name, body) => {
+    const m = await machine();
+    const text = body();
+    await writeFile(lockPath(m.home), text, { mode: 0o600 });
+    const before = await m.raw();
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stdout: "", stderr: LOCKED, sent: [], messages: [] });
+    const runtime = { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async () => "y" };
+    expect(await runCli(["workspace", "disconnect"], runtime)).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect(await runCli(["workspace", "connect"], runtime)).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect(lines((await m.status()).stdout)).toContain(LOCKED_STATUS);
+    expect(await readFile(lockPath(m.home), "utf8")).toBe(text);
+    expect(await m.raw()).toBe(before);
+
+    await rm(lockPath(m.home));
+    expect((await m.status()).stdout).not.toContain("workspace-device.lock");
+    expect(await m.push([call])).toMatchObject({ exitCode: 0, stdout: SESSIONS_ACCEPTED });
+  });
+
+  it("status names a lock on a machine with no pairing, and on an unfinished request", async () => {
+    const fresh = await mkdtemp(join(tmpdir(), "aibill-cannot-stall-lock-"));
+    const runtime = { homeDirectory: fresh, interactive: true, workspaceNow: now, consentRead: async () => "y" };
+    await mkdir(join(fresh, ".aibill"), { mode: 0o700 });
+    await writeFile(lockPath(fresh), "", { mode: 0o600 });
+    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toEqual(["This machine has no completed local Workspace pairing. No logs or network were read.", LOCKED_STATUS]);
+    await rm(lockPath(fresh));
+    expect((await runCli(["workspace", "connect"], runtime)).exitCode).toBe(0);
+    await writeFile(lockPath(fresh), "", { mode: 0o600 });
+    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toContain(LOCKED_STATUS);
+  });
+
+  it("a link or a folder in the lock's place is not followed or removed", async () => {
+    const m = await machine();
+    const target = join(m.home, "not-the-lock");
+    await writeFile(target, owner(deadPid()), { mode: 0o600 });
+    await symlink(target, lockPath(m.home));
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect((await lstat(lockPath(m.home))).isSymbolicLink()).toBe(true);
+    await rm(lockPath(m.home));
+    await mkdir(lockPath(m.home));
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    expect((await lstat(lockPath(m.home))).isDirectory()).toBe(true);
+  });
+
+  it("a lock another user could write is not trusted", async () => {
+    const m = await machine();
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o644 });
+    await chmod(lockPath(m.home), 0o644);
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
+  });
+
+  it("many commands racing for a lock whose process is gone: one at a time holds it, and every other says the lock is held", async () => {
+    for (let round = 0; round < 12; round++) {
+      const m = await machine({ capability: true });
+      await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+      let inside = 0, most = 0, entered = 0;
+      const attempt = () => prepareWorkspacePlanFacts({ home: m.home, generatedAt: now, confirm: async () => false,
+        readAgentPlanFacts: async () => { inside++; entered++; most = Math.max(most, inside); await new Promise(resolve => setTimeout(resolve, 5)); inside--; return []; } });
+      const settled = await Promise.allSettled(Array.from({ length: 16 }, attempt));
+      expect(most).toBe(1);
+      expect(entered).toBeGreaterThanOrEqual(1);
+      for (const result of settled) if (result.status === "rejected") expect(result.reason).toBeInstanceOf(WorkspaceStateLocked);
+      expect(settled.filter(result => result.status === "fulfilled")).toHaveLength(entered);
+      await expect(lstat(lockPath(m.home))).rejects.toThrow();
+      await expect(lstat(`${lockPath(m.home)}.reclaim`)).rejects.toThrow();
+    }
+  });
+
+  it("a command killed inside the takeover leaves it shut: the lock stays until deleted by hand, and that is enough", async () => {
+    const m = await machine();
+    await writeFile(lockPath(m.home), owner(deadPid()), { mode: 0o600 });
+    await mkdir(`${lockPath(m.home)}.reclaim`, { mode: 0o700 });
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: LOCKED });
+    await rm(lockPath(m.home));
+    expect(await m.push([call])).toMatchObject({ exitCode: 0, stdout: SESSIONS_ACCEPTED });
+  });
+
+  it.runIf(process.getuid?.() !== 0)("a lock that cannot be created is not called held: it keeps the general words", async () => {
+    const m = await machine();
+    const directory = join(m.home, ".aibill");
+    await chmod(directory, 0o500);
+    try {
+      expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: GENERAL_STOP });
+    } finally { await chmod(directory, 0o700); }
+  });
+});
+
+describe("a heavy machine", { timeout: 90_000 }, () => {
+  const MAX_BYTES = 262144;
+  /** Days of a closed month, models and sessions per fact: `days` x `models` facts, `days` x `models` x `sessions` session identities. */
+  const heavy = (days: number, models: number, sessions: number): LocalAgentCall[] => Array.from({ length: days * models * sessions }, (_, index) => {
+    const day = Math.floor(index / (models * sessions)), model = Math.floor(index / sessions) % models;
+    const timestamp = `2026-09-${String(day + 1).padStart(2, "0")}T10:00:00.000Z`;
+    return { ...call, sessionId: `session-${index}`, callId: `call-${index}`, model: `gpt-5.${model}`, timestamp, startedAt: timestamp };
+  });
+  const sessionFacts = (body: string) => parse(body).facts.filter(isWorkspaceSessionFact);
+  const size = (body: string) => Buffer.byteLength(body);
+
+  it("gets a preview, and the batch stops at the last fact that fits; the next preview carries the rest until none are left", async () => {
+    const m = await machine();
+    const calls = heavy(19, 9, 25);
+    const total = 19 * 9;
+    const seen = new Set<string>();
+    let pushes = 0, sent = 0, previous = 0;
+    for (;;) {
+      const run = await m.push(calls);
+      pushes++;
+      if (!run.sent.length) {
+        expect(run.messages).toEqual([]);
+        expect(lines(run.stdout)[0]).toBe(IDLE);
+        break;
+      }
+      expect(run.exitCode).toBe(0);
+      expect(run.sent).toHaveLength(1);
+      expect(run.messages).toHaveLength(1);
+      const body = run.sent[0]!, facts = sessionFacts(body);
+      expect(size(body)).toBeLessThanOrEqual(MAX_BYTES);
+      for (const fact of facts) { expect(seen.has(`${fact.day}/${fact.model}`)).toBe(false); seen.add(`${fact.day}/${fact.model}`); }
+      sent += facts.length;
+      const waiting = total - sent;
+      const accepted = lines(run.stdout);
+      expect(accepted[0]).toBe(`Workspace accepted ${facts.length} local session facts. These are attribution inputs, not billed costs.`);
+      if (waiting) {
+        expect(accepted).toContain(`${waiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`);
+        expect(lines(run.messages[0]!)).toContain(`This batch holds ${facts.length} of ${total - previous} changed local session facts, as many as one batch can carry. The next push previews the rest.`);
+      } else {
+        expect(run.stdout).not.toContain("more changed local session facts wait");
+        expect(run.messages[0]).not.toContain("as many as one batch can carry");
+      }
+      previous = sent;
+      expect(pushes).toBeLessThan(10);
+    }
+    expect(pushes).toBeGreaterThan(2);
+    expect(seen.size).toBe(total);
+    const state = await m.read();
+    expect(Object.keys(state.facts)).toHaveLength(total);
+    expect(state.pending).toBeNull();
+  });
+
+  it("fills a batch to the last byte the bound allows and not one past it", async () => {
+    const m = await machine();
+    const calls = heavy(19, 9, 25);
+    let held: WorkspaceFact[] = [], body = "";
+    await prepareWorkspacePush({ home: m.home, calls, generatedAt: now, confirm: async (payload, coverage) => { body = payload; held = coverage.facts; return false; } });
+    const facts = sessionFacts(body);
+    expect(facts.length).toBeLessThan(held.length);
+    expect(facts).toEqual(held.slice(0, facts.length));
+    const next = held[facts.length]!;
+    expect(size(body)).toBeLessThanOrEqual(MAX_BYTES);
+    expect(size(body) + size(workspaceCanonicalJson(next as never)) + 1).toBeGreaterThan(MAX_BYTES);
+  });
+
+  it("counts its bytes exactly, wherever the facts happen to fall against the bound", async () => {
+    let tightest = Infinity;
+    for (const plans of [false, true]) for (let padding = 1; padding <= 40; padding++) {
+      const m = await machine({ capability: plans, planFiles: plans });
+      const calls = heavy(19, 9, 25).map(item => ({ ...item, project: "p".repeat(padding * 2) }));
+      let body = "", held: WorkspaceFact[] = [];
+      const prepared = await prepareWorkspacePush({ home: m.home, calls, generatedAt: now, confirm: async (payload, coverage) => { body = payload; held = coverage.facts; return false; },
+        ...(plans ? { readAgentPlanFacts: async () => [{ kind: "agent_plan" as const, agent: "claude_code" as const, tier: "claude_max_20x" as const, tierRaw: "default_claude_max_20x", source: "claude_json.oauthAccount.organizationRateLimitTier" as const, observedAt: now, activeUntil: null }] } : {}) });
+      expect(prepared.state).toBe("cancelled");
+      const facts = sessionFacts(body);
+      expect(size(body)).toBeLessThanOrEqual(MAX_BYTES);
+      expect(size(body) + size(workspaceCanonicalJson(held[facts.length]! as never)) + 1).toBeGreaterThan(MAX_BYTES);
+      tightest = Math.min(tightest, MAX_BYTES - size(body));
+    }
+    // The sweep is worth running only if some batch came within a comma per fact of the bound.
+    expect(tightest).toBeLessThan(100);
+  });
+
+  it("counts the tier facts beside it, in bytes and in number", async () => {
+    const m = await machine({ capability: true, planFiles: true });
+    const run = await m.push(heavy(19, 9, 25), { answers: ["n"] });
+    expect(run.messages).toHaveLength(1);
+    const payload = lines(run.messages[0]!).find(line => line.startsWith("{"))!;
+    expect(size(payload)).toBeLessThanOrEqual(MAX_BYTES);
+    expect(parse(payload).facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
+
+    const many = await machine({ capability: true, planFiles: true });
+    const small = Array.from({ length: 300 }, (_, index) => ({ ...call, sessionId: `s-${index}`, callId: `c-${index}`, model: `gpt-5.${index}` }));
+    const counted = await many.push(small, { answers: ["n"] });
+    const envelope = parse(lines(counted.messages[0]!).find(line => line.startsWith("{"))!);
+    expect(envelope.facts).toHaveLength(256);
+    expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
+    expect(lines(counted.messages[0]!)).toContain("This batch holds 255 of 300 changed local session facts, as many as one batch can carry. The next push previews the rest.");
+  });
+
+  it("a batch that fits whole says nothing about room, whatever its size", async () => {
+    const m = await machine();
+    const run = await m.push(heavy(19, 1, 20));
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe("Workspace accepted 19 local session facts. These are attribution inputs, not billed costs.");
+    expect(run.messages[0]).not.toContain("as many as one batch can carry");
+  });
+
+  const swarm = (count: number, day = "2026-09-18"): LocalAgentCall[] => Array.from({ length: count }, (_, index) => ({ ...call, sessionId: `swarm-${day}-${index}`, callId: `c-${day}-${index}`, timestamp: `${day}T10:00:00.000Z`, startedAt: `${day}T10:00:00.000Z` }));
+
+  it("one fact at the bound of 1024 session identities still goes", async () => {
+    const m = await machine();
+    const run = await m.push(swarm(1024));
+    expect(run.exitCode).toBe(0);
+    expect(sessionFacts(run.sent[0]!)[0]!.sessionRefs).toHaveLength(1024);
+  });
+
+  it("one fact over it stops the push with its own line, the day and the count, and changes nothing", async () => {
+    const m = await machine();
+    const before = await m.raw();
+    const run = await m.push(swarm(1025));
+    expect(run).toMatchObject({ exitCode: 1, stdout: "", sent: [], messages: [] });
+    expect(lines(run.stderr)).toEqual([
+      "No facts were replaced or sent: a local fact holds more session identities than one fact can carry, and a fact cannot be split.",
+      "Over the bound of 1024: 2026-09-18 (1025).",
+      "Pushes stop here until those days leave the 30-day window a push reads, on 2026-10-19 at the latest. Share these counts for help. Do not delete logs or reconnect this machine."]);
+    expect(await m.raw()).toBe(before);
+  });
+
+  it("names every day over it, and the date is when the last of them leaves the window a push reads", async () => {
+    const m = await machine();
+    const run = await m.push([...swarm(1030, "2026-09-10"), ...swarm(1026, "2026-09-18"), { ...call, timestamp: "2026-09-12T10:00:00.000Z", startedAt: "2026-09-12T10:00:00.000Z" }]);
+    expect(lines(run.stderr)[1]).toBe("Over the bound of 1024: 2026-09-10 (1030), 2026-09-18 (1026).");
+    expect(lines(run.stderr)[2]).toContain("on 2026-10-19 at the latest");
+    const window = (at: string) => workspaceClock.daysBefore(at, 30).slice(0, 10);
+    expect(window("2026-10-18T23:59:59.000Z")).toBe("2026-09-18");
+    expect(window("2026-10-19T00:00:00.000Z")).toBe("2026-09-19");
+  });
+
+  it.each([
+    ["no working directory", { workingDirectory: undefined }, "directory_identity_missing"],
+    ["no session", { sessionId: undefined }, "session_identity_missing"],
+    ["a model with a space", { model: "gpt 5" }, "model_invalid"],
+    ["an unreadable time", { timestamp: "not a time" }, "timestamp_invalid"],
+  ] as [string, Partial<LocalAgentCall>, string][])("a call with %s stops the push with its own line and its count, and changes nothing", async (_name, change, code) => {
+    const m = await machine();
+    const before = await m.raw();
+    const run = await m.push([call, { ...call, callId: "odd-1", ...change }, { ...call, callId: "odd-2", sessionId: change.sessionId === undefined && "sessionId" in change ? undefined : "odd-session", ...change } as LocalAgentCall]);
+    expect(run).toMatchObject({ exitCode: 1, stdout: "", sent: [], messages: [] });
+    expect(lines(run.stderr)).toEqual([
+      "No facts were replaced or sent: some local calls lack a usable day or identity, and a daily fact built without them would undercount its day. Absence is not zero usage.",
+      "Excluded calls (counts, without paths or transcript contents):",
+      `${code}: 2`,
+      "Pushes stop here until those calls leave the 30-day window a push reads. Share these counts for help. Do not delete logs or reconnect this machine."]);
+    expect(await m.raw()).toBe(before);
+  });
+
+  it("calls lacking different things are counted apart, in order", async () => {
+    const m = await machine();
+    const run = await m.push([{ ...call, callId: "a", model: "gpt 5" }, { ...call, callId: "b", sessionId: undefined }, { ...call, callId: "c", model: "gpt 6" }] as LocalAgentCall[]);
+    expect(lines(run.stderr).slice(2, 4)).toEqual(["model_invalid: 2", "session_identity_missing: 1"]);
+  });
+
+  it("neither stop moves a retained expired batch: it goes only once a new batch can be built", async () => {
+    for (const calls of [swarm(1025), [{ ...call, callId: "odd", model: "gpt 5" }]]) {
+      const m = await machine();
+      await m.hold("refused", "expired");
+      const before = await m.raw();
+      expect((await m.push(calls)).exitCode).toBe(1);
+      expect(await m.raw()).toBe(before);
+    }
+  });
+
+  it("the general words stay for the state file and permissions: nothing a log line can do reaches them", async () => {
+    const m = await machine();
+    const odd = await m.push([{ ...call, callId: "odd", model: "gpt 5" }]);
+    expect(odd.stderr).not.toContain(GENERAL_STOP);
+    const over = await m.push(swarm(1025));
+    expect(over.stderr).not.toContain(GENERAL_STOP);
+    await writeFile(m.statePath, "{ not json", { mode: 0o600 });
+    expect((await m.push([call], { load: unexpectedRead })).stderr).toBe(GENERAL_STOP);
+  });
+});
+
+describe("the days a dropped batch cannot get back", () => {
+  // A batch signed 12 minutes before this moment; a push at this moment reads back to 2026-09-05.
+  const moment = "2026-10-05T12:00:00.000Z", signed = "2026-10-05T11:48:00.000Z", start = "2026-09-05";
+  const resend = async (days: string[], kind: "uncertain" | "refused", refusal: "expired" | null, calls: LocalAgentCall[] = []) => {
+    const m = await machine();
+    await m.hold(kind, refusal, signed, days);
+    m.server.clock = moment;
+    return { m, run: await m.push(calls, { at: moment, serverAt: moment, ...(kind === "uncertain" ? { load: unexpectedRead } : {}) }) };
+  };
+
+  it("some of them: the line names where the window starts, and the rebuild promises only the rest", async () => {
+    const { m, run } = await resend(["2026-09-02", "2026-09-18"], "uncertain", null);
+    expect(run.exitCode).toBe(1);
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch because it was signed at ${signed}, more than 10 minutes ago. ${NOT_STORED}`, windowLine(start), REBUILD_THE_REST]);
+    expect((await m.read()).pending).toBeNull();
+  });
+
+  it("all of them: nothing can be rebuilt, so nothing promises it, and the next push is idle", async () => {
+    const { m, run } = await resend(["2026-09-02"], "uncertain", null);
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch because it was signed at ${signed}, more than 10 minutes ago. ${NOT_STORED}`, windowLine(start), ANYTHING_NEWER]);
+    const next = await m.push([], { at: moment });
+    expect(next).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(lines(next.stdout)[0]).toBe(IDLE);
+  });
+
+  it("a day the window still reads, even on its first day, keeps the plain line", async () => {
+    const { run } = await resend([start, "2026-09-18"], "uncertain", null);
+    expect(lines(run.stderr)).toEqual(lateLines(signed));
+  });
+
+  it("the day before the window's first day does not", async () => {
+    const { run } = await resend(["2026-09-04", start], "uncertain", null);
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch because it was signed at ${signed}, more than 10 minutes ago. ${NOT_STORED}`, windowLine(start), REBUILD_THE_REST]);
+  });
+
+  it("the clock line and the window line can both be true", async () => {
+    const m = await machine();
+    const signedNow = "2026-10-05T11:59:00.000Z";
+    await m.hold("uncertain", null, signedNow, ["2026-09-02", "2026-09-18"]);
+    m.server.script = [{ refuse: "expired" }];
+    const run = await m.push([], { at: moment, load: unexpectedRead });
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch as out of date, though this machine signed it under 10 minutes ago, at ${signedNow} by its clock. ${NOT_STORED}`, CLOCK_OFF, windowLine(start), REBUILD_THE_REST]);
+  });
+
+  it("a batch an earlier CLI held: the preview says what is gone before it says what is new", async () => {
+    const m = await machine();
+    await m.hold("refused", "expired", signed, ["2026-09-02", "2026-09-18"]);
+    const late = { ...call, timestamp: "2026-09-18T10:00:00.000Z", startedAt: "2026-09-18T10:00:00.000Z" };
+    const run = await m.push([late], { at: moment, answers: ["n"] });
+    expect(lines(run.messages[0]!).slice(0, 4)).toEqual([HELD_DROPPED, windowLine(start), "This is a new batch:", "Exact outgoing local facts (no prompts, paths, session IDs, or amounts):"]);
+  });
+
+  it("a batch an earlier CLI held, nothing left to send: the idle line comes after what is gone", async () => {
+    const m = await machine({ capability: true });
+    await m.hold("refused", "expired", signed, ["2026-09-02"]);
+    const run = await m.push([], { at: moment });
+    expect(run).toMatchObject({ exitCode: 0, sent: [], messages: [] });
+    expect(lines(run.stdout)).toEqual([HELD_DROPPED, windowLine(start), IDLE]);
+  });
+
+  it("a batch an earlier CLI held, all inside the window: no line about the window", async () => {
+    const { run } = await resend(["2026-09-18"], "refused", "expired", [call]);
+    expect(run.messages[0]).not.toContain("30-day window");
+    expect(lines(run.messages[0]!).slice(0, 2)).toEqual([HELD_DROPPED, "This is a new batch:"]);
+  });
+});
+
+describe("what the way back costs", () => {
+  it("the disconnect's own question says so, and that it cannot be undone", async () => {
+    const m = await machine();
+    const asked: string[] = [];
+    const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async (message: string) => { asked.push(message); return "n"; } });
+    expect(run.exitCode).toBe(1);
+    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} [y/N] `]);
+  });
+
+  it("the connection ending while a batch is on its way: the refusal says so, and promises no rebuild it could not land", async () => {
+    const m = await machine({ expiresAt: at(MINUTE) });
+    m.server.script = [{ refuse: "expired" }];
+    const clock = vi.spyOn(workspaceClock, "now").mockReturnValueOnce(now).mockReturnValue(at(MINUTE));
+    const asked: string[] = [];
+    const run = await runCli(["workspace", "push"], { homeDirectory: m.home, interactive: true, workspaceLoadCalls: loaded([call]), consentRead: async (message: string) => { asked.push(message); return "y"; }, workspaceTransport: m.server.transport });
+    expect(clock).toHaveBeenCalled();
+    expect(asked).toHaveLength(1);
+    expect(lines(run.stderr)).toEqual([`Workspace refused this batch as out of date, and this machine's Workspace connection ended at ${at(MINUTE)}. ${NOT_STORED}`, RECONNECT, DISCONNECT_COST, CLOCK_FIRST]);
+    expect(run.exitCode).toBe(1);
+  });
+});
+
+describe("a Workspace that will not take a push from this machine", () => {
+  const denied: Scripted = { reply: { status: 403, body: { state: "unavailable", retry: "same_envelope_only" } } };
+
+  it("stays an unknown outcome, retained, and says where to look: consent or a disconnect", async () => {
+    const m = await machine();
+    m.server.script = [denied];
+    const run = await m.push([call]);
+    expect(run.exitCode).toBe(1);
+    expect(lines(run.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
+    expect((await m.read()).pending?.state).toBe("uncertain");
+    m.server.script = [denied];
+    const again = await m.push([], { load: unexpectedRead });
+    expect(again.sent).toEqual(run.sent);
+    expect(lines(again.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
+  });
+
+  it("the Workspace's refusal words on a 403 are not a refusal: the batch stays retained", async () => {
+    const m = await machine();
+    m.server.script = [{ reply: { status: 403, body: { state: "refused", reason: "expired" } } }];
+    const run = await m.push([call]);
+    expect(lines(run.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
+    expect((await m.read()).pending?.state).toBe("uncertain");
+    expect((await m.read()).device.sequence).toBe("0");
+  });
+
+  it("names nothing of the kind on any other answer", async () => {
+    for (const reply of [{ status: 503, body: { state: "unavailable", retry: "same_envelope_only" } }, { status: 404, body: { state: "disabled" } }, { status: 401, body: {} }]) {
+      const m = await machine();
+      m.server.script = [{ reply }];
+      expect(await m.push([call])).toMatchObject({ exitCode: 1, stderr: UNKNOWN_OUTCOME });
+    }
+    const lost = await machine();
+    lost.server.script = ["lost_before_commit"];
+    expect(await lost.push([call])).toMatchObject({ exitCode: 1, stderr: UNKNOWN_OUTCOME });
+  });
+
+  it("says so for a batch of tier facts alone, with the words that batch has", async () => {
+    const m = await machine({ capability: true, planFiles: true });
+    m.server.script = [denied];
+    const run = await m.push([]);
+    expect(lines(run.stderr)[1]).toBe(MACHINE_REFUSED);
+    expect(run.stderr).toContain("The exact signed subscription tier batch is retained.");
+  });
+});
+
+describe("a batch of tier facts alone refused as expired", () => {
+  it("keeps what the Workspace announced: expired says nothing about what it accepts, and the next push offers the tier again", async () => {
+    const m = await machine({ capability: true, planFiles: true });
+    m.server.script = ["lost_before_commit"];
+    const lost = await m.push([]);
+    expect(lost.exitCode).toBe(1);
+    const late = await m.push([], { at: at(12 * MINUTE), load: unexpectedRead });
+    expect(late.exitCode).toBe(0);
+    expect(late.stdout).toBe("Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.");
+    expect(await m.read()).toMatchObject({ pending: null, device: { sequence: "1" }, capabilities: { agentPlanFacts: true } });
+    const next = await m.push([], { at: at(13 * MINUTE) });
+    expect(next.exitCode).toBe(0);
+    expect(next.sent).toHaveLength(1);
+    expect(parse(next.sent[0]!).sequence).toBe("2");
+    expect((await m.read()).agentPlansAccepted?.claude_code?.tier).toBeDefined();
+  });
+
+  it("signed moments ago: the same line and the clock line, one batch per yes, no loop", async () => {
+    const m = await machine({ capability: true, planFiles: true });
+    const ahead = at(3 * MINUTE);
+    const first = await m.push([], { at: ahead, serverAt: now });
+    expect(first.exitCode).toBe(0);
+    expect(first.sent).toHaveLength(1);
+    expect(first.messages).toHaveLength(1);
+    expect(lines(first.stdout)).toEqual(["Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.", CLOCK_OFF]);
+    expect((await m.read()).capabilities).toEqual({ agentPlanFacts: true });
+  });
+});
+
+describe("a retained expired batch on a machine that has pushed before", () => {
+  it("drops the batch and moves the sequence, keeps the ledger, and rebuilds only what changed, at the next revision", async () => {
+    const m = await machine();
+    const other: LocalAgentCall = { ...call, callId: "other", sessionId: "other-session", timestamp: "2026-09-17T10:00:00.000Z", startedAt: "2026-09-17T10:00:00.000Z" };
+    expect((await m.push([call, other])).exitCode).toBe(0);
+    const ledger = (await m.read()).facts;
+    expect(Object.keys(ledger)).toHaveLength(2);
+    const changed: LocalAgentCall = { ...call, usage: { ...call.usage, outputTokens: 6 } };
+    m.server.script = ["lost_before_commit"];
+    const lost = await m.push([changed, other], { at: at(MINUTE) });
+    expect(lost.exitCode).toBe(1);
+    expect(sessionFacts(lost.sent[0]!).map(fact => fact.factRevision)).toEqual(["2"]);
+    await m.edit(held => { held.pending.state = "refused"; held.pending.refusal = "expired"; });
+
+    const run = await m.push([changed, other], { at: at(13 * MINUTE) });
+    expect(run.exitCode).toBe(0);
+    expect(lines(run.messages[0]!)[0]).toBe(HELD_DROPPED);
+    const fresh = sessionFacts(run.sent[0]!);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.factRevision).toBe("2");
+    expect(parse(run.sent[0]!).sequence).toBe("3");
+    const state = await m.read();
+    expect(Object.keys(state.facts)).toHaveLength(2);
+    expect(Object.keys(state.facts).sort()).toEqual(Object.keys(ledger).sort());
+    expect(m.server.highWater).toBe(3n);
+  });
+
+  it("on a no, the ledger is what it was", async () => {
+    const m = await machine();
+    expect((await m.push([call])).exitCode).toBe(0);
+    const ledger = (await m.read()).facts;
+    const changed: LocalAgentCall = { ...call, usage: { ...call.usage, outputTokens: 6 } };
+    m.server.script = ["lost_before_commit"];
+    expect((await m.push([changed], { at: at(MINUTE) })).exitCode).toBe(1);
+    await m.edit(held => { held.pending.state = "refused"; held.pending.refusal = "expired"; });
+    const run = await m.push([changed], { at: at(13 * MINUTE), answers: ["n"] });
+    expect(run).toMatchObject({ exitCode: 0, stdout: "Not sent.", sent: [] });
+    expect(await m.read()).toMatchObject({ facts: ledger, pending: null, device: { sequence: "2" } });
+  });
+  const sessionFacts = (body: string) => parse(body).facts.filter(isWorkspaceSessionFact);
+});
+
+describe("the instant the Workspace answered with", () => {
+  it("is what the ledger keeps, not this machine's clock", async () => {
+    const m = await machine({ capability: true, planFiles: true });
+    const local = at(-90 * 1000), answered = at(30 * 1000);
+    const run = await m.push([call], { at: local, serverAt: answered });
+    expect(run.exitCode).toBe(0);
+    const state = await m.read();
+    expect(state.lastAcceptedAt).toBe(answered);
+    expect(state.agentPlansAccepted?.claude_code?.sentAt).toBe(answered);
+    expect(lines((await m.status(now)).stdout)).toContain(`Last accepted push: ${answered}`);
+  });
+});
+
+describe("a state file with one key missing and one this version does not know", () => {
+  it("reads as newer: the unknown key is what this version can name, and nothing is changed", async () => {
+    const m = await machine();
+    await m.edit(state => { delete state.lastAcceptedAt; state.aKeyFromLater = true; });
+    const before = await m.raw();
+    expect(await m.push([call], { load: unexpectedRead })).toMatchObject({ exitCode: 1, stderr: newerState("push"), sent: [], messages: [] });
+    expect(await m.raw()).toBe(before);
   });
 });

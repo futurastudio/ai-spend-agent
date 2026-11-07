@@ -696,7 +696,7 @@ describe("older pairing files", () => {
 });
 
 describe("a refused tier-only batch never strands a machine", () => {
-  it.each(["invalid", "conflict", "stale", "expired", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs past its sequence with a fresh nonce", async (reason) => {
+  it.each(["invalid", "conflict", "stale", "a_reason_this_cli_has_not_met"])("is dropped on 409 %s: one line, the capability false, and the next session push signs past its sequence with a fresh nonce", async (reason) => {
     const m = await machine({ capability: true });
     m.server.script = [{ refuse: reason }];
     const refused = await m.push([]);
