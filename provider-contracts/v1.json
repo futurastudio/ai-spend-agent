@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-11-04",
+  "reviewedAt": "2026-11-06",
   "defaultReviewCadenceDays": 14,
   "statusVocabulary": [
     "current",
@@ -26,7 +26,7 @@
         "GET /v1/organization/costs"
       ],
       "pagination": "Cursor pagination through next_page while has_more is true; query scope must remain unchanged",
-      "units": "Usage totals are inclusive input_tokens/output_tokens; modality and cache fields are breakdowns. Cost amount.value carries its currency.",
+      "units": "Usage totals are inclusive input_tokens/output_tokens; modality and cache fields are breakdowns. Cost amount.value carries its currency. GPT-5.6 Sol's $4 input, $0.40 cached input and $20 output are promotional, available until November 30, 2026 (the page used to say at least through November 21); the page names no later rate, and the rates before the promotion were $5, $0.50 and $30, so dated pricing must follow",
       "currency": "Use the Costs API currency and amount; never derive billed money from Usage API tokens",
       "window": "start_time inclusive and end_time exclusive for an explicitly reported Unix-second interval",
       "freshnessAndRevision": "Treat API results as provider-reported accrued cost/usage for the requested interval; final invoice, credits, tax, discounts and later adjustments remain separate",
@@ -47,17 +47,17 @@
             "including cached and cache-write tokens",
             "across text, audio, and image outputs",
             "GET /organization/costs",
-            "OrganizationCostsResult object {",
-            "OrganizationUsageCompletionsResult object {",
             "input_cache_write_30m_tokens",
             "input_cache_write_12h_tokens",
             "api_source",
             "this field provides the user ID of the grouped costs result",
-            "value : optional number The numeric value of the cost",
-            "Lowercase ISO-4217 currency"
+            "Lowercase ISO-4217 currency",
+            "OrganizationCostsResult",
+            "OrganizationUsageCompletionsResult",
+            "The numeric value of the cost"
           ],
-          "semanticSha256": "eba7ed3ebea5a51600f6fd0c15b91532419e90242eedc24100a979adaab52c4b",
-          "contentSha256": "4554594e094c3d1f46db39fd92f858305d1a3d25204632cb987e06568e2cc7d6"
+          "semanticSha256": "b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4",
+          "contentSha256": "7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e"
         },
         {
           "kind": "pricing",
@@ -65,11 +65,12 @@
           "requiredMarkers": [
             "GPT-5.6 Sol",
             "Input $4.00 Cached input $0.40 Output $20.00",
+            "promotional pricing is available until November 30, 2026",
             "Prompts with >272K input tokens are priced at 2x input and 1.5x output",
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
-          "semanticSha256": "5925188f839b1e6e4142b7c5752440501a328c665ba12afa9d3bdd1f01f3498f",
-          "contentSha256": "ebd00f7034ae0cea7c755efdaa68d4b1b9096e1eaf987042f7b64bd3bc44e695"
+          "semanticSha256": "74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8",
+          "contentSha256": "e84da8a0bbfc787d64ab01f3dbb47b44518648443fb0019896332fdf66f43b46"
         },
         {
           "kind": "pricing",
@@ -81,7 +82,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33",
-          "contentSha256": "3aace0ff7f7035e461f60f328123b8b90c217e571bb64c89ea2c80760edb455b"
+          "contentSha256": "254c0916203286e0199dd6597d94ee48685dc7f98bc4edd0baef32a0e759f937"
         },
         {
           "kind": "pricing",
@@ -93,7 +94,28 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af",
-          "contentSha256": "2d6c327491dee5551d1df2d17f8caa4eb0e5061869d50f188224601b52e9cd22"
+          "contentSha256": "99044fdc71c5d3a9763120d5820f09f6808ed1ea81f7e2056e8e0490bd9339f2"
+        },
+        {
+          "kind": "pricing",
+          "url": "https://developers.openai.com/api/docs/pricing.md",
+          "requiredMarkers": [
+            "### Standard pricing data",
+            "| gpt-6-astra | $10.00 | $50.00 | $1.00 |",
+            "| gpt-6-luna | $0.10 | $0.50 | $0.01 |",
+            "| gpt-5.6-sol | $4.00 | $20.00 | $0.40 |",
+            "| gpt-5.5 (<272K context length) | $5.00 | $30.00 | $0.50 |",
+            "| gpt-5.4-pro (<272K context length) | $30.00 | $180.00 |",
+            "| gpt-5.4-mini | $0.75 | $4.50 | $0.075 |",
+            "| gpt-5.1 | $1.25 | $10.00 | $0.125 |",
+            "| gpt-4.1 | $2.00 | $8.00 | $0.50 |",
+            "| o3-pro | $20.00 | $80.00 |",
+            "Long context: >272K input tokens.",
+            "charged a 10% uplift for models released on or after March 5, 2026",
+            "promotional pricing is available until November 30, 2026"
+          ],
+          "semanticSha256": "3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d",
+          "contentSha256": "6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce"
         }
       ]
     },
@@ -147,8 +169,8 @@
             "reported as decimal strings in lowest units (cents)",
             "Priority Tier costs use a different billing model and are not included in the cost endpoint"
           ],
-          "semanticSha256": "83fbb18c8f939372804c821c686692f12bac72387ce49cd18d80fbae53001b49",
-          "contentSha256": "d4425bb000250e5b4f0393f71958b7dce0ad5aad44a29f145fc742a83a5e422b"
+          "semanticSha256": "e63c8cac8705feb389ba7335f010bb2aa99b73914ba8c2620228a40c14af6797",
+          "contentSha256": "e7f7f2ad1e11beaa4a8c64b45a561d506eb45d6ad5408c280f4fef41132cc6f9"
         },
         {
           "kind": "contract",
@@ -162,7 +184,53 @@
             "Migrate from the Usage and Cost API"
           ],
           "semanticSha256": "ac73794c732b77194f55d85be507329c7f8e816a1dfebb30825cbf9ba4859b30",
-          "contentSha256": "b827f7b879ba35a6cbc3d2407f668021802f7a1f39cb0f1c4ca4a2fd1b80f6dd"
+          "contentSha256": "ff0ccb808ee291b7f5474ce26349f77b5677dae6da192dacb6b5e5d7bc39d808"
+        },
+        {
+          "kind": "contract-cost-report",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve",
+          "requiredMarkers": [
+            "GET /v1/organizations/cost_report [legacy]",
+            "this endpoint is part of the legacy usage and cost api",
+            "optional array of \"description\" or \"workspace_id\"",
+            "betacostreport",
+            "context_window",
+            "token_type"
+          ],
+          "semanticSha256": "cead7c2245d82f0b7f60a0dfe01390c412c6e09b360a288d89d6c159f13b4abd",
+          "contentSha256": "b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7"
+        },
+        {
+          "kind": "contract-usage-messages",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages",
+          "requiredMarkers": [
+            "GET /v1/organizations/usage_report/messages [legacy]",
+            "this endpoint is part of the legacy usage and cost api",
+            "optional array of \"account_id\" or \"api_key_id\" or \"context_window\" or 6 more",
+            "array of betaanalyticsservicetier",
+            "betamessagesusagereport",
+            "cache_read_input_tokens",
+            "uncached_input_tokens"
+          ],
+          "semanticSha256": "6c718a86d49a55d881dc2e26d57775330e872e94913c450f17a006e8b61394a0",
+          "contentSha256": "c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8"
+        },
+        {
+          "kind": "contract-claude-code",
+          "url": "https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code",
+          "requiredMarkers": [
+            "GET /v1/organizations/usage_report/claude_code",
+            "UTC date in YYYY-MM-DD format. Returns metrics for this single day only.",
+            "betaclaudecodeusagereport",
+            "core_metrics",
+            "2025-08-08T00:00:00Z",
+            "is_remote",
+            "estimated_cost",
+            "tool_actions",
+            "subscription_type"
+          ],
+          "semanticSha256": "9806b7ee41ef3bfea69353fb3b9110189b0e488e5fd90814109599c0e9c50072",
+          "contentSha256": "dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0"
         },
         {
           "kind": "pricing",
@@ -179,10 +247,15 @@
             "Claude Mythos 5.1",
             "On Claude Fable 5.1 and Claude Mythos 5.1, a cache hit costs 2.5% of the standard input price ($0.25 USD per million tokens).",
             "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
-            "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok"
+            "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
+            "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
+            "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok",
+            "Claude Opus 4.5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+            "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok",
+            "include the full 1M token context window at standard pricing"
           ],
-          "semanticSha256": "b4f158b2d9d98610c3d6bc0adc65d2a812e67b7635633ac0549bcaa0783718c9",
-          "contentSha256": "2307479fd324c3e880209821ca39951a2c1fb6b7fcf8655b58db19efdba7d295"
+          "semanticSha256": "9fee3d1943df2f37ff877659fff7625fa20ef52ff37cd3846da182c760eff09e",
+          "contentSha256": "d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c"
         }
       ]
     },
@@ -206,9 +279,9 @@
       ],
       "implementedEndpoints": [],
       "pagination": "Cursors are bound to the original filters, grouping and period; changing scope requires restarting from page one",
-      "units": "Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only",
+      "units": "Analytics cost amounts are decimal fractional cents; organization total is authoritative for reported usage credits and per-user rows are attribution only. Product metric objects are always present: an organization without that product's usage sees zero counts, never a null object, while an individual field inside an object can be null, which means the value is not available and must not be read as zero (distinct_skills_used_count in chat_metrics when user activity is filtered by project)",
       "currency": "Post-discount, pre-credit USD fractional cents for reported usage credits; not the contracted Enterprise seat invoice",
-      "window": "Explicit ending_at at or before data_refreshed_at; data starts January 1, 2026. Organization cost queries start within the last 365 days and span at most 31 days",
+      "window": "Explicit ending_at at or before data_refreshed_at; data starts January 1, 2026. Organization cost queries start within the last 365 days and span at most 31 days. When ending_at is omitted it defaults to 31 days after starting_at or the current time, whichever is earlier, and that range can run past data_refreshed_at",
       "freshnessAndRevision": "Cost/usage typically refreshes within four hours and can take up to 24 hours; engagement snapshots lag about one day. The guide permits cost/usage revisions until about seven days after calendar-month end, while endpoint references still describe about 30 days after usage. Preserve provisional status across this documentation discrepancy; data_refreshed_at does not establish finality. The four analytics cost and usage report endpoints are documented as legacy and remain supported, with the Usage and Cost Analytics API (callable with the Analytics API key) as the recommended successor",
       "financialBasis": "provider_reported_provisional_usage_credit_cost_not_seat_bill",
       "reconciliationAnchor": "Organization cost report after the applicable documented revision bounds, reconciled separately from the matching Enterprise seat invoice/contract; finality remains provisional while the revision guidance conflicts",
@@ -232,10 +305,13 @@
             "until about 7 days after the end of the calendar month",
             "are legacy and remain supported",
             "The other Claude Enterprise Analytics API endpoints are not legacy",
-            "customer-managed encryption keys"
+            "customer-managed encryption keys",
+            "it defaults to 31 days after starting_at or the current time, whichever is earlier",
+            "see zero counts rather than a null object",
+            "Individual fields inside these objects can be null"
           ],
-          "semanticSha256": "6528d0ebcacf58d846d07f6095f6106612c0c36cd6bd2aff88df88e472597c50",
-          "contentSha256": "ab779940af482f52469fe16a4a452b798ec545aa6dd491711d374596221f24d8"
+          "semanticSha256": "aecb6a57a18c5c93b398958a74589e7b708b80bae6eb25ceb1027208c89b9d05",
+          "contentSha256": "20d098fc6f9afab16aa3c2b6d2f7f469b54f525ca30b9834258173130e53e7a9"
         }
       ]
     },
@@ -315,7 +391,7 @@
             "$4.00 starting December 1, 2026"
           ],
           "semanticSha256": "665d980cd862011c605a98e29c13d48d6c6f0547bdbbabe195178a32c9674134",
-          "contentSha256": "79d59f41e8e270688c3356fd0473ab0871ff88d709c3d88f7033c4bd58edc59f"
+          "contentSha256": "a26a233c11b0048ab31ba37a500ad301d54c22cf0845b447f50bf10b3a175c27"
         },
         {
           "kind": "reconciliation",
@@ -327,7 +403,7 @@
             "Pricing data"
           ],
           "semanticSha256": "e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e",
-          "contentSha256": "b2cd90452e90597b82e86126b39bd7b6e431ddc36cb5614d11909f94f3b997d6"
+          "contentSha256": "019167495bdcd15da760f215dbb4c37fa58b93ac5b733938544ed13f45d1080e"
         }
       ]
     },
@@ -373,7 +449,7 @@
             "reconcile event-level costs"
           ],
           "semanticSha256": "04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59",
-          "contentSha256": "e1cfca227196746355d72634f75d333a37ccf3f25fedb9cfeaffbc6a3864f041"
+          "contentSha256": "831eb22c2dc583e1f28312c7050214603005ffbd3c041df92cbf0196b22ae829"
         },
         {
           "kind": "pricing",
@@ -392,7 +468,7 @@
             "Opting in to regional data residency incurs a 10% uplift"
           ],
           "semanticSha256": "bc2e9bb767fd34f16b1876e811af4e644955705568d8193d38ebeb61864b0369",
-          "contentSha256": "bf5bf3cadf3357c9972b832760c3e477cca2fc19c70503960440c5c48c70ae60"
+          "contentSha256": "b0973c96bcd848bbac86f2a99d2daab4823fd1d10b718974feee14c1ee659af6"
         }
       ]
     },
@@ -441,11 +517,11 @@
             "netAmount"
           ],
           "semanticSha256": "6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c",
-          "contentSha256": "804e07146560f7979688be3fb610aab1368ca6efefa5eb20c0c91a89009523d8"
+          "contentSha256": "c6e469aa310c47a9a80d6287a9e1238c8abe32707f0093e14b87439c9ed2c8b8"
         },
         {
           "kind": "pricing",
-          "url": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-organizations-and-enterprises",
+          "url": "https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing",
           "requiredMarkers": [
             "GitHub AI Credits are the billing unit",
             "1 AI credit = $0.01 USD",
