@@ -39,9 +39,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
   - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4`; reviewed content `7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `e84da8a0bbfc787d64ab01f3dbb47b44518648443fb0019896332fdf66f43b46`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `254c0916203286e0199dd6597d94ee48685dc7f98bc4edd0baef32a0e759f937`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `99044fdc71c5d3a9763120d5820f09f6808ed1ea81f7e2056e8e0490bd9339f2`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `96a56c1d5c7d918f413c5327732fa3b56874ac69fa6577c69fa176ba62ba9e1a`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `5321df3a7f26da11ed5224da90b82fd75bc3efa20af8bf21e9d2394efa8e2b1f`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `0aa12312dcf584303d1e0b47c2211861b5b2eccdc152cc0747d335595b9d799b`
   - [pricing](https://developers.openai.com/api/docs/pricing.md) — semantic `3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d`; reviewed content `6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce`
 
 ## Anthropic Platform Usage and Cost Admin API

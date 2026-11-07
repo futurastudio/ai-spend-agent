@@ -70,7 +70,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8",
-          "contentSha256": "e84da8a0bbfc787d64ab01f3dbb47b44518648443fb0019896332fdf66f43b46"
+          "contentSha256": "96a56c1d5c7d918f413c5327732fa3b56874ac69fa6577c69fa176ba62ba9e1a"
         },
         {
           "kind": "pricing",
@@ -82,7 +82,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33",
-          "contentSha256": "254c0916203286e0199dd6597d94ee48685dc7f98bc4edd0baef32a0e759f937"
+          "contentSha256": "5321df3a7f26da11ed5224da90b82fd75bc3efa20af8bf21e9d2394efa8e2b1f"
         },
         {
           "kind": "pricing",
@@ -94,7 +94,7 @@
             "Cache writes are billed at 1.25x the uncached input token rate"
           ],
           "semanticSha256": "1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af",
-          "contentSha256": "99044fdc71c5d3a9763120d5820f09f6808ed1ea81f7e2056e8e0490bd9339f2"
+          "contentSha256": "0aa12312dcf584303d1e0b47c2211861b5b2eccdc152cc0747d335595b9d799b"
         },
         {
           "kind": "pricing",
