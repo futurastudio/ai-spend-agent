@@ -1829,6 +1829,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       && item.workspaceFactCoverage === "unknown_tokens").reduce((count, item) => count + item.count, 0) ?? 0;
     const blockingDiagnostics = loaded?.diagnostics.filter(item => item.code !== "directory_missing"
       && !(item.code === "unsupported_token_shape" && item.workspaceFactCoverage === "unknown_tokens")) ?? [];
+    // Codex compresses a rollout it has not written to for 7 days. A day built without one would be short, and a fact
+    // sent short replaces the fuller one: so nothing goes, and the one line says which Node.js reads them.
+    const unreadableCompressed = blockingDiagnostics.filter(item => item.code === "compressed_unsupported");
+    if (unreadableCompressed.length) return fail(`${unreadableCompressed.map(item => item.message).join(" ")} No facts were replaced or sent.`);
     if (blockingDiagnostics.length) {
       const counts = new Map<string, number>();
       for (const diagnostic of blockingDiagnostics) {

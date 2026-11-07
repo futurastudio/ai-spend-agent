@@ -78,6 +78,12 @@ export type WorkspaceState = {
   capabilities?: WorkspaceCapabilities;
   agentPlansAccepted?: WorkspaceAcceptedPlans;
   factNames?: WorkspaceFactNames;
+  /**
+   * The Codex places (day, model and the session's first folder, hashed) that releases before this one sent, read from
+   * the ledger once, before this release first adds a key. Their events stay there. Present, even empty, once this
+   * release has saved a push. Stays on this machine and is never sent.
+   */
+  codexKeptPlaces?: string[];
 };
 /**
  * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
@@ -207,47 +213,103 @@ function foldersAbove(directory: string | undefined): string[] {
   for (let current = dirname(resolve(directory)); basename(current); current = dirname(current)) above.push(basename(current));
   return above;
 }
+type LedgerNames = {
+  repositoryName: (directory: string | undefined) => string | undefined;
+  /** The name this place went out under, or undefined when the ledger holds it under none of the names it could have. */
+  sentName: (call: LocalAgentCall, shape: WorkspaceFactIdentity) => string | null | undefined;
+};
 /**
- * Names each call's fact. One day, agent, model and folder is one place, and a fact's key also holds its name. The server
- * keys on that and never deletes, so a second name for one place is a second row that counts the same sessions twice. So
- * a place the ledger already holds keeps the name it went out under, whatever the folder's checkout says now. The ledger
- * holds keys and no names, so each name the place could have gone out under is tried against it: the folder's own, those
- * this machine remembers for the folder, its repository's, those of the folders above it and those used elsewhere on this
- * machine. A key found there can only mean this place went out under that name.
- *
- * Any other place names the repository (the main checkout, found from the session folder), so worktrees, sub-folders and
- * clones land in one project. With no checkout to find, it takes the name the folder last went out under, or its own.
- * `names` is `remembered` plus any name the ledger proved here that the folder's own name would not have told.
+ * The ledger holds keys and no names, so each name a place could have gone out under is tried against it: the folder's
+ * own, those this machine remembers for the folder, its repository's, those of the folders above it and those used
+ * elsewhere on this machine. A key covers day, agent, provider, model, name and folder, so a key found can only mean this
+ * place went out under that name, and a wrong guess finds nothing.
  */
-export function collapseRepositoryProjects(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
-  resolveRoot: (directory: string) => string | undefined, remembered: WorkspaceFactNames = {}): { calls: LocalAgentCall[]; names: WorkspaceFactNames } {
-  const roots = new Map<string, string | undefined>(), home = resolve(homedir()), names = { ...remembered };
-  const anySent = Object.keys(previous).length > 0, decided = new Map<string, string | null>();
+function ledgerNames(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
+  resolveRoot: ((directory: string) => string | undefined) | undefined, remembered: WorkspaceFactNames): LedgerNames {
+  const roots = new Map<string, string | undefined>(), home = resolve(homedir()), anySent = Object.keys(previous).length > 0;
   const repositoryName = (directory: string | undefined): string | undefined => {
-    if (!directory || !isAbsolute(directory)) return undefined;
+    if (!resolveRoot || !directory || !isAbsolute(directory)) return undefined;
     if (!roots.has(directory)) roots.set(directory, resolveRoot(directory));
     const root = roots.get(directory);
     return root && resolve(root) !== home ? basename(root) || undefined : undefined;
   };
   let elsewhere: (string | null)[] | undefined;
   const namesElsewhere = () => elsewhere ??= [...new Set([...Object.values(remembered).flat(),
-    ...calls.flatMap(call => [factProjectName(call.project), factProjectName(repositoryName(call.workingDirectory))])])];
-  const nameFor = (call: LocalAgentCall, shape: WorkspaceFactIdentity): string | null => {
+    ...calls.flatMap(call => [factProjectName(call.project), factProjectName(repositoryName(call.workingDirectory)),
+      ...call.sessionPlace ? [factProjectName(call.sessionPlace.project), factProjectName(repositoryName(call.sessionPlace.workingDirectory))] : []])])];
+  const sentName = (call: LocalAgentCall, shape: WorkspaceFactIdentity): string | null | undefined => {
+    if (!anySent) return undefined;
     const repository = repositoryName(call.workingDirectory), kept = remembered[shape.directoryRef] ?? [];
-    if (anySent) {
-      const inLedger = (name: string | null) => previous[workspaceFactKey({ ...shape, projectName: name })] !== undefined;
-      let sent = [shape.projectName, ...[...kept].reverse(), ...(repository ? [factProjectName(repository)] : []),
-        ...foldersAbove(call.workingDirectory).map(factProjectName)].find(inLedger);
-      if (sent === undefined) sent = namesElsewhere().find(inLedger);
-      if (sent !== undefined) {
-        // Older than anything an ACCEPT wrote, so the name last used stays last.
-        if (sent !== shape.projectName && !names[shape.directoryRef]?.includes(sent)) names[shape.directoryRef] = [sent, ...names[shape.directoryRef] ?? []];
-        return sent;
-      }
+    const inLedger = (name: string | null) => previous[workspaceFactKey({ ...shape, projectName: name })] !== undefined;
+    const sent = [shape.projectName, ...[...kept].reverse(), ...(repository ? [factProjectName(repository)] : []),
+      ...foldersAbove(call.workingDirectory).map(factProjectName)].find(inLedger);
+    return sent !== undefined ? sent : namesElsewhere().find(inLedger);
+  };
+  return { repositoryName, sentName };
+}
+/** One Codex place an earlier release sent: day, agent, model and the session's folder. */
+const keptPlaceId = (shape: WorkspaceFactIdentity) =>
+  workspaceDomainHash("tilden:local-session-kept-place:v1", [shape.day, shape.agent, shape.provider, shape.model, shape.directoryRef]);
+/**
+ * Files each Codex event under the folder its turn ran in, unless an earlier release already sent it under its session's
+ * first folder: then it stays there, so no fact that went out moves, shrinks or doubles. Releases before this one filed
+ * every event of a session under that first folder, so a place they sent holds all of its session's events of that day.
+ *
+ * The ledger cannot say which release sent a key: once this release has sent a day, a turn that never moved puts the
+ * session's folder in the ledger too. So the places earlier releases sent are read from the ledger once, on this
+ * release's first push, and kept: `keptPlaces` absent means that push is now, and the result goes into the state with
+ * whatever the push saves next. Every later push uses that list and only that list.
+ */
+function placeCodexEvents(calls: readonly LocalAgentCall[], keptPlaces: readonly string[] | undefined, ledger: LedgerNames):
+  { calls: LocalAgentCall[]; keptPlaces: string[] } {
+  const kept = keptPlaces ? new Set(keptPlaces) : undefined, found = new Set<string>();
+  const placed = calls.map(call => {
+    if (!call.sessionPlace) return call;
+    const { sessionPlace, ...turn } = call;
+    const { project: _turnProject, ...unnamed } = turn;
+    const asBefore: LocalAgentCall = { ...unnamed, workingDirectory: sessionPlace.workingDirectory,
+      ...(sessionPlace.project === undefined ? {} : { project: sessionPlace.project }) };
+    let shape: WorkspaceFactIdentity;
+    try { shape = workspaceFactIdentity(asBefore); } catch { return turn; } // the aggregate reports unusable calls
+    const place = keptPlaceId(shape);
+    if (!(kept ? kept.has(place) : ledger.sentName(asBefore, shape) !== undefined)) return turn;
+    found.add(place);
+    return asBefore;
+  });
+  return { calls: placed, keptPlaces: keptPlaces ? [...keptPlaces] : [...found].sort() };
+}
+/** C's placement alone, for a push that names facts after their folders. */
+export function placeCodexEventsWithoutCheckouts(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
+  remembered: WorkspaceFactNames = {}, keptPlaces?: readonly string[]): { calls: LocalAgentCall[]; keptPlaces: string[] } {
+  return placeCodexEvents(calls, keptPlaces, ledgerNames(calls, previous, undefined, remembered));
+}
+/**
+ * Names each call's fact. One day, agent, model and folder is one place, and a fact's key also holds its name. The server
+ * keys on that and never deletes, so a second name for one place is a second row that counts the same sessions twice. So
+ * a place the ledger already holds keeps the name it went out under, whatever the folder's checkout says now (see
+ * `ledgerNames`).
+ *
+ * Any other place names the repository (the main checkout, found from the session folder), so worktrees, sub-folders and
+ * clones land in one project. With no checkout to find, it takes the name the folder last went out under, or its own.
+ * `names` is `remembered` plus any name the ledger proved here that the folder's own name would not have told. Codex
+ * events are placed first (`placeCodexEvents`), and `keptPlaces` is what that placement keeps.
+ */
+export function collapseRepositoryProjects(calls: readonly LocalAgentCall[], previous: WorkspaceFactState,
+  resolveRoot: (directory: string) => string | undefined, remembered: WorkspaceFactNames = {}, keptPlaces?: readonly string[]):
+  { calls: LocalAgentCall[]; names: WorkspaceFactNames; keptPlaces: string[] } {
+  const ledger = ledgerNames(calls, previous, resolveRoot, remembered), names = { ...remembered };
+  const placement = placeCodexEvents(calls, keptPlaces, ledger), decided = new Map<string, string | null>();
+  const nameFor = (call: LocalAgentCall, shape: WorkspaceFactIdentity): string | null => {
+    const sent = ledger.sentName(call, shape);
+    if (sent !== undefined) {
+      // Older than anything an ACCEPT wrote, so the name last used stays last.
+      if (sent !== shape.projectName && !names[shape.directoryRef]?.includes(sent)) names[shape.directoryRef] = [sent, ...names[shape.directoryRef] ?? []];
+      return sent;
     }
+    const repository = ledger.repositoryName(call.workingDirectory), kept = remembered[shape.directoryRef] ?? [];
     return repository ? factProjectName(repository) : kept.length ? kept.at(-1)! : shape.projectName;
   };
-  const named = calls.map(call => {
+  const named = placement.calls.map(call => {
     let shape: WorkspaceFactIdentity;
     try { shape = workspaceFactIdentity(call); } catch { return call; } // the aggregate reports unusable calls
     const place = JSON.stringify([shape.day, shape.agent, shape.model, shape.directoryRef, shape.projectName]);
@@ -255,7 +317,7 @@ export function collapseRepositoryProjects(calls: readonly LocalAgentCall[], pre
     if (name === undefined) decided.set(place, name = nameFor(call, shape));
     return name === shape.projectName ? call : { ...call, project: name ?? undefined };
   });
-  return { calls: named, names };
+  return { calls: named, names, keptPlaces: placement.keptPlaces };
 }
 
 /**
@@ -490,7 +552,7 @@ async function readState(path: string): Promise<WorkspaceState | null> {
     if (!info.isFile() || info.nlink !== 1 || info.mode & 0o077 || info.size > MAX_STATE_BYTES || process.getuid && info.uid !== process.getuid())
       throw Error("Workspace state is not a private regular file.");
     const state = JSON.parse(await file.readFile("utf8")) as WorkspaceState;
-    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities", "agentPlansAccepted", "factNames"]);
+    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities", "agentPlansAccepted", "factNames", "codexKeptPlaces"]);
     if (state.version !== 1 || !state.facts || typeof state.facts !== "object" || Array.isArray(state.facts)) throw Error("Workspace state is invalid.");
     validateDevice(state.device);
     if (state.capabilities !== undefined) {
@@ -499,6 +561,9 @@ async function readState(path: string): Promise<WorkspaceState | null> {
     }
     if (state.agentPlansAccepted !== undefined) validateAcceptedPlans(state.agentPlansAccepted);
     if (state.factNames !== undefined) validateFactNames(state.factNames);
+    if (state.codexKeptPlaces !== undefined && (!Array.isArray(state.codexKeptPlaces)
+      || state.codexKeptPlaces.some(place => typeof place !== "string" || !HASH.test(place))
+      || new Set(state.codexKeptPlaces).size !== state.codexKeptPlaces.length)) throw Error("Workspace kept place state is invalid.");
     if (state.lastAcceptedAt !== null) utcDay(state.lastAcceptedAt);
     for (const [key, value] of Object.entries(state.facts)) {
       exactKeys(value, ["revision", "contentHash"]);
@@ -821,14 +886,18 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
       return { state: "dropped", coverage };
     }
     const naming = options.resolveRepositoryRoot
-      ? collapseRepositoryProjects(options.calls, held.facts, options.resolveRepositoryRoot, held.factNames) : { calls: options.calls, names: held.factNames ?? {} };
+      ? collapseRepositoryProjects(options.calls, held.facts, options.resolveRepositoryRoot, held.factNames, held.codexKeptPlaces)
+      : { ...placeCodexEventsWithoutCheckouts(options.calls, held.facts, held.factNames, held.codexKeptPlaces), names: held.factNames ?? {} };
     const coverage = aggregateWorkspaceFacts(naming.calls, held.facts, held.device.keyId);
     if (coverage.excludedCalls) throw new WorkspaceCallsExcluded(coverage.excludedCalls, coverage.excludedByReason ?? {});
     // A CLI before this one kept a batch refused as `expired` and stopped every later push on it. The Workspace
     // answered `expired` only after its replay lookup found nothing, so it does not hold that batch: it goes now,
     // durably, whatever the person answers below, and the same facts are rebuilt under a new preview.
-    // A name the ledger proved stays with whatever is saved next, so it outlives the checkout that told it. A push with nothing to save leaves the file as it is.
-    const state = { ...(heldExpired ? withoutBatch(held, heldExpired) : held), ...(Object.keys(naming.names).length ? { factNames: naming.names } : {}) };
+    // A name the ledger proved stays with whatever is saved next, so it outlives the checkout that told it. So do the
+    // Codex places earlier releases sent, read from the ledger before this release adds a key. A push with nothing to
+    // save leaves the file as it is, and the next one reads them again from the same ledger.
+    const state = { ...(heldExpired ? withoutBatch(held, heldExpired) : held), ...(Object.keys(naming.names).length ? { factNames: naming.names } : {}),
+      codexKeptPlaces: naming.keptPlaces };
     if (heldExpired) await save(state);
     const today = utcDay(options.generatedAt), authority = Math.max(Date.parse(state.device.collectionNotBefore), Date.parse(state.device.authorityStartsAt));
     const eligible = coverage.facts.filter(fact => fact.day < today && Date.parse(`${fact.day}T00:00:00.000Z`) >= authority

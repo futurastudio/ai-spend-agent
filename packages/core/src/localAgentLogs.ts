@@ -1,4 +1,4 @@
-import { constants, createReadStream } from "node:fs";
+import { constants } from "node:fs";
 import { lstat, open, readdir, readFile, stat, type FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -35,10 +35,21 @@ import {
   localAgentFormatDescriptor,
   localAgentFormatDescriptors,
   localAgentFormatLabel,
+  matchesLocalAgentCompressedFile,
   matchesLocalAgentDetectionFile,
   matchesLocalAgentFormatFile,
   validateLocalAgentFormatDescriptors
 } from "./localAgentFormats/registry.js";
+import {
+  COMPRESSED_ROLLOUT_SUFFIX,
+  compressedContentSize,
+  isCompressedRolloutPath,
+  openTranscriptBytes,
+  openTranscriptText,
+  readWholeTranscriptBytes,
+  ZSTD_NODE_VERSIONS,
+  zstdDecodingAvailable
+} from "./compressedRollout.js";
 import type {
   LocalAgentFormatDescriptor,
   LocalAgentFormatFinancialFileContext,
@@ -89,6 +100,13 @@ export type LocalAgentCall = {
    * this opaque reference while deliberately omitting the absolute path.
    */
   workingDirectoryRef?: string;
+  /**
+   * Workspace daily Codex events only, and only when the event's turn ran in another folder than the session started
+   * in: that first folder, where every release before this one filed the event. `workingDirectory` is the turn's
+   * folder. The push keeps an event in this place when an earlier release already sent it there, so no sent fact moves.
+   * Internal, like `workingDirectory`.
+   */
+  sessionPlace?: { workingDirectory: string; project?: string };
   /**
    * Numeric-only usage for the latest observed model turn. Codex reports this
    * separately from cumulative `total_token_usage`; Claude assistant-message
@@ -561,7 +579,9 @@ export type LocalAgentLogDiagnosticCode =
   | "malformed_session_file"
   | "unsupported_token_shape"
   | "qualitative_scan_incomplete"
-  | "qualitative_index_error";
+  | "qualitative_index_error"
+  /** Compressed transcripts in the window that this Node.js cannot decode; they count as unreadable files. */
+  | "compressed_unsupported";
 
 export type WorkspaceDiagnosticReason = "missing_endpoint" | "missing_identity" | "first_day_unknown"
   | "nonchronological" | "cache_shape" | "unsupported_components" | "missing_or_invalid_components"
@@ -594,6 +614,8 @@ export type LocalAgentSourceScan = {
   detectionSignals?: number;
   /** Regular files safely excluded because their metadata predates `sinceIso`. */
   filesSkippedBeforeWindow?: number;
+  /** Compressed transcripts inside the window that this Node.js cannot decode; also counted in `unreadableFiles`. */
+  compressedFilesNotRead?: number;
   /** Codex files resolved from bounded head/tail financial evidence. */
   filesReadFinancially?: number;
   /** Bytes not replayed as events after the required Codex financial state was proved. */
@@ -2094,8 +2116,15 @@ export async function loadLocalAgentUsageWithFormats(
         )
       : discoveredFiles.map((filePath) => ({ filePath }));
     for (const selected of files) {
-      const file = selected.filePath;
-      if (!matchesLocalAgentFormatFile(descriptor, file)) continue;
+      let file = selected.filePath;
+      const compressed = matchesLocalAgentCompressedFile(descriptor, file);
+      if (!compressed && !matchesLocalAgentFormatFile(descriptor, file)) continue;
+      // The unbounded reader reads every plain file; a compressed one gets the spend scans' window and Node.js checks.
+      if (compressed && !qualitativePolicy) {
+        const path = await codexRolloutToRead(file, sinceMs, scan, diagnostics);
+        if (!path) continue;
+        file = path;
+      }
       const collectInvocationEvidence = Boolean(codexInvocationFiles) &&
         descriptor.id === "codex" && descriptor.capabilities.invocationEvidence;
       let indexed: LocalAgentQualitativeIndexValue | undefined;
@@ -2155,7 +2184,9 @@ export async function loadLocalAgentUsageWithFormats(
             scan.qualitativeFilesReadCompletely =
               (scan.qualitativeFilesReadCompletely ?? 0) + 1;
           } else {
-            content = await readFile(file, "utf8");
+            content = isCompressedRolloutPath(file)
+              ? (await readWholeTranscriptBytes(file)).toString("utf8")
+              : await readFile(file, "utf8");
           }
         } catch (error) {
           if (qualitativePolicy && error instanceof QualitativeReadLimitError) {
@@ -2213,6 +2244,7 @@ export async function loadLocalAgentUsageWithFormats(
       }
     }
     if (qualitativePolicy) finishQualitativeCoverage(scan, diagnostics);
+    reportCompressedUnsupported(scan, diagnostics);
   }
 
   const normalizedCalls = dedupeCumulativeSessionCalls(calls, (agent) => {
@@ -2312,7 +2344,7 @@ export async function loadLocalAgentFinancialUsageWithFormats(
     const calls: LocalAgentCall[] = [];
     const root = localAgentFormatRoot(descriptor, options, home);
     const candidateFiles = (await listFormatCandidateFiles(root, descriptor, scan, diagnostics))
-      .filter((file) => matchesLocalAgentFormatFile(descriptor, file));
+      .filter((file) => matchesLocalAgentFormatFile(descriptor, file) || matchesLocalAgentCompressedFile(descriptor, file));
 
     // Per-file financial cache (req 5's financial half). The newest file per
     // source always parses fresh: the active session's evidence — including
@@ -2333,7 +2365,10 @@ export async function loadLocalAgentFinancialUsageWithFormats(
           fileIdentity: qualitativeFileIdentity(metadata),
           financialParserVersion: localAgentFinancialParserVersion
         });
-        const recency = Math.max(metadata.mtimeMs, metadata.ctimeMs, metadata.birthtimeMs);
+        // A compressed rollout's ctime is when Codex compressed it: it is never the active session.
+        const recency = isCompressedRolloutPath(file)
+          ? metadata.mtimeMs
+          : Math.max(metadata.mtimeMs, metadata.ctimeMs, metadata.birthtimeMs);
         if (recency > newestRecency) {
           newestRecency = recency;
           newestFile = file;
@@ -2410,6 +2445,7 @@ export async function loadLocalAgentFinancialUsageWithFormats(
         }).catch(() => undefined);
       }
     }
+    reportCompressedUnsupported(scan, diagnostics);
     return { calls, scan, diagnostics };
   }));
 
@@ -2684,12 +2720,18 @@ export async function readCodexFinancialFileForRegistry(
   context: LocalAgentFormatFinancialFileContext
 ): Promise<LocalAgentCall[]> {
   const { filePath, sinceMs, scan, diagnostics } = context;
-  if (!await shouldStreamFile(filePath, sinceMs, "codex", scan, diagnostics)) {
-    return [];
-  }
-  let financialFile: CodexFinancialFileResult;
+  const path = await codexRolloutToRead(filePath, sinceMs, scan, diagnostics);
+  if (!path) return [];
+  const state = createCodexFinancialStreamState();
+  let financialFile: Omit<CodexFinancialFileResult, "entries">;
   try {
-    financialFile = await readCodexFinancialFile(filePath);
+    if (isCompressedRolloutPath(path)) {
+      financialFile = await readCompressedCodexFinancialFile(path, (entry) => consumeCodexFinancialEntry(state, entry));
+    } else {
+      const read = await readCodexFinancialFile(path);
+      for (const entry of read.entries) consumeCodexFinancialEntry(state, entry);
+      financialFile = read;
+    }
   } catch (error) {
     recordUnreadableFile("codex", scan, diagnostics, error);
     return [];
@@ -2711,10 +2753,6 @@ export async function readCodexFinancialFileForRegistry(
       code: "malformed_jsonl",
       count: financialFile.malformedLines
     });
-  }
-  const state = createCodexFinancialStreamState();
-  for (const entry of financialFile.entries) {
-    consumeCodexFinancialEntry(state, entry);
   }
   const call = finishCodexFinancialStream(state, (diagnostic) => {
     recordParseDiagnostic("codex", scan, diagnostics, diagnostic);
@@ -2747,20 +2785,32 @@ function workspaceCounterFailureReason(
   return "unsupported_components";
 }
 
-/** Workspace-only event deltas. The existing snapshot reader remains cumulative. */
+/**
+ * Workspace-only event deltas. The existing snapshot reader remains cumulative.
+ *
+ * Each event goes under the folder its turn ran in, the latest `turn_context.cwd`, as Claude Code's are read per entry.
+ * Inherited turns are a fork's parent's, so the fork boundary clears it, and an event before the session's own first
+ * turn context takes the session's folder. When the two differ the call also carries the session's place, where every
+ * release before this one filed it, so the push can keep an event in a place that already went out.
+ */
 async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFileContext & { untilMs?: number }): Promise<LocalAgentCall[]> {
   const { filePath, sinceMs, untilMs, scan, diagnostics } = context;
-  if (!await shouldStreamFile(filePath, sinceMs, "codex", scan, diagnostics)) return [];
+  const path = await codexRolloutToRead(filePath, sinceMs, scan, diagnostics);
+  if (!path) return [];
   const state = createCodexFinancialStreamState(), calls: LocalAgentCall[] = [];
   const report = (workspaceReason: WorkspaceDiagnosticReason, markerBacked = false) => recordParseDiagnostic("codex", scan, diagnostics,
     { code: "unsupported_token_shape", count: 1, workspaceReason,
       ...(markerBacked ? { workspaceFactCoverage: "unknown_tokens" as const } : {}) });
   let priorEventAt: string | undefined;
+  let turnCwd: string | undefined;
   try {
-    const streamed = await streamJsonlRecords(filePath, entry => {
+    const streamed = await streamJsonlRecords(path, entry => {
       const payload = isRecord(entry.payload) ? entry.payload : undefined;
       const previousTotal = state.lastTotal ?? state.inheritedUsageBaseline;
+      const beforeBoundary = state.hasInheritedHistory && !state.rootTaskStarted;
       consumeCodexFinancialEntry(state, entry);
+      if (beforeBoundary && state.rootTaskStarted) turnCwd = undefined;
+      if (entry.type === "turn_context" && payload) turnCwd = stringOf(payload.cwd);
       if (entry.type !== "event_msg" || payload?.type !== "token_count"
         || state.hasInheritedHistory && !state.rootTaskStarted) return;
       const timestamp = toIso(stringOf(entry.timestamp));
@@ -2787,7 +2837,8 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
       priorEventAt = timestamp;
       if (supported && previousTotal && parsed.usage.inputTokens === 0 && parsed.usage.outputTokens === 0
         && (parsed.usage.cacheReadTokens ?? 0) === 0 && (parsed.reportedTotalTokens ?? 0) === 0) return;
-      const workingDirectory = absoluteWorkingDirectory(state.rootCwd);
+      const sessionDirectory = absoluteWorkingDirectory(state.rootCwd);
+      const workingDirectory = absoluteWorkingDirectory(turnCwd) ?? sessionDirectory;
       // The cumulative endpoint fingerprint is stable across copies of a
       // rollout. Different deltas for that same endpoint become a conflict in
       // dedupeCumulativeSessionCalls rather than two financial contributions.
@@ -2797,6 +2848,8 @@ async function readCodexDailyFinancialFile(context: LocalAgentFormatFinancialFil
       calls.push({ agent: "codex", sessionId: state.sessionId, callId,
         model: state.model ?? "codex", timestamp, startedAt: timestamp,
         project: projectFromCwd(workingDirectory), workingDirectory,
+        ...(sessionDirectory && sessionDirectory !== workingDirectory ? { sessionPlace: { workingDirectory: sessionDirectory,
+          ...(projectFromCwd(sessionDirectory) ? { project: projectFromCwd(sessionDirectory) } : {}) } } : {}),
         usageScope: "turn", usageSupport: supported ? "complete" : "unsupported_token_shape",
         usage: parsed.usage,
         ...(supported && parsed.tokenComponentEvidence ? { tokenComponentEvidence: parsed.tokenComponentEvidence } : {}),
@@ -2944,7 +2997,11 @@ type BoundedQualitativeFile = {
 
 type QualitativeFileMetadata = {
   filePath: string;
+  /** On-disk size: part of the file's identity. */
   size: number;
+  /** What a read takes from the byte budget: the on-disk size, or a compressed rollout's decoded size. */
+  budgetBytes: number;
+  compressed: boolean;
   recencyMs: number;
   dev: number;
   ino: number;
@@ -3009,7 +3066,8 @@ async function selectBoundedQualitativeFiles(
 ): Promise<BoundedQualitativeFile[]> {
   const eligible: QualitativeFileMetadata[] = [];
   for (const filePath of discoveredFiles) {
-    if (!matchesLocalAgentFormatFile(descriptor, filePath)) continue;
+    const compressed = matchesLocalAgentCompressedFile(descriptor, filePath);
+    if (!compressed && !matchesLocalAgentFormatFile(descriptor, filePath)) continue;
     let metadata;
     try {
       metadata = await lstat(filePath);
@@ -3028,8 +3086,10 @@ async function selectBoundedQualitativeFiles(
     }
     // Match the financial reader's conservative proof: ctime catches a path
     // whose mtime was restored after replacement, and birthtime catches a
-    // recent copy that preserved an older mtime.
-    const newestFileEvidence = Math.max(
+    // recent copy that preserved an older mtime. A compressed rollout holds no
+    // event later than its mtime; its ctime is when Codex compressed it (see
+    // codexRolloutToRead).
+    const newestFileEvidence = compressed ? metadata.mtimeMs : Math.max(
       metadata.mtimeMs,
       metadata.ctimeMs,
       metadata.birthtimeMs
@@ -3039,11 +3099,26 @@ async function selectBoundedQualitativeFiles(
       scan.filesSkippedBeforeWindow = (scan.filesSkippedBeforeWindow ?? 0) + 1;
       continue;
     }
+    let budgetBytes = metadata.size;
+    if (compressed) {
+      if (!zstdDecodingAvailable()) {
+        recordCompressedUnsupported(scan);
+        scan.qualitativeCoverage = "partial";
+        continue;
+      }
+      // Budgeted by what it decodes to. A frame that declares no size is over every limit: skipped, never read unbounded.
+      const declared = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
+        .then(async (handle) => { try { return await compressedContentSize(handle); } finally { await handle.close(); } })
+        .catch(() => undefined);
+      budgetBytes = declared ?? policy.maxFileBytes + 1;
+    }
     scan.qualitativeFilesEligible = (scan.qualitativeFilesEligible ?? 0) + 1;
-    scan.qualitativeBytesEligible = (scan.qualitativeBytesEligible ?? 0) + metadata.size;
+    scan.qualitativeBytesEligible = (scan.qualitativeBytesEligible ?? 0) + budgetBytes;
     eligible.push({
       filePath,
       size: metadata.size,
+      budgetBytes,
+      compressed,
       recencyMs: newestFileEvidence,
       dev: metadata.dev,
       ino: metadata.ino,
@@ -3087,8 +3162,8 @@ async function selectBoundedQualitativeFiles(
       if (cachedHit) {
         selected.push({
           filePath: file.filePath,
-          maxReadBytes: file.size,
-          fileSize: file.size,
+          maxReadBytes: file.budgetBytes,
+          fileSize: file.budgetBytes,
           indexKey: candidateKey,
           budgetExempt: true,
           probeErrored
@@ -3099,19 +3174,22 @@ async function selectBoundedQualitativeFiles(
     }
     // Oversized Codex rollouts route to the bounded streaming pass instead
     // of a permanent skip whenever both index sections are available; they
-    // never consume the whole-file byte budget (req 5).
+    // never consume the whole-file byte budget (req 5). Its checkpoints are
+    // offsets in a plain file, so an oversized compressed rollout is skipped
+    // by budget instead.
     if (streamCheckpoints && qualitativeIndex && descriptor.id === "codex" &&
-        file.size > policy.maxFileBytes) {
+        !file.compressed && file.size > policy.maxFileBytes) {
       streamCandidates.push(file);
       continue;
     }
-    if (file.size > policy.maxFileBytes || file.size > remaining) {
+    if (file.budgetBytes > policy.maxFileBytes || file.budgetBytes > remaining) {
       recordQualitativeBudgetSkip(scan);
       // A budget-skipped Codex file still gets a bounded header pass so a
       // proven-foreign attribution can honestly narrow the requested
       // project's blocking set without ever reading the body. Claude files
-      // get no header shortcut (their cwd can change mid-file).
-      if (headerPass && descriptor.id === "codex") {
+      // get no header shortcut (their cwd can change mid-file), and neither
+      // does a compressed rollout, whose first bytes are not its first line.
+      if (headerPass && descriptor.id === "codex" && !file.compressed) {
         await recordBudgetSkippedCodexHeader(file, headerPass, scan);
       }
       continue;
@@ -3121,8 +3199,8 @@ async function selectBoundedQualitativeFiles(
       // Bind the read to the selected metadata snapshot. Growth is treated as
       // incomplete coverage rather than silently consuming another file's
       // reserved source budget.
-      maxReadBytes: file.size,
-      fileSize: file.size,
+      maxReadBytes: file.budgetBytes,
+      fileSize: file.budgetBytes,
       indexKey: qualitativeIndexKey(
         descriptor.id,
         file.filePath,
@@ -3133,8 +3211,8 @@ async function selectBoundedQualitativeFiles(
       probeErrored: probeErrored || undefined
     });
     scan.qualitativeFilesSelected = (scan.qualitativeFilesSelected ?? 0) + 1;
-    scan.qualitativeBytesSelected = (scan.qualitativeBytesSelected ?? 0) + file.size;
-    remaining -= file.size;
+    scan.qualitativeBytesSelected = (scan.qualitativeBytesSelected ?? 0) + file.budgetBytes;
+    remaining -= file.budgetBytes;
   }
   if (streamCandidates.length > 0 && streamCheckpoints && qualitativeIndex) {
     const streamed = await runCodexStreamingPass(streamCandidates, {
@@ -4025,6 +4103,19 @@ async function readBoundedUtf8File(
     if (!before.isFile() || qualitativeFileIdentity(before) !== expectedIdentity) {
       throw newErrorWithCode("ESTALE");
     }
+    if (isCompressedRolloutPath(filePath)) {
+      // Decoded on the same descriptor; the limit is on decoded bytes, the size the selection budgeted.
+      const decoded = await readWholeTranscriptBytes(filePath, {
+        handle, maxBytes, overLimit: () => new QualitativeReadLimitError()
+      });
+      chunks.push(decoded);
+      bytesRead = decoded.length;
+      const after = await handle.stat();
+      if (!after.isFile() || qualitativeFileIdentity(after) !== expectedIdentity) {
+        throw newErrorWithCode("ESTALE");
+      }
+      return { content: decoded.toString("utf8"), bytesRead };
+    }
     const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1));
     while (true) {
       const remainingWithSentinel = maxBytes - bytesRead + 1;
@@ -4146,7 +4237,7 @@ async function streamJsonlRecords(
   onRecord: (entry: Record<string, unknown>) => void,
   workspaceCompatibility = false
 ): Promise<StreamedJsonlResult> {
-  const input = createReadStream(file, { encoding: "utf8" });
+  const input = openTranscriptText(file);
   const lines = createInterface({ input, crlfDelay: Infinity });
   let hadContent = false;
   let malformedLines = 0;
@@ -4310,6 +4401,48 @@ async function readCodexFinancialFile(file: string): Promise<CodexFinancialFileR
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * A compressed rollout cannot be read from its end, so it is read forward, one decoded line at a time, through the
+ * same prefilter: the same financial entries in the same order as the reverse reader's scan to byte zero.
+ */
+async function readCompressedCodexFinancialFile(
+  file: string,
+  onEntry: (entry: Record<string, unknown>) => void
+): Promise<Omit<CodexFinancialFileResult, "entries">> {
+  const input = openTranscriptBytes(file);
+  let hadContent = false;
+  let malformedLines = 0;
+  let prefilteredLines = 0;
+  let prefilteredBytes = 0;
+  let parts: Buffer[] = [];
+  const observe = () => {
+    const observed = parseCodexFinancialLine(parts);
+    parts = [];
+    if (observed.malformed) malformedLines += 1;
+    if (observed.prefilteredBytes > 0) {
+      prefilteredLines += 1;
+      prefilteredBytes += observed.prefilteredBytes;
+    }
+    if (observed.entry) onEntry(observed.entry);
+  };
+  try {
+    for await (const chunk of input as AsyncIterable<Buffer>) {
+      if (chunk.length > 0) hadContent = true;
+      let start = 0;
+      for (let newline = chunk.indexOf(0x0a); newline >= 0; newline = chunk.indexOf(0x0a, start)) {
+        parts.push(chunk.subarray(start, newline));
+        observe();
+        start = newline + 1;
+      }
+      if (start < chunk.length) parts.push(chunk.subarray(start));
+    }
+    if (parts.length > 0) observe();
+  } finally {
+    input.destroy();
+  }
+  return { hadContent, malformedLines, bytesSkipped: 0, prefilteredLines, prefilteredBytes };
 }
 
 async function readFirstJsonlRecord(
@@ -4566,6 +4699,81 @@ async function shouldStreamFile(
   }
   scan.filesSkippedBeforeWindow = (scan.filesSkippedBeforeWindow ?? 0) + 1;
   return false;
+}
+
+/**
+ * The form of one Codex rollout to read now, or nothing. Codex moves a rollout between its plain and compressed form
+ * by writing the new form before removing the old, so the plain file wins when both exist, and a form gone since the
+ * listing is read in the other: a scan that meets Codex mid-move reads the rollout once.
+ *
+ * A compressed rollout is skipped before the window by its mtime alone. Codex compresses only a rollout whose mtime is
+ * 7 days old and gives the compressed file that mtime; a rollout is append-only and each line is written after its
+ * timestamp, so no event in it is later than that mtime. Its ctime and birthtime are when it was compressed and say
+ * nothing about its events: the plain-file rule would read every rollout compressed in the last 30 days.
+ */
+async function codexRolloutToRead(
+  file: string,
+  sinceMs: number | undefined,
+  scan: LocalAgentSourceScan,
+  diagnostics: LocalAgentLogDiagnostic[]
+): Promise<string | undefined> {
+  const plain = isCompressedRolloutPath(file) ? file.slice(0, -COMPRESSED_ROLLOUT_SUFFIX.length) : file;
+  let path = plain;
+  let fileStat;
+  try {
+    fileStat = await lstat(plain);
+  } catch (error) {
+    if (!isNodeError(error, "ENOENT")) {
+      recordUnreadableFile("codex", scan, diagnostics, error);
+      return undefined;
+    }
+    path = `${plain}${COMPRESSED_ROLLOUT_SUFFIX}`;
+    try {
+      fileStat = await lstat(path);
+    } catch (compressedError) {
+      recordUnreadableFile("codex", scan, diagnostics, isNodeError(compressedError, "ENOENT") ? error : compressedError);
+      return undefined;
+    }
+  }
+  if (!fileStat.isFile()) {
+    recordUnreadableFile("codex", scan, diagnostics, newErrorWithCode("EINVAL"));
+    return undefined;
+  }
+  const compressed = isCompressedRolloutPath(path);
+  if (typeof sinceMs === "number") {
+    const newestFileEvidence = compressed
+      ? fileStat.mtimeMs
+      : Math.max(fileStat.mtimeMs, fileStat.ctimeMs, fileStat.birthtimeMs);
+    if (Number.isFinite(newestFileEvidence) && newestFileEvidence < sinceMs) {
+      scan.filesSkippedBeforeWindow = (scan.filesSkippedBeforeWindow ?? 0) + 1;
+      return undefined;
+    }
+  }
+  if (compressed && !zstdDecodingAvailable()) {
+    // One diagnostic per scan names the Node.js needed.
+    recordCompressedUnsupported(scan);
+    return undefined;
+  }
+  return path;
+}
+
+/** The one line a spend scan gives for compressed transcripts this Node.js cannot decode. */
+function reportCompressedUnsupported(scan: LocalAgentSourceScan, diagnostics: LocalAgentLogDiagnostic[]): void {
+  const count = scan.compressedFilesNotRead ?? 0;
+  if (count === 0) return;
+  diagnostics.push({
+    agent: scan.agent,
+    code: "compressed_unsupported",
+    severity: "error",
+    message: `${count} compressed ${agentLabel(scan.agent)} session file(s) could not be read: reading them needs ${ZSTD_NODE_VERSIONS}, and this is Node.js ${process.version}.`,
+    count
+  });
+}
+
+/** A compressed rollout this Node.js cannot decode: unreadable, so every coverage check sees it. */
+function recordCompressedUnsupported(scan: LocalAgentSourceScan): void {
+  scan.unreadableFiles += 1;
+  scan.compressedFilesNotRead = (scan.compressedFilesNotRead ?? 0) + 1;
 }
 
 function newErrorWithCode(code: string): NodeJS.ErrnoException {
@@ -4951,6 +5159,7 @@ async function listFormatCandidateFiles(
   }
   scan.directoryStatus = "readable";
   const out: string[] = [];
+  const compressed: string[] = [];
   const queue = [root];
   while (queue.length > 0) {
     const dir = queue.pop()!;
@@ -4976,8 +5185,18 @@ async function listFormatCandidateFiles(
       } else if (entry.isFile() && matchesLocalAgentFormatFile(descriptor, path)) {
         out.push(path);
         scan.filesDiscovered += 1;
+      } else if (entry.isFile() && matchesLocalAgentCompressedFile(descriptor, path)) {
+        compressed.push(path);
       }
     }
+  }
+  // One rollout, one entry: a plain file wins over a compressed sibling of the same name, as it does in Codex.
+  // Readers that do not decode compressed files skip them by name, so they see exactly the list they saw before.
+  const plain = new Set(out);
+  for (const path of compressed) {
+    if (plain.has(path.slice(0, -descriptor.discovery.compressedSuffix!.length))) continue;
+    out.push(path);
+    scan.filesDiscovered += 1;
   }
   return out.sort((left, right) => left.localeCompare(right));
 }

@@ -162,6 +162,39 @@ historical untagged exception.
   nowhere else on the machine, goes once more under another name. Rows already in Workspace
   stay: no CLI can remove one.
 
+- Codex sessions that Codex compressed are read. Codex compresses a session it has not
+  written to for 7 days into a `.jsonl.zst` file, and aibill skipped those files without a
+  word: in `workspace push`, in the free report and in MCP. On a machine that has used Codex
+  for a while that is most of its history.
+  - In `workspace push`, a day could go out short. A session compressed between two pushes
+    dropped out of its day, and the next push sent that day again without it, replacing the
+    fuller count Workspace held. Now the day keeps every session. A day an earlier version
+    sent short heals on the next push while it is inside the 30-day window a push reads; a day
+    that has already left that window stays short in Workspace, because no push reads it again.
+  - A push reads a compressed file only when its session could hold an event inside the
+    window: Codex gives a compressed file its session's last write time, and a session writes
+    nothing after that. On one machine that was 64 of 1,348 compressed files.
+  - A plain file wins over a compressed copy of the same session, so one session never counts
+    twice while Codex is replacing one with the other. A compressed file that is cut short,
+    has anything after its end, or is not a Codex rollout is reported as unreadable, never
+    read as a shorter session.
+  - Reading them needs Node.js 22.15 or later. On an older Node.js, `workspace push` stops with
+    one line that names the Node.js it needs, and sends nothing. The report and MCP count those
+    files as unreadable and say how many there are and why.
+  - The first `aibill doctor --sources` or `aibill watch` after upgrading reads every compressed
+    session once, which took 39 seconds on a machine with 1,348 of them; later runs read the
+    cache. The report and MCP read the last 30 days, under a second there.
+
+- Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
+  thread that started in the home folder and moved to a project used to count wholly as the
+  home folder, which has no name in Workspace.
+  - Codex days already sent keep the folder they went out under, so no fact that reached
+    Workspace moves, shrinks or counts twice. Only days not yet sent take the new folder.
+  - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: hashes of the
+    Codex days and folders an earlier version sent, read once from the ledger before this
+    version's first batch. It stays on this machine and is never sent. 0.9.15 refuses a file
+    that holds it, as it refuses `factNames`.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
