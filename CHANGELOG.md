@@ -162,6 +162,23 @@ historical untagged exception.
   nowhere else on the machine, goes once more under another name. Rows already in Workspace
   stay: no CLI can remove one.
 
+- Give every Anthropic cost row its own id. Rows that differ only by service
+  tier, context window or region used to share an id, which left the provider
+  total right but dropped all of them from the activity snapshot and marked it
+  partial. A row at the documented defaults keeps the id it always had.
+- Read the date Anthropic documents on Claude Code usage rows
+  (`2025-08-08T00:00:00Z`). The reader only built a timestamp from a date-only
+  value, so a row in the documented form with a model in it stopped
+  `sync-provider --provider anthropic` with "Invalid time value" and lost the
+  whole sync, cost report included. A row whose date cannot be read is now left
+  out and the fetch is marked partial. Not confirmed against a live response.
+- Give every Claude Code usage row its own id. Rows for one actor, model and day
+  that differ by `is_remote`, terminal, customer or subscription used to share an
+  id and were all dropped from the activity snapshot.
+- Accept `is_remote` and `tool_actions` under any tool name on Claude Code usage
+  rows, which Anthropic documents, so they no longer show up as response drift
+  notes. A new field under a tool still does.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
