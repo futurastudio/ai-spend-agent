@@ -14,7 +14,8 @@ import {
   type LocalAgentQualitativeIndexKey,
   type LocalAgentQualitativeIndexValue,
   parseClaudeCodeTranscript,
-  parseCodexRollout
+  parseCodexRollout,
+  SAFE_QUALITATIVE_SCAN_POLICY
 } from "./localAgentLogs.js";
 import {
   createCodexInvocationCollector,
@@ -1847,20 +1848,69 @@ describe("aggregateCalls", () => {
       expect(dedupeCumulativeSessionCalls([original, unrelated])).toEqual([original, unrelated]);
     });
 
-    it("falls back to the earliest timestamp, then the first file read, and never prefers a sub-agent copy", () => {
+    it("falls back to the earliest timestamp, then the lower session id, and never prefers a sub-agent copy", () => {
       const undated = (call: typeof original) => {
         const { transcriptStartedAt: _ignored, ...rest } = call;
         return rest;
       };
-      // Equal timestamps, neither transcript start known: the first read stays.
+      // Equal timestamps, neither transcript start known: the lower session id
+      // ("fork" < "original") wins, whichever file was read first.
       expect(dedupeCumulativeSessionCalls([undated(fork), undated(original)])).toEqual([undated(fork)]);
-      expect(dedupeCumulativeSessionCalls([undated(original), undated(fork)])).toEqual([undated(original)]);
+      expect(dedupeCumulativeSessionCalls([undated(original), undated(fork)])).toEqual([undated(fork)]);
+      // Equal transcript starts too: still the lower session id.
+      const sameStart = { ...fork, transcriptStartedAt: original.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([original, sameStart])).toEqual([sameStart]);
+      expect(dedupeCumulativeSessionCalls([sameStart, original])).toEqual([sameStart]);
       // An earlier timestamp wins before transcript starts are compared.
       const laterCopy = { ...fork, timestamp: "2026-10-06T21:30:05.000Z", transcriptStartedAt: "2026-10-01T00:00:00.000Z" };
       expect(dedupeCumulativeSessionCalls([laterCopy, original])).toEqual([original]);
       // A sub-agent transcript's copy loses to a plain session's, even one that started later.
       const subagentCopy = { ...original, subagentId: "agent-1" };
       expect(dedupeCumulativeSessionCalls([subagentCopy, fork])).toEqual([fork]);
+    });
+
+    it("drops a copy with no usage at all beside a copy that has usage, and keeps it when every copy is zero", () => {
+      // Claude Code can write a zeroed copy of a response after its final line.
+      const zeroed = { ...fork, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 } };
+      expect(dedupeCumulativeSessionCalls([zeroed, original])).toEqual([original]);
+      expect(dedupeCumulativeSessionCalls([original, zeroed])).toEqual([original]);
+      // The zeroed copy goes even when it sorts first and would otherwise win the tie.
+      const zeroedLower = { ...zeroed, sessionId: "a-fork", transcriptStartedAt: original.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([zeroedLower, original])).toEqual([original]);
+      // Alone, or with every copy zero, the usual rule stands.
+      expect(dedupeCumulativeSessionCalls([zeroed])).toEqual([zeroed]);
+      const zeroedOriginal = { ...original, usage: zeroed.usage };
+      expect(dedupeCumulativeSessionCalls([zeroed, zeroedOriginal])).toEqual([zeroedOriginal]);
+      // A reported total is usage evidence, not a zeroed copy.
+      const reported = { ...zeroed, reportedTotalTokens: 1_500 };
+      expect(dedupeCumulativeSessionCalls([original, reported])).toEqual([original, reported]);
+      // A same-session conflict marker is a verdict, never dropped as a zeroed copy.
+      const differsInOriginal = { ...original, usage: { ...original.usage, outputTokens: 1 } };
+      expect(dedupeCumulativeSessionCalls([original, differsInOriginal, fork])).toEqual([
+        expect.objectContaining({ model: "conflicting-local-evidence", sessionId: "original" }),
+        fork
+      ]);
+    });
+
+    it("keeps both copies when any one evidence field differs", () => {
+      const variants: Array<[string, Parameters<typeof dedupeCumulativeSessionCalls>[0][number]]> = [
+        ["model", { ...fork, model: "claude-sonnet-5-5" }],
+        ["inputTokens", { ...fork, usage: { ...fork.usage, inputTokens: 5 } }],
+        ["cacheReadTokens", { ...fork, usage: { ...fork.usage, cacheReadTokens: 180_001 } }],
+        ["usageSupport", { ...fork, usageSupport: "unsupported_token_shape" as const }]
+      ];
+      for (const [field, variant] of variants) {
+        expect(dedupeCumulativeSessionCalls([original, variant]), field).toEqual([original, variant]);
+        expect(dedupeCumulativeSessionCalls([variant, original]), field).toEqual([variant, original]);
+      }
+    });
+
+    it("never groups two agents that share a call id", () => {
+      const gemini = { ...original, agent: "gemini-cli" as const, model: "gemini-2.5-pro", sessionId: "gemini-session" };
+      expect(dedupeCumulativeSessionCalls([original, gemini])).toEqual([original, gemini]);
+      // Within one agent the rule applies to Gemini CLI as well.
+      const geminiCopy = { ...gemini, sessionId: "gemini-fork", transcriptStartedAt: fork.transcriptStartedAt };
+      expect(dedupeCumulativeSessionCalls([geminiCopy, gemini])).toEqual([gemini]);
     });
 
     it("leaves Codex alone: its turn ids hash the session id, so two sessions never share one", () => {
@@ -2418,6 +2468,32 @@ describe("Claude native response identity across transcript files", () => {
       }));
     });
   }
+
+  it("both loaders pick the same owner in an exact tie, before and after the files' recency swaps", async () => {
+    // A fork that copied the parent's first line verbatim: equal transcript
+    // starts, equal timestamps. The financial loader reads files in path
+    // order and the bounded qualitative loader by recency; the owner is the
+    // lower session id either way, so the two never disagree.
+    const directories = await fixtureDirectories("aibill-claude-owner-tie-");
+    const opening = (sessionId: string) => JSON.stringify({ type: "custom-title", sessionId, timestamp: "2026-06-08T09:59:00.000Z" });
+    const transcript = (sessionId: string, cwd: string) => [opening(sessionId), claudeLine({ sessionId, cwd })].join("\n");
+    // The higher session id sorts first by path; the lower one last.
+    const first = join(directories.claudeProjectsDir, "a-session.jsonl");
+    const last = join(directories.claudeProjectsDir, "z-session.jsonl");
+    await writeFile(first, transcript("zeta-session", "/Users/testuser/other-project"), "utf8");
+    await writeFile(last, transcript("alpha-session", "/Users/testuser/agent-finops"), "utf8");
+    const owner = (calls: readonly { agent: string; sessionId?: string; project?: string }[]) =>
+      calls.filter((call) => call.agent === "claude-code").map((call) => [call.sessionId, call.project]);
+    const qualitative = { ...directories, qualitativeScan: SAFE_QUALITATIVE_SCAN_POLICY };
+
+    expect(owner((await loadLocalAgentFinancialUsage(directories)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    expect(owner((await loadLocalAgentUsage(qualitative)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    // The first-by-path file becomes the most recently modified one.
+    await utimes(first, new Date("2026-11-07T00:00:00.000Z"), new Date("2026-11-07T00:00:00.000Z"));
+    await utimes(last, new Date("2026-11-01T00:00:00.000Z"), new Date("2026-11-01T00:00:00.000Z"));
+    expect(owner((await loadLocalAgentFinancialUsage(directories)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+    expect(owner((await loadLocalAgentUsage(qualitative)).calls)).toEqual([["alpha-session", "agent-finops"]]);
+  });
 });
 
 describe("bounded qualitative local-agent scans", () => {

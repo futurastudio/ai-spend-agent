@@ -889,5 +889,14 @@ describe("loadToolInvocations across parent and sub-agent transcripts", () => {
     const alone = await summarize({ "fork.jsonl": fork });
     expect(alone.sessions).toBe(1);
     expect(alone.invocations).toEqual([{ name: "Agent", count: 1 }]);
+    // An exact tie (the fork copied the parent's opening line verbatim): the
+    // lower session id owns the turn, as in the financial reader, whichever
+    // file sorts first.
+    const sameOpening = JSON.stringify({ type: "custom-title", sessionId: "zeta", timestamp: "2026-06-16T11:59:00.000Z" });
+    const tied = await summarize({
+      "a.jsonl": `${sameOpening}\n${placeholder.replace("session-a", "zeta")}\n${finalLine.replace("session-a", "zeta")}\n`,
+      "z.jsonl": `${sameOpening.replace("zeta", "alpha")}\n${placeholder.replace("session-a", "alpha")}\n${finalLine.replace("session-a", "alpha")}\n`
+    });
+    expect(tied.sessionSignals?.map((signal) => signal.sessionId)).toEqual(["alpha"]);
   });
 });

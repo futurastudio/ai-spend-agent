@@ -112,7 +112,9 @@ export function finalClaudeResponseLines(lines: readonly string[]): Map<string, 
  * after every response it copied, while the original's file opens at or
  * before its first response: the transcript that started earlier holds the
  * original. When neither start is known, or both are equal, the prior copy
- * (the first in path order) stays, so the choice is the same on every run.
+ * stays; both readers fold a group in session id order, so the lower session
+ * id wins and the choice is the same on every run, in every reader, whatever
+ * order the files were read in.
  *
  * The financial reader (`dedupeCumulativeSessionCalls`) and the qualitative
  * reader (`loadToolInvocations`) both pick with this, so money and counts

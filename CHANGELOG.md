@@ -6,7 +6,7 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
-## 0.9.17 (published on npm, 2026-11-07)
+## Unreleased
 
 - Count a Claude Code response once when it sits in more than one session
   file. Forking or handing off a conversation copies its earlier responses
@@ -18,10 +18,13 @@ published (see its section).
   files counts once, under the original session: the copy outside a sub-agent
   transcript, else the earliest, else the one in the transcript that started
   earlier (a fork's file opens at fork time, after every response it copied),
-  else the first file read. The fact it lands in keeps its day, model, project
-  and folder; only the copies' counts go. A copy whose usage differs is not the
-  same response and stays. Codex is unchanged: a fork's inherited history was
-  already set aside.
+  else the lower session id, so the choice is the same on every run and in
+  every reader. The fact it lands in keeps its day, model, project and folder;
+  only the copies' counts go. A copy whose usage differs is not the same
+  response and stays; a copy with no usage at all beside one that has usage
+  (Claude Code writes such a zeroed copy after a response's final line) is a
+  copy and goes. Gemini CLI responses are grouped by the same rule. Codex is
+  unchanged: a fork's inherited history was already set aside.
   - A machine whose earlier push counted a forked copy sends the corrected,
     smaller fact on its next push, as a revision of the same fact; nothing
     refuses or re-keys it. Days outside the 30-day window are not read again,
@@ -29,6 +32,9 @@ published (see its section).
   - The local financial and qualitative caches re-read Claude Code transcripts
     once after this update (the cached calls now carry when their transcript
     started), as does the `guard` tally cache.
+
+## 0.9.17 (published on npm, 2026-11-07)
+
 - One `workspace push` now gets this machine's subscription tier to the
   Workspace. This replaces the 0.9.16 behaviour in which the first push after
   the Workspace's announcement carried no tier and the next one did, and in

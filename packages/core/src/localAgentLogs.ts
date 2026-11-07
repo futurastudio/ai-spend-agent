@@ -836,13 +836,19 @@ export function dedupeCumulativeSessionCalls(
  * and its support) count once, under the owner: the copy outside a sub-agent
  * transcript, else the earliest, else the one in the transcript that started
  * earlier (`transcriptStartedAt`: the fork's file opens at fork time), else
- * the first read (files are read in path order). Every key of the owner stays
- * as it was (day, model, project, working directory): only the copies'
- * counts go. Copies whose evidence differs are not the same response and are
+ * the lower session id. Each group is folded in session id order, never in
+ * read order, so the financial reader (path order), the qualitative reader
+ * (recency order) and a warm cache pick the same owner. Every key of the
+ * owner stays as it was (day, model, project, working directory): only the
+ * copies' counts go. Claude Code can also write a zeroed copy of a response
+ * after its final line; in a group where another copy carries usage, a copy
+ * whose usage totals zero and reports no total is a copy, not evidence, and
+ * goes first. Copies whose evidence differs are not the same response and are
  * all kept: within one session that is the fail-closed conflict above, across
- * sessions each session keeps its own. Codex turn ids hash the session id, so
- * this never groups Codex events of two sessions; Codex forks reset their
- * inherited baseline in the parsers instead.
+ * sessions each session keeps its own. Gemini CLI responses carry a call id
+ * and follow the same rule. Codex turn ids hash the session id, so this never
+ * groups Codex events of two sessions; Codex forks reset their inherited
+ * baseline in the parsers instead.
  */
 function dedupeResponsesAcrossSessions(calls: LocalAgentCall[]): LocalAgentCall[] {
   const groups = new Map<string, LocalAgentCall[]>();
@@ -852,10 +858,18 @@ function dedupeResponsesAcrossSessions(calls: LocalAgentCall[]): LocalAgentCall[
     groups.set(key, [...(groups.get(key) ?? []), call]);
   }
   const dropped = new Set<LocalAgentCall>();
-  for (const group of groups.values()) {
-    if (group.length < 2) continue;
+  for (const unordered of groups.values()) {
+    if (unordered.length < 2) continue;
+    const group = [...unordered].sort((left, right) =>
+      (left.sessionId ?? "").localeCompare(right.sessionId ?? "") ||
+      (left.subagentId ?? "").localeCompare(right.subagentId ?? ""));
     const owners = new Map<string, LocalAgentCall>();
+    const someUsage = group.some((call) => !isZeroedResponseCopy(call));
     for (const call of group) {
+      if (someUsage && isZeroedResponseCopy(call)) {
+        dropped.add(call);
+        continue;
+      }
       const evidence = crossSessionEvidenceFingerprint(call);
       const prior = owners.get(evidence);
       if (!prior) {
@@ -868,6 +882,16 @@ function dedupeResponsesAcrossSessions(calls: LocalAgentCall[]): LocalAgentCall[
     }
   }
   return dropped.size === 0 ? calls : calls.filter((call) => !dropped.has(call));
+}
+
+/**
+ * A copy with no usage at all: every component zero and no reported total.
+ * Never the fail-closed conflict marker, which is a verdict, not a copy.
+ */
+function isZeroedResponseCopy(call: LocalAgentCall): boolean {
+  return !isStableTurnConflict(call) &&
+    totalUsageTokens(call.usage) === 0 &&
+    call.reportedTotalTokens === undefined;
 }
 
 /**

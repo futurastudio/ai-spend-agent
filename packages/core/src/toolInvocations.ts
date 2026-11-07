@@ -172,6 +172,8 @@ type ClaudeResponseEvidence = {
   timestamp: string;
   /** The transcript's first dated line, for the cross-file owner rule: a fork's file opens at fork time. */
   transcriptStartedAt?: string;
+  /** The transcript's session id: the group is folded in its order, so the owner never depends on read order. */
+  sessionId?: string;
   /** The transcript sits under a `subagents/` directory. */
   subagent: boolean;
   /** Rank of the counted line so far; undefined while no line carried usage. */
@@ -295,8 +297,9 @@ function collectClaudeCodeInvocations(
       for (const cmd of slashCommandsFrom(entry)) commands.add(cmd);
     }
   }
-  if (transcriptStartedAt) {
-    for (const response of responses) response.transcriptStartedAt = transcriptStartedAt;
+  for (const response of responses) {
+    if (transcriptStartedAt) response.transcriptStartedAt = transcriptStartedAt;
+    if (sessionId) response.sessionId = sessionId;
   }
 
   return {
@@ -335,9 +338,11 @@ function claudeToolUseOf(block: Record<string, unknown>, key: string): ClaudeToo
  * session id, sometimes in another folder. The copy the financial reader's
  * cross-session dedupe keeps (`preferredClaudeResponseCopy`: outside a
  * sub-agent transcript, else the earliest, else in the transcript that
- * started earlier, else the first in path order) owns the turn, with the
- * union of the tool_use blocks every copy saw, and its own line decides the
- * window; the other copies are not counted. This reader sees no usage, so
+ * started earlier, else the lower session id) owns the turn, with the union
+ * of the tool_use blocks every copy saw, and its own line decides the window;
+ * the other copies are not counted. Each group is folded in session id
+ * order, as the financial reader folds it, so the two never disagree in a
+ * tie whatever order the files were read in. This reader sees no usage, so
  * it cannot keep the rare copy whose usage differs; the financial reader
  * keeps that one as its own call.
  */
@@ -351,8 +356,9 @@ function dedupeClaudeResponsesAcrossFiles(collections: ClaudeInvocationCollectio
       copies.set(response.crossFileKey, group);
     }
   }
-  for (const group of copies.values()) {
-    if (group.length < 2) continue;
+  for (const unordered of copies.values()) {
+    if (unordered.length < 2) continue;
+    const group = [...unordered].sort((left, right) => (left.sessionId ?? "").localeCompare(right.sessionId ?? ""));
     const owner = group.reduce((prior, candidate) => preferredClaudeResponseCopy(prior, candidate));
     for (const response of group) {
       if (response === owner) continue;
@@ -737,8 +743,9 @@ export async function loadToolInvocations(options: ToolInvocationOptions = {}): 
   let claudeCodeSessions = 0;
   let codexSessions = 0;
 
-  // Path order breaks owner ties between equal copies of a response, so the
-  // per-session counts are the same on every run and filesystem.
+  // Files are read in path order; owner ties between equal copies of a
+  // response are broken by session id (`dedupeClaudeResponsesAcrossFiles`),
+  // so the per-session counts are the same on every run and filesystem.
   const claudeCollections: ClaudeInvocationCollection[] = [];
   for (const file of (await listJsonlFiles(claudeDir)).sort()) {
     const content = await readFile(file, "utf8").catch(() => "");
