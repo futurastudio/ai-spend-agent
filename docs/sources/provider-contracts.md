@@ -139,7 +139,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `6b5ef480a198018651c45495c1f53a6f79a1ab06dc965fb785d1a3611246d0f2`
   - [pricing](https://aistudio.google.com/docs/pricing.md) — semantic `665d980cd862011c605a98e29c13d48d6c6f0547bdbbabe195178a32c9674134`; reviewed content `a26a233c11b0048ab31ba37a500ad301d54c22cf0845b447f50bf10b3a175c27`
-  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `dad1f3f39cb28a80abdf77f8473f3a45a8004d4029298bda47286ff57f4d2ee9`
+  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `019167495bdcd15da760f215dbb4c37fa58b93ac5b733938544ed13f45d1080e`
 
 ## Cursor Admin API spending and usage events
 
