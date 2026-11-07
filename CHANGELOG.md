@@ -6,7 +6,7 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
-## 0.9.17 (unreleased)
+## 0.9.17 (published on npm, 2026-11-07)
 
 - One `workspace push` now gets this machine's subscription tier to the
   Workspace. This replaces the 0.9.16 behaviour in which the first push after
