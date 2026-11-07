@@ -134,7 +134,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const requests: string[] = [], messages: string[] = [];
     const result = await runCli(["workspace", "push"], pushRuntime(home, [call()], requests, messages));
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("accepted 3 local session facts");
+    expect(result.stdout).toContain("accepted 1 local session facts");
+    expect(result.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
 
     const envelope = parse(requests[0]!);
     const plans = envelope.facts.filter(isWorkspaceAgentPlanFact);
@@ -162,7 +163,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(state.capabilities).toEqual({ agentPlanFacts: true });
   });
 
-  it("reads and sends nothing about tiers until the Workspace has announced the capability, then does from the next push on", async () => {
+  it("reads and sends nothing about tiers until the Workspace has announced the capability, then sends them in that same command and beside session facts from then on", async () => {
     // Freshly paired: no capability stored, no sign-in file read.
     const reader = vi.fn(async () => expectedPlanFacts);
     const fresh = await pairedHome({ planFiles: true });
@@ -171,22 +172,26 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(prepared.state).toBe("cancelled");
     expect(reader).not.toHaveBeenCalled();
 
-    // Push 1: the Workspace accepts and announces the capability; this batch carried no plan facts.
+    // Push 1: the Workspace accepts and announces the capability; this batch carried no plan facts, and the same command offers them alone.
     const requests: string[] = [], messages: string[] = [];
     const first = await runCli(["workspace", "push"], pushRuntime(fresh.home, [call()], requests, messages));
     expect(first.stdout).toContain("accepted 1 local session facts");
     expect(parse(requests[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
     expect(messages[0]).not.toContain("Subscription tier");
+    expect(first.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(parse(requests[1]!).facts).toEqual(expectedPlanFacts);
+    expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect((await readState(fresh.statePath)).capabilities).toEqual({ agentPlanFacts: true });
     const status = await runCli(["workspace", "status"], { homeDirectory: fresh.home });
     expect(status.stdout).toContain("Subscription tier facts: announced by this Workspace");
 
-    // Push 2: the stored capability admits the plan facts.
+    // Push 2: the stored capability admits the plan facts beside the changed session fact.
     const nextDay = call({ callId: "call-two", timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" });
     const second = await runCli(["workspace", "push"], pushRuntime(fresh.home, [call(), nextDay], requests, messages));
-    expect(second.stdout).toContain("accepted 3 local session facts");
-    expect(parse(requests[1]!).facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
-    expect(messages[1]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(second.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
+    expect(parse(requests[2]!).facts.filter(isWorkspaceAgentPlanFact)).toEqual(expectedPlanFacts);
+    expect(messages[2]).toContain("Subscription tier included for claude_code (claude_max_20x), codex (chatgpt_pro)");
 
     // Push 3: an ACCEPT without the header takes the capability away again.
     const third = await runCli(["workspace", "push"], { ...pushRuntime(fresh.home, [call(), nextDay,
@@ -197,9 +202,9 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
       call({ callId: "call-three", model: "gpt-5-mini" }), call({ callId: "call-four", model: "gpt-5-nano" })], requests, messages),
       workspaceTransport: accepting(requests, {}) });
     expect(fourth.stdout).toContain("accepted 1 local session facts");
-    expect(parse(requests[3]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
-    expect(messages[3]).not.toContain("Subscription tier");
-    expect((await runCli(["workspace", "status"], { homeDirectory: fresh.home })).stdout).toContain("not announced by this Workspace in an accepted push yet");
+    expect(parse(requests[4]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(messages[4]).not.toContain("Subscription tier");
+    expect((await runCli(["workspace", "status"], { homeDirectory: fresh.home })).stdout).toContain("off until an accepted push announces them");
   });
 
   it("leaves the tiers out under AIBILL_NO_PLAN_TIER and when the machine has no sign-in files", async () => {
@@ -218,14 +223,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     expect(messages[0]).not.toContain("Subscription tier");
   });
 
-  it("never sends plan facts alone, and makes room for them inside the 256-fact batch", async () => {
+  it("makes room for the tiers inside the 256-fact batch, and then has nothing to send alone", async () => {
     const { home } = await pairedHome({ planFiles: true, capability: true });
-    const idle: string[] = [], idleMessages: string[] = [];
-    const nothing = await runCli(["workspace", "push"], pushRuntime(home, [], idle, idleMessages));
-    expect(nothing.stdout).toContain("No changed eligible local session facts to push.");
-    expect(idle).toEqual([]);
-    expect(idleMessages).toEqual([]);
-
     const many = Array.from({ length: 300 }, (_, index) => call({ callId: `call-${index}`, model: `gpt-5-variant-${index}` }));
     const requests: string[] = [];
     const result = await runCli(["workspace", "push"], pushRuntime(home, many, requests, []));
@@ -233,6 +232,12 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const facts = parse(requests[0]!).facts;
     expect(facts).toHaveLength(256);
     expect(facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(2);
+
+    const idle: string[] = [], idleMessages: string[] = [];
+    const nothing = await runCli(["workspace", "push"], pushRuntime(home, [], idle, idleMessages));
+    expect(nothing.stdout).toContain("No changed eligible local session facts to push.");
+    expect(idle).toEqual([]);
+    expect(idleMessages).toEqual([]);
   });
 
   it("treats a 400 unavailable reply like any other unknown outcome: the batch is retained and resent identically", async () => {
@@ -281,7 +286,8 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
     const second = await runCli(["workspace", "push"], { ...pushRuntime(home, [], requests, messages),
       workspaceLoadCalls: async () => { throw Error("unexpected local read"); }, workspaceTransport: replay });
     expect(second.exitCode).toBe(0);
-    expect(second.stdout).toContain("accepted 3 local session facts");
+    expect(second.stdout).toContain("accepted 1 local session facts");
+    expect(second.stdout).toContain("accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro)");
     expect(requests).toHaveLength(2);
     expect(requests[1]).toBe(requests[0]);
     // The preview showed the signed envelope, named the tiers it carries, and said the opt-out starts with the next new batch.
@@ -313,7 +319,7 @@ describe("workspace push carries this machine's plan tiers once the Workspace ac
       const result = await runCli(["workspace", "push"], { ...pushRuntime(home, [call()], requests, []),
         workspaceTransport: accepting(requests, header === undefined ? {} : { header }) });
       expect(result.exitCode, JSON.stringify(header)).toBe(0);
-      expect(result.stdout).toContain("accepted 3 local session facts");
+      expect(result.stdout).toContain("accepted 1 local session facts");
       const state = await readState(statePath);
       expect(state.pending).toBeNull();
       expect(state.device.sequence).toBe("1");
@@ -400,7 +406,8 @@ describe("agent plan facts inside the envelope", () => {
     expect(() => envelopeWith(missing as AgentPlanFact)).toThrow();
     // One plan fact per agent and device.
     expect(() => envelopeWith(planFact(), planFact({ tierRaw: "default_claude_max_5x", tier: "claude_max_5x" }))).toThrow("Duplicate Workspace fact key.");
-    // Never alone.
-    expect(() => buildWorkspaceEnvelope(device(), [planFact()], now)).toThrow("Workspace envelope bounds are invalid.");
+    // Alone is well formed, the batch a push sends when no session fact changed; an empty batch never is.
+    expect(buildWorkspaceEnvelope(device(), [planFact()], now).facts).toEqual([planFact()]);
+    expect(() => buildWorkspaceEnvelope(device(), [], now)).toThrow("Workspace envelope bounds are invalid.");
   });
 });
