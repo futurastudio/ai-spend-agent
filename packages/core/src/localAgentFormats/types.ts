@@ -31,6 +31,11 @@ export type LocalAgentFormatDescriptor = {
     readonly extensions?: readonly string[];
     readonly basename?: string;
     readonly basenamePrefix?: string;
+    /**
+     * A file the agent itself compressed: `<name><extension><compressedSuffix>`. The financial readers decode it; a
+     * plain file of the same name wins over it. Only zstd is supported.
+     */
+    readonly compressedSuffix?: ".zst";
     /** Required directory name somewhere above a financial evidence file. */
     readonly ancestorBasename?: string;
     /** Presence signal only. This file must never reach a financial parser. */

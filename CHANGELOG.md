@@ -7,6 +7,227 @@ historical untagged exception.
 
 ## Unreleased
 
+- One `workspace push` now gets this machine's subscription tier to the
+  Workspace. This replaces the 0.9.16 behaviour in which the first push after
+  the Workspace's announcement carried no tier and the next one did, and in
+  which plan facts never travelled without session facts: a second push the same
+  day had nothing eligible to send, so the tier could wait a day or never arrive.
+  - The ACCEPT that first announces `agentPlanFacts=1` is followed, in the same
+    command, by a second preview of the tier facts alone; they go as their own
+    batch on yes. Declining sends and retains nothing, and the next push offers
+    them again.
+  - With the capability known and no changed session facts, a push sends the tier
+    alone only if it was never accepted, it changed, or it was last accepted more
+    than 14 days ago, inside the device policy's retention. Otherwise the existing
+    "No changed eligible local session facts" message stands. Tier facts still ride
+    beside session facts when session facts changed.
+  - `~/.aibill/workspace-device.json` gains an optional `agentPlansAccepted` key
+    (per agent: `tier`, `tierRaw`, `sentAt`, no other data), written only on an
+    ACCEPT. Files without it read as before. 0.9.15 refuses a file this CLI has written
+    an accepted push to, because it knows neither that key nor `capabilities`, as it
+    refuses any unknown key. So stay on `aibill@latest` from the first accepted push on.
+  - A refused tier-only batch never strands a machine. On a 409 with any reason it
+    is dropped rather than retained, the stored capability goes false until a later
+    ACCEPT announces it (a refusal as `expired` leaves it, as below), one line says the
+    tier facts were not accepted, and session pushes continue. Any drop moves the local sequence past the batch, because the
+    Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
+    still retains the exact envelope, and a retained envelope is never rebuilt: yes
+    resends it identically, while no, no answer, or `AIBILL_NO_PLAN_TIER` drops it, so
+    session facts never wait on a yes. A batch that holds session facts and is refused
+    as `invalid`, `conflict` or `stale`, or whose reply was lost, stays retained, as before.
+  - A Claude Team or Enterprise seat's tier (`oauthAccount.organizationType`) is now
+    held on the machine rather than sent: the Workspace does not accept that source
+    yet, and beside session facts its refusal would have retained the batch and
+    halted that machine's pushes. The other agent's tier on that machine still goes.
+  - When a tier the Workspace accepted has nothing on the machine to replace it,
+    because the seat moved to Team or Enterprise, the agent signed out, or it moved to
+    an API key, each push that reads the sign-in files prints one line naming the
+    agent, that tier and when it was accepted. The Workspace hears nothing new, and a
+    seat plan set from that tier stays until the owner changes it.
+  - `AIBILL_NO_PLAN_TIER=1` also suppresses the follow-up and tier-only batches, and
+    a machine whose Workspace has not announced the capability still reads no sign-in
+    file. `workspace status` shows when each agent's tier was last reported: the agent,
+    the tier id and the time. The seven fields and what is never read into them are
+    unchanged. No batch is built at or past the grant's end, where the Workspace gives
+    no refusal to drop it on. The opt-out withdraws nothing. For a tier the Workspace
+    already accepted:
+    Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+    That seat plan stays until the owner changes it.
+  - A push with nothing to send, to a Workspace that has not announced the capability,
+    adds one line, and reads no sign-in file to say it:
+    `Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.`
+    No file was read, so it promises no tier: a Claude Team seat with no Codex, or an API
+    key for both agents, reports none that Workspace accepts.
+  - The accepted line counts session facts only and names the tier in words, and the
+    preview says the tier goes as seven fields, not two. A batch with one session fact
+    and two tiers used to print `accepted 3 local session facts`.
+  - `workspace status` says a Claude Team or Enterprise seat does not report its tier
+    yet while no Claude tier has been reported, and reads no sign-in file to say it.
+  - This needs the Workspace release that accepts tier-only envelopes. Against one
+    that does not, the batch is refused as `invalid` and dropped as above, and each
+    session push repeats the second preview and the refusal line. No push halts.
+
+- A push that stops now says why. What a log line, a clock, a lost reply or a killed process
+  can do no longer ends at `Workspace operation stopped safely`, which stays for a pairing
+  file or private directory this CLI cannot read or write.
+  - A batch with session facts that Workspace refuses as `expired` is dropped instead of
+    retained for good. That refusal is decided after Workspace's replay lookup, so it
+    means Workspace does not hold the batch. The way there was ordinary: a dropped
+    connection or a closed laptop, then a resend more than 10 minutes after signing.
+    Before this, every later push stopped at `A retained batch was refused` and no
+    command resolved it. The local sequence moves past the batch, the fact ledger does
+    not move, and the next push rebuilds the same session facts into a new batch with a
+    new preview and a new yes. Nothing is resent in the same command, and nothing goes
+    without consent. A machine an earlier CLI already stopped this way recovers on its
+    next push. `invalid`, `conflict` and `stale` stay as they were, and a batch that did
+    land, its reply lost, still replays its receipt however late it is resent.
+  - What a dropped batch held for days that have left the 30-day window a push reads cannot
+    be rebuilt. The line says where the window starts and that this stays out of Workspace,
+    and it promises a rebuild only of the rest. A batch an earlier CLI retained says the same.
+  - A machine whose clock is more than 2 minutes ahead of Workspace's, or more than 10
+    minutes behind it, gets that refusal on a first send. A batch refused under 10
+    minutes after it was signed, by this machine's clock, says this machine's clock looks
+    ahead of Workspace's, or more than 10 minutes behind it, and to check it. It does not loop.
+  - Past the connection's end, `workspace push` stops with exit 1, reads no session facts,
+    sends nothing, resends no retained batch, and says what to run:
+    `npx aibill@latest workspace disconnect`, then `npx aibill@latest workspace connect`.
+    It used to print `No changed eligible local session facts to push.` and exit 0, or
+    build a batch that could only come back unknown. `workspace status` shows when the
+    connection ends and, past that, says it ended. Nothing renews a connection, and the
+    new one starts no earlier than the UTC day after the disconnect. The stop, status and
+    the disconnect's own question all say what that disconnect costs: it takes this
+    machine's accepted session facts out of Workspace's projects and receipts, and those
+    days' shares move to unattributed cost.
+  - A command that is killed no longer stops every later one. A closed terminal or a
+    dropped SSH session left `~/.aibill/.workspace-device.lock` behind, and every push and
+    every disconnect then printed the general stop, with nothing naming the file. The lock
+    now names its process, and the next command takes over a lock whose process is gone.
+    When it cannot tell, it says another command holds that file or one was killed and left
+    it, and to delete it if none is running. `workspace status` says so too. What the killed
+    command left in the pairing file is safe: a batch on its way is retained as uncertain.
+  - A heavy machine gets its preview. A batch was cut by count and could then pass the byte
+    bound, which stopped every push with the general words and nothing sent, for as long
+    as the history stayed that large. A batch is now cut by bytes too, its preview says when
+    it holds only part of the changed facts, the accepted line says how many wait, and the
+    next preview carries them. It is cut between days, oldest first, by count as well as by
+    bytes. Workspace reads what it holds of a day as that day, with nothing to mark a part,
+    so a cut in hash order left most days short until someone ran the next push, while
+    Workspace called them complete. The days that wait are now absent, not short. A day
+    with more changed facts than its batch can carry goes in part, and the preview and the
+    accepted line name it.
+  - One fact over its 1,024 session identities, and any call with no usable day or identity,
+    still stop a push, and nothing is sent. Each now says so in its own line: the day and the
+    count, or the calls per reason, and how long it lasts. The line written for those calls
+    could not be reached before, because the general stop came first.
+  - A push Workspace answers with 403 stays an unknown outcome with its batch retained, and
+    now also points at Settings → Machines: finish the sharing consent if it asks, and if it
+    shows this machine disconnected or expired, run the disconnect and connect again.
+  - A batch of tier facts alone refused as `expired` keeps the announced capability, since
+    that refusal says nothing about what Workspace accepts, and the next push offers the tier
+    again. If it was signed under 10 minutes ago the line also says to check the clock.
+  - A project name that is not well formed goes as no name, as a name with control
+    characters already did. Only a hand-made log can hold one, and a batch with it came
+    back unknown on every retry, because the Workspace's database cannot store it.
+  - Where this CLI tells a person what to type for a Workspace command, it says
+    `npx aibill@latest`: the help, the pairing lines and the recovery lines. A stale npx
+    cache meets a state file it cannot read.
+  - A state file refused because it carries keys this version does not know now says a
+    newer aibill wrote it, to run `npx aibill@latest`, and that nothing was changed. The
+    refusal itself is unchanged and nothing is reset. Versions already published keep
+    their general words.
+
+- One folder's day goes out under one name, so a second push can no longer count it twice.
+  A fact's key holds its name and Workspace keeps every key it accepts, so a second name is
+  a second row beside the first, and Workspace counted those sessions twice, in its token
+  counts and in how a seat's cost splits. Two things could send one:
+  - A day counted as already sent under folder names once any of its facts was in the
+    ledger, and a repository's root folder, or a folder with no checkout, has the same key
+    under either name. So after the first push of such a day, the next push sent each
+    sub-folder and worktree of that day again under its own name. 0.9.15 does this.
+  - A folder whose checkout had changed by the next push: a linked worktree removed after
+    merge, a repository removed, moved or renamed, a sub-folder that became its own checkout.
+
+  A fact that has gone out now keeps the name it went out under, and a folder new to a day
+  names its repository whatever the day's other folders went out under.
+  `~/.aibill/workspace-device.json` gains an optional `factNames` key: per hashed folder,
+  the names its facts went out under, no other data, and it is never sent. 0.9.15 refuses a
+  file that holds it, as it refuses any unknown key. A folder with no checkout left to find
+  keeps the name it last went out under on its later days.
+
+  A ledger an earlier version wrote holds keys and no names, so each name the folder could
+  have gone out under is tried against it: its own, its repository's, those of the folders
+  above it, and those used elsewhere on this machine. A name found is kept from the next
+  batch on. One case is out of reach: a linked worktree outside its repository, removed or
+  repointed at a renamed repository before this version's first batch, with the old name
+  nowhere else on the machine, goes once more under another name. Rows already in Workspace
+  stay: no CLI can remove one.
+
+- Give every Anthropic cost row its own id. Rows that differ only by service
+  tier, context window or region used to share an id, which left the provider
+  total right but dropped all of them from the activity snapshot and marked it
+  partial. A row at the documented defaults keeps the id it always had.
+- Read the date Anthropic documents on Claude Code usage rows
+  (`2025-08-08T00:00:00Z`). The reader only built a timestamp from a date-only
+  value, so a row in the documented form with a model in it stopped
+  `sync-provider --provider anthropic` with "Invalid time value" and lost the
+  whole sync, cost report included. A row whose date cannot be read is now left
+  out and the fetch is marked partial. Not confirmed against a live response.
+- Give every Claude Code usage row its own id. Rows for one actor, model and day
+  that differ by `is_remote`, terminal, customer or subscription used to share an
+  id and were all dropped from the activity snapshot.
+- Accept `is_remote` and `tool_actions` under any tool name on Claude Code usage
+  rows, which Anthropic documents, so they no longer show up as response drift
+  notes. A new field under a tool still does.
+
+- Codex sessions that Codex compressed are read. Codex compresses a session it has not
+  written to for 7 days into a `.jsonl.zst` file, and aibill skipped those files without a
+  word: in `workspace push`, in the free report and in MCP. On a machine that has used Codex
+  for a while that is most of its history.
+  - In `workspace push`, a day could go out short. A session compressed between two pushes
+    dropped out of its day, and the next push sent that day again without it, replacing the
+    fuller count Workspace held. Now the day keeps every session. A day an earlier version
+    sent short heals on the next push while it is inside the 30-day window a push reads; a day
+    that has already left that window stays short in Workspace, because no push reads it again.
+  - A push reads a compressed file only when its session could hold an event inside the
+    window: Codex gives a compressed file its session's last write time, and a session writes
+    nothing after that. On one machine that was 64 of 1,348 compressed files.
+  - A plain file wins over a compressed copy of the same session, so one session never counts
+    twice while Codex is replacing one with the other. A compressed file that is cut short,
+    has anything after its end, or is not zstd at all is reported as unreadable, never read as
+    a shorter session.
+  - Reading them needs Node.js 22.15 or later (23.8 or later on Node.js 23). On an older
+    Node.js these commands stop with one line that says how many compressed sessions in their
+    window they could not read and which Node.js reads them, instead of showing or sending a
+    total without them: `workspace push`, the receipt and `--full`, `report`, `report-card`,
+    `improve`, `apply`, `verify inspect`, `verify start` and `watch`. `init` and
+    `doctor --sources` print the same line beside what they read, and the 30-day amount `init`
+    prints leaves those sessions out. `glance` and the status line do not stop; what they show
+    from before the last 7 days leaves those sessions out.
+  - A window that holds a long compressed session reads all of it. On one machine, while two
+    sessions that decode to 2.4 GB were inside the 30 days, every push took 12 to 23 seconds
+    instead of about 1.5, and the first receipt or report 12 to 38 seconds; the receipt and
+    the report keep what they read in a cache, so their later runs took under a second. The
+    first `aibill doctor`, `aibill doctor --sources` or `aibill watch` after upgrading reads
+    every compressed session once, which took 39 seconds on a machine with 1,348 of them.
+  - MCP gets this only when it is rebuilt on this version of the core library.
+
+- Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
+  thread that started in the home folder and moved to a project used to count wholly as the
+  home folder, which has no name in Workspace.
+  - Where an earlier version already sent a Codex day, model and folder under a name this
+    version can find, every event it would have filed there stays there, so that fact does not
+    move, shrink or count twice. Every other Codex event goes under the folder its turn ran in,
+    on a day already sent as on a new one. A folder 0.9.15 sent under its repository's name
+    whose checkout is gone, such as a removed linked worktree outside the repository, may not
+    be found: its day then goes out again under the folder's own name and counts twice, as it
+    does when 0.9.15 itself pushes again.
+  - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: the first and
+    last day this version has placed Codex events on, and hashes of the folders on those days
+    that an earlier version sent. A day is decided once, by the first push that reads it,
+    against what earlier versions sent for it, so a clock set wrong on one push cannot move a
+    sent fact on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
+    that holds it, as it refuses `factNames`.
+
 - Price GPT-5.6 Sol (`gpt-5.6-sol`) by the UTC day of each call. OpenAI now
   says Sol's promotional pricing is available until November 30, 2026; it used
   to say at least through November 21. Usage through 2026-11-30 keeps $4 input,
@@ -138,7 +359,9 @@ historical untagged exception.
   project. Only days this machine has never sent change; a day already sent
   keeps its folder names, because the server keys facts on the name and never
   deletes, so a renamed day would sit beside the old one. Folders outside any
-  checkout, the home directory and unknown paths keep the folder name.
+  checkout, the home directory and unknown paths keep the folder name. This release
+  did not keep that promise for every folder: see "One folder's day goes out under one
+  name" in the release after it.
 - Count a streamed Claude Code message once, from the line that carries its
   final state. Claude Code 2.1.221–2.1.295 writes an assistant message several
   times while streaming: a placeholder first (2–3 output tokens), the final

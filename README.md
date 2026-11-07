@@ -274,9 +274,10 @@ and recovery steps.
   reference with that provider. aibill never sits in the inference path and
   never stores, prints, or proxies provider credentials.
 - **Workspace:** pairing is optional; each explicit push requires consent to
-  the outgoing facts. Project labels may be shared, and each push names the
-  subscription tier each agent is signed in with (the tier id and raw tier
-  string only; `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
+  the outgoing facts. Project labels may be shared, and a push previews and can
+  send the subscription tier each agent is signed in with, in its own batch when
+  no session fact changed (seven fields, never an account, email or token;
+  `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
   in private local pairing state. Disconnect revokes future machine access;
   previously accepted records follow hosted retention rules.
 - **Other explicit network actions:** `outcome github` asks the installed `gh`
