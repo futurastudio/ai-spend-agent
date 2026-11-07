@@ -1,4 +1,4 @@
-import { mkdtemp, chmod, lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, chmod, lstat, mkdir, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -374,7 +374,13 @@ describe("projectIndexStore", () => {
     const { adapters, cacheDirectory } = await isolatedStore();
     await adapters.qualitative.write(qualitativeKey(), callValue("keep"));
     const shardDirectory = join(cacheDirectory, "project-index-v2", "entries", pathHash.slice(0, 2));
-    await writeFile(join(shardDirectory, `${pathHash}.json.999.dead.tmp`), "{ torn", { mode: 0o600 });
+    const deadTemp = join(shardDirectory, `${pathHash}.json.999.dead.tmp`);
+    await writeFile(deadTemp, "{ torn", { mode: 0o600 });
+    // The sweep keeps a temp file whose mtime is not older than the grace cutoff. A file
+    // written in the same millisecond as the sweep's clock read is "not older", so back-date
+    // it: a crash-orphaned file is, by definition, old.
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    await utimes(deadTemp, anHourAgo, anHourAgo);
     await mkdir(join(shardDirectory, "litter.json"), { mode: 0o700 });
     await adapters.collectGarbage({ retainPathHashes: new Set([pathHash]), graceMs: 0 });
     expect((await readdir(shardDirectory)).filter((name) => name.endsWith(".tmp"))).toHaveLength(0);

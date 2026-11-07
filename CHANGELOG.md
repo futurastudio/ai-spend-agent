@@ -240,6 +240,55 @@ historical untagged exception.
     sent fact on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
     that holds it, as it refuses `factNames`.
 
+- Price GPT-5.6 Sol (`gpt-5.6-sol`) by the UTC day of each call. OpenAI now
+  says Sol's promotional pricing is available until November 30, 2026; it used
+  to say at least through November 21. Usage through 2026-11-30 keeps $4 input,
+  $0.40 cached input and $20 output per million tokens ($8, $0.80 and $30 for
+  prompts over 272,000 tokens). From 2026-12-01 it is estimated at $5, $0.50
+  and $30 ($10, $1 and $45 over 272,000 tokens), about 27% more on a
+  cache-heavy Codex day. OpenAI has not published the rate that follows the
+  promotion: these are the rates it listed before the promotion, which match
+  the 20% input and 33% output reductions it describes, and they will be
+  re-checked by December 1 and replaced if it says otherwise. These are
+  API-equivalent estimates of local usage; provider-reported cost is unaffected.
+  As with Gemini 4 Argon and Gemini 2.5 Pro, the estimator never prices
+  `gpt-5.6-sol` without a usage date. Codex calls always carry one, their last
+  activity, and a report prices a session as one slice at that date, so a session
+  still active on December 1 takes the later rates whole, including one resumed
+  that day with weeks of November tokens. `PRICING_TABLE_AS_OF` moves to
+  2026-11-06, with evidence in `provider-contracts/model-pricing-2026-11-06.json`.
+- Price the dated IDs of Claude Opus 4 and 4.1 (`claude-opus-4-20250514`,
+  `claude-opus-4-1-20250805`) at their published $15 input and $75 output per
+  million tokens, as their aliases already were. Older transcripts carrying
+  those IDs used to count as missing.
+- Correct the OpenAI rows of the price table against OpenAI's pricing page of
+  2026-11-07, compared row by row. `gpt-5-pro` and `gpt-5.2-pro`, with their dated
+  snapshots, were priced through the `gpt-5` and `gpt-5.2` rules at 1/12 of their
+  published rates; they now use $15 input and $120 output, and $21 and $168, per
+  million tokens. Cached input moves from the 0.1x default to the published rate
+  on `gpt-4o` ($1.25, 5x), `gpt-4o-mini` ($0.075, 5x), `gpt-4.1-mini` ($0.10,
+  2.5x) and `o3` ($0.50, 2.5x). Five published models that counted as missing now
+  price: `gpt-6.1-terra` ($1 input, $5 output, $0.05 cached; $2, $7.50 and $0.10
+  for prompts over 272,000 tokens), `gpt-5.1` ($1.25, $10, $0.125), `gpt-5.5-pro`
+  and `gpt-5.4-pro` ($30 and $180; $60 and $270 over 272,000 tokens) and `o3-pro`
+  ($20 and $80). OpenAI's table prints a dash for cached input on `gpt-5-pro`,
+  `gpt-5.2-pro`, `gpt-5.4-pro` and `o3-pro`, so usage that reports cached tokens
+  on them counts as missing rather than take a rate nobody published. `gpt-5.5-pro`
+  prints the dash too, but its page says it offers no cached input discount, so
+  its cached tokens cost its input rate. These are API-equivalent estimates of
+  local usage; provider-reported cost and invoices are unaffected.
+  `PRICING_TABLE_AS_OF` moves to 2026-11-07, with evidence in
+  `provider-contracts/model-pricing-2026-11-07.json`.
+- Check the same rules against every model page OpenAI lists, not only the two
+  standard tables. `gpt-5.1-codex-mini` now uses its published $0.25 input, $2
+  output and $0.025 cached; a prefix priced it 5x high. Cached input moves to the
+  published rate on `gpt-4.1-nano` ($0.025) and `o4-mini` ($0.275), 2.5x. Rules
+  that were prefixes now name their IDs, so these count as missing rather than
+  take a rate their pages contradict or do not print: the realtime, audio, search,
+  transcribe and speech variants of `gpt-4o` and `gpt-4o-mini`,
+  `o4-mini-deep-research`, `gpt-5-codex-mini` and any other `gpt-5-` variant no page
+  prices, and `gpt-4o-2024-05-13`, a shut-down snapshot with rates of its own.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed

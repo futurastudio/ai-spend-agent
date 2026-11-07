@@ -3525,6 +3525,30 @@ describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
     }))
   ].join("\n");
 
+  it("prices a Codex session by the UTC day of its last activity across the end of Sol's promotion", () => {
+    const sessionOn = (first: string, second: string) => codexRollout([
+      {
+        at: first,
+        total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+        last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+      },
+      {
+        at: second,
+        total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+        last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+      }
+    ]);
+    const amount = (rollout: string) => aggregateCalls(parseCodexRollout(rollout))[0]!.amountUsd;
+    // 100000*4 + 1000*20 + 400000*0.4, per million.
+    expect(amount(sessionOn("2026-11-30T10:10:00.000Z", "2026-11-30T23:59:59.000Z"))).toBeCloseTo(0.58, 4);
+    // 100000*5 + 1000*30 + 400000*0.5, per million.
+    expect(amount(sessionOn("2026-12-01T00:00:00.000Z", "2026-12-01T10:20:00.000Z"))).toBeCloseTo(0.73, 4);
+    // One cumulative slice, dated at its last activity: a session running across the change takes the later rates.
+    expect(amount(sessionOn("2026-11-30T23:50:00.000Z", "2026-12-01T00:10:00.000Z"))).toBeCloseTo(0.73, 4);
+    // So does a session resumed in December: weeks of November tokens take the later rates whole.
+    expect(amount(sessionOn("2026-11-09T10:00:00.000Z", "2026-12-01T08:00:00.000Z"))).toBeCloseTo(0.73, 4);
+  });
+
   it("prices a >272K cumulative Codex session at the base tier when every request stayed under the threshold", () => {
     // The founder's real shape: cumulative prompt (500K) clears the 272K
     // per-request tier on cache reads alone, but no single turn did — so the
@@ -3595,6 +3619,74 @@ describe("Codex cumulative tiered pricing (per-request tier evidence)", () => {
     // 60000*4 + 500*20 + 40000*0.4, per million = 0.266.
     expect(record.amountUsd).toBeCloseTo(0.266, 4);
     expect(record.costConfidence).toBe("estimated");
+  });
+});
+
+describe("Codex sessions on the OpenAI rows corrected on 2026-11-07", () => {
+  const rollout = (model: string, turns: ReadonlyArray<{ total: Record<string, number>; last: Record<string, number> }>): string => [
+    JSON.stringify({
+      type: "session_meta",
+      payload: { id: "codex-rows-sess", cwd: "/Users/testuser/agent-finops", timestamp: "2026-11-07T10:00:00.000Z" }
+    }),
+    JSON.stringify({ type: "turn_context", payload: { model } }),
+    ...turns.map((turn, index) => JSON.stringify({
+      type: "event_msg",
+      timestamp: `2026-11-07T10:${10 + index}:00.000Z`,
+      payload: { type: "token_count", info: { total_token_usage: turn.total, last_token_usage: turn.last } }
+    }))
+  ].join("\n");
+  // Cumulative 500K prompt on cache reads alone, and no single request over 272K.
+  const cumulative = [
+    {
+      total: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500 },
+      last: { input_tokens: 200_000, cached_input_tokens: 150_000, output_tokens: 500, total_tokens: 200_500 }
+    },
+    {
+      total: { input_tokens: 500_000, cached_input_tokens: 400_000, output_tokens: 1_000 },
+      last: { input_tokens: 250_000, cached_input_tokens: 250_000, output_tokens: 500, total_tokens: 250_500 }
+    }
+  ];
+  const record = (model: string, turns: typeof cumulative) => aggregateCalls(parseCodexRollout(rollout(model, turns)))[0]!;
+  const noCache = [{
+    total: { input_tokens: 100_000, cached_input_tokens: 0, output_tokens: 1_000 },
+    last: { input_tokens: 100_000, cached_input_tokens: 0, output_tokens: 1_000, total_tokens: 101_000 }
+  }];
+
+  it("prices gpt-6.1-terra at its base tier when every request stayed under 272K", () => {
+    // 100000*1 + 1000*5 + 400000*0.05, per million.
+    expect(record("gpt-6.1-terra", cumulative)).toMatchObject({ amountUsd: 0.125, costConfidence: "estimated" });
+  });
+
+  it("prices gpt-5.5-pro's cached tokens at its input rate, as it offers no discount", () => {
+    // 500000*30 + 1000*180, per million.
+    expect(record("gpt-5.5-pro", cumulative)).toMatchObject({ amountUsd: 15.18, costConfidence: "estimated" });
+  });
+
+  it.each(["gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "o3-pro"])("keeps a %s session with cached tokens honestly missing", (model) => {
+    expect(record(model, cumulative)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+  });
+
+  it.each([
+    // 100000*15 + 1000*120, per million.
+    ["gpt-5-pro", 1.62],
+    // 100000*21 + 1000*168, per million.
+    ["gpt-5.2-pro", 2.268],
+    // 100000*30 + 1000*180, per million.
+    ["gpt-5.4-pro", 3.18],
+    // 100000*20 + 1000*80, per million.
+    ["o3-pro", 2.08]
+  ])("prices a %s session that reports no cached tokens", (model, amountUsd) => {
+    expect(record(model, noCache)).toMatchObject({ amountUsd, costConfidence: "estimated" });
+  });
+
+  it("prices a gpt-5.1-codex-mini session at its own rates, not the gpt-5.1-codex prefix's", () => {
+    // 100000*0.25 + 1000*2 + 400000*0.025, per million.
+    expect(record("gpt-5.1-codex-mini", cumulative)).toMatchObject({ amountUsd: 0.037, costConfidence: "estimated" });
+  });
+
+  it("keeps a gpt-5-codex-mini session honestly missing: no page prints a rate for it", () => {
+    expect(record("gpt-5-codex-mini", cumulative)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+    expect(record("gpt-5-codex-mini", noCache)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
   });
 });
 
