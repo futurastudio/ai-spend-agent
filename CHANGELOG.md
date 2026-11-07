@@ -163,6 +163,18 @@ published (see its section).
   nowhere else on the machine, goes once more under another name. Rows already in Workspace
   stay: no CLI can remove one.
 
+  So make the next push on a machine 0.9.15 pushed from with this version, never with
+  0.9.15: by the first case above, 0.9.15 can send the days its last push sent again, each
+  worktree and sub-folder under its own name, and its push after that can do the same to the
+  days that push sent. After this version's first accepted push the state file holds keys
+  0.9.15 does not know, and 0.9.15 refuses it, changing nothing.
+
+- The push preview's "Missing token components" line counts the batch it shows, the one a
+  yes sends. It counted every fact the 30 days formed, including facts Workspace already
+  holds unchanged and facts waiting for a later batch, and it said 0 for a retained batch
+  shown again whatever that batch held. It now reads "Missing token components in this
+  batch". What is sent is unchanged.
+
 - Give every Anthropic cost row its own id. Rows that differ only by service
   tier, context window or region used to share an id, which left the provider
   total right but dropped all of them from the activity snapshot and marked it

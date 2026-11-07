@@ -96,7 +96,12 @@ export type WorkspaceCodexKeptPlaces = { from: string; to: string; places: strin
  */
 export type WorkspaceUnreportedPlan = { agent: WorkspaceAgentPlanFact["agent"]; tier: WorkspaceAgentPlanFact["tier"]; sentAt: string; held: boolean };
 export type WorkspaceAggregate = {
-  facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
+  facts: WorkspaceFact[]; excludedCalls: number;
+  /**
+   * Unknown token components. From `aggregateWorkspaceFacts`, across every fact the calls form; in a push's
+   * preview, across the session facts of the batch it shows, the one a yes sends (see `missingTokenComponents`).
+   */
+  incompleteComponents: number; reasons: string[];
   /** Calls per reason code, beside `reasons`. Set only when a call was excluded. */
   excludedByReason?: Record<string, number>;
   /** Changed facts this batch has no room for; the next preview carries them. Absent when the batch holds them all. */
@@ -717,6 +722,13 @@ export type WorkspaceStatus = { state: "not_connected" } | {
 function sessionFactDays(envelope: WorkspaceEnvelope): string[] {
   return [...new Set(envelope.facts.filter(isWorkspaceSessionFact).map(fact => fact.day))].sort();
 }
+/**
+ * The unknown token components in these session facts. The consent preview counts the batch it shows: a fact the
+ * Workspace already holds unchanged, or one waiting for a later batch, is not part of what a yes sends.
+ */
+function missingTokenComponents(facts: readonly WorkspaceFact[]): number {
+  return facts.reduce((count, fact) => count + Object.values(fact.tokens).filter(value => value === null).length, 0);
+}
 /** Reads only the private pairing record; never logs, a provider, or the Workspace. */
 export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus> {
   let path: string;
@@ -889,8 +901,9 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
       // session facts must reconcile. Tier facts alone have nothing to reconcile, so no
       // session fact waits on a yes: the opt-out and a no both drop them.
       const envelope = pending.envelope;
-      const coverage: WorkspaceAggregate = { facts: envelope.facts.filter(isWorkspaceSessionFact),
-        excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"],
+      const retainedFacts = envelope.facts.filter(isWorkspaceSessionFact);
+      const coverage: WorkspaceAggregate = { facts: retainedFacts,
+        excludedCalls: 0, incompleteComponents: missingTokenComponents(retainedFacts), reasons: ["retained_pending_batch"],
         agentPlanFacts: envelope.facts.filter(isWorkspaceAgentPlanFact) };
       const planOnly = envelope.facts.every(isWorkspaceAgentPlanFact);
       if (!(planOnly && options.planFactsOptOut) && await options.confirm(workspaceCanonicalJson(envelope), coverage)) {
@@ -928,6 +941,7 @@ export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
     const { fitted, partDay } = sessionFactsThatFit(state.device, coverage.facts, coverage.agentPlanFacts, options.generatedAt);
     if (fitted.length < coverage.facts.length) coverage.factsWaiting = coverage.facts.length - fitted.length;
     if (partDay) coverage.partDay = partDay;
+    coverage.incompleteComponents = missingTokenComponents(fitted);
     const envelope = buildWorkspaceEnvelope(state.device, [...fitted, ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
     await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
