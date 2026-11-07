@@ -3,9 +3,10 @@
 All notable changes to `ai-spend-agent` (and the `@agent-finops/*` packages)
 are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
-historical untagged exception.
+historical untagged exception, and `v0.9.16` is a tag that was never
+published (see its section).
 
-## Unreleased
+## 0.9.17 (unreleased)
 
 - One `workspace push` now gets this machine's subscription tier to the
   Workspace. This replaces the 0.9.16 behaviour in which the first push after
@@ -289,7 +290,30 @@ historical untagged exception.
   `o4-mini-deep-research`, `gpt-5-codex-mini` and any other `gpt-5-` variant no page
   prices, and `gpt-4o-2024-05-13`, a shut-down snapshot with rates of its own.
 
-## 0.9.16 (unreleased)
+- Re-review the registered provider documentation pages, on 2026-11-06, and
+  pin their current content, so the exact-ref provider gate that a release tag
+  runs passes again; the gate on `v0.9.16` failed because pages had moved since
+  the 2026-11-04 pins. All fifteen registered pages were fetched and read
+  against the copies reviewed on 2026-11-04 before any fingerprint moved, and
+  four pages join the registry, which now holds nineteen. Every contract stays
+  `current`, and nothing the CLI prices or reports changes with this entry. The
+  review is `docs/sources/provider-contract-review-2026-11-06.md`.
+- Fix the core test that sweeps a temp file a crash left in the project index
+  cache. The sweep keeps a temp file whose modification time is not older than
+  its grace cutoff, and a file the test wrote in the same millisecond as the
+  sweep read its clock counted as not older, so the test failed now and then.
+  The test now back-dates the file; the sweep itself is unchanged.
+
+## 0.9.16 (tagged 2026-11-05, never published)
+
+Tag `v0.9.16` was placed on 2026-11-05 and is never published. Its exact-ref
+provider gate failed: provider documentation pages had moved since the
+2026-11-04 pins its tree carries, so the gate cannot pass at that ref. Its
+`workspace push` would also have halted on a machine with a Claude Team or
+Enterprise seat: the tier it read from `oauthAccount.organizationType` is one
+the Workspace does not accept yet, and beside session facts that refusal
+retained the batch. The tag stays where it is. Everything below ships in
+0.9.17, with the entries above.
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
   Claude Code transcripts (2.1.221 onwards). Claude Code writes an assistant
