@@ -107,8 +107,8 @@ went out under on its later days.
 A session's folder is where each of its turns ran: the working directory on each Claude
 Code log line, and for Codex the latest `turn_context` before each token count. Earlier
 versions filed a Codex session wholly under the folder it started in. Where one of them
-already sent a Codex day, model and folder, every event it would have filed there stays
-there; every other Codex event takes its own turn's folder, on a day already sent as on a
+already sent a Codex day, model and folder under a name this version can find, every event
+it would have filed there stays there; every other Codex event takes its own turn's folder, on a day already sent as on a
 new one. Each Codex day is decided once, by the first push of this version that reads it,
 against what earlier versions sent for it; `~/.aibill/workspace-device.json` keeps the first
 and last day decided and hashes of the sent folders on them. A push also reads the sessions

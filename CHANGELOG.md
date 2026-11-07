@@ -214,10 +214,13 @@ historical untagged exception.
 - Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
   thread that started in the home folder and moved to a project used to count wholly as the
   home folder, which has no name in Workspace.
-  - Where an earlier version already sent a Codex day, model and folder, every event it would
-    have filed there stays there, so no fact that reached Workspace moves, shrinks or counts
-    twice. Every other Codex event goes under the folder its turn ran in, on a day already sent
-    as on a new one.
+  - Where an earlier version already sent a Codex day, model and folder under a name this
+    version can find, every event it would have filed there stays there, so that fact does not
+    move, shrink or count twice. Every other Codex event goes under the folder its turn ran in,
+    on a day already sent as on a new one. A folder 0.9.15 sent under its repository's name
+    whose checkout is gone, such as a removed linked worktree outside the repository, may not
+    be found: its day then goes out again under the folder's own name and counts twice, as it
+    does when 0.9.15 itself pushes again.
   - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: the first and
     last day this version has placed Codex events on, and hashes of the folders on those days
     that an earlier version sent. A day is decided once, by the first push that reads it,
