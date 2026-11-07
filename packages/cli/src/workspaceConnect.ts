@@ -27,13 +27,23 @@ export type WorkspaceFact = {
 };
 /**
  * This machine's subscription tier for one agent, read by core's plan reader
- * and sent beside the day's session facts once the Workspace has announced it
- * accepts the kind. The Workspace keys it `agent_plan:<device>:<agent>`; it has
- * no revision and is replaced on every push.
+ * and sent once the Workspace has announced it accepts the kind: beside changed
+ * session facts, or alone when none changed and the tier is due. The Workspace
+ * keys it `agent_plan:<device>:<agent>`; it has no revision and a later
+ * observation replaces the earlier one.
  */
 export type WorkspaceAgentPlanFact = AgentPlanFact;
 /** What the Workspace accepts, as the header on its last ACCEPT announced it; absent until the first accepted push. */
 export type WorkspaceCapabilities = { agentPlanFacts: boolean };
+/** What the Workspace last accepted for one agent's tier, and when. Written only on an ACCEPT; ids and an instant, no other data. */
+export type WorkspaceAcceptedPlan = { tier: WorkspaceAgentPlanFact["tier"]; tierRaw: string; sentAt: string };
+export type WorkspaceAcceptedPlans = Partial<Record<WorkspaceAgentPlanFact["agent"], WorkspaceAcceptedPlan>>;
+/**
+ * A tier the Workspace accepted is sent alone again once that ACCEPT is older than this.
+ * Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+ * The device policy's retention runs longer than this, so a machine that keeps pushing keeps its tier readable.
+ */
+export const WORKSPACE_PLAN_REFRESH_DAYS = 14;
 export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
 export type WorkspaceFactState = Record<string, { revision: string; contentHash: string }>;
 /** The fields that form a fact's key. */
@@ -58,11 +68,25 @@ export type WorkspaceState = {
   pending: WorkspacePending | null; lastAcceptedAt: string | null;
   disconnect: null | { state: "uncertain" | "revoked"; requestId: string; revokedAt: string | null };
   capabilities?: WorkspaceCapabilities;
+  agentPlansAccepted?: WorkspaceAcceptedPlans;
 };
+/**
+ * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
+ * reports none now (a sign-out, an API key), or sits in an organization whose source the Workspace does
+ * not accept yet; `held` says that organization is a Claude Team or Enterprise seat, the only kinds this
+ * CLI can name. The Workspace hears nothing new about the old fact.
+ * Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+ * That seat plan stays until the owner changes it. Ids and an instant only.
+ */
+export type WorkspaceUnreportedPlan = { agent: WorkspaceAgentPlanFact["agent"]; tier: WorkspaceAgentPlanFact["tier"]; sentAt: string; held: boolean };
 export type WorkspaceAggregate = {
   facts: WorkspaceFact[]; excludedCalls: number; incompleteComponents: number; reasons: string[];
   /** Plan facts prepared beside the session facts (or signed into a retained batch); absent from a bare aggregate. */
   agentPlanFacts?: WorkspaceAgentPlanFact[];
+  /** Set when this push read the sign-in files; nothing is sent for these, so the push says so in words. */
+  unreportedPlans?: WorkspaceUnreportedPlan[];
+  /** A push with nothing to send, to a Workspace that has not announced plan facts: nothing else says the tier is off. Reads nothing, so it cannot know whether this machine has a tier to offer. */
+  tierAwaitsAnnouncement?: true;
 };
 
 export function workspaceCanonicalJson(value: Json): string {
@@ -276,6 +300,26 @@ function validateAgentPlanFact(fact: WorkspaceAgentPlanFact): void {
 function validateEnvelopeFact(fact: WorkspaceEnvelopeFact): void {
   if (isWorkspaceAgentPlanFact(fact)) validateAgentPlanFact(fact); else validateFact(fact);
 }
+function validateAcceptedPlans(plans: WorkspaceAcceptedPlans): void {
+  exactKeys(plans, [], ["claude_code", "codex"]);
+  for (const plan of Object.values(plans)) {
+    exactKeys(plan, ["tier", "tierRaw", "sentAt"]);
+    if (typeof plan.tier !== "string" || !PLAN_TIER_IDS.has(plan.tier) || typeof plan.tierRaw !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(plan.tierRaw) || typeof plan.sentAt !== "string")
+      throw Error("Workspace accepted plan state is invalid.");
+    utcDay(plan.sentAt);
+  }
+}
+/**
+ * The tier sources the Workspace accepts today. Core also reads a Claude Team
+ * or Enterprise organization's type, a source the Workspace still refuses as
+ * `invalid`. Beside session facts that refusal would retain the whole batch and
+ * halt this machine's pushes, so such a fact stays on the machine until the
+ * Workspace accepts the source; the other agent's tier is unaffected.
+ */
+const WORKSPACE_ACCEPTED_PLAN_SOURCES = new Set<string>(["claude_json.oauthAccount.organizationRateLimitTier", "codex_auth.id_token.chatgpt_plan_type"]);
+/** Of the organizations that source reports, the ones this CLI can call a seat; any other type normalizes to `unknown` and names none. */
+const CLAUDE_ORGANIZATION_SEAT_TIERS = new Set<string>(["claude_team", "claude_enterprise"]);
 function validateEnvelope(envelope: WorkspaceEnvelope, device: WorkspaceDevice): void {
   exactKeys(envelope, ["schemaVersion", "deviceGrantId", "grantRevision", "deviceKeyId", "sequence", "nonce", "batchId", "idempotencyKey", "generatedAt", "facts", "manifestHash", "signature"]);
   exactKeys(envelope.signature, ["algorithm", "canonicalization", "value"]);
@@ -303,11 +347,10 @@ function validateDevice(device: WorkspaceDevice): void {
     || device.authorityStartsAt > device.collectionNotBefore || device.collectionNotBefore >= device.expiresAt
     || createPrivateKey(device.privateKeyPem).asymmetricKeyType !== "ed25519") throw Error("Workspace device state is invalid.");
 }
-/** Plan facts ride beside session facts; an envelope never carries plan facts alone. */
+/** Session facts, plan facts, or both; signed and bound the same way whichever it holds. */
 export function buildWorkspaceEnvelope(device: WorkspaceDevice, facts: WorkspaceEnvelopeFact[], generatedAt: string): WorkspaceEnvelope {
   validateDevice(device); utcDay(generatedAt); facts.forEach(validateEnvelopeFact);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(generatedAt) || facts.length < 1 || facts.length > MAX_FACTS
-    || facts.every(isWorkspaceAgentPlanFact))
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(generatedAt) || facts.length < 1 || facts.length > MAX_FACTS)
     throw Error("Workspace envelope bounds are invalid.");
   const sequence = String(BigInt(device.sequence) + 1n);
   if (!UINT.test(sequence)) throw Error("Workspace sequence exceeds its bound.");
@@ -341,13 +384,14 @@ async function readState(path: string): Promise<WorkspaceState | null> {
     if (!info.isFile() || info.nlink !== 1 || info.mode & 0o077 || info.size > MAX_STATE_BYTES || process.getuid && info.uid !== process.getuid())
       throw Error("Workspace state is not a private regular file.");
     const state = JSON.parse(await file.readFile("utf8")) as WorkspaceState;
-    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities"]);
+    exactKeys(state, ["version", "device", "facts", "pending", "lastAcceptedAt", "disconnect"], ["capabilities", "agentPlansAccepted"]);
     if (state.version !== 1 || !state.facts || typeof state.facts !== "object" || Array.isArray(state.facts)) throw Error("Workspace state is invalid.");
     validateDevice(state.device);
     if (state.capabilities !== undefined) {
       exactKeys(state.capabilities, ["agentPlanFacts"]);
       if (typeof state.capabilities.agentPlanFacts !== "boolean") throw Error("Workspace capability state is invalid.");
     }
+    if (state.agentPlansAccepted !== undefined) validateAcceptedPlans(state.agentPlansAccepted);
     if (state.lastAcceptedAt !== null) utcDay(state.lastAcceptedAt);
     for (const [key, value] of Object.entries(state.facts)) {
       exactKeys(value, ["revision", "contentHash"]);
@@ -409,7 +453,7 @@ export type WorkspaceStatus = { state: "not_connected" } | {
   state: "enrollment_pending"; enrollment: "prepared" | "exchange_uncertain"; requestId: string;
 } | {
   state: "connected"; origin: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
-  disconnect: "uncertain" | "revoked" | null; capabilities: WorkspaceCapabilities;
+  disconnect: "uncertain" | "revoked" | null; capabilities: WorkspaceCapabilities; agentPlansAccepted: WorkspaceAcceptedPlans;
   pending: null | { state: WorkspacePending["state"]; factCount: number; generatedAt: string; refusal: WorkspacePending["refusal"] };
 };
 /** Reads only the private pairing record; never logs, a provider, or the Workspace. */
@@ -424,7 +468,8 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
   }
   return { state: "connected", origin: state.device.origin, lastAcceptedAt: state.lastAcceptedAt,
     acknowledgedFacts: Object.keys(state.facts).length, disconnect: state.disconnect?.state ?? null,
-    capabilities: state.capabilities ?? { agentPlanFacts: false }, pending: state.pending ? { state: state.pending.state,
+    capabilities: state.capabilities ?? { agentPlanFacts: false }, agentPlansAccepted: state.agentPlansAccepted ?? {},
+    pending: state.pending ? { state: state.pending.state,
       factCount: state.pending.envelope.facts.length, generatedAt: state.pending.envelope.generatedAt, refusal: state.pending.refusal } : null };
 }
 
@@ -476,26 +521,93 @@ function workspaceNativeRequest(path: string, payload: string, token?: string): 
  });
 }
 
-/** Consent precedes durable preparation. A pending batch is never replaced with a fresh nonce. */
-export async function prepareWorkspacePush(options: {
-  home?: string; calls: readonly LocalAgentCall[]; generatedAt: string;
+type WorkspacePlanFactOptions = {
+  generatedAt: string;
   confirm: (exactPayload: string, coverage: WorkspaceAggregate) => Promise<boolean>;
-  /** Finds a session folder's checkout; absent, facts keep the folder name. */
-  resolveRepositoryRoot?: (directory: string) => string | undefined;
   /**
    * Reads this machine's subscription tier per agent. Called only when the
    * Workspace announced `agentPlanFacts` on its last ACCEPT, the opt-out is not
-   * set, and a new envelope is being built; the facts ride beside changed
-   * session facts, never alone.
+   * set, and no batch is retained. Fails open: a reader that throws, or a fact
+   * this CLI would refuse to sign, leaves that tier out of the batch.
    */
   readAgentPlanFacts?: () => Promise<readonly WorkspaceAgentPlanFact[]>;
   /**
-   * AIBILL_NO_PLAN_TIER: read no plan facts into a new envelope. A retained batch
-   * is never rebuilt: it was dispatched once, the Workspace may hold it, and only
-   * the identical resend reconciles through the replay receipt.
+   * AIBILL_NO_PLAN_TIER: read no plan facts into a new envelope, and drop a retained
+   * batch of tier facts alone without asking. A retained batch that holds session
+   * facts is never rebuilt: it was dispatched once, the Workspace may hold it, and
+   * only the identical resend reconciles through the replay receipt.
    */
   planFactsOptOut?: boolean;
-}): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
+};
+/** A reader that threw says nothing about the seat, so it names no tier as no longer reported. */
+async function offerablePlanFacts(state: WorkspaceState, options: WorkspacePlanFactOptions): Promise<{ facts: WorkspaceAgentPlanFact[]; unreported: WorkspaceUnreportedPlan[] }> {
+  // Capability gating: a Workspace that has not announced agentPlanFacts on an ACCEPT gets none, and no sign-in file is read for it.
+  if (state.capabilities?.agentPlanFacts !== true || options.planFactsOptOut || !options.readAgentPlanFacts) return { facts: [], unreported: [] };
+  let read: readonly WorkspaceAgentPlanFact[];
+  try { read = await options.readAgentPlanFacts(); } catch { return { facts: [], unreported: [] }; }
+  const wellFormed = read.filter(fact => {
+    try { validateAgentPlanFact(fact); return true; } catch { return false; }
+  });
+  const facts = wellFormed.filter(fact => WORKSPACE_ACCEPTED_PLAN_SOURCES.has(fact.source));
+  const unreported = (["claude_code", "codex"] as const).flatMap(agent => {
+    const last = state.agentPlansAccepted?.[agent];
+    return last && !facts.some(fact => fact.agent === agent)
+      ? [{ agent, tier: last.tier, sentAt: last.sentAt, held: wellFormed.some(fact => fact.agent === agent && CLAUDE_ORGANIZATION_SEAT_TIERS.has(fact.tier)) }] : [];
+  });
+  return { facts, unreported };
+}
+/**
+ * A batch of tier facts alone, no longer retained. The local sequence moves past
+ * it: whatever answer this machine saw, the Workspace may hold that batch, and a
+ * machine one sequence behind would have its next batch refused and retained. The
+ * Workspace admits the gap this leaves when it does not hold the batch.
+ */
+function withoutPlanOnlyBatch(state: WorkspaceState, envelope: WorkspaceEnvelope): WorkspaceState {
+  return { ...state, device: { ...state.device, sequence: envelope.sequence }, pending: null };
+}
+function agentPlanFactsDue(facts: readonly WorkspaceAgentPlanFact[], accepted: WorkspaceAcceptedPlans | undefined, now: string): boolean {
+  return facts.some(fact => {
+    const last = accepted?.[fact.agent];
+    return !last || last.tier !== fact.tier || last.tierRaw !== fact.tierRaw
+      || Date.parse(now) - Date.parse(last.sentAt) > WORKSPACE_PLAN_REFRESH_DAYS * 86400000;
+  });
+}
+/**
+ * A batch of tier facts and nothing else, offered only when the tier was never
+ * accepted, changed, or is due a refresh. The same consent path as any batch,
+ * and durable only after consent. Past the grant's end the Workspace answers
+ * with no refusal a batch could be dropped on, so none is built.
+ */
+async function offerPlanOnlyBatch(state: WorkspaceState, save: (state: WorkspaceState) => Promise<void>, coverage: WorkspaceAggregate,
+  options: WorkspacePlanFactOptions): Promise<{ state: "prepared" | "unchanged" | "cancelled"; coverage: WorkspaceAggregate }> {
+  if (Date.parse(options.generatedAt) >= Date.parse(state.device.expiresAt)) return { state: "unchanged", coverage };
+  if (state.capabilities?.agentPlanFacts !== true && !options.planFactsOptOut) coverage.tierAwaitsAnnouncement = true;
+  const { facts: plans, unreported } = await offerablePlanFacts(state, options);
+  coverage.unreportedPlans = unreported;
+  if (!plans.length || !agentPlanFactsDue(plans, state.agentPlansAccepted, options.generatedAt)) return { state: "unchanged", coverage };
+  coverage.agentPlanFacts = plans;
+  const envelope = buildWorkspaceEnvelope(state.device, plans, options.generatedAt);
+  if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
+  await save({ ...state, pending: { envelope, state: "ready", refusal: null } });
+  return { state: "prepared", coverage };
+}
+/**
+ * The tier in the same command whose ACCEPT first announced the capability:
+ * reads no local logs, and leaves the state as it found it unless consent is given.
+ */
+export async function prepareWorkspacePlanFacts(options: WorkspacePlanFactOptions & { home?: string }): Promise<{ state: "prepared" | "unchanged" | "cancelled"; coverage?: WorkspaceAggregate }> {
+  return withState(options.home ?? homedir(), async (state, save) => {
+    if (!state || state.disconnect || state.pending) return { state: "unchanged" };
+    return offerPlanOnlyBatch(state, save, { facts: [], excludedCalls: 0, incompleteComponents: 0, reasons: [] }, options);
+  });
+}
+
+/** Consent precedes durable preparation. A pending batch is never replaced with a fresh nonce. */
+export async function prepareWorkspacePush(options: WorkspacePlanFactOptions & {
+  home?: string; calls: readonly LocalAgentCall[];
+  /** Finds a session folder's checkout; absent, facts keep the folder name. */
+  resolveRepositoryRoot?: (directory: string) => string | undefined;
+}): Promise<{ state: "prepared" | "pending" | "unchanged" | "cancelled" | "dropped"; coverage?: WorkspaceAggregate }> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state) throw Error("This machine is not connected to a Workspace.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
@@ -503,15 +615,23 @@ export async function prepareWorkspacePush(options: {
       if (state.pending.state === "refused") return { state: "pending" };
       // A retained batch is resent exactly as signed, plan facts included: it may already
       // sit on the Workspace with its sequence, and only the identical envelope can be
-      // reconciled by the replay receipt. The opt-out applies from the next new batch.
+      // reconciled by the replay receipt. It is never rebuilt. Beside session facts the
+      // opt-out applies from the next new batch and a no leaves it retained, because the
+      // session facts must reconcile. Tier facts alone have nothing to reconcile, so no
+      // session fact waits on a yes: the opt-out and a no both drop them.
       const envelope = state.pending.envelope;
       const coverage: WorkspaceAggregate = { facts: envelope.facts.filter(isWorkspaceSessionFact),
         excludedCalls: 0, incompleteComponents: 0, reasons: ["retained_pending_batch"],
         agentPlanFacts: envelope.facts.filter(isWorkspaceAgentPlanFact) };
-      if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
-      // Explicit consent permits only the identical retained envelope to be attempted again.
-      if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
-      return { state: "prepared", coverage };
+      const planOnly = envelope.facts.every(isWorkspaceAgentPlanFact);
+      if (!(planOnly && options.planFactsOptOut) && await options.confirm(workspaceCanonicalJson(envelope), coverage)) {
+        // Explicit consent permits only the identical retained envelope to be attempted again.
+        if (state.pending.state === "uncertain") await save({ ...state, pending: { ...state.pending, state: "ready" } });
+        return { state: "prepared", coverage };
+      }
+      if (!planOnly) return { state: "cancelled", coverage };
+      await save(withoutPlanOnlyBatch(state, envelope));
+      return { state: "dropped", coverage };
     }
     const calls = options.resolveRepositoryRoot
       ? collapseRepositoryProjects(options.calls, state.facts, options.resolveRepositoryRoot) : options.calls;
@@ -522,11 +642,10 @@ export async function prepareWorkspacePush(options: {
       && Date.parse(`${fact.day}T00:00:00.000Z`) + 86400000 <= Date.parse(state.device.expiresAt));
     if (eligible.length !== coverage.facts.length) coverage.reasons.push("outside_closed_authorized_days");
     coverage.facts = eligible;
-    if (!coverage.facts.length) return { state: "unchanged", coverage };
-    // Capability gating: a Workspace that has not announced agentPlanFacts on an ACCEPT
-    // gets none, so the first push after its upgrade carries none and the next does.
-    coverage.agentPlanFacts = state.capabilities?.agentPlanFacts === true && !options.planFactsOptOut && options.readAgentPlanFacts
-      ? [...await options.readAgentPlanFacts()] : [];
+    if (!coverage.facts.length) return offerPlanOnlyBatch(state, save, coverage, options);
+    const plans = await offerablePlanFacts(state, options);
+    coverage.agentPlanFacts = plans.facts;
+    coverage.unreportedPlans = plans.unreported;
     const envelope = buildWorkspaceEnvelope(state.device,
       [...coverage.facts.slice(0, MAX_FACTS - coverage.agentPlanFacts.length), ...coverage.agentPlanFacts], options.generatedAt);
     if (!await options.confirm(workspaceCanonicalJson(envelope), coverage)) return { state: "cancelled", coverage };
@@ -548,8 +667,24 @@ export function workspacePushCapabilities(headers: WorkspaceTransportResult["hea
   const pairs = value.split(/[;,\s]+/).filter(Boolean).map(pair => pair.split("="));
   return { agentPlanFacts: pairs.some(([key, flag, ...rest]) => key === "agentPlanFacts" && flag === "1" && rest.length === 0) };
 }
-/** One attempt. Uncertain/refused batches remain retained and cannot silently be resubmitted. */
-export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{ state: "accepted" | "refused" | "unconfirmed"; factCount?: number }> {
+/**
+ * One attempt. Uncertain and refused session batches remain retained and cannot
+ * silently be resubmitted. A batch of tier facts alone must never strand a
+ * machine: no session fact waits behind it, so any refusal drops it, and the
+ * capability goes false until a later ACCEPT announces it again. A refusal does not
+ * prove the Workspace never stored the batch: a reply lost earlier leaves it stored,
+ * and a resend the Workspace's shape check turns away never reaches its replay
+ * lookup. So the drop moves the local sequence past the batch, as any drop does.
+ */
+export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{
+  state: "accepted" | "refused" | "unconfirmed";
+  /** The session facts in the accepted batch. Tier facts are not session facts: they are named, never counted here. */
+  sessionFactCount?: number;
+  /** This ACCEPT turned the stored capability from false to true. */
+  capabilityAnnounced?: boolean;
+  /** The refused batch held tier facts alone and was dropped, not retained. */
+  planOnlyDropped?: boolean;
+}> {
   return withState(options.home ?? homedir(), async (state, save) => {
     if (!state?.pending) throw Error("No prepared Workspace batch exists.");
     if (state.disconnect) throw Error("Disconnect is pending or complete; no facts may be sent.");
@@ -571,14 +706,20 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
         if (counts.some(value => !Number.isSafeInteger(value) || (value as number) < 0)
           || (counts as number[]).reduce((sum, value) => sum + value, 0) !== envelope.facts.length) throw Error("receipt_counts");
         const capabilities = workspacePushCapabilities(result.headers);
-        const facts = { ...state.facts };
+        const facts = { ...state.facts }, agentPlansAccepted = { ...state.agentPlansAccepted };
         for (const fact of envelope.facts)
-          if (!isWorkspaceAgentPlanFact(fact)) facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
-        await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt, capabilities });
-        return { state: "accepted", factCount: envelope.facts.length };
+          if (isWorkspaceAgentPlanFact(fact)) agentPlansAccepted[fact.agent] = { tier: fact.tier, tierRaw: fact.tierRaw, sentAt: receipt.acceptedAt };
+          else facts[workspaceFactKey(fact)] = { revision: fact.factRevision, contentHash: workspaceFactContentHash(fact) };
+        await save({ ...state, device: { ...state.device, sequence: envelope.sequence }, facts, pending: null, lastAcceptedAt: receipt.acceptedAt, capabilities,
+          ...(Object.keys(agentPlansAccepted).length ? { agentPlansAccepted } : {}) });
+        return { state: "accepted", sessionFactCount: envelope.facts.filter(isWorkspaceSessionFact).length, capabilityAnnounced: capabilities.agentPlanFacts && state.capabilities?.agentPlanFacts !== true };
       }
       if (result.status === 409) {
         exactKeys(receipt, ["state", "reason"]);
+        if (receipt.state === "refused" && typeof receipt.reason === "string" && envelope.facts.every(isWorkspaceAgentPlanFact)) {
+          await save({ ...withoutPlanOnlyBatch(dispatched, envelope), capabilities: { agentPlanFacts: false } });
+          return { state: "refused", planOnlyDropped: true };
+        }
         if (receipt.state !== "refused" || !["invalid", "conflict", "stale", "expired"].includes(String(receipt.reason))) throw Error("receipt_refusal");
         await save({ ...dispatched, pending: { envelope, state: "refused", refusal: receipt.reason as WorkspacePending["refusal"] } });
         return { state: "refused" };

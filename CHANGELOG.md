@@ -5,6 +5,68 @@ are documented here. Versions follow [semver](https://semver.org). Public
 release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception.
 
+## Unreleased
+
+- One `workspace push` now gets this machine's subscription tier to the
+  Workspace. This replaces the 0.9.16 behaviour in which the first push after
+  the Workspace's announcement carried no tier and the next one did, and in
+  which plan facts never travelled without session facts: a second push the same
+  day had nothing eligible to send, so the tier could wait a day or never arrive.
+  - The ACCEPT that first announces `agentPlanFacts=1` is followed, in the same
+    command, by a second preview of the tier facts alone; they go as their own
+    batch on yes. Declining sends and retains nothing, and the next push offers
+    them again.
+  - With the capability known and no changed session facts, a push sends the tier
+    alone only if it was never accepted, it changed, or it was last accepted more
+    than 14 days ago, inside the device policy's retention. Otherwise the existing
+    "No changed eligible local session facts" message stands. Tier facts still ride
+    beside session facts when session facts changed.
+  - `~/.aibill/workspace-device.json` gains an optional `agentPlansAccepted` key
+    (per agent: `tier`, `tierRaw`, `sentAt`, no other data), written only on an
+    ACCEPT. Files without it read as before. CLIs older than this one refuse a file
+    that has it, as they refuse any unknown key, so stay on `aibill@latest` once it
+    is written.
+  - A refused tier-only batch never strands a machine. On a 409 with any reason it
+    is dropped rather than retained, the stored capability goes false until a later
+    ACCEPT announces it, one line says the tier facts were not accepted, and session
+    pushes continue. Any drop moves the local sequence past the batch, because the
+    Workspace may hold it; the Workspace admits the gap when it does not. A lost reply
+    still retains the exact envelope, and a retained envelope is never rebuilt: yes
+    resends it identically, while no, no answer, or `AIBILL_NO_PLAN_TIER` drops it, so
+    session facts never wait on a yes. A refused or retained batch that holds session
+    facts stays retained, as before.
+  - A Claude Team or Enterprise seat's tier (`oauthAccount.organizationType`) is now
+    held on the machine rather than sent: the Workspace does not accept that source
+    yet, and beside session facts its refusal would have retained the batch and
+    halted that machine's pushes. The other agent's tier on that machine still goes.
+  - When a tier the Workspace accepted has nothing on the machine to replace it,
+    because the seat moved to Team or Enterprise, the agent signed out, or it moved to
+    an API key, each push that reads the sign-in files prints one line naming the
+    agent, that tier and when it was accepted. The Workspace hears nothing new, and a
+    seat plan set from that tier stays until the owner changes it.
+  - `AIBILL_NO_PLAN_TIER=1` also suppresses the follow-up and tier-only batches, and
+    a machine whose Workspace has not announced the capability still reads no sign-in
+    file. `workspace status` shows when each agent's tier was last reported: the agent,
+    the tier id and the time. The seven fields and what is never read into them are
+    unchanged. No batch is built at or past the grant's end, where the Workspace gives
+    no refusal to drop it on. The opt-out withdraws nothing. For a tier the Workspace
+    already accepted:
+    Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+    That seat plan stays until the owner changes it.
+  - A push with nothing to send, to a Workspace that has not announced the capability,
+    adds one line, and reads no sign-in file to say it:
+    `Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.`
+    No file was read, so it promises no tier: a Claude Team seat with no Codex, or an API
+    key for both agents, reports none that Workspace accepts.
+  - The accepted line counts session facts only and names the tier in words, and the
+    preview says the tier goes as seven fields, not two. A batch with one session fact
+    and two tiers used to print `accepted 3 local session facts`.
+  - `workspace status` says a Claude Team or Enterprise seat does not report its tier
+    yet while no Claude tier has been reported, and reads no sign-in file to say it.
+  - This needs the Workspace release that accepts tier-only envelopes. Against one
+    that does not, the batch is refused as `invalid` and dropped as above, and each
+    session push repeats the second preview and the refusal line. No push halts.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed
