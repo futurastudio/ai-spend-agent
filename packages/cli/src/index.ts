@@ -1844,7 +1844,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const tierAccepted = (coverage: WorkspaceAggregate | undefined) => `Workspace accepted the subscription tier for ${tierNames(coverage)}. This is a plan input, not a billed cost.`;
     const tierDeclined = `Subscription tier not sent. The next workspace push offers it again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierRefused = "Workspace did not accept the subscription tier facts; they were dropped, not retained, and session pushes continue.";
-    const tierWaits = "Subscription tier: not sent yet. It goes right after this machine's next batch of session facts, from a UTC day that has closed, because only an accepted batch tells this CLI that Workspace takes it. No sign-in file was read.";
+    const tierWaits = "Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.";
     const tierKept = "If it had already reached the Workspace, the Workspace keeps that tier.";
     const tierDropped = `Retained subscription tier batch dropped; nothing was sent. ${tierKept} The next workspace push sends any changed session facts and offers the tier again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierOptedOut = `Retained subscription tier batch dropped because ${AGENT_PLAN_TIER_OPT_OUT} is set. ${tierKept}`;

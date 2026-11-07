@@ -39,9 +39,9 @@ export type WorkspaceCapabilities = { agentPlanFacts: boolean };
 export type WorkspaceAcceptedPlan = { tier: WorkspaceAgentPlanFact["tier"]; tierRaw: string; sentAt: string };
 export type WorkspaceAcceptedPlans = Partial<Record<WorkspaceAgentPlanFact["agent"], WorkspaceAcceptedPlan>>;
 /**
- * A tier the Workspace accepted is sent alone again once that ACCEPT is older
- * than this. The Workspace keeps a plan fact for the device policy's retention,
- * which runs longer than this, so a machine that keeps pushing keeps its tier readable.
+ * A tier the Workspace accepted is sent alone again once that ACCEPT is older than this.
+ * Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+ * The device policy's retention runs longer than this, so a machine that keeps pushing keeps its tier readable.
  */
 export const WORKSPACE_PLAN_REFRESH_DAYS = 14;
 export type WorkspaceEnvelopeFact = WorkspaceFact | WorkspaceAgentPlanFact;
@@ -74,8 +74,9 @@ export type WorkspaceState = {
  * A tier the Workspace accepted for an agent, with nothing on this machine to replace it: the agent
  * reports none now (a sign-out, an API key), or sits in an organization whose source the Workspace does
  * not accept yet; `held` says that organization is a Claude Team or Enterprise seat, the only kinds this
- * CLI can name. The Workspace hears nothing new. It keeps the old fact until its retention ends, and a
- * seat plan set from that fact stays after that, until the owner changes it. Ids and an instant only.
+ * CLI can name. The Workspace hears nothing new about the old fact.
+ * Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+ * That seat plan stays until the owner changes it. Ids and an instant only.
  */
 export type WorkspaceUnreportedPlan = { agent: WorkspaceAgentPlanFact["agent"]; tier: WorkspaceAgentPlanFact["tier"]; sentAt: string; held: boolean };
 export type WorkspaceAggregate = {
@@ -84,7 +85,7 @@ export type WorkspaceAggregate = {
   agentPlanFacts?: WorkspaceAgentPlanFact[];
   /** Set when this push read the sign-in files; nothing is sent for these, so the push says so in words. */
   unreportedPlans?: WorkspaceUnreportedPlan[];
-  /** A push with nothing to send, to a Workspace that has not announced plan facts: nothing else tells the person the tier waits. Reads nothing. */
+  /** A push with nothing to send, to a Workspace that has not announced plan facts: nothing else says the tier is off. Reads nothing, so it cannot know whether this machine has a tier to offer. */
   tierAwaitsAnnouncement?: true;
 };
 

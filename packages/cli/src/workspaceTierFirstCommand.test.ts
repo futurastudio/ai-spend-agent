@@ -191,7 +191,7 @@ const tierDroppedLine = "Retained subscription tier batch dropped; nothing was s
 const tierOptedOutLine = "Retained subscription tier batch dropped because AIBILL_NO_PLAN_TIER is set. If it had already reached the Workspace, the Workspace keeps that tier.";
 const teamSeatLine = "A Claude Team or Enterprise seat does not report its tier yet: Workspace does not accept that source.";
 const idleLine = "No changed eligible local session facts to push.";
-const tierWaitsLine = "Subscription tier: not sent yet. It goes right after this machine's next batch of session facts, from a UTC day that has closed, because only an accepted batch tells this CLI that Workspace takes it. No sign-in file was read.";
+const tierWaitsLine = "Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.";
 const unexpectedRead = async (): Promise<never> => { throw Error("unexpected local read"); };
 
 beforeEach(() => {
@@ -585,7 +585,7 @@ describe("with no announced capability", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it("a push with nothing to send says the tier goes right after the next batch of session facts, reads no file and changes nothing to say it, and the next batch keeps that promise", async () => {
+  it("a push with nothing to send says the tier is off until an accepted push announces it, reads no file and changes nothing to say it, and a machine that reports a tier gets it offered right after that push", async () => {
     const m = await machine();
     const before = await readFile(m.statePath, "utf8");
     const nothing = await m.push([]);
@@ -603,6 +603,34 @@ describe("with no announced capability", () => {
     expect(run.stdout.split("\n")).toEqual([sessionsAcceptedLine, tierAcceptedLine]);
     // Announced now, so the line has nothing left to say.
     expect(await m.push([call()])).toMatchObject({ sent: [], messages: [], stdout: idleLine });
+  });
+
+  it.each([
+    ["a Claude Team seat with no Codex", { oauthAccount: { organizationType: "claude_team", organizationRateLimitTier: "default_claude_max_5x" } }, null],
+    ["an API key for both agents", { numStartups: 1 }, { auth_mode: "apikey", tokens: null }],
+  ] as const)("promises no tier on %s, which never has one Workspace accepts: the idle push says the line, and the next session push says nothing about the tier", async (_seat, claudeFile, codexFile) => {
+    const m = await machine({ planFiles: false });
+    await writeFile(join(m.home, ".claude.json"), JSON.stringify(claudeFile));
+    if (codexFile) {
+      await mkdir(join(m.home, ".codex"));
+      await writeFile(join(m.home, ".codex", "auth.json"), JSON.stringify(codexFile));
+    }
+    const idle = await m.push([]);
+    expect(idle).toMatchObject({ exitCode: 0, stderr: "", sent: [], messages: [] });
+    expect(idle.stdout.split("\n")).toEqual([idleLine, tierWaitsLine]);
+    expect(readPlanFiles).not.toHaveBeenCalled();
+
+    const session = await m.push([call()]);
+    expect(session).toMatchObject({ exitCode: 0, stderr: "", stdout: sessionsAcceptedLine });
+    expect(session.sent).toHaveLength(1);
+    expect(session.messages).toHaveLength(1);
+    expect(parse(session.sent[0]!).facts.some(isWorkspaceAgentPlanFact)).toBe(false);
+    expect(readPlanFiles).toHaveBeenCalledTimes(1);
+    const state = await m.state();
+    expect(state.capabilities).toEqual({ agentPlanFacts: true });
+    expect(state.agentPlansAccepted).toBeUndefined();
+    // Announced now, so the next idle push has no line to print, and still nothing goes.
+    expect(await m.push([call()])).toMatchObject({ exitCode: 0, sent: [], messages: [], stdout: idleLine });
   });
 
   it("says nothing under the opt-out, which leaves the tier out whatever comes next, or at the grant's end, where no next batch comes", async () => {

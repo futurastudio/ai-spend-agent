@@ -49,12 +49,15 @@ historical untagged exception.
     file. `workspace status` shows when each agent's tier was last reported: the agent,
     the tier id and the time. The seven fields and what is never read into them are
     unchanged. No batch is built at or past the grant's end, where the Workspace gives
-    no refusal to drop it on. The opt-out withdraws nothing: a tier the Workspace
-    already accepted stays until its retention ends, and a seat plan set from it stays
-    until the owner changes it.
+    no refusal to drop it on. The opt-out withdraws nothing. For a tier the Workspace
+    already accepted:
+    Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+    That seat plan stays until the owner changes it.
   - A push with nothing to send, to a Workspace that has not announced the capability,
-    adds one line saying the tier goes right after the next batch of session facts. It
-    reads no sign-in file to say so.
+    adds one line, and reads no sign-in file to say it:
+    `Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.`
+    No file was read, so it promises no tier: a Claude Team seat with no Codex, or an API
+    key for both agents, reports none that Workspace accepts.
   - The accepted line counts session facts only and names the tier in words, and the
     preview says the tier goes as seven fields, not two. A batch with one session fact
     and two tiers used to print `accepted 3 local session facts`.

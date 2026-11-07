@@ -111,9 +111,10 @@ been reported. Any other agent's tier on that machine is unaffected.
 
 If Workspace already accepted a tier for that agent and the seat then moves to Team
 or Enterprise, the agent signs out, or it moves to an API key or another kind of
-organization, Workspace hears nothing new. It keeps the last tier until that fact's
-retention ends, and a seat plan can be set from it until then. A seat plan set from it
-stays after that, until the owner changes it in Workspace: no later report moves it.
+organization, Workspace hears nothing new about the last tier it accepted.
+Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+A seat plan can be set from it while Workspace reads it, and a seat plan set from it
+stays until the owner changes it in Workspace: no later report moves it.
 Each push that reads the sign-in files prints one line naming the agent, that tier and
 when it was accepted. `workspace status` reads no sign-in file, so it still shows that
 tier as last reported.
@@ -135,8 +136,12 @@ then no sign-in file is read. `workspace status` shows whether it has. After tha
 
 Declining a tier preview sends nothing and retains nothing; the next push offers
 it again. A push that has nothing else to send and no announcement yet has nothing
-to learn it from, so the tier waits for the next batch of session facts. That push
-says so in one line, and reads no sign-in file to say it.
+to learn it from. That push says so in one line, and reads no sign-in file to say it,
+so it cannot know whether this machine has a tier to offer:
+
+```text
+Subscription tier: off until an accepted push announces it, so no sign-in file was read and none was sent. If this machine reports one Workspace accepts, it is offered right after that push, which needs session facts from a UTC day that has closed.
+```
 
 **What stays on the machine.** `~/.aibill/workspace-device.json` records, per
 agent, the tier id, the raw tier string and when Workspace last accepted them. That
@@ -162,9 +167,10 @@ so, and the push goes on. A retained batch that also holds session facts is neve
 rebuilt and is resent exactly as signed, tier facts included, so the opt-out applies
 from the next new batch and the preview says so. On a machine that never reported a
 tier, Workspace then costs those sessions at a tier the owner types by hand. The
-opt-out stops what this machine sends and withdraws nothing: a tier Workspace already
-accepted stays until its retention ends, and a seat plan set from it stays until the
-owner changes it.
+opt-out stops what this machine sends and withdraws nothing. For a tier Workspace
+already accepted:
+Workspace reads it until that fact's retention ends or this machine disconnects; neither deletes the stored row or moves a seat plan set from it.
+That seat plan stays until the owner changes it.
 
 ## If setup or sharing does not complete
 
