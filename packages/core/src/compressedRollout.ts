@@ -183,16 +183,15 @@ export function openTranscriptBytes(file: string, handle?: FileHandle): Readable
   return size;
 }
 
-/** The decoded size a compressed rollout declares in its frame header, or undefined when it declares none or is not one. */
+/**
+ * The decoded size a compressed rollout declares in its frame header, or undefined when its frame declares none. A file
+ * that does not start with a whole zstd frame header is refused with the frame walker's own code, as a read would be.
+ */
 export async function compressedContentSize(handle: FileHandle): Promise<number | undefined> {
   const header = Buffer.alloc(18);
   const { bytesRead } = await handle.read(header, 0, header.length, 0);
-  try {
-    if (bytesRead < 5 || frameHeaderLength(header) > bytesRead) return undefined;
-    return frameContentSize(header);
-  } catch {
-    return undefined;
-  }
+  if (bytesRead < 5 || frameHeaderLength(header) > bytesRead) throw frameError("ZSTD_FRAME_INCOMPLETE");
+  return frameContentSize(header);
 }
 
 /** The same, decoded as UTF-8 text. A plain file reads exactly as it always has. */

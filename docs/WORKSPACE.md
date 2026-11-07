@@ -108,9 +108,10 @@ A session's folder is where each of its turns ran: the working directory on each
 Code log line, and for Codex the latest `turn_context` before each token count. Earlier
 versions filed a Codex session wholly under the folder it started in, so a Codex day one of
 them sent keeps that folder, and only days not yet sent take each turn's own.
-`~/.aibill/workspace-device.json` keeps hashes of those sent days and folders, read once
-before this version's first batch. A push also reads the sessions Codex compressed into
-`.jsonl.zst` after 7 idle days, which needs Node.js 22.15 or later.
+Each Codex day is decided once, by the first push of this version that reads it, against what
+earlier versions sent for it; `~/.aibill/workspace-device.json` keeps the first and last day
+decided and hashes of the sent folders on them. A push also reads the sessions Codex
+compressed into `.jsonl.zst` after 7 idle days, which needs Node.js 22.15 or later.
 
 The push excludes raw prompts, transcript contents, file contents, full paths,
 raw session IDs, dollar amounts, provider credentials, saved reports and local

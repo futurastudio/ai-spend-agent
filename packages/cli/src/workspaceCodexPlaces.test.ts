@@ -10,7 +10,8 @@ import { workspaceClock } from "./lib/clock.js";
 import {
   aggregateWorkspaceFacts, collapseRepositoryProjects, isWorkspaceSessionFact, workspaceCanonicalJson, workspaceDomainHash,
   workspaceFactContentHash, workspaceFactKey, WORKSPACE_ORIGIN,
-  type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceFact, type WorkspaceFactState, type WorkspaceState, type WorkspaceTransport
+  type WorkspaceCodexKeptPlaces, type WorkspaceDevice, type WorkspaceEnvelope, type WorkspaceFact, type WorkspaceFactState, type WorkspaceState,
+  type WorkspaceTransport
 } from "./workspaceConnect.js";
 
 /**
@@ -46,7 +47,7 @@ const asEarlierRelease = (item: LocalAgentCall): LocalAgentCall => {
   return { ...rest, workingDirectory: sessionPlace.workingDirectory, project: sessionPlace.project };
 };
 const noCheckout = () => undefined;
-const facts = (calls: readonly LocalAgentCall[], previous: WorkspaceFactState, kept?: readonly string[]) => {
+const facts = (calls: readonly LocalAgentCall[], previous: WorkspaceFactState, kept?: WorkspaceCodexKeptPlaces) => {
   const placed = collapseRepositoryProjects(calls, previous, noCheckout, {}, kept);
   return { ...aggregateWorkspaceFacts(placed.calls, previous, keyId), keptPlaces: placed.keptPlaces, calls: placed.calls };
 };
@@ -56,7 +57,7 @@ describe("placing Codex events (collapseRepositoryProjects)", () => {
     const placed = facts([stayed(), moved()], {});
     expect(placed.calls.map(item => [item.sessionId, item.workingDirectory, "sessionPlace" in item])).toEqual([["T", home, false], ["S", tilden, false]]);
     expect(placed.facts.map(fact => [fact.projectName, fact.sessionCount])).toEqual(expect.arrayContaining([[null, "1"], ["tilden", "1"]]));
-    expect(placed.keptPlaces).toEqual([]);
+    expect(placed.keptPlaces).toEqual({ from: "2026-10-20", to: "2026-10-20", places: [] });
   });
 
   it("a place an earlier release sent keeps its events, and that is what the first push records", () => {
@@ -64,8 +65,9 @@ describe("placing Codex events (collapseRepositoryProjects)", () => {
     const placed = facts([stayed(), moved()], sent);
     expect(placed.calls.map(item => item.workingDirectory)).toEqual([home, home]);
     expect(placed.facts).toEqual([]);
-    expect(placed.keptPlaces).toHaveLength(1);
-    // Every later push reads the list, not the ledger.
+    expect(placed.keptPlaces).toMatchObject({ from: "2026-10-20", to: "2026-10-20" });
+    expect(placed.keptPlaces?.places).toHaveLength(1);
+    // Every later push reads the list for the days it decided, not the ledger.
     expect(facts([stayed(), moved()], sent, placed.keptPlaces).facts).toEqual([]);
   });
 
@@ -85,6 +87,25 @@ describe("placing Codex events (collapseRepositoryProjects)", () => {
     const sent = record(aggregateWorkspaceFacts([stayed()], {}, keyId).facts);
     const placed = facts([stayed(), moved()], sent);
     expect(placed.facts.map(fact => [fact.projectName, fact.sessionCount, fact.factRevision])).toEqual([[null, "2", "2"]]);
+  });
+
+  it("a day first placed after this release has sent others, as a clock set wrong can bring, is decided against the ledger then", () => {
+    const day = (item: LocalAgentCall, at: string) => ({ ...item, callId: `${item.callId}-${at.slice(0, 10)}`, timestamp: at, startedAt: at });
+    const earlier = [stayed(), moved()], later = [day(stayed(), "2026-10-21T10:00:00.000Z"), day(moved(), "2026-10-21T10:00:00.000Z")];
+    // An earlier release sent 10-20. This release's first push placed only 10-21, so 10-20 is not one of its days.
+    const sent = record(aggregateWorkspaceFacts(earlier.map(asEarlierRelease), {}, keyId).facts);
+    const first = facts(later, sent);
+    expect(first.keptPlaces).toEqual({ from: "2026-10-21", to: "2026-10-21", places: [] });
+    const ledger = record(first.facts, { ...sent });
+    // 10-20 comes into the window: decided now, against what earlier releases sent for it, so its place keeps S.
+    const second = facts([...earlier, ...later], ledger, first.keptPlaces);
+    expect(second.facts).toEqual([]);
+    expect(second.calls.map(item => [item.timestamp.slice(0, 10), item.workingDirectory])).toEqual([
+      ["2026-10-20", home], ["2026-10-20", home], ["2026-10-21", home], ["2026-10-21", tilden]]);
+    expect(second.keptPlaces).toMatchObject({ from: "2026-10-20", to: "2026-10-21" });
+    expect(second.keptPlaces?.places).toHaveLength(1);
+    // A day decided before stays decided: 10-21 went out by turn, and the ledger now holding its home key changes nothing.
+    expect(facts([...earlier, ...later], ledger, second.keptPlaces).facts).toEqual([]);
   });
 
   it("keeps the name the place went out under, as #139 does for any place", () => {
@@ -135,11 +156,12 @@ async function machine(rollouts: Record<string, string[]>) {
       factCount: envelope.facts.length, introduced: envelope.facts.length, replaced: 0, unchanged: 0, acceptedAt: envelope.generatedAt } };
   };
   const now = "2026-11-06T12:00:00.000Z";
-  const read = () => loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, codexSessionsDir: sessions, claudeProjectsDir: claude,
-    sinceIso: workspaceClock.daysBefore(now, 30), untilIso: `${now.slice(0, 10)}T00:00:00.000Z` });
-  const push = async (load = read) => {
+  const read = (at = now) => loadLocalAgentFinancialUsage({ workspaceDailyFacts: true, codexSessionsDir: sessions, claudeProjectsDir: claude,
+    sinceIso: workspaceClock.daysBefore(at, 30), untilIso: `${at.slice(0, 10)}T00:00:00.000Z` });
+  /** One `workspace push`, by this machine's clock `at`, reading the 30 days before it. */
+  const push = async (load?: () => ReturnType<typeof read>, at = now) => {
     const before = requests.length;
-    const result = await runCli(["workspace", "push"], { homeDirectory: root, interactive: true, workspaceNow: now, workspaceLoadCalls: load,
+    const result = await runCli(["workspace", "push"], { homeDirectory: root, interactive: true, workspaceNow: at, workspaceLoadCalls: load ?? (() => read(at)),
       workspaceRepositoryRoot: noCheckout, consentRead: async () => "y", workspaceTransport: transport });
     return { ...result, sent: requests.slice(before).flatMap(envelope => envelope.facts.filter(isWorkspaceSessionFact)) };
   };
@@ -202,7 +224,8 @@ describe("workspace push with Codex rollouts compressing between pushes", () => 
     const first = await m.push();
     expect(first.exitCode).toBe(0);
     expect(m.places()).toEqual(["2026-10-20 (no name) 2 r1", "2026-10-21 (no name) 1 r1", "2026-10-21 tilden 1 r1"]);
-    expect((JSON.parse(await readFile(m.statePath, "utf8")) as WorkspaceState).codexKeptPlaces).toHaveLength(1);
+    expect((JSON.parse(await readFile(m.statePath, "utf8")) as WorkspaceState).codexKeptPlaces).toMatchObject({ from: "2026-10-20", to: "2026-10-21",
+      places: [expect.stringMatching(/^sha256_/)] });
     await m.compress("S");
     expect((await m.push()).sent).toEqual([]);
     await m.compress("T");
@@ -234,6 +257,27 @@ describe("workspace push with Codex rollouts compressing between pushes", () => 
     expect(m.server()).toEqual(await m.truth());
   });
 
+  for (const [label, firstClock, sentDay] of [["ahead, so its first push missed the oldest day", "2026-11-20T12:00:00.000Z", "2026-10-20"],
+    ["behind, so its first push missed the newest day", "2026-10-21T12:00:00.000Z", "2026-10-21"]] as const) {
+    it(`a clock ${label}: once right, the day an earlier release sent keeps its place`, async () => {
+      const m = await machine({ S, T });
+      // An earlier release, with a right clock, sent that day, every event under the session's first folder.
+      await m.sentByEarlierRelease(item => item.timestamp.startsWith(sentDay));
+      expect(m.places()).toEqual([`${sentDay} (no name) 2 r1`]);
+      // This release's first push sees only the other day, which goes out by turn.
+      expect((await m.push(undefined, firstClock)).exitCode).toBe(0);
+      const afterFirst = m.places();
+      expect(afterFirst).toContain(`${sentDay} (no name) 2 r1`);
+      expect(afterFirst.filter(place => place.includes("tilden"))).toHaveLength(1);
+      await m.compress("S");
+      const corrected = await m.push();
+      expect(corrected.exitCode).toBe(0);
+      expect(corrected.sent).toEqual([]);
+      expect(m.places()).toEqual(afterFirst);
+      expect(m.server()).toEqual(await m.truth());
+    });
+  }
+
   it("on a Node.js that cannot read compressed rollouts the push sends nothing, in one line, and leaves the state as it was", async () => {
     const m = await machine({ S, T });
     const before = await readFile(m.statePath, "utf8");
@@ -246,12 +290,15 @@ describe("workspace push with Codex rollouts compressing between pushes", () => 
 });
 
 describe("the state file", () => {
-  it("holds the kept places as hashes only, and refuses any other shape", async () => {
+  it("holds the days decided and the kept places as hashes only, and refuses any other shape", async () => {
     const m = await machine({ S, T });
     await m.push();
     const held = JSON.parse(await readFile(m.statePath, "utf8")) as WorkspaceState;
-    expect(held.codexKeptPlaces).toEqual([]);
-    for (const bad of [["not-a-hash"], "x", [`sha256_${"0".repeat(64)}`, `sha256_${"0".repeat(64)}`]]) {
+    expect(held.codexKeptPlaces).toEqual({ from: "2026-10-20", to: "2026-10-21", places: [] });
+    const hash = `sha256_${"0".repeat(64)}`, days = { from: "2026-10-20", to: "2026-10-21" };
+    for (const bad of [[], [hash], "x", { ...days, places: ["not-a-hash"] }, { ...days, places: [hash, hash] }, { ...days },
+      { from: "2026-10-21", to: "2026-10-20", places: [] }, { from: "2026-02-30", to: "2026-10-21", places: [] },
+      { ...days, places: [], extra: true }]) {
       await writeFile(m.statePath, JSON.stringify({ ...held, codexKeptPlaces: bad }), { mode: 0o600 });
       expect((await m.push()).exitCode, JSON.stringify(bad)).toBe(1);
     }

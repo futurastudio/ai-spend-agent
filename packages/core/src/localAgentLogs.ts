@@ -3107,9 +3107,16 @@ async function selectBoundedQualitativeFiles(
         continue;
       }
       // Budgeted by what it decodes to. A frame that declares no size is over every limit: skipped, never read unbounded.
-      const declared = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
-        .then(async (handle) => { try { return await compressedContentSize(handle); } finally { await handle.close(); } })
-        .catch(() => undefined);
+      // A file that does not open, or does not start with a whole frame header, is unreadable, as it is to a read.
+      let declared: number | undefined;
+      try {
+        const handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try { declared = await compressedContentSize(handle); } finally { await handle.close(); }
+      } catch (error) {
+        recordUnreadableFile(descriptor.id, scan, diagnostics, error);
+        scan.qualitativeCoverage = "partial";
+        continue;
+      }
       budgetBytes = declared ?? policy.maxFileBytes + 1;
     }
     scan.qualitativeFilesEligible = (scan.qualitativeFilesEligible ?? 0) + 1;

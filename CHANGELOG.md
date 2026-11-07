@@ -193,23 +193,33 @@ historical untagged exception.
     nothing after that. On one machine that was 64 of 1,348 compressed files.
   - A plain file wins over a compressed copy of the same session, so one session never counts
     twice while Codex is replacing one with the other. A compressed file that is cut short,
-    has anything after its end, or is not a Codex rollout is reported as unreadable, never
-    read as a shorter session.
-  - Reading them needs Node.js 22.15 or later. On an older Node.js, `workspace push` stops with
-    one line that names the Node.js it needs, and sends nothing. The report and MCP count those
-    files as unreadable and say how many there are and why.
-  - The first `aibill doctor --sources` or `aibill watch` after upgrading reads every compressed
-    session once, which took 39 seconds on a machine with 1,348 of them; later runs read the
-    cache. The report and MCP read the last 30 days, under a second there.
+    has anything after its end, or is not zstd at all is reported as unreadable, never read as
+    a shorter session.
+  - Reading them needs Node.js 22.15 or later. On an older Node.js, a command that adds up
+    local spend over a window holding compressed sessions stops with one line that says how
+    many it could not read and which Node.js reads them, instead of showing or sending a total
+    without them: `workspace push`, the receipt and `--full`, `report`, `report-card`,
+    `improve`, `apply`, `verify inspect`, `verify start` and `watch`. `init` and
+    `doctor --sources` print the same line beside what they read. `glance` and the status line
+    do not stop; what they show from before the last 7 days leaves those sessions out.
+  - A window that holds a long compressed session reads all of it. On one machine, while two
+    sessions that decode to 2.4 GB were inside the 30 days, every push took 12 to 23 seconds
+    instead of about 1.5, and the first receipt or report 12 to 38 seconds; the receipt and
+    the report keep what they read in a cache, so their later runs took under a second. The
+    first `aibill doctor`, `aibill doctor --sources` or `aibill watch` after upgrading reads
+    every compressed session once, which took 39 seconds on a machine with 1,348 of them.
+  - MCP gets this only when it is rebuilt on this version of the core library.
 
 - Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
   thread that started in the home folder and moved to a project used to count wholly as the
   home folder, which has no name in Workspace.
   - Codex days already sent keep the folder they went out under, so no fact that reached
     Workspace moves, shrinks or counts twice. Only days not yet sent take the new folder.
-  - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: hashes of the
-    Codex days and folders an earlier version sent, read once from the ledger before this
-    version's first batch. It stays on this machine and is never sent. 0.9.15 refuses a file
+  - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: the first and
+    last day this version has placed Codex events on, and hashes of the folders on those days
+    that an earlier version sent. A day is decided once, by the first push that reads it,
+    against what earlier versions sent for it, so a clock set wrong on one push cannot move a
+    sent day on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
     that holds it, as it refuses `factNames`.
 
 ## 0.9.16 (unreleased)

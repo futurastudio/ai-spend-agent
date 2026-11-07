@@ -207,6 +207,43 @@ describe("compressed Codex rollouts", () => {
     expect(over.calls).toEqual([]);
     expect(over.sourceScans[0]).toMatchObject({ qualitativeCoverage: "partial", qualitativeFilesSkippedForBudget: 1, qualitativeFilesSelected: 0 });
   });
+
+  it("the bounded activity scan calls a file with no whole frame header unreadable, and one that declares no size over budget", async () => {
+    const whole = zstdCompressSync(Buffer.from(session()));
+    const skippable = Buffer.concat([Buffer.from([0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0]), Buffer.from("skip"), whole]);
+    const noSize = await new Promise<Buffer>((done, fail) => {
+      const parts: Buffer[] = [], encoder = createZstdCompress();
+      encoder.on("data", (part: Buffer) => parts.push(part)).on("end", () => done(Buffer.concat(parts))).on("error", fail);
+      encoder.end(Buffer.from(session()));
+    });
+    const runtimes = localAgentFormatRuntimeRegistry.filter(runtime => runtime.descriptor.id === "codex");
+    const cases: [string, Buffer, string | undefined][] = [
+      ["magic-only", whole.subarray(0, 4), "ZSTD_FRAME_INCOMPLETE"],
+      ["cut-header", whole.subarray(0, 5), "ZSTD_FRAME_INCOMPLETE"],
+      ["skippable-first", skippable, "ZSTD_FRAME_INVALID"],
+      ["plain-text", Buffer.from(session()), "ZSTD_FRAME_INVALID"],
+      ["no-declared-size", noSize, undefined]
+    ];
+    for (const [label, bytes, code] of cases) {
+      const dirs = await sessionsDir();
+      const path = join(dirs.codex, `${name(label)}.zst`);
+      await writeFile(path, bytes);
+      await utimes(path, new Date("2026-10-22T00:00:00.000Z"), new Date("2026-10-22T00:00:00.000Z"));
+      const loaded = await loadLocalAgentUsageWithFormats(runtimes, { codexSessionsDir: join(dirs.root, "sessions"), claudeProjectsDir: dirs.claude,
+        sinceIso: since, qualitativeScan: SAFE_QUALITATIVE_SCAN_POLICY });
+      expect(loaded.calls, label).toEqual([]);
+      expect(loaded.sourceScans[0]?.qualitativeCoverage, label).toBe("partial");
+      if (code) {
+        expect(loaded.diagnostics.filter(item => item.code === "file_unreadable"), label).toEqual([expect.objectContaining({
+          severity: "error", message: `Codex transcript file could not be read (${code}).` })]);
+        expect(loaded.sourceScans[0], label).toMatchObject({ unreadableFiles: 1 });
+        expect(loaded.sourceScans[0]?.qualitativeFilesSkippedForBudget ?? 0, label).toBe(0);
+      } else {
+        expect(loaded.diagnostics.filter(item => item.code === "file_unreadable"), label).toEqual([]);
+        expect(loaded.sourceScans[0], label).toMatchObject({ unreadableFiles: 0, qualitativeFilesSkippedForBudget: 1 });
+      }
+    }
+  });
 });
 
 describe("each Codex event goes under the folder its turn ran in", () => {
