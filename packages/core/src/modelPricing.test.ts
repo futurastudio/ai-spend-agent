@@ -5,10 +5,13 @@ import {
   estimateTokenCostsUsd,
   findPricingRule,
   promptTierThreshold,
-  usesPromptTieredPricing
+  usesPromptTieredPricing,
+  type TokenUsage
 } from "./modelPricing.js";
 
 const usage = { inputTokens: 1_000_000, outputTokens: 100_000 };
+// GPT-5.6 Sol has dated rates, so a usage date is part of every price; this one is inside the promotion.
+const solPromotion = "2026-11-06";
 
 describe("model pricing coverage", () => {
   it("uses current published prices for Claude 5 model IDs", () => {
@@ -46,6 +49,26 @@ describe("model pricing coverage", () => {
       })).toBe(18.6);
     }
   );
+
+  // Official Anthropic pricing reviewed 2026-11-06. The dated IDs are the ones its deprecations
+  // page lists; Opus 4.5 and later keep their own rule, and an unknown suffix stays unpriced.
+  it.each(["claude-opus-4", "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-20250514", "claude-opus-4-1-20250805"])(
+    "%s uses the published Opus 4 and 4.1 prices",
+    (model) => {
+      expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 0 })).toBe(15);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 1_000_000 })).toBe(75);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite5mTokens: 1_000_000 })).toBe(18.75);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheWrite1hTokens: 1_000_000 })).toBe(30);
+      expect(estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })).toBe(1.5);
+    }
+  );
+
+  it("does not stretch the Opus 4 and 4.1 prices to other IDs", () => {
+    expect(estimateTokenCostUsd("claude-opus-4-5-20251101", usage)).toBe(7.5);
+    expect(estimateTokenCostUsd("claude-opus-4-2", usage)).toBeUndefined();
+    expect(estimateTokenCostUsd("claude-opus-4-1-preview", usage)).toBeUndefined();
+    expect(estimateTokenCostUsd("claude-opus-4-1-2025", usage)).toBeUndefined();
+  });
 
   it.each([
     ["claude-sonnet-5", 0.2],
@@ -246,7 +269,7 @@ describe("model pricing coverage", () => {
       }
     );
 
-    it.each(["claude-haiku-5-5", "gpt-5.6-sol"])(
+    it.each(["claude-haiku-5-5", "gpt-5.6-terra"])(
       "%s keeps the same price whatever the usage date",
       (model) => {
         const undated = estimateTokenCostUsd(model, usage);
@@ -256,6 +279,65 @@ describe("model pricing coverage", () => {
         expect(estimateTokenCostUsd(model, usage, "not-a-date")).toBe(undated);
       }
     );
+  });
+
+  // https://developers.openai.com/api/docs/models/gpt-5.6-sol. Reviewed 2026-11-06;
+  // evidence in provider-contracts/model-pricing-2026-11-06.json. "GPT-5.6 Sol's
+  // promotional pricing is available until November 30, 2026." OpenAI names no rate
+  // for afterwards; the schedule returns to the rates published before the promotion.
+  describe("GPT-5.6 Sol dated rates", () => {
+    const belowTier = { inputTokens: 100_000, outputTokens: 10_000 };
+    const cacheOnly = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 100_000 };
+    const aboveTier = { inputTokens: 272_001, outputTokens: 10_000 };
+
+    it("keeps the promotional $4 / $0.40 / $20 and its long-context tier through 2026-11-30 (UTC)", () => {
+      expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, "2026-08-25T09:00:00.000Z")).toBe(0.6);
+      expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, "2026-11-30T23:59:59.999Z")).toBe(0.6);
+      expect(estimateTokenCostUsd("gpt-5.6-sol", cacheOnly, "2026-11-30")).toBe(0.04);
+      // 272,001*8 + 10K*30, per million.
+      expect(estimateTokenCostUsd("gpt-5.6-sol", aboveTier, "2026-11-30")).toBe(2.476);
+    });
+
+    it("returns to $5 / $0.50 / $30 and $10 / $1 / $45 above 272K from 2026-12-01 (UTC)", () => {
+      // 100K*5 + 10K*30, per million.
+      expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, "2026-12-01T00:00:00.000Z")).toBe(0.8);
+      expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, "2026-12-01")).toBe(0.8);
+      expect(estimateTokenCostUsd("GPT-5.6-SOL", belowTier, "2027-06-01T12:00:00.000Z")).toBe(0.8);
+      expect(estimateTokenCostUsd("gpt-5.6-sol", cacheOnly, "2026-12-01")).toBe(0.05);
+      // 272,001*10 + 10K*45, per million.
+      expect(estimateTokenCostUsd("gpt-5.6-sol", aboveTier, "2026-12-01")).toBe(3.17);
+      expect(estimateTokenCostsUsd("gpt-5.6-sol", [belowTier, belowTier], undefined, "2026-12-01")).toBe(1.6);
+    });
+
+    it("keeps the 272K request tier and its evidence rule on both sides of the change", () => {
+      const aggregate = { inputTokens: 300_000, outputTokens: 1 };
+      for (const day of ["2026-11-30", "2026-12-01"]) {
+        expect(usesPromptTieredPricing("gpt-5.6-sol", day)).toBe(true);
+        expect(promptTierThreshold("gpt-5.6-sol", day)).toBe(272_000);
+        expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", undefined, day)).toBe(false);
+        expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", 272_000, day)).toBe(true);
+        expect(canPriceTokenUsageAtScope("gpt-5.6-sol", aggregate, "aggregate", 272_001, day)).toBe(false);
+      }
+      // A cumulative slice whose largest request stayed base-tier prices at the base rate of its day.
+      const cumulative = { inputTokens: 300_000, outputTokens: 10_000 };
+      expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [200_000], "2026-11-30")).toBe(1.4);
+      expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [200_000], "2026-12-01")).toBe(1.8);
+    });
+
+    it.each([undefined, "", "not-a-date", "11/30/2026"])("never guesses a rate for usage dated %j", (usageAt) => {
+      expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, usageAt)).toBeUndefined();
+      expect(estimateTokenCostsUsd("gpt-5.6-sol", [belowTier], undefined, usageAt)).toBeUndefined();
+      // The model is still known, so it is not reported as missing from the price table.
+      expect(findPricingRule("gpt-5.6-sol")).toBeDefined();
+    });
+
+    it("does not touch the other GPT-5.6 models, which have no promotion", () => {
+      for (const model of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
+        const undated = estimateTokenCostUsd(model, belowTier);
+        expect(undated, model).toBeDefined();
+        expect(estimateTokenCostUsd(model, belowTier, "2026-12-01"), model).toBe(undated);
+      }
+    });
   });
 
   // https://aistudio.google.com/docs/pricing.md (the Gemini Developer API docs moved
@@ -361,7 +443,7 @@ describe("model pricing coverage", () => {
     const belowTier = { inputTokens: 100_000, outputTokens: 10_000 };
     // developers.openai.com/api/docs/pricing cross-checked against each model's
     // own doc page, both fetched 2026-08-25. Short-context (<=272K) rates.
-    expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier)!).toBeCloseTo(0.6, 4);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", belowTier, solPromotion)!).toBeCloseTo(0.6, 4);
     expect(estimateTokenCostUsd("gpt-5.6-terra", belowTier)!).toBeCloseTo(0.32, 4);
     expect(estimateTokenCostUsd("gpt-5.6-luna", belowTier)!).toBeCloseTo(0.032, 4);
     expect(estimateTokenCostUsd("gpt-5.5", belowTier)!).toBeCloseTo(0.8, 4);
@@ -377,7 +459,7 @@ describe("model pricing coverage", () => {
   it("pins published cached-input rates for the current GPT families", () => {
     // 100K cache-read tokens only, keeping the request under the 272K tier.
     const cacheOnly = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 100_000 };
-    expect(estimateTokenCostUsd("gpt-5.6-sol", cacheOnly)!).toBeCloseTo(0.04, 5);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", cacheOnly, solPromotion)!).toBeCloseTo(0.04, 5);
     expect(estimateTokenCostUsd("gpt-5.6-terra", cacheOnly)!).toBeCloseTo(0.02, 5);
     expect(estimateTokenCostUsd("gpt-5.6-luna", cacheOnly)!).toBeCloseTo(0.002, 5);
     expect(estimateTokenCostUsd("gpt-5.5", cacheOnly)!).toBeCloseTo(0.05, 5);
@@ -388,14 +470,14 @@ describe("model pricing coverage", () => {
   it("prices the founder-observed Codex model ids exactly", () => {
     // The two model ids that appear in real Codex transcripts. gpt-5.6-sol
     // carried GPT-5.5's numbers ($5/$30) until 0.9.6, overstating input 25% and
-    // output 50% on every OpenAI record.
+    // output 50% on every OpenAI record during its promotion.
     const oneM = { inputTokens: 1_000_000, outputTokens: 0 };
     const oneMOut = { inputTokens: 0, outputTokens: 1_000_000 };
-    expect(estimateTokenCostUsd("gpt-5.6-sol", oneM)).toBe(8);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", oneM, solPromotion)).toBe(8);
     expect(estimateTokenCostUsd("gpt-5.6-terra", oneM)).toBe(4);
     // Output-only requests never cross the prompt-size tier, so these are the
     // published short-context output rates.
-    expect(estimateTokenCostUsd("gpt-5.6-sol", oneMOut)).toBe(20);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", oneMOut, solPromotion)).toBe(20);
     expect(estimateTokenCostUsd("gpt-5.6-terra", oneMOut)).toBe(12);
   });
 
@@ -423,16 +505,218 @@ describe("model pricing coverage", () => {
       // Canonical sources disagree on cyber's >272K tier; Daybreak-gated.
       "gpt-5.6-cyber",
       "gpt-5.5-cyber",
-      // Listed as long-context capable but no per-model rate published.
-      "gpt-5.5-pro",
-      "gpt-5.4-pro",
-      // Pricing page quotes only a $1.25-$1.75 range for this group.
-      "gpt-5.1",
+      // The pricing page has no row for it.
       "gpt-5.3"
     ]) {
       expect(findPricingRule(model), model).toBeUndefined();
       expect(estimateTokenCostUsd(model, usage), model).toBeUndefined();
     }
+  });
+
+  // https://developers.openai.com/api/docs/pricing.md. Reviewed 2026-11-07; evidence in
+  // provider-contracts/model-pricing-2026-11-07.json, whose release test checks every row
+  // of the two standard tables. These pin what each correction changed.
+  describe("OpenAI rows corrected on 2026-11-07", () => {
+    const oneM = (component: Partial<TokenUsage>): TokenUsage => ({ inputTokens: 0, outputTokens: 0, ...component });
+
+    it.each([
+      ["gpt-5-pro", 15, 120],
+      // The dated snapshot OpenAI lists; it took the GPT-5 fallback too.
+      ["gpt-5-pro-2025-10-06", 15, 120],
+      ["GPT-5-PRO", 15, 120],
+      ["gpt-5.2-pro", 21, 168],
+      // The dated snapshot OpenAI lists; it took the gpt-5.2 prefix too.
+      ["gpt-5.2-pro-2025-12-11", 21, 168],
+      ["o3-pro", 20, 80]
+    ])("%s uses its own published input and output rates, with no prompt-size tier", (model, input, output) => {
+      expect(estimateTokenCostUsd(model, oneM({ inputTokens: 1_000_000 }))).toBe(input);
+      expect(estimateTokenCostUsd(model, oneM({ outputTokens: 1_000_000 }))).toBe(output);
+      expect(usesPromptTieredPricing(model)).toBe(false);
+    });
+
+    it("leaves the rules those rows used to fall through to as they were", () => {
+      expect(estimateTokenCostUsd("gpt-5", oneM({ inputTokens: 1_000_000 }))).toBe(1.25);
+      expect(estimateTokenCostUsd("gpt-5-2025-08-07", oneM({ outputTokens: 1_000_000 }))).toBe(10);
+      expect(estimateTokenCostUsd("gpt-5.2", oneM({ inputTokens: 1_000_000 }))).toBe(1.75);
+      expect(estimateTokenCostUsd("gpt-5.2-codex", oneM({ outputTokens: 1_000_000 }))).toBe(14);
+      expect(estimateTokenCostUsd("o3", oneM({ inputTokens: 1_000_000 }))).toBe(2);
+      expect(estimateTokenCostUsd("o3", oneM({ outputTokens: 1_000_000 }))).toBe(8);
+    });
+
+    it.each([
+      ["gpt-4o", 1.25],
+      ["gpt-4o-mini", 0.075],
+      ["gpt-4.1-mini", 0.1],
+      ["o3", 0.5]
+    ])("%s prices cached input at its published rate, not the 0.1x default", (model, cached) => {
+      expect(estimateTokenCostUsd(model, oneM({ cacheReadTokens: 1_000_000 }))).toBe(cached);
+    });
+
+    it("prices gpt-5.1 at its published rates, and its -codex and -mini variants keep their own rules", () => {
+      expect(estimateTokenCostUsd("gpt-5.1", oneM({ inputTokens: 1_000_000 }))).toBe(1.25);
+      expect(estimateTokenCostUsd("gpt-5.1", oneM({ outputTokens: 1_000_000 }))).toBe(10);
+      expect(estimateTokenCostUsd("gpt-5.1", oneM({ cacheReadTokens: 1_000_000 }))).toBe(0.125);
+      expect(estimateTokenCostUsd("gpt-5.1-codex", usage)).toBeCloseTo(2.25, 2);
+      expect(estimateTokenCostUsd("gpt-5.1-mini", usage)).toBeCloseTo(0.45, 2);
+    });
+
+    // Both sides of the 272K request tier: a prompt of exactly 272,000 tokens stays on the base
+    // rates, and one more token moves the whole request.
+    it.each([
+      // model, at the threshold, one token over, cached 100K, cached one token over
+      // 272000*1 + 10000*5, then 272001*2 + 10000*7.5; 100000*0.05, then 272001*0.10, all per million.
+      ["gpt-6.1-terra", 0.322, 0.619, 0.005, 0.0272],
+      // 272000*30 + 10000*180, then 272001*60 + 10000*270; cached tokens bill as input: 100000*30, then 272001*60.
+      ["gpt-5.5-pro", 9.96, 19.0201, 3, 16.3201]
+    ])("%s selects its rates from the 272K request tier, cached tokens included", (model, at, above, cached, cachedAbove) => {
+      expect(usesPromptTieredPricing(model)).toBe(true);
+      expect(promptTierThreshold(model)).toBe(272_000);
+      expect(estimateTokenCostUsd(model, { inputTokens: 272_000, outputTokens: 10_000 })).toBe(at);
+      expect(estimateTokenCostUsd(model, { inputTokens: 272_001, outputTokens: 10_000 })).toBe(above);
+      expect(estimateTokenCostUsd(model, oneM({ cacheReadTokens: 100_000 }))).toBe(cached);
+      expect(estimateTokenCostUsd(model, oneM({ cacheReadTokens: 272_001 }))).toBe(cachedAbove);
+    });
+
+    it("selects gpt-5.4-pro's rates from the 272K request tier", () => {
+      expect(promptTierThreshold("gpt-5.4-pro")).toBe(272_000);
+      // 272000*30 + 10000*180, then 272001*60 + 10000*270, per million.
+      expect(estimateTokenCostUsd("gpt-5.4-pro", { inputTokens: 272_000, outputTokens: 10_000 })).toBe(9.96);
+      expect(estimateTokenCostUsd("gpt-5.4-pro", { inputTokens: 272_001, outputTokens: 10_000 })).toBe(19.0201);
+    });
+
+    it.each(["gpt-6.1-terra", "gpt-5.5-pro", "gpt-5.4-pro"])("%s keeps the evidence rule for aggregates over the tier", (model) => {
+      const aggregate = { inputTokens: 300_000, outputTokens: 1 };
+      expect(canPriceTokenUsageAtScope(model, aggregate, "aggregate")).toBe(false);
+      expect(canPriceTokenUsageAtScope(model, aggregate, "aggregate", 272_000)).toBe(true);
+      expect(canPriceTokenUsageAtScope(model, aggregate, "aggregate", 272_001)).toBe(false);
+      expect(canPriceTokenUsageAtScope(model, aggregate, "request")).toBe(true);
+    });
+
+    // These four rows print a dash for cached input and their pages say nothing more, so the
+    // 0.1x default would be a rate nobody published.
+    describe.each(["gpt-5-pro", "gpt-5-pro-2025-10-06", "gpt-5.2-pro", "gpt-5.4-pro", "o3-pro"])("%s with no cached rate", (model) => {
+      it("is unpriced when usage reports cached tokens, and known to the table", () => {
+        const cached = { inputTokens: 1_000, outputTokens: 1_000, cacheReadTokens: 1 };
+        expect(estimateTokenCostUsd(model, cached)).toBeUndefined();
+        expect(estimateTokenCostsUsd(model, [{ inputTokens: 1_000, outputTokens: 1_000 }, cached])).toBeUndefined();
+        expect(findPricingRule(model)).toBeDefined();
+      });
+
+      it("prices usage whose cached count is zero or absent", () => {
+        const fresh = { inputTokens: 1_000_000, outputTokens: 0 };
+        const rate = estimateTokenCostUsd(model, fresh);
+        expect(rate).toBeGreaterThan(0);
+        expect(estimateTokenCostUsd(model, { ...fresh, cacheReadTokens: 0 })).toBe(rate);
+      });
+    });
+
+    it("keeps gpt-5.4-pro unpriced with cached tokens above the tier as well", () => {
+      expect(estimateTokenCostUsd("gpt-5.4-pro", { inputTokens: 300_000, outputTokens: 1, cacheReadTokens: 1 })).toBeUndefined();
+      expect(estimateTokenCostsUsd("gpt-5.4-pro", [{ inputTokens: 300_000, outputTokens: 1 }], [272_001])).toBe(18.0003);
+    });
+
+    it.each([
+      // Dated snapshots of the rows that used to be unpriced stay unpriced, as gpt-5.5's and gpt-5.4's do.
+      "gpt-5.5-pro-2026-04-23",
+      "gpt-5.4-pro-2026-03-05",
+      "gpt-5.1-2025-11-13",
+      "o3-pro-2025-06-10",
+      "gpt-5.5-2026-04-23",
+      // Siblings nobody publishes.
+      "gpt-6.1-terra-preview",
+      "gpt-6.2-terra",
+      "gpt-5.5-pro-preview",
+      "gpt-5.4-pro-future",
+      "gpt-5.1-future",
+      "gpt-5.6-pro",
+      "gpt-5.3-pro",
+      "o3-pro-future",
+      "o4-pro"
+    ])("%s stays unpriced", (model) => {
+      expect(findPricingRule(model)).toBeUndefined();
+      expect(estimateTokenCostUsd(model, usage)).toBeUndefined();
+    });
+
+    // Checked the same day against every model page OpenAI lists. The release test checks every ID the
+    // evidence lists; these pin the rules that were prefixes and reached IDs at rates their pages contradict.
+    describe("IDs a prefix used to reach", () => {
+      const rates = (model: string) => [
+        estimateTokenCostUsd(model, oneM({ inputTokens: 1_000_000 })),
+        estimateTokenCostUsd(model, oneM({ outputTokens: 1_000_000 })),
+        estimateTokenCostUsd(model, oneM({ cacheReadTokens: 1_000_000 }))
+      ];
+
+      it.each([
+        // The gpt-5.1-codex prefix priced it at 5x these.
+        ["gpt-5.1-codex-mini", 0.25, 2, 0.025],
+        ["GPT-5.1-CODEX-MINI", 0.25, 2, 0.025],
+        // Their cached input took the 0.1x default, 2.5x below these.
+        ["gpt-4.1-nano", 0.1, 0.4, 0.025],
+        ["gpt-4.1-nano-2025-04-14", 0.1, 0.4, 0.025],
+        ["o4-mini", 1.1, 4.4, 0.275],
+        ["o4-mini-2025-04-16", 1.1, 4.4, 0.275]
+      ])("%s uses the rates on its own page", (model, input, output, cached) => {
+        expect(rates(model)).toEqual([input, output, cached]);
+      });
+
+      it.each([
+        ["gpt-4o", 2.5, 10, 1.25],
+        ["gpt-4o-2024-08-06", 2.5, 10, 1.25],
+        ["gpt-4o-2024-11-20", 2.5, 10, 1.25],
+        ["gpt-4o-mini", 0.15, 0.6, 0.075],
+        ["gpt-4o-mini-2024-07-18", 0.15, 0.6, 0.075],
+        ["gpt-5", 1.25, 10, 0.125],
+        ["gpt-5-2025-08-07", 1.25, 10, 0.125],
+        ["gpt-5-chat-latest", 1.25, 10, 0.125],
+        ["gpt-5-search-api", 1.25, 10, 0.125],
+        ["gpt-5-codex", 1.25, 10, 0.125],
+        ["gpt-5.1-codex", 1.25, 10, 0.125],
+        ["gpt-5.1-codex-max", 1.25, 10, 0.125]
+      ])("%s keeps the rates its page prints once the rule names its IDs", (model, input, output, cached) => {
+        expect(rates(model)).toEqual([input, output, cached]);
+      });
+
+      it.each([
+        // Other rates on their own pages than the rule that used to reach them.
+        "gpt-4o-realtime-preview",
+        "gpt-4o-realtime-preview-2025-06-03",
+        "gpt-4o-mini-realtime-preview",
+        "gpt-4o-mini-realtime-preview-2024-12-17",
+        "gpt-4o-mini-tts",
+        "o4-mini-deep-research",
+        "o4-mini-deep-research-2025-06-26",
+        // No text-token rate on their pages.
+        "gpt-4o-transcribe",
+        "gpt-4o-transcribe-diarize",
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-mini-transcribe-2025-12-15",
+        // Their pages print no cached rate, which this rule used to supply.
+        "gpt-4o-audio-preview",
+        "gpt-4o-search-preview",
+        "gpt-4o-mini-audio-preview",
+        "gpt-4o-mini-search-preview",
+        // The snapshot's own rates were not gpt-4o's, and no current page prints them.
+        "gpt-4o-2024-05-13",
+        // Named on the deprecations page, with a rate on no page.
+        "gpt-4o-audio",
+        "gpt-4o-realtime",
+        "gpt-4o-mini-audio",
+        "gpt-4o-mini-realtime",
+        "gpt-5-codex-mini",
+        // Nobody publishes these.
+        "gpt-4o-2099-01-01",
+        "gpt-4o-mini-2099-01-01",
+        "o4-mini-2099-01-01",
+        "gpt-5-2099-01-01",
+        "gpt-5-future",
+        "gpt-5-codex-future",
+        "gpt-5.1-codex-future",
+        "gpt-5.1-codex-mini-2099-01-01"
+      ])("%s counts as missing", (model) => {
+        expect(findPricingRule(model)).toBeUndefined();
+        expect(rates(model)).toEqual([undefined, undefined, undefined]);
+      });
+    });
   });
 
   it("uses the current per-request long-context tiers above 272K tokens", () => {
@@ -450,8 +734,8 @@ describe("model pricing coverage", () => {
     expect(usesPromptTieredPricing("gpt-5.5-codex")).toBe(false);
     expect(usesPromptTieredPricing("gpt-5-nano")).toBe(false);
 
-    expect(estimateTokenCostUsd("gpt-5.6-sol", atThreshold)).toBe(1.288);
-    expect(estimateTokenCostUsd("gpt-5.6-sol", aboveThreshold)).toBe(2.476);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", atThreshold, solPromotion)).toBe(1.288);
+    expect(estimateTokenCostUsd("gpt-5.6-sol", aboveThreshold, solPromotion)).toBe(2.476);
     expect(estimateTokenCostUsd("gpt-5.6-terra", atThreshold)).toBe(0.664);
     expect(estimateTokenCostUsd("gpt-5.6-terra", aboveThreshold)).toBe(1.268);
     expect(estimateTokenCostUsd("gpt-5.6-luna", atThreshold)).toBe(0.0664);
@@ -487,15 +771,15 @@ describe("model pricing coverage", () => {
     // base-tier and prices exactly there — not 2x.
     const cumulative = { inputTokens: 300_000, outputTokens: 10_000 };
     // Base: 300000*4/1e6 + 10000*20/1e6.
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [200_000])).toBe(1.4);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [200_000], solPromotion)).toBe(1.4);
     // Threshold is inclusive on the base side (<=272K stays base).
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_000])).toBe(1.4);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_000], solPromotion)).toBe(1.4);
     // Without evidence the slice's own 300K prompt still selects the 2x tier:
     // 300000*8/1e6 + 10000*30/1e6. Turn-scoped callers are unchanged.
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative])).toBe(2.7);
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [undefined])).toBe(2.7);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], undefined, solPromotion)).toBe(2.7);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [undefined], solPromotion)).toBe(2.7);
     // Evidence that a single request DID cross the threshold keeps the 2x tier.
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_001])).toBe(2.7);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [cumulative], [272_001], solPromotion)).toBe(2.7);
   });
 
   it("gates request-evidence tier pricing exactly at the inclusive threshold", () => {
@@ -528,10 +812,14 @@ describe("model pricing coverage", () => {
     )).toBe(true);
     // 30_186_579*4 + 2_896_454*20 + 1_226_450_816*0.4, all per million.
     expect(estimateTokenCostsUsd(
-      "gpt-5.6-sol", [session], [maxRequestPromptTokens]
+      "gpt-5.6-sol", [session], [maxRequestPromptTokens], solPromotion
     )).toBeCloseTo(669.2557, 4);
+    // The same day of usage after the promotion: 30_186_579*5 + 2_896_454*30 + 1_226_450_816*0.5.
+    expect(estimateTokenCostsUsd(
+      "gpt-5.6-sol", [session], [maxRequestPromptTokens], "2026-12-01"
+    )).toBeCloseTo(851.0519, 4);
     // Left ungated (no evidence) it would have priced ~2x on the above tier —
     // the dishonest outcome this fix avoids.
-    expect(estimateTokenCostsUsd("gpt-5.6-sol", [session])).toBe(1309.5469);
+    expect(estimateTokenCostsUsd("gpt-5.6-sol", [session], undefined, solPromotion)).toBe(1309.5469);
   });
 });

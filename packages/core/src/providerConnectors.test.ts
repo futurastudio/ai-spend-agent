@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { buildActivitySnapshot } from "./activitySnapshot.js";
 import { generateCutList } from "./cutList.js";
 import {
   AGENT_ECONOMICS_RECEIPT_KIND,
@@ -1575,6 +1576,160 @@ describe("real provider connector implementations", () => {
     expect(nullSpeed.id).toBe(legacy.id);
     expect(fast.id).toBe(`${legacy.id}-speed-fast`);
     expect([legacy, standard, fast].map((record) => record.amountUsd)).toEqual([10, 10, 10]);
+  });
+
+  it("keeps default Anthropic cost ids unchanged and gives other tiers, context windows and regions their own id", () => {
+    const options = { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Admin Cost Report" };
+    const row = (extra: Record<string, unknown> = {}) => ({ amount: "1000", currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens",
+      model: "claude-opus-5-5", workspace_id: "wrk_eng", token_type: "uncached_input_tokens", ...extra });
+    const defaults = { service_tier: "standard", context_window: "0-200k", inference_geo: "global", speed: "standard" };
+    const [legacy, documentedDefaults, noRegion, nulls, batch, longContext, regional, fastBatch] = normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-10-19T00:00:00Z",
+      ending_at: "2026-10-20T00:00:00Z", results: [
+        row(),
+        row(defaults),
+        row({ ...defaults, inference_geo: "not_available" }),
+        row({ service_tier: null, context_window: null, inference_geo: null, speed: null }),
+        row({ ...defaults, service_tier: "batch" }),
+        row({ ...defaults, context_window: "200k-1M" }),
+        row({ ...defaults, inference_geo: "us" }),
+        row({ ...defaults, service_tier: "batch", speed: "fast" })
+      ] }] }, options);
+    expect(legacy.id).toBe("anthropic-costs-2026-10-19t00-00-00z-wrk-eng-claude-opus-5-5-uncached-input-tokens");
+    expect(documentedDefaults.id).toBe(legacy.id);
+    expect(noRegion.id).toBe(legacy.id);
+    expect(nulls.id).toBe(legacy.id);
+    expect(batch.id).toBe(`${legacy.id}-tier-batch`);
+    expect(longContext.id).toBe(`${legacy.id}-context-200k-1m`);
+    expect(regional.id).toBe(`${legacy.id}-geo-us`);
+    expect(fastBatch.id).toBe(`${legacy.id}-speed-fast-tier-batch`);
+  });
+
+  it("carries every Anthropic cost row that differs only by tier, context window or region into the snapshot", () => {
+    const row = (amount: string, extra: Record<string, unknown>) => ({ amount, currency: "USD", cost_type: "tokens", description: "Claude Opus 5.5 usage - input tokens",
+      model: "claude-opus-5-5", workspace_id: "wrk_eng", token_type: "uncached_input_tokens",
+      service_tier: "standard", context_window: "0-200k", inference_geo: "global", speed: "standard", ...extra });
+    const records = normalizeAnthropicCostResponse({ data: [{ starting_at: "2026-08-09T00:00:00Z", ending_at: "2026-08-10T00:00:00Z", results: [
+      row("123.78912", {}),
+      row("50.5", { service_tier: "batch" }),
+      row("7", { context_window: "200k-1M" }),
+      row("3", { inference_geo: "us" })
+    ] }] }, { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Admin Cost Report" });
+    expect(new Set(records.map((record) => record.id)).size).toBe(4);
+    const snapshot = buildActivitySnapshot({
+      asOf: "2026-08-10T12:00:00.000Z",
+      generatedAt: "2026-08-10T12:00:00.000Z",
+      records,
+      trustedProviderRecordIds: records.map((record) => record.id)
+    });
+    expect(snapshot.coverage).toMatchObject({ recordsParsed: 4 });
+    expect(snapshot.coverage.validationStatus).not.toBe("partial");
+  });
+
+  describe("the documented Claude Code usage row", () => {
+    // The example on the reference page, with a synthetic actor and organization.
+    const documentedRow = (extra: Record<string, unknown> = {}) => ({
+      actor: { email_address: "dev@example.com", type: "user_actor" },
+      core_metrics: { commits_by_claude_code: 8, lines_of_code: { added: 342, removed: 128 }, num_sessions: 15, pull_requests_by_claude_code: 2 },
+      customer_type: "api",
+      date: "2026-10-19T00:00:00Z",
+      is_remote: false,
+      model_breakdown: [
+        { estimated_cost: { amount: 186, currency: "USD" }, model: "claude-opus-5-5", tokens: { cache_creation: 2340, cache_read: 8790, input: 45230, output: 12450 } },
+        { estimated_cost: { amount: 42, currency: "USD" }, model: "claude-sonnet-5-5", tokens: { cache_creation: 890, cache_read: 3420, input: 23100, output: 5680 } }
+      ],
+      organization_id: "org_1",
+      terminal_type: "iterm.app",
+      tool_actions: { edit_tool: { accepted: 25, rejected: 3 }, multi_edit_tool: { accepted: 12, rejected: 1 }, notebook_edit_tool: { accepted: 5, rejected: 2 }, write_tool: { accepted: 8, rejected: 0 } },
+      subscription_type: "enterprise",
+      ...extra
+    });
+    const read = (rows: unknown[]) => fetchProviderUsageRecords({
+      provider: "anthropic",
+      sourceId: "anthropic-provider-api",
+      authReference: "env:ANTHROPIC_ADMIN_KEY",
+      tokenResolver: () => fakeToken,
+      startTime: Date.parse("2026-10-19T00:00:00.000Z") / 1_000,
+      fetcher: async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: url.includes("claude_code") ? rows : [], has_more: false })
+      })
+    });
+    const options = { sourceId: "anthropic-provider-api", observedFrom: "Anthropic Claude Code Usage Report" };
+
+    it("reads the documented date with models in the row, so the sync does not fail", async () => {
+      const result = await read([documentedRow()]);
+      expect(result.records.map((record) => [record.model, record.timestamp, record.amountUsd])).toEqual([
+        ["claude-opus-5-5", "2026-10-19T00:00:00.000Z", 1.86],
+        ["claude-sonnet-5-5", "2026-10-19T00:00:00.000Z", 0.42]
+      ]);
+      expect(result.coverage).toBe("complete");
+      expect(result.qa.responseDrift).toEqual([]);
+    });
+
+    it("reads the older date-only form as the same day", () => {
+      const [dateOnly] = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow({ date: "2026-10-19" })] }, options);
+      const [documented] = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow()] }, options);
+      expect(dateOnly.id).toBe(documented.id);
+      expect(dateOnly.timestamp).toBe(documented.timestamp);
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["not midnight", "2026-10-19T12:00:00Z"],
+      ["not a date", "yesterday"],
+      ["an impossible day", "2026-13-45T00:00:00Z"],
+      ["February 30, which the clock rolls to March 2", "2026-02-30T00:00:00Z"],
+      ["February 30 in the date-only form", "2026-02-30"],
+      ["February 29 in a year without one", "2026-02-29T00:00:00Z"],
+      ["April 31", "2026-04-31T00:00:00Z"]
+    ])("excludes a row whose date is %s and marks the fetch partial, keeping the other rows", async (_label, date) => {
+      const result = await read([documentedRow({ date }), documentedRow({ terminal_type: "vscode" })]);
+      expect(result.records.map((record) => record.timestamp)).toEqual(["2026-10-19T00:00:00.000Z", "2026-10-19T00:00:00.000Z"]);
+      expect(result.coverage).toBe("partial");
+      expect(result.qa.responseDrift).toEqual(expect.arrayContaining([expect.objectContaining({ field: "data[0].date" })]));
+    });
+
+    it("reads a real leap day as itself, and does not file February 30 under March 2", () => {
+      const [leapDay] = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow({ date: "2028-02-29T00:00:00Z" })] }, options);
+      expect(leapDay.timestamp).toBe("2028-02-29T00:00:00.000Z");
+      expect(normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow({ date: "2026-02-30T00:00:00Z" })] }, options)).toEqual([]);
+    });
+
+    it.each([
+      ["is_remote", { is_remote: true }],
+      ["terminal", { terminal_type: "vscode" }],
+      ["customer", { customer_type: "subscription" }],
+      ["subscription", { subscription_type: "team" }]
+    ])("keeps two rows that differ only by %s apart, so both reach the snapshot", (_label, other) => {
+      const oneModel = { model_breakdown: [{ estimated_cost: { amount: 186, currency: "USD" }, model: "claude-opus-5-5", tokens: { cache_creation: 0, cache_read: 0, input: 10, output: 5 } }] };
+      const records = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow(oneModel), documentedRow({ ...oneModel, ...other })] }, options);
+      expect(new Set(records.map((record) => record.id)).size).toBe(2);
+      const snapshot = buildActivitySnapshot({
+        asOf: "2026-10-20T12:00:00.000Z",
+        generatedAt: "2026-10-20T12:00:00.000Z",
+        records,
+        trustedProviderRecordIds: records.map((record) => record.id)
+      });
+      expect(snapshot.coverage).toMatchObject({ recordsParsed: 2 });
+      expect(snapshot.coverage.validationStatus).not.toBe("partial");
+    });
+
+    it("gives the same documented dimensions the same id on every read", () => {
+      const [first] = normalizeAnthropicClaudeCodeUsageResponse({ data: [documentedRow()] }, options);
+      expect(first.id).toBe("anthropic-claude-code-2026-10-19-dev-example-com-claude-opus-5-5-remote-no-terminal-iterm-app-customer-api-subscription-enterprise");
+    });
+
+    it("still reports a field nobody documents, at the row and under a tool", async () => {
+      const fields = async (extra: Record<string, unknown>) => (await read([documentedRow(extra)])).qa.responseDrift.map((drift) => drift.field);
+      expect(await fields({ is_elsewhere: false })).toContain("data[0].is_elsewhere");
+      expect(await fields({ tool_actions: { edit_tool: { accepted: 1, rejected: 0, cost: 5 } } })).toEqual(["data[0].tool_actions.edit_tool.cost"]);
+    });
+
+    it("accepts a tool Anthropic has not listed yet", async () => {
+      const result = await read([documentedRow({ tool_actions: { future_tool: { accepted: 1, rejected: 0 } } })]);
+      expect(result.qa.responseDrift).toEqual([]);
+    });
   });
 
   it("reads Anthropic cost rows that carry the documented speed field without response drift", async () => {
