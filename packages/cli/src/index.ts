@@ -673,7 +673,14 @@ async function quickstartCommand(
   }
   // ONE evidence bundle, shared with the machine-wide `report` (0.9.6) so the
   // readout and the written artifact can never disagree.
-  const evidence = await loadBroadScanEvidence(args, sinceDays);
+  let evidence: BroadScanEvidence;
+  try {
+    evidence = await loadBroadScanEvidence(args, sinceDays);
+  } catch (error) {
+    const stop = compressedSessionsStop(error);
+    if (stop) return stop;
+    throw error;
+  }
   const {
     records,
     mode,
@@ -1253,6 +1260,32 @@ function trustedAccountingMap<T>(
   return isPlainObject(value) ? value as Record<string, T> : {};
 }
 
+/**
+ * The reader's one line for compressed Codex sessions inside the window that this Node.js cannot decode
+ * (`compressed_unsupported`): how many, and which Node.js reads them. Undefined when there are none.
+ */
+function compressedSessionsNotReadLine(logs: Pick<LocalAgentLogResult, "diagnostics"> | undefined): string | undefined {
+  const lines = logs?.diagnostics.filter((item) => item.code === "compressed_unsupported").map((item) => item.message) ?? [];
+  return lines.length ? lines.join(" ") : undefined;
+}
+
+/** Thrown where a command would total local spend without sessions this Node.js cannot decode. */
+class CompressedSessionsNotRead extends Error {}
+
+/**
+ * A total without those sessions would be a part read as the whole, so a command that adds up local spend stops on the
+ * reader's line instead, as `workspace push` does, and never prints or writes that total.
+ */
+function stopWithoutCompressedSessions(logs: Pick<LocalAgentLogResult, "diagnostics"> | undefined): void {
+  const line = compressedSessionsNotReadLine(logs);
+  if (line) throw new CompressedSessionsNotRead(`${line} Nothing was totaled without them.`);
+}
+
+/** The command's whole answer when it stopped on {@link stopWithoutCompressedSessions}: that one line. */
+function compressedSessionsStop(error: unknown): CliResult | undefined {
+  return error instanceof CompressedSessionsNotRead ? { exitCode: 1, stdout: "", stderr: error.message } : undefined;
+}
+
 async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   const warnings: string[] = [];
   if (args.sample) {
@@ -1274,6 +1307,8 @@ async function loadInstantReadData(args: ParsedArgs): Promise<InstantReadData> {
   ]);
   const financialLogs = financialResult.value;
   const actionEvidence = actionResult.value;
+  // The receipt, --full, the machine-wide report and the report card all read their totals here.
+  stopWithoutCompressedSessions(financialLogs);
   if (!financialLogs) {
     warnings.push("Some local financial evidence could not be read; coverage is incomplete.");
   }
@@ -1829,6 +1864,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       && item.workspaceFactCoverage === "unknown_tokens").reduce((count, item) => count + item.count, 0) ?? 0;
     const blockingDiagnostics = loaded?.diagnostics.filter(item => item.code !== "directory_missing"
       && !(item.code === "unsupported_token_shape" && item.workspaceFactCoverage === "unknown_tokens")) ?? [];
+    // Codex compresses a rollout it has not written to for 7 days. A day built without one would be short, and a fact
+    // sent short replaces the fuller one: so nothing goes, and the one line says which Node.js reads them.
+    const unreadableCompressed = compressedSessionsNotReadLine(loaded);
+    if (unreadableCompressed) return fail(`${unreadableCompressed} No facts were replaced or sent.`);
     if (blockingDiagnostics.length) {
       const counts = new Map<string, number>();
       for (const diagnostic of blockingDiagnostics) {
@@ -4444,7 +4483,15 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
   let iteration = 0;
   while (unbounded || iteration < cycles) {
     const previous = await readOptionalJson<WatchSnapshot | null>(join(stateDir, "watch-latest.json"), null);
-    const { summary, snapshot, records, mode } = await runWatchCycle(stateDir, args);
+    let cycle: Awaited<ReturnType<typeof runWatchCycle>>;
+    try {
+      cycle = await runWatchCycle(stateDir, args);
+    } catch (error) {
+      const stop = compressedSessionsStop(error);
+      if (stop) return stop;
+      throw error;
+    }
+    const { summary, snapshot, records, mode } = cycle;
     if (records.length === 0) {
       return noEvidenceResult("watch", [], args.sinceDays ?? 30);
     }
@@ -4523,6 +4570,8 @@ async function runWatchCycle(stateDir: string, args: ParsedArgs): Promise<{ summ
         codexSessionsDir: process.env.AI_SPEND_CODEX_LOGS_DIR,
         geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR
       }).catch(() => undefined);
+      // Before the cycle is persisted: a short baseline would read as a jump once those sessions are read.
+      stopWithoutCompressedSessions(logs);
       if (logs && logs.records.length > 0) {
         records = logs.records;
         mode = "local_logs";
@@ -7502,6 +7551,8 @@ async function applyArtifactCommand(args: ParsedArgs): Promise<CliResult> {
       codingPrompt.trimEnd()
     ].join("\n"));
   } catch (error) {
+    // The evidence is there and this Node.js cannot decode it: collecting more would not help.
+    if (error instanceof CompressedSessionsNotRead) return { exitCode: 1, stdout: "", stderr: `Couldn't build apply artifacts: ${error.message}` };
     return {
       exitCode: 1,
       stdout: "",
@@ -8195,6 +8246,8 @@ async function buildReportInput(
     geminiSessionsDir: process.env.AI_SPEND_GEMINI_LOGS_DIR,
     sinceIso
   }).catch(() => undefined);
+  // Before anything is persisted: the project report, improve, apply and verify all build on these totals.
+  stopWithoutCompressedSessions(freshFinancialLogs);
   if (needsFreshLogs) {
     if (freshFinancialLogs && freshFinancialLogs.records.length > 0) {
       const records = freshFinancialLogs.records;

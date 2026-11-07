@@ -179,6 +179,55 @@ historical untagged exception.
   rows, which Anthropic documents, so they no longer show up as response drift
   notes. A new field under a tool still does.
 
+- Codex sessions that Codex compressed are read. Codex compresses a session it has not
+  written to for 7 days into a `.jsonl.zst` file, and aibill skipped those files without a
+  word: in `workspace push`, in the free report and in MCP. On a machine that has used Codex
+  for a while that is most of its history.
+  - In `workspace push`, a day could go out short. A session compressed between two pushes
+    dropped out of its day, and the next push sent that day again without it, replacing the
+    fuller count Workspace held. Now the day keeps every session. A day an earlier version
+    sent short heals on the next push while it is inside the 30-day window a push reads; a day
+    that has already left that window stays short in Workspace, because no push reads it again.
+  - A push reads a compressed file only when its session could hold an event inside the
+    window: Codex gives a compressed file its session's last write time, and a session writes
+    nothing after that. On one machine that was 64 of 1,348 compressed files.
+  - A plain file wins over a compressed copy of the same session, so one session never counts
+    twice while Codex is replacing one with the other. A compressed file that is cut short,
+    has anything after its end, or is not zstd at all is reported as unreadable, never read as
+    a shorter session.
+  - Reading them needs Node.js 22.15 or later (23.8 or later on Node.js 23). On an older
+    Node.js these commands stop with one line that says how many compressed sessions in their
+    window they could not read and which Node.js reads them, instead of showing or sending a
+    total without them: `workspace push`, the receipt and `--full`, `report`, `report-card`,
+    `improve`, `apply`, `verify inspect`, `verify start` and `watch`. `init` and
+    `doctor --sources` print the same line beside what they read, and the 30-day amount `init`
+    prints leaves those sessions out. `glance` and the status line do not stop; what they show
+    from before the last 7 days leaves those sessions out.
+  - A window that holds a long compressed session reads all of it. On one machine, while two
+    sessions that decode to 2.4 GB were inside the 30 days, every push took 12 to 23 seconds
+    instead of about 1.5, and the first receipt or report 12 to 38 seconds; the receipt and
+    the report keep what they read in a cache, so their later runs took under a second. The
+    first `aibill doctor`, `aibill doctor --sources` or `aibill watch` after upgrading reads
+    every compressed session once, which took 39 seconds on a machine with 1,348 of them.
+  - MCP gets this only when it is rebuilt on this version of the core library.
+
+- Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
+  thread that started in the home folder and moved to a project used to count wholly as the
+  home folder, which has no name in Workspace.
+  - Where an earlier version already sent a Codex day, model and folder under a name this
+    version can find, every event it would have filed there stays there, so that fact does not
+    move, shrink or count twice. Every other Codex event goes under the folder its turn ran in,
+    on a day already sent as on a new one. A folder 0.9.15 sent under its repository's name
+    whose checkout is gone, such as a removed linked worktree outside the repository, may not
+    be found: its day then goes out again under the folder's own name and counts twice, as it
+    does when 0.9.15 itself pushes again.
+  - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: the first and
+    last day this version has placed Codex events on, and hashes of the folders on those days
+    that an earlier version sent. A day is decided once, by the first push that reads it,
+    against what earlier versions sent for it, so a clock set wrong on one push cannot move a
+    sent fact on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
+    that holds it, as it refuses `factNames`.
+
 ## 0.9.16 (unreleased)
 
 - Fix the qualitative reader's undercount of tool invocations on streamed

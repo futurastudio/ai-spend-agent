@@ -225,8 +225,10 @@ function discoveryPattern(discovery) {
   const ancestor = discovery.ancestorBasename
     ? `${discovery.ancestorBasename}/**/`
     : "";
-  if (discovery.basenamePrefix) return `${discovery.basenamePrefix}*${extension}`;
-  return `${ancestor}*${extension}`;
+  const pattern = discovery.basenamePrefix
+    ? `${discovery.basenamePrefix}*${extension}`
+    : `${ancestor}*${extension}`;
+  return discovery.compressedSuffix ? `${pattern}, ${pattern}${discovery.compressedSuffix}` : pattern;
 }
 
 function bulletList(values, shouldEscape = true) {
