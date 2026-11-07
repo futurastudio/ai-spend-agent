@@ -636,6 +636,87 @@ describe("model pricing coverage", () => {
       expect(findPricingRule(model)).toBeUndefined();
       expect(estimateTokenCostUsd(model, usage)).toBeUndefined();
     });
+
+    // Checked the same day against every model page OpenAI lists. The release test checks every ID the
+    // evidence lists; these pin the rules that were prefixes and reached IDs at rates their pages contradict.
+    describe("IDs a prefix used to reach", () => {
+      const rates = (model: string) => [
+        estimateTokenCostUsd(model, oneM({ inputTokens: 1_000_000 })),
+        estimateTokenCostUsd(model, oneM({ outputTokens: 1_000_000 })),
+        estimateTokenCostUsd(model, oneM({ cacheReadTokens: 1_000_000 }))
+      ];
+
+      it.each([
+        // The gpt-5.1-codex prefix priced it at 5x these.
+        ["gpt-5.1-codex-mini", 0.25, 2, 0.025],
+        ["GPT-5.1-CODEX-MINI", 0.25, 2, 0.025],
+        // Their cached input took the 0.1x default, 2.5x below these.
+        ["gpt-4.1-nano", 0.1, 0.4, 0.025],
+        ["gpt-4.1-nano-2025-04-14", 0.1, 0.4, 0.025],
+        ["o4-mini", 1.1, 4.4, 0.275],
+        ["o4-mini-2025-04-16", 1.1, 4.4, 0.275]
+      ])("%s uses the rates on its own page", (model, input, output, cached) => {
+        expect(rates(model)).toEqual([input, output, cached]);
+      });
+
+      it.each([
+        ["gpt-4o", 2.5, 10, 1.25],
+        ["gpt-4o-2024-08-06", 2.5, 10, 1.25],
+        ["gpt-4o-2024-11-20", 2.5, 10, 1.25],
+        ["gpt-4o-mini", 0.15, 0.6, 0.075],
+        ["gpt-4o-mini-2024-07-18", 0.15, 0.6, 0.075],
+        ["gpt-5", 1.25, 10, 0.125],
+        ["gpt-5-2025-08-07", 1.25, 10, 0.125],
+        ["gpt-5-chat-latest", 1.25, 10, 0.125],
+        ["gpt-5-search-api", 1.25, 10, 0.125],
+        ["gpt-5-codex", 1.25, 10, 0.125],
+        ["gpt-5.1-codex", 1.25, 10, 0.125],
+        ["gpt-5.1-codex-max", 1.25, 10, 0.125]
+      ])("%s keeps the rates its page prints once the rule names its IDs", (model, input, output, cached) => {
+        expect(rates(model)).toEqual([input, output, cached]);
+      });
+
+      it.each([
+        // Other rates on their own pages than the rule that used to reach them.
+        "gpt-4o-realtime-preview",
+        "gpt-4o-realtime-preview-2025-06-03",
+        "gpt-4o-mini-realtime-preview",
+        "gpt-4o-mini-realtime-preview-2024-12-17",
+        "gpt-4o-mini-tts",
+        "o4-mini-deep-research",
+        "o4-mini-deep-research-2025-06-26",
+        // No text-token rate on their pages.
+        "gpt-4o-transcribe",
+        "gpt-4o-transcribe-diarize",
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-mini-transcribe-2025-12-15",
+        // Their pages print no cached rate, which this rule used to supply.
+        "gpt-4o-audio-preview",
+        "gpt-4o-search-preview",
+        "gpt-4o-mini-audio-preview",
+        "gpt-4o-mini-search-preview",
+        // The snapshot's own rates were not gpt-4o's, and no current page prints them.
+        "gpt-4o-2024-05-13",
+        // Named on the deprecations page, with a rate on no page.
+        "gpt-4o-audio",
+        "gpt-4o-realtime",
+        "gpt-4o-mini-audio",
+        "gpt-4o-mini-realtime",
+        "gpt-5-codex-mini",
+        // Nobody publishes these.
+        "gpt-4o-2099-01-01",
+        "gpt-4o-mini-2099-01-01",
+        "o4-mini-2099-01-01",
+        "gpt-5-2099-01-01",
+        "gpt-5-future",
+        "gpt-5-codex-future",
+        "gpt-5.1-codex-future",
+        "gpt-5.1-codex-mini-2099-01-01"
+      ])("%s counts as missing", (model) => {
+        expect(findPricingRule(model)).toBeUndefined();
+        expect(rates(model)).toEqual([undefined, undefined, undefined]);
+      });
+    });
   });
 
   it("uses the current per-request long-context tiers above 272K tokens", () => {

@@ -46,6 +46,15 @@ historical untagged exception.
   local usage; provider-reported cost and invoices are unaffected.
   `PRICING_TABLE_AS_OF` moves to 2026-11-07, with evidence in
   `provider-contracts/model-pricing-2026-11-07.json`.
+- Check the same rules against every model page OpenAI lists, not only the two
+  standard tables. `gpt-5.1-codex-mini` now uses its published $0.25 input, $2
+  output and $0.025 cached; a prefix priced it 5x high. Cached input moves to the
+  published rate on `gpt-4.1-nano` ($0.025) and `o4-mini` ($0.275), 2.5x. Rules
+  that were prefixes now name their IDs, so these count as missing rather than
+  take a rate their pages contradict or do not print: the realtime, audio, search,
+  transcribe and speech variants of `gpt-4o` and `gpt-4o-mini`,
+  `o4-mini-deep-research`, `gpt-5-codex-mini` and any other `gpt-5-` variant no page
+  prices, and `gpt-4o-2024-05-13`, a shut-down snapshot with rates of its own.
 
 ## 0.9.16 (unreleased)
 

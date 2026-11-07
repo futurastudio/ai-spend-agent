@@ -1,9 +1,9 @@
 {
   "retrievedAt": "2026-11-07",
-  "fetchedAt": "2026-11-07T03:07:43Z",
+  "fetchedAt": "2026-11-07T04:55:15Z",
   "currency": "USD",
   "unit": "per million tokens",
-  "basis": "Standard API-equivalent estimates for the OpenAI API, not subscription charges, provider-reported spending or invoices. No Batch, Flex, Fast, Ultrafast, regional or negotiated adjustments. models lists every row of the two standard tables on the pricing page, read by script from the bytes whose hash is below, except gpt-5.6-sol. Sol keeps its dated rates and its re-check in model-pricing-2026-11-06.json, because the release test reads the newest evidence file that lists it; solTodayOnThisPage records what this page prints for it today. A long-context row prices prompts over 272,000 input tokens at the Long context columns for the full request. A null cacheRead or aboveCacheRead means the table prints a dash and the model's own page says nothing more, so no rate is assumed and usage that reports cached tokens on that row is unpriced. gpt-5.5-pro also prints a dash, and its model page says it does not offer a cached input discount, so its cached tokens cost its input rate. The tables' cache-write columns are not compared and this is no OpenAI cache-write price claim: the estimator keeps its generic fallback for those rates and the Codex reader does not read the cache-write count that Codex logs now carry, so written tokens price as plain input. Earlier evidence files are retained unchanged.",
+  "basis": "Standard API-equivalent estimates for the OpenAI API, not subscription charges, provider-reported spending or invoices. No Batch, Flex, Fast, Ultrafast, regional or negotiated adjustments. models lists every row of the two standard tables on the pricing page, read by script from the bytes whose hash is below, except gpt-5.6-sol. Sol keeps its dated rates and its re-check in model-pricing-2026-11-06.json, because the release test reads the newest evidence file that lists it; solTodayOnThisPage records what this page prints for it today. A long-context row prices prompts over 272,000 input tokens at the Long context columns for the full request. A null cacheRead or aboveCacheRead means the table prints a dash and the model's own page says nothing more, so no rate is assumed and usage that reports cached tokens on that row is unpriced. gpt-5.5-pro also prints a dash, and its model page says it does not offer a cached input discount, so its cached tokens cost its input rate. modelPageRows lists every other ID the docs name that the table prices, with the text-token rates of its own page or of the page that lists it as a snapshot, also read by script; gpt-5-search-api comes from the pricing page's grouped table. notPricedOnPurpose lists the IDs the docs name that a prefix used to reach and that count as missing since this review, each with the reason its page gives. The IDs the docs name are those on the model pages listed by the all-models index, their Snapshots sections, the pricing page's table cells and the deprecations page. The tables' cache-write columns are not compared and this is no OpenAI cache-write price claim: the estimator keeps its generic fallback for those rates and the Codex reader does not read the cache-write count that Codex logs now carry, so written tokens price as plain input. Earlier evidence files are retained unchanged.",
   "standardTableRows": 27,
   "solTodayOnThisPage": {
     "input": 4,
@@ -22,7 +22,40 @@
     "https://developers.openai.com/api/docs/models/gpt-5-pro.md",
     "https://developers.openai.com/api/docs/models/o3-pro.md",
     "https://developers.openai.com/api/docs/models/gpt-5.1.md",
-    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md"
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md",
+    "https://developers.openai.com/api/docs/deprecations.md",
+    "https://developers.openai.com/api/docs/models/gpt-4.1.md",
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini.md",
+    "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-audio-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-realtime-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-search-preview.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-transcribe.md",
+    "https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.md",
+    "https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md",
+    "https://developers.openai.com/api/docs/models/gpt-5-codex.md",
+    "https://developers.openai.com/api/docs/models/gpt-5-mini.md",
+    "https://developers.openai.com/api/docs/models/gpt-5-nano.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.2.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-codex.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.3-codex.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-mini.md",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-nano.md",
+    "https://developers.openai.com/api/docs/models/o4-mini.md",
+    "https://developers.openai.com/api/docs/models/o4-mini-deep-research.md",
+    "https://web.archive.org/web/20260426061824id_/https://developers.openai.com/api/docs/pricing"
   ],
   "pageContentSha256": {
     "https://developers.openai.com/api/docs/pricing.md": "f1ade44afc62fd8a12dd6e199bcecaa989a94c9b691aa620a34e1504ff62ff57",
@@ -32,7 +65,40 @@
     "https://developers.openai.com/api/docs/models/gpt-5-pro.md": "ed0e0caec9df665bfe5800baeefcfea8a067597aa8c2d23702f920976d9155ac",
     "https://developers.openai.com/api/docs/models/o3-pro.md": "3b41ae9e053c803346698ebdaf1a3cb5a02067d5f149a94681a462f361d07fed",
     "https://developers.openai.com/api/docs/models/gpt-5.1.md": "f74abd8073ae69ffeffa8f4773ef63d9a1224badecc717682db9fb1911dcfb7e",
-    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md": "6a73b3e2e941fbe3813636d5bd2d653ff190e49cc3692eaf8daa3bb125c877f8"
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md": "6a73b3e2e941fbe3813636d5bd2d653ff190e49cc3692eaf8daa3bb125c877f8",
+    "https://developers.openai.com/api/docs/deprecations.md": "49e382e18bf8e14ea82d099a21a1f2b818b72603424518519eb908b419b45be1",
+    "https://developers.openai.com/api/docs/models/gpt-4.1.md": "baa0f3aa720c9ab9faf3d060d56549ecc6273dd366336d7269c92bebe95b3389",
+    "https://developers.openai.com/api/docs/models/gpt-4.1-mini.md": "06d8ad50f5d80f51a437dda8aa391e52e83ccf18672347a1d572e33b565754a4",
+    "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md": "5b4b61b8b7cdd94378d852a7c96803860829db784a82eec1f8af5b2603894ba0",
+    "https://developers.openai.com/api/docs/models/gpt-4o.md": "22950725c1d75a0098d1c5f046f10c946ffdd41e76d37d14b44e80a6dab8abee",
+    "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md": "3193f2ab4fcd7c76f18b4f4e517c7036e6f32e49a58085414e14f33c31cad6eb",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini.md": "93e14f848cf90f35dd77a270998a9b2b440ef08d724da11947b0dee26179f09b",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-audio-preview.md": "ac535846177436af04776e30e0147a4e528726962d43d992df6be6cbca0e1902",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-realtime-preview.md": "4ca883e8d76eba226b6d174285e286878364d11a5a5f2ad99a3f7ebdcf65ec87",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview.md": "28514348b1a45be8ea7e0c712a0838926468057db54bdbdd8a9acc39e9e2e241",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md": "f0a312513dc649bb572fe539f75292358432587f9e783e945a05a571960d0f86",
+    "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md": "42ee958c693c89c2f8cb052e6d62e0d51032ad261b2f3935b24b829a0ea61661",
+    "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md": "bf5639124e3dd5f65dee6fdbf2bb4171c768e6d706e2c72f2fcd20872e3baa13",
+    "https://developers.openai.com/api/docs/models/gpt-4o-search-preview.md": "dba9c2a42595435fdddbbac13a20e69029487bd5c7ef3a9f05ba0bdd5fd82f51",
+    "https://developers.openai.com/api/docs/models/gpt-4o-transcribe.md": "cc2a3df83d99f36b43e63f5eae30d43c2b1909e9e7837f4b9d6445e453cdb3cd",
+    "https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize.md": "25f2e5a8c8c12d3a590b162bf5ef2c251a80760ce6ad3301cdd76ba38574f81f",
+    "https://developers.openai.com/api/docs/models/gpt-5.md": "9a43b63c9b63dfc74104eba1739f72dabb8ac7a5b8d697e88aa1466f96092059",
+    "https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md": "1b6f97e2396994920e972b84f6319dcc5d73a53345d8ffe63c7488fc3dac3a72",
+    "https://developers.openai.com/api/docs/models/gpt-5-codex.md": "4b07f8f0d1514497cabafd508bb21e215fb0f2658db25078289c2749d2362326",
+    "https://developers.openai.com/api/docs/models/gpt-5-mini.md": "a483623704a4cfcc090feaed29cc3b5a9af61ad64e8925a6ed0593e07ca2695c",
+    "https://developers.openai.com/api/docs/models/gpt-5-nano.md": "820ffae70cff96b13f2203766f75fa8ebcafeaeb9d970cda021280ae13cc922f",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex.md": "808b628d169ed222f2c342bdada07dfb172c2ff16773d28232a8a3f92ebdf4be",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md": "2fcf16af6e06c9e6902f826d62bc2fe7569ee7226f52d2041200e570b207eac0",
+    "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md": "fbf4ddc350f8b846b8723167d8f8a1c773b70c5d93fe1c708513eb71bf0e4482",
+    "https://developers.openai.com/api/docs/models/gpt-5.2.md": "4f0a82d85589c75952cdd147a9bf98a66b14fac309ab678983b27b8afcba3b0e",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md": "8200fb1c287a8d59065503800b670128bd349b4cef407ec0c8846801de6d3616",
+    "https://developers.openai.com/api/docs/models/gpt-5.2-codex.md": "1e6cb6dd5bb1e9a52c660646602427dc714e3b4f880fa765b51187b1b1c14359",
+    "https://developers.openai.com/api/docs/models/gpt-5.3-codex.md": "18a6039b6e2617159b8358670ce40a62346c9206bf9125a745571ed0e794204b",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-mini.md": "83625d2f3548c29379b3b2a44b183a26d266d2f5c3ffda7161dd19c9213a9058",
+    "https://developers.openai.com/api/docs/models/gpt-5.4-nano.md": "c5b4ae3bbcc8e0580808b12eadc74ccc05aa16c4b7bad160deb22e62b13bc0b1",
+    "https://developers.openai.com/api/docs/models/o4-mini.md": "e3731b90c851bf9f6d229a4b2fc2242e68eb5532c24d13f64eca7b375ec866e0",
+    "https://developers.openai.com/api/docs/models/o4-mini-deep-research.md": "b3755a47eba76590bb63de34adea619d440575f33f99cec9c746f694fc64de4c",
+    "https://web.archive.org/web/20260426061824id_/https://developers.openai.com/api/docs/pricing": "7eb1c91734c007ccbe207354727ce0f22e141b95d9e32537c6febe2a2c481559"
   },
   "models": [
     {
@@ -258,6 +324,447 @@
     {
       "id": "o3",
       "source": "https://developers.openai.com/api/docs/pricing.md",
+      "input": 2,
+      "output": 8,
+      "cacheRead": 0.5
+    }
+  ],
+  "modelPageRows": [
+    {
+      "id": "gpt-4.1-2025-04-14",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1.md",
+      "status": "Deprecated",
+      "input": 2,
+      "output": 8,
+      "cacheRead": 0.5
+    },
+    {
+      "id": "gpt-4.1-mini-2025-04-14",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1-mini.md",
+      "status": "Deprecated",
+      "input": 0.4,
+      "output": 1.6,
+      "cacheRead": 0.1
+    },
+    {
+      "id": "gpt-4.1-nano",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md",
+      "status": "Shut down",
+      "input": 0.1,
+      "output": 0.4,
+      "cacheRead": 0.025
+    },
+    {
+      "id": "gpt-4.1-nano-2025-04-14",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md",
+      "status": "Shut down",
+      "input": 0.1,
+      "output": 0.4,
+      "cacheRead": 0.025
+    },
+    {
+      "id": "gpt-4o-2024-08-06",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o.md",
+      "status": "Deprecated",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": 1.25
+    },
+    {
+      "id": "gpt-4o-2024-11-20",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o.md",
+      "status": "Deprecated",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": 1.25
+    },
+    {
+      "id": "gpt-4o-mini-2024-07-18",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini.md",
+      "status": "Deprecated",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0.075
+    },
+    {
+      "id": "gpt-5-2025-08-07",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.md",
+      "status": "Deprecated",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5-chat-latest",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-chat-latest.md",
+      "status": "Shut down",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5-codex",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-codex.md",
+      "status": "Shut down",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5-mini-2025-08-07",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-mini.md",
+      "status": "Deprecated",
+      "input": 0.25,
+      "output": 2,
+      "cacheRead": 0.025
+    },
+    {
+      "id": "gpt-5-nano-2025-08-07",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-nano.md",
+      "status": "Deprecated",
+      "input": 0.05,
+      "output": 0.4,
+      "cacheRead": 0.005
+    },
+    {
+      "id": "gpt-5-pro-2025-10-06",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-pro.md",
+      "status": "Deprecated",
+      "input": 15,
+      "output": 120,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-5-search-api",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "status": "Available",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5.1-codex",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.1-codex.md",
+      "status": "Shut down",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5.1-codex-max",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-max.md",
+      "status": "Shut down",
+      "input": 1.25,
+      "output": 10,
+      "cacheRead": 0.125
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini.md",
+      "status": "Shut down",
+      "input": 0.25,
+      "output": 2,
+      "cacheRead": 0.025
+    },
+    {
+      "id": "gpt-5.2-2025-12-11",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2.md",
+      "status": "Available",
+      "input": 1.75,
+      "output": 14,
+      "cacheRead": 0.175
+    },
+    {
+      "id": "gpt-5.2-chat-latest",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest.md",
+      "status": "Shut down",
+      "input": 1.75,
+      "output": 14,
+      "cacheRead": 0.175
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2-codex.md",
+      "status": "Shut down",
+      "input": 1.75,
+      "output": 14,
+      "cacheRead": 0.175
+    },
+    {
+      "id": "gpt-5.2-pro-2025-12-11",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2-pro.md",
+      "status": "Available",
+      "input": 21,
+      "output": 168,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.3-codex.md",
+      "status": "Deprecated",
+      "input": 1.75,
+      "output": 14,
+      "cacheRead": 0.175
+    },
+    {
+      "id": "gpt-5.4-mini-2026-03-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4-mini.md",
+      "status": "Available",
+      "input": 0.75,
+      "output": 4.5,
+      "cacheRead": 0.075
+    },
+    {
+      "id": "gpt-5.4-nano-2026-03-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4-nano.md",
+      "status": "Deprecated",
+      "input": 0.2,
+      "output": 1.25,
+      "cacheRead": 0.02
+    },
+    {
+      "id": "o4-mini",
+      "source": "https://developers.openai.com/api/docs/models/o4-mini.md",
+      "status": "Shut down",
+      "input": 1.1,
+      "output": 4.4,
+      "cacheRead": 0.275
+    },
+    {
+      "id": "o4-mini-2025-04-16",
+      "source": "https://developers.openai.com/api/docs/models/o4-mini.md",
+      "status": "Shut down",
+      "input": 1.1,
+      "output": 4.4,
+      "cacheRead": 0.275
+    }
+  ],
+  "notPricedOnPurpose": [
+    {
+      "id": "gpt-4o-2024-05-13",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o.md",
+      "why": "gpt-4o's page lists this snapshot as shut down and no current page prints a rate for it. OpenAI's pricing page of 2026-04-26 printed its own rates, which are not gpt-4o's.",
+      "archivedSource": "https://web.archive.org/web/20260426061824id_/https://developers.openai.com/api/docs/pricing",
+      "archivedRates": {
+        "input": 5,
+        "output": 15,
+        "cacheRead": null
+      }
+    },
+    {
+      "id": "gpt-4o-audio",
+      "source": "https://developers.openai.com/api/docs/deprecations.md",
+      "why": "Named on the deprecations page. No page prints a rate for it."
+    },
+    {
+      "id": "gpt-4o-audio-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-audio-preview-2024-10-01",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-audio-preview-2024-12-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-audio-preview-2025-06-03",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-audio",
+      "source": "https://developers.openai.com/api/docs/deprecations.md",
+      "why": "Named on the deprecations page. No page prints a rate for it."
+    },
+    {
+      "id": "gpt-4o-mini-audio-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-audio-preview-2024-12-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-audio-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-realtime",
+      "source": "https://developers.openai.com/api/docs/deprecations.md",
+      "why": "Named on the deprecations page. No page prints a rate for it."
+    },
+    {
+      "id": "gpt-4o-mini-realtime-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 0.6,
+      "output": 2.4,
+      "cacheRead": 0.3
+    },
+    {
+      "id": "gpt-4o-mini-realtime-preview-2024-12-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 0.6,
+      "output": 2.4,
+      "cacheRead": 0.3
+    },
+    {
+      "id": "gpt-4o-mini-search-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-search-preview-2025-03-11",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-search-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-transcribe",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md",
+      "why": "Its page prints no text-token rate."
+    },
+    {
+      "id": "gpt-4o-mini-transcribe-2025-03-20",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md",
+      "why": "Its page prints no text-token rate."
+    },
+    {
+      "id": "gpt-4o-mini-transcribe-2025-12-15",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe.md",
+      "why": "Its page prints no text-token rate."
+    },
+    {
+      "id": "gpt-4o-mini-tts",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md",
+      "why": "Its page prints other rates.",
+      "input": 0.6,
+      "output": null,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-tts-2025-03-20",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md",
+      "why": "Its page prints other rates.",
+      "input": 0.6,
+      "output": null,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-mini-tts-2025-12-15",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts.md",
+      "why": "Its page prints other rates.",
+      "input": 0.6,
+      "output": null,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-realtime",
+      "source": "https://developers.openai.com/api/docs/deprecations.md",
+      "why": "Named on the deprecations page. No page prints a rate for it."
+    },
+    {
+      "id": "gpt-4o-realtime-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 5,
+      "output": 20,
+      "cacheRead": 2.5
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2024-10-01",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 5,
+      "output": 20,
+      "cacheRead": 2.5
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2024-12-17",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 5,
+      "output": 20,
+      "cacheRead": 2.5
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2025-06-03",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview.md",
+      "why": "Its page prints other rates.",
+      "input": 5,
+      "output": 20,
+      "cacheRead": 2.5
+    },
+    {
+      "id": "gpt-4o-search-preview",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-search-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-search-preview-2025-03-11",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-search-preview.md",
+      "why": "Its page prints no cached rate.",
+      "input": 2.5,
+      "output": 10,
+      "cacheRead": null
+    },
+    {
+      "id": "gpt-4o-transcribe",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe.md",
+      "why": "Its page prints no text-token rate."
+    },
+    {
+      "id": "gpt-4o-transcribe-diarize",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-transcribe-diarize.md",
+      "why": "Its page prints no text-token rate."
+    },
+    {
+      "id": "gpt-5-codex-mini",
+      "source": "https://developers.openai.com/api/docs/deprecations.md",
+      "why": "Named on the deprecations page. No page prints a rate for it."
+    },
+    {
+      "id": "o4-mini-deep-research",
+      "source": "https://developers.openai.com/api/docs/models/o4-mini-deep-research.md",
+      "why": "Its page prints other rates.",
+      "input": 2,
+      "output": 8,
+      "cacheRead": 0.5
+    },
+    {
+      "id": "o4-mini-deep-research-2025-06-26",
+      "source": "https://developers.openai.com/api/docs/models/o4-mini-deep-research.md",
+      "why": "Its page prints other rates.",
       "input": 2,
       "output": 8,
       "cacheRead": 0.5

@@ -58,6 +58,48 @@ describe("2026-11-07 reviewed OpenAI standard tables", () => {
     expect(price(model, { outputTokens: 1_000_000 }, above)).toBe(row.aboveOutput);
     expectCached(model, above, row.aboveCacheRead);
   });
+
+  describe("every other ID the docs name", () => {
+    type OtherRow = { id: string; input: number; output: number; cacheRead: number | null };
+    type NotPriced = { id: string; why: string; archivedRates?: { input: number; output: number; cacheRead: null } };
+    const others = standardTablesEvidence.modelPageRows as OtherRow[];
+    const notPriced = standardTablesEvidence.notPricedOnPurpose as NotPriced[];
+
+    it("lists an ID once, and never GPT-5.6 Sol or a row of the two tables", () => {
+      const ids = others.map((row) => row.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids).not.toContain("gpt-5.6-sol");
+      expect(ids.filter((id) => rows.some((row) => row.id === id))).toEqual([]);
+      expect(notPriced.map((row) => row.id).filter((id) => ids.includes(id))).toEqual([]);
+    });
+
+    it.each(others.map((row): [string, OtherRow] => [row.id, row]))("%s matches the page that prices it, with no prompt tier", (model, row) => {
+      expect(promptTierThreshold(model)).toBeUndefined();
+      expect(price(model, { inputTokens: 1_000_000 }, 1_000_000)).toBe(row.input);
+      expect(price(model, { outputTokens: 1_000_000 }, 1_000_000)).toBe(row.output);
+      expectCached(model, 1_000_000, row.cacheRead);
+    });
+
+    it.each(notPriced.map((row): [string, string] => [row.id, row.why]))("%s counts as missing: %s", (model) => {
+      expect(findPricingRule(model)).toBeUndefined();
+      expect(estimateTokenCostUsd(model, { inputTokens: 1_000, outputTokens: 1_000 })).toBeUndefined();
+    });
+
+    it("records why the older gpt-4o snapshot is not priced at gpt-4o's rates", () => {
+      const archived = notPriced.find((row) => row.id === "gpt-4o-2024-05-13")?.archivedRates;
+      expect(archived).toBeDefined();
+      expect(archived!.input).not.toBe(estimateTokenCostUsd("gpt-4o", { inputTokens: 1_000_000, outputTokens: 0 }));
+      expect(archived!.output).not.toBe(estimateTokenCostUsd("gpt-4o", { inputTokens: 0, outputTokens: 1_000_000 }));
+    });
+
+    it("hashes every page it cites", () => {
+      const cited = [...others, ...notPriced].map((row) => (row as { source?: string }).source);
+      for (const url of cited) expect(standardTablesEvidence.sources).toContain(url);
+      for (const url of standardTablesEvidence.sources as string[]) {
+        expect(standardTablesEvidence.pageContentSha256[url], url).toMatch(/^[a-f0-9]{64}$/);
+      }
+    });
+  });
 });
 
 describe("2026-11-06 reviewed GPT-5.6 Sol prices", () => {

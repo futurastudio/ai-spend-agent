@@ -288,7 +288,12 @@ const pricingRules: PricingRule[] = [
   { match: /^gpt-5\.2-pro(?:-|$)/i, inputPerM: 21, outputPerM: 168, cacheReadPerM: null },
   { match: /^gpt-5\.2(?:-codex)?/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
   { match: /^gpt-5\.1$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
-  { match: /^gpt-5(?:\.1)?-codex/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+  // developers.openai.com/api/docs/models/gpt-5.1-codex-mini, reviewed 2026-11-07. A prefix
+  // on the rule below priced this model at 5x its published rates until that review.
+  { match: /^gpt-5\.1-codex-mini$/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
+  // The IDs OpenAI prices at these rates, and no others: gpt-5-codex-mini is named on the
+  // deprecations page and no page prints a rate for it, so it counts as missing.
+  { match: /^gpt-5-codex$|^gpt-5\.1-codex(?:-max)?$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   { match: /^gpt-5(?:\.1)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
   // developers.openai.com/api/docs/models/gpt-5-nano, 2026-08-25. Before 0.9.6
   // this fell through to the ^gpt-5 fallback and billed at $1.25/$10 — 25x the
@@ -297,19 +302,27 @@ const pricingRules: PricingRule[] = [
   // Before the fallback below, which priced this model and its dated snapshot at
   // 1/12 of the published rates until the 2026-11-07 review.
   { match: /^gpt-5-pro(?:-|$)/i, inputPerM: 15, outputPerM: 120, cacheReadPerM: null },
-  // GPT-5 base and its dash-suffixed snapshots only. The `-|$` boundary stops
-  // this fallback from swallowing dot-minor families it knows nothing about:
-  // gpt-5.7-*, gpt-5.6-cyber and any future gpt-5.6-<variant> now return
-  // undefined -> "missing" instead of silently billing at GPT-5's $1.25/$10.
-  { match: /^gpt-5(?:-|$)/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
-  { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4 },
+  // GPT-5 base, its snapshot and the two variants OpenAI prices at the same rates. Named IDs
+  // only, so this cannot swallow a family it knows nothing about: gpt-5.7-*, gpt-5.6-cyber,
+  // any future gpt-5.6-<variant> and any other gpt-5-<variant> return undefined -> "missing"
+  // instead of silently billing at GPT-5's $1.25/$10.
+  { match: /^gpt-5(?:-2025-08-07|-chat-latest|-search-api)?$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
+  { match: /^gpt-4\.1-nano/i, inputPerM: 0.1, outputPerM: 0.4, cacheReadPerM: 0.025 },
   { match: /^gpt-4\.1-mini/i, inputPerM: 0.4, outputPerM: 1.6, cacheReadPerM: 0.1 },
   { match: /^gpt-4\.1/i, inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
-  { match: /^gpt-4o-mini/i, inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.075 },
-  { match: /^gpt-4o/i, inputPerM: 2.5, outputPerM: 10, cacheReadPerM: 1.25 },
+  // developers.openai.com/api/docs/pricing.md, reviewed 2026-11-07. These two rules were
+  // prefixes, so they also priced IDs OpenAI bills differently or prints no such rate for:
+  // realtime at 2x to 4x these rates, gpt-4o-mini-tts and -transcribe, and the audio and
+  // search previews. Those count as missing now. So does gpt-4o-2024-05-13, the snapshot
+  // the page no longer lists: OpenAI's pricing page of 2026-04-26 printed it at $5 / $15
+  // with no cached rate, not at these rates.
+  { match: /^gpt-4o-mini(?:-2024-07-18)?$/i, inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.075 },
+  { match: /^gpt-4o(?:-2024-08-06|-2024-11-20)?$/i, inputPerM: 2.5, outputPerM: 10, cacheReadPerM: 1.25 },
   { match: /^o3-pro$/i, inputPerM: 20, outputPerM: 80, cacheReadPerM: null },
   { match: /^o3$/i, inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.5 },
-  { match: /^o4-mini/i, inputPerM: 1.1, outputPerM: 4.4 },
+  // developers.openai.com/api/docs/models/o4-mini, reviewed 2026-11-07. Named IDs only:
+  // o4-mini-deep-research bills at other rates and counts as missing.
+  { match: /^o4-mini(?:-2025-04-16)?$/i, inputPerM: 1.1, outputPerM: 4.4, cacheReadPerM: 0.275 },
   // Google (Gemini API list prices)
   // Reviewed 2026-10-18: https://ai.google.dev/gemini-api/docs/pricing.
   // Retained evidence: provider-contracts/model-pricing-2026-10-18.json.

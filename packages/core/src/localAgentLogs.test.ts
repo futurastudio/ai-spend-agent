@@ -3678,6 +3678,16 @@ describe("Codex sessions on the OpenAI rows corrected on 2026-11-07", () => {
   ])("prices a %s session that reports no cached tokens", (model, amountUsd) => {
     expect(record(model, noCache)).toMatchObject({ amountUsd, costConfidence: "estimated" });
   });
+
+  it("prices a gpt-5.1-codex-mini session at its own rates, not the gpt-5.1-codex prefix's", () => {
+    // 100000*0.25 + 1000*2 + 400000*0.025, per million.
+    expect(record("gpt-5.1-codex-mini", cumulative)).toMatchObject({ amountUsd: 0.037, costConfidence: "estimated" });
+  });
+
+  it("keeps a gpt-5-codex-mini session honestly missing: no page prints a rate for it", () => {
+    expect(record("gpt-5-codex-mini", cumulative)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+    expect(record("gpt-5-codex-mini", noCache)).toMatchObject({ amountUsd: null, costConfidence: "missing" });
+  });
 });
 
 describe("Codex USER forks inherit a baseline, not a bill", () => {
