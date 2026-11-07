@@ -141,7 +141,7 @@ const descriptors = [
       ],
       limitations: [
         "Only rollout-*.jsonl files and their compressed rollout-*.jsonl.zst form are parsed as Codex sessions.",
-        "Compressed rollouts need Node.js 22.15 or later; on an older Node.js they are counted as unreadable files, and a Workspace push or a CLI command that totals spend over a window holding them stops.",
+        "Compressed rollouts need Node.js 22.15 or later (23.8 or later on Node.js 23); on an older Node.js they are counted as unreadable files. A Workspace push stops on them, as do the receipt, report, report-card, improve, apply, verify inspect, verify start and watch; init and doctor --sources show the count beside what they read, and glance and the status line show what they could read.",
         "The bounded activity scan budgets a compressed rollout by the size its frame declares and skips an oversized one, or one that declares none, by budget; it never streams one in parts. A file with no whole frame header is unreadable.",
         "Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence.",
         "An event_msg/task_complete marker proves only that the latest observed task completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts."

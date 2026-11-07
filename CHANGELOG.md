@@ -195,13 +195,14 @@ historical untagged exception.
     twice while Codex is replacing one with the other. A compressed file that is cut short,
     has anything after its end, or is not zstd at all is reported as unreadable, never read as
     a shorter session.
-  - Reading them needs Node.js 22.15 or later. On an older Node.js, a command that adds up
-    local spend over a window holding compressed sessions stops with one line that says how
-    many it could not read and which Node.js reads them, instead of showing or sending a total
-    without them: `workspace push`, the receipt and `--full`, `report`, `report-card`,
+  - Reading them needs Node.js 22.15 or later (23.8 or later on Node.js 23). On an older
+    Node.js these commands stop with one line that says how many compressed sessions in their
+    window they could not read and which Node.js reads them, instead of showing or sending a
+    total without them: `workspace push`, the receipt and `--full`, `report`, `report-card`,
     `improve`, `apply`, `verify inspect`, `verify start` and `watch`. `init` and
-    `doctor --sources` print the same line beside what they read. `glance` and the status line
-    do not stop; what they show from before the last 7 days leaves those sessions out.
+    `doctor --sources` print the same line beside what they read, and the 30-day amount `init`
+    prints leaves those sessions out. `glance` and the status line do not stop; what they show
+    from before the last 7 days leaves those sessions out.
   - A window that holds a long compressed session reads all of it. On one machine, while two
     sessions that decode to 2.4 GB were inside the 30 days, every push took 12 to 23 seconds
     instead of about 1.5, and the first receipt or report 12 to 38 seconds; the receipt and
@@ -213,13 +214,15 @@ historical untagged exception.
 - Each Codex event goes under the folder its turn ran in, as Claude Code's already do. A Codex
   thread that started in the home folder and moved to a project used to count wholly as the
   home folder, which has no name in Workspace.
-  - Codex days already sent keep the folder they went out under, so no fact that reached
-    Workspace moves, shrinks or counts twice. Only days not yet sent take the new folder.
+  - Where an earlier version already sent a Codex day, model and folder, every event it would
+    have filed there stays there, so no fact that reached Workspace moves, shrinks or counts
+    twice. Every other Codex event goes under the folder its turn ran in, on a day already sent
+    as on a new one.
   - `~/.aibill/workspace-device.json` gains an optional `codexKeptPlaces` key: the first and
     last day this version has placed Codex events on, and hashes of the folders on those days
     that an earlier version sent. A day is decided once, by the first push that reads it,
     against what earlier versions sent for it, so a clock set wrong on one push cannot move a
-    sent day on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
+    sent fact on a later one. It stays on this machine and is never sent. 0.9.15 refuses a file
     that holds it, as it refuses `factNames`.
 
 ## 0.9.16 (unreleased)

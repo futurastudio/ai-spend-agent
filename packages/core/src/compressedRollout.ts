@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { pipeline, Transform, type Readable, type TransformCallback } from "node:stream";
 // The namespace, never a named import: a named import of an export this Node.js lacks stops the whole module graph
-// from loading, so every command would fail on Node.js 22.0 to 22.14, not only the reads that need zstd.
+// from loading, so every command would fail on Node.js 22.0 to 22.14 and 23.0 to 23.7, not only the reads that need zstd.
 import * as zlib from "node:zlib";
 
 /**
@@ -13,8 +13,12 @@ import * as zlib from "node:zlib";
  */
 export const COMPRESSED_ROLLOUT_SUFFIX = ".zst";
 
-/** Node.js decodes zstd from 22.15.0 and 23.8.0 (its zlib docs: `zlib.createZstdDecompress`, added v23.8.0, v22.15.0). */
-export const ZSTD_NODE_VERSIONS = "Node.js 22.15 or later";
+/**
+ * Node.js decodes zstd from 22.15.0 and 23.8.0 (its zlib docs: `zlib.createZstdDecompress`, added v23.8.0, v22.15.0;
+ * the docs at the v22.14.0 and v23.7.0 tags have no zstd, those at v24.0.0 do). `engines` allows 23.0 to 23.7 too, so
+ * the line names both floors: "22.15 or later" alone reads as met on Node.js 23.5.
+ */
+export const ZSTD_NODE_VERSIONS = "Node.js 22.15 or later (23.8 or later on Node.js 23)";
 
 export function isCompressedRolloutPath(path: string): boolean {
   return path.endsWith(`.jsonl${COMPRESSED_ROLLOUT_SUFFIX}`);

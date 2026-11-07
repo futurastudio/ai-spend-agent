@@ -281,7 +281,7 @@ describe("workspace push with Codex rollouts compressing between pushes", () => 
   it("on a Node.js that cannot read compressed rollouts the push sends nothing, in one line, and leaves the state as it was", async () => {
     const m = await machine({ S, T });
     const before = await readFile(m.statePath, "utf8");
-    const message = `1 compressed Codex session file(s) could not be read: reading them needs Node.js 22.15 or later, and this is Node.js v22.14.0.`;
+    const message = `1 compressed Codex session file(s) could not be read: reading them needs Node.js 22.15 or later (23.8 or later on Node.js 23), and this is Node.js v23.5.0.`;
     // A test double for the reader on such a Node.js: what the core tests show it reports.
     const refused = await m.push(async () => ({ ...await m.read(), diagnostics: [{ agent: "codex", code: "compressed_unsupported", severity: "error", message, count: 1 }] }));
     expect(refused).toMatchObject({ exitCode: 1, stdout: "", stderr: `${message} No facts were replaced or sent.`, sent: [] });

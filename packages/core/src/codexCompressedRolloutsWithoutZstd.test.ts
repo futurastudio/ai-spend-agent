@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * A Node.js before 22.15 has no zstd. Simulated here: `node:zlib` whose zstd exports read as undefined, as a missing
- * export reads through a namespace on such a Node.js (this test runner's mock refuses a key it does not hold, so the
- * keys are held, as undefined). Every reader still loads, a compressed rollout inside the window counts as unreadable
- * with one line naming the Node.js needed, and one before the window is skipped as before.
+ * Node.js 22.0 to 22.14 and 23.0 to 23.7 have no zstd. Simulated here: `node:zlib` whose zstd exports read as
+ * undefined, as a missing export reads through a namespace on such a Node.js (this test runner's mock refuses a key it
+ * does not hold, so the keys are held, as undefined). Every reader still loads, a compressed rollout inside the window
+ * counts as unreadable with one line naming the Node.js needed, and one before the window is skipped as before.
  */
 vi.mock("node:zlib", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:zlib")>();
@@ -41,7 +41,8 @@ async function machine() {
   }
   return { codexSessionsDir: join(root, "sessions"), claudeProjectsDir: claude, sinceIso: "2026-10-08T00:00:00.000Z" };
 }
-const line = `2 compressed Codex session file(s) could not be read: reading them needs Node.js 22.15 or later, and this is Node.js ${process.version}.`;
+// Both floors: "22.15 or later" alone reads as met on Node.js 23.0 to 23.7, which have no zstd either.
+const line = `2 compressed Codex session file(s) could not be read: reading them needs Node.js 22.15 or later (23.8 or later on Node.js 23), and this is Node.js ${process.version}.`;
 
 describe("on a Node.js without zstd", () => {
   it("is the Node.js this file simulates", () => {
