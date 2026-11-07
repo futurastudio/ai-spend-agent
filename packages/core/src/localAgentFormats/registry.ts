@@ -82,7 +82,7 @@ const descriptors = [
     provider: "openai",
     defaultHomeRelative: [".codex", "sessions"],
     legacyDirectoryOption: "codexSessionsDir",
-    discovery: { extension: ".jsonl", basenamePrefix: "rollout-" },
+    discovery: { extension: ".jsonl", basenamePrefix: "rollout-", compressedSuffix: ".zst" },
     confidenceDefaults: {
       validationCoverage: "live_verified",
       pricedFinancialEvidence: "estimated",
@@ -111,9 +111,10 @@ const descriptors = [
     financialRead: "bounded_event_jsonl",
     validationNote: "Local parsing was replayed against live logs; total-only token shapes and unknown aliases remain missing rather than becoming estimated $0.",
     docs: {
-      format: "JSON Lines under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl",
+      format: "JSON Lines under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl, or rollout-*.jsonl.zst once Codex has compressed a rollout it has not written to for 7 days",
       howRead: [
         "Read the Codex event stream and retain the root session identity, model, and latest cumulative event_msg/token_count evidence.",
+        "Decode a compressed rollout (one zstd frame) as it streams; a plain file of the same name wins over it, and a file that is not one complete frame is reported unreadable, never read short.",
         "Never sum earlier running token counters; forked sessions subtract a supported inherited cumulative baseline.",
         "Use a bounded proof-based financial reader for init/cache while the full reader retains privacy-reduced activity and optional invocation evidence."
       ],
@@ -139,7 +140,9 @@ const descriptors = [
         "aibill never sits in the inference path and never stores, prints, or proxies provider credentials."
       ],
       limitations: [
-        "Only rollout-*.jsonl files are parsed as Codex sessions.",
+        "Only rollout-*.jsonl files and their compressed rollout-*.jsonl.zst form are parsed as Codex sessions.",
+        "Compressed rollouts need Node.js 22.15 or later (23.8 or later on Node.js 23); on an older Node.js they are counted as unreadable files. A Workspace push stops on them, as do the receipt, report, report-card, improve, apply, verify inspect, verify start and watch; init and doctor --sources show the count beside what they read, and glance and the status line show what they could read.",
+        "The bounded activity scan budgets a compressed rollout by the size its frame declares and skips an oversized one, or one that declares none, by budget; it never streams one in parts. A file with no whole frame header is unreadable.",
         "Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence.",
         "An event_msg/task_complete marker proves only that the latest observed task completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts."
       ]
@@ -273,6 +276,16 @@ export function matchesLocalAgentFormatFile(
   return true;
 }
 
+/** A file the agent compressed: the format's own file name plus its `compressedSuffix`. */
+export function matchesLocalAgentCompressedFile(
+  descriptor: LocalAgentFormatDescriptor,
+  filePath: string
+): boolean {
+  const suffix = descriptor.discovery.compressedSuffix;
+  return Boolean(suffix && filePath.endsWith(suffix) &&
+    matchesLocalAgentFormatFile(descriptor, filePath.slice(0, -suffix.length)));
+}
+
 export function matchesLocalAgentDetectionFile(
   descriptor: LocalAgentFormatDescriptor,
   filePath: string
@@ -314,6 +327,10 @@ export function validateLocalAgentFormatDescriptors(
       if (!/^\.[A-Za-z0-9]+$/.test(extension)) {
         throw new Error(`Unsafe discovery extension for ${descriptor.id}.`);
       }
+    }
+    if (discovery.compressedSuffix !== undefined &&
+        (discovery.compressedSuffix !== ".zst" || !discovery.extension || discovery.extensions?.length)) {
+      throw new Error(`Unsafe compressed discovery rule for ${descriptor.id}.`);
     }
     for (const value of [
       discovery.basename,

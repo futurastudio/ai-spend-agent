@@ -8,9 +8,9 @@
 | --- | --- |
 | Format ID | `codex` |
 | Provider | `openai` |
-| Format | `JSON Lines under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
+| Format | `JSON Lines under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl, or rollout-*.jsonl.zst once Codex has compressed a rollout it has not written to for 7 days` |
 | Default local root | `~/.codex/sessions` |
-| Discovered files | `rollout-*.jsonl` |
+| Discovered files | `rollout-*.jsonl, rollout-*.jsonl.zst` |
 | Presence-only signal | `none` |
 | Financial reader | `bounded_event_jsonl` |
 | Reader validation | `live_verified` |
@@ -27,6 +27,7 @@ Reader validation describes how the parser has been exercised; it never upgrades
 ## How aibill reads it
 
 - Read the Codex event stream and retain the root session identity, model, and latest cumulative event_msg/token_count evidence.
+- Decode a compressed rollout (one zstd frame) as it streams; a plain file of the same name wins over it, and a file that is not one complete frame is reported unreadable, never read short.
 - Never sum earlier running token counters; forked sessions subtract a supported inherited cumulative baseline.
 - Use a bounded proof-based financial reader for init/cache while the full reader retains privacy-reduced activity and optional invocation evidence.
 
@@ -76,7 +77,9 @@ Fixtures and generated documentation must never contain a real transcript, promp
 
 ## Limitations
 
-- Only rollout-*.jsonl files are parsed as Codex sessions.
+- Only rollout-*.jsonl files and their compressed rollout-*.jsonl.zst form are parsed as Codex sessions.
+- Compressed rollouts need Node.js 22.15 or later (23.8 or later on Node.js 23); on an older Node.js they are counted as unreadable files. A Workspace push stops on them, as do the receipt, report, report-card, improve, apply, verify inspect, verify start and watch; init and doctor --sources show the count beside what they read, and glance and the status line show what they could read.
+- The bounded activity scan budgets a compressed rollout by the size its frame declares and skips an oversized one, or one that declares none, by budget; it never streams one in parts. A file with no whole frame header is unreadable.
 - Incomplete, regressing, or total-only token shapes remain unpriced with missing financial evidence.
 - An event_msg/task_complete marker proves only that the latest observed task completed; it does not prove permanent transcript closure, and missing or inconsistent completion evidence stays ineligible for automatic before/after cohorts.
 
