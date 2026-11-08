@@ -6,6 +6,35 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
+## 0.9.19 (unreleased)
+
+- Finishing `workspace connect <response-bundle>` now offers the first upload in
+  the same terminal. The browser's sharing consent must be complete; reading the
+  local facts and sending the exact batch remain separate choices.
+- `workspace push --schedule daily` adds an optional daily upload at 09:17 local
+  time using a user launchd agent on macOS or cron where available. Setup requires
+  explicit standing consent for this machine connection. It retains the installed
+  CLI locally, so an npx cache eviction does not break the job, and never puts
+  device credentials or fact payloads in the OS schedule. Run setup again after
+  replacing Node.js or updating aibill. Windows scheduling is not yet supported.
+  Manual pushes keep their exact-batch preview. Scheduled runs stop on a retained
+  batch, incomplete source read, or expired connection; they do not guess or retry
+  an uncertain upload. Remove the schedule with `workspace push --schedule none`;
+  `workspace status` reports its authorization and last run. Obsolete runtime
+  copies are removed after successful replacement or removal.
+- Workspace commands accept trailing display flags such as `--no-color` without
+  rejecting the command. Unsupported `--sample` on a Workspace push still refuses
+  before reading or sending real facts.
+- `watch --sample` labels its illustrative output before the first dollar amount.
+  `context --sample` and `--plan ... --sample` now explain that the combination is
+  unsupported instead of silently ignoring it or reading real context.
+- Workspace sharing documentation now includes per-session hashes, policy-based
+  retention, the distinction between read expiry and physical deletion, and the
+  limits of unkeyed directory references. No identity format, hosted retention
+  policy, provider admission, local MCP package, or Codex plugin changes in this
+  release. Hosted data delivery still depends on the Workspace connection and
+  permissions; this release makes no measured latency claim.
+
 ## 0.9.18 (published on npm, 2026-11-08)
 
 - Count a Claude Code response once when it sits in more than one session

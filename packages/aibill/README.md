@@ -46,16 +46,28 @@ each number’s financial label and coverage.
 Use the free CLI on its own, or keep working locally and connect it to your
 invited [Tilden Workspace](https://asktilden.com/docs/workspace) for a shared
 spending review. Start with `npx aibill@latest workspace connect`, complete the
-browser enrollment and sharing consent, then run
+browser enrollment and sharing consent, then accept the first-push offer or run
 `npx aibill@latest workspace push` to preview and approve a share. The browser
 does not need to stay open for later pushes while the machine’s grant and
 sharing consent remain valid. Shared facts include eligible
 Claude Code/Codex sessions, tokens and project labels where available, plus
 hashed identities and the subscription tier each agent is signed in with
 (`AIBILL_NO_PLAN_TIER=1` leaves the tier out); they exclude raw prompts,
-transcript contents, full paths, raw session IDs, dollar amounts, tokens and
+transcript contents, full paths, raw session IDs, dollar amounts, credential tokens and
 account identities. Local provider records are not uploaded.
 Hosted provider connections are set up separately.
+
+Optional `npx aibill@latest workspace push --schedule daily` installs a daily
+macOS launchd or cron job after separate standing consent. Each run sends one
+bounded session batch and may follow it with announced tier facts; uncertain
+batches require a terminal review. `npx aibill@latest workspace push --schedule none`
+removes daily sharing. The installed CLI is retained locally; run setup again
+after CLI or Node.js updates. Windows scheduling is not yet supported.
+`npx aibill@latest workspace status` shows the schedule and its last run.
+
+Shared facts include device-keyed session identities and unkeyed directory hashes.
+They expire from hosted reads after the machine policy's displayed retention
+period; expiry and disconnect do not promise physical deletion.
 
 Read [Workspace setup and limits](https://github.com/futurastudio/ai-spend-agent/blob/main/docs/WORKSPACE.md)
 before pairing. [Join the Tilden waitlist](https://asktilden.com/?ref=npm-aibill#beta)
@@ -64,7 +76,8 @@ for updates and access invitations; joining does not grant immediate access.
 ## Privacy
 
 Default transcript analysis runs locally. Reports remain local until shared.
-Explicit Workspace pushes send only the approved facts. Explicit provider
+Manual Workspace pushes require approval of the exact batch. Daily pushes require
+separate standing consent tied to the current machine connection. Explicit provider
 sync uses the referenced credential only with that provider’s read-only API;
 aibill never sits in the inference path and never stores, prints, or proxies provider credentials.
 Workspace pairing uses separate private local device credentials.

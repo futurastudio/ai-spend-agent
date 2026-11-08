@@ -96,7 +96,7 @@ describe("daily Workspace sync consent and OS jobs", () => {
     expect(command.mock.calls.at(-1)?.[1][0]).toBe("bootstrap");
   });
   it("quotes paths and cron percent signs; launchd XML escapes special characters", () => {
-    const line = dailyCron("", "/node's & bin/node", "/home/50% done/run.mjs");
+    const line = dailyCron("", "/node's & bin/node", "/home/user/50% done/run.mjs");
     expect(line).toContain("'\\''"); expect(line).toContain("50\\% done");
     const plist = dailyLaunchAgent("/x<&\"'/node", "/x/run.mjs");
     expect(plist).toContain("&lt;&amp;&quot;&apos;");
@@ -108,7 +108,7 @@ describe("daily Workspace sync consent and OS jobs", () => {
     const result = await promisify(execFile)(process.execPath, [entry, "--help"], { env: { ...process.env, AI_SPEND_NO_TELEMETRY: "1", AI_SPEND_NO_PROMPT: "1" } });
     expect(result.stdout).toContain("workspace push --schedule daily");
     expect((await readdir(join(destination, "node_modules"))).includes("ai-spend-agent")).toBe(true);
-  });
+  }, 20_000); // Copies the installed dependency graph and starts Node; allow parallel-suite disk contention.
 });
 
 describe("scheduled upload authority", () => {

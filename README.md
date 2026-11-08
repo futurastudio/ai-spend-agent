@@ -245,10 +245,16 @@ that half lives in Tilden Workspace.
 ## Optional Workspace connection
 
 The CLI includes an optional client for an existing invited Workspace.
+The first-push offer and daily scheduling below are prepared for the unreleased
+0.9.19 version in this checkout; see the [changelog](CHANGELOG.md).
+Hosted provider collection and Workspace rollout are separate from this CLI release.
 
 To connect, run `npx aibill@latest workspace connect`, complete enrollment and
-sharing consent in Workspace Settings → Machines, then use
-`npx aibill@latest workspace push` to preview and share supported activity.
+sharing consent in Workspace Settings → Machines, and accept the first-push offer
+or run `npx aibill@latest workspace push` to preview and share supported activity.
+For optional daily uploads, run `npx aibill@latest workspace push --schedule daily`
+and review its separate standing-consent prompt. Remove them with
+`npx aibill@latest workspace push --schedule none`; manual pushes keep their preview.
 The browser is needed for setup; it does not need to stay open for later pushes
 while the machine’s grant and sharing consent remain valid.
 
