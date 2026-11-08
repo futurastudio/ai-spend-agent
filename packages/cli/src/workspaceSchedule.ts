@@ -110,6 +110,19 @@ export async function stageWorkspaceRuntime(destination: string): Promise<string
   await lstat(entry); // A source-only checkout must build first.
   return entry;
 }
+/** Only directories created by this installer, after OS replacement/removal succeeds.
+ * An invocation running from a retained runtime keeps its own code until a later setup. */
+async function cleanupWorkspaceRuntimes(root: string, keep?: string): Promise<void> {
+  const runningModule = fileURLToPath(import.meta.url);
+  for (const name of await readdir(root)) {
+    if (!/^runtime-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(name)) continue;
+    const path = join(root, name);
+    if (path === keep || runningModule.startsWith(`${path}/`)) continue;
+    const info = await lstat(path).catch(() => null);
+    if (!info?.isDirectory() || info.isSymbolicLink() || info.mode & 0o077 || process.getuid && info.uid !== process.getuid()) continue;
+    await rm(path, { recursive: true, force: true });
+  }
+}
 export async function updateWorkspaceSchedule(options: { home?: string; mode: "daily" | "none"; now: string; includePlanTier: boolean; binding?: string } & WorkspaceScheduleOptions): Promise<string> {
   const home = options.home ?? homedir(), platform = options.platform ?? process.platform;
   if (platform === "win32") throw new WorkspaceScheduleError("Daily sync currently supports macOS and systems with crontab. Use workspace push manually on Windows.");
@@ -130,6 +143,7 @@ export async function updateWorkspaceSchedule(options: { home?: string; mode: "d
         if (current.code !== 0 && !(current.code === 1 && current.stdout === "" && /no crontab for/i.test(current.stderr ?? ""))) throw new WorkspaceScheduleError("Daily sync consent is removed, but crontab could not be read. Remove its aibill-workspace-daily-v1 line manually.");
         if ((await command("crontab", ["-"], dailyCron(current.stdout, "", "", true))).code !== 0) throw new WorkspaceScheduleError("Daily sync consent is removed, but its cron line could not be removed.");
       }
+      await cleanupWorkspaceRuntimes(root).catch(() => {});
       return "Daily sync removed. No more unattended uploads are authorized; the machine remains paired.";
     }
     if (!options.binding || options.binding !== await workspaceScheduleBinding(home)) throw new WorkspaceScheduleError("The machine connection changed during setup. No daily uploads were authorized.");
@@ -158,7 +172,9 @@ export async function updateWorkspaceSchedule(options: { home?: string; mode: "d
     const pending = join(root, `consent-${randomUUID()}.json`);
     await writeFile(pending, JSON.stringify({ version: 1, binding: options.binding, includePlanTier: options.includePlanTier, installedAt: options.now } satisfies ScheduleConsent), { mode: 0o600, flag: "wx" });
     await rename(pending, join(root, "consent.json"));
-    stage = undefined;
+    const installedRuntime = stage;
+    stage = undefined; // Consent/job now own it; cleanup failure must never delete the live runtime.
+    await cleanupWorkspaceRuntimes(root, installedRuntime).catch(() => {});
     return `Daily sync installed for 09:17 local time while this machine is available. Each run sends one bounded session batch from the last 30 closed UTC days, with a tier-only follow-up when first announced; it stops on an uncertain prior batch or an expired connection. The current CLI was copied locally, so npx cache removal is safe. Run setup again after updating aibill or Node.js. Remove it with: ${REMOVE}`;
   } finally {
     if (stage) await rm(stage, { recursive: true, force: true });

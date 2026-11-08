@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
@@ -58,6 +58,23 @@ describe("daily Workspace sync consent and OS jobs", () => {
     const command: ScheduleCommand = async (...args) => { expect(await readWorkspaceSchedule(home)).toBeNull(); return os.command(...args); };
     await updateWorkspaceSchedule({ home, mode: "none", now, includePlanTier: false, platform: "linux", command });
     expect(os.value()).toBe("5 1 * * * /usr/bin/true # existing-job\n"); expect(await authorizedWorkspaceSchedule(home)).toBeNull();
+  });
+  it("removes obsolete private runtimes only after successful replacement or removal", async () => {
+    const { home } = await machine(), os = cron(), root = join(home, ".aibill", "workspace-sync");
+    await install(home, os.command);
+    const names = async () => (await readdir(root)).filter(name => /^runtime-[a-f0-9-]{36}$/.test(name));
+    const first = (await names())[0]!;
+    await expect(install(home, async (_cmd, args) => ({ code: args[0] === "-l" ? 0 : 2, stdout: "" }))).rejects.toThrow();
+    expect(await names()).toEqual([first]); // Partial replacement cannot remove the installed code.
+    await mkdir(join(root, "runtime-not-managed"));
+    const link = "runtime-11111111-1111-4111-8111-111111111111";
+    await symlink(join(root, "runtime-not-managed"), join(root, link));
+    await install(home, os.command);
+    const kept = await names();
+    expect(kept).toHaveLength(2); expect(kept).toContain(link); expect(kept).not.toContain(first);
+    await updateWorkspaceSchedule({ home, mode: "none", now, includePlanTier: false, platform: "linux", command: os.command });
+    expect(await names()).toEqual([link]);
+    expect(await readdir(root)).toContain("runtime-not-managed");
   });
   it("fails closed if the OS install fails or the machine grant changes", async () => {
     const { home, state, save } = await machine();

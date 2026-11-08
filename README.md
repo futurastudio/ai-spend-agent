@@ -281,7 +281,10 @@ and recovery steps.
   no session fact changed (seven fields, never an account, email or token;
   `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
   in private local pairing state. Disconnect revokes future machine access;
-  previously accepted records follow hosted retention rules.
+  accepted facts expire from hosted reads after the retention period shown for
+  the machine's sharing policy in Settings → Machines. A later accepted revision
+  starts that fact's retention period again. Expiry from reads and disconnect do
+  not promise physical deletion; see the [sharing guide](docs/WORKSPACE.md#retention).
 - **Other explicit network actions:** `outcome github` asks the installed `gh`
   CLI for merged-PR evidence. The optional signup command sends the displayed
   email/ref payload only after confirmation. Normal HTTP metadata accompanies

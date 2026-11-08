@@ -187,6 +187,26 @@ Machine activity is context for the spending review. It is not provider-billed
 cost, proof of a person’s spend, an accepted outcome, productivity or ROI.
 Provider records have their own dates, coverage and labels.
 
+### Retention
+
+Accepted session and subscription-tier facts carry an expiry set by the machine's
+sharing policy: acceptance time plus that policy's retention period. Check the
+period displayed in Settings → Machines when reviewing sharing consent; there is
+no universal period asserted by this CLI. An accepted revision or tier refresh
+starts its retained fact's period again. Unchanged facts are not extended merely
+by running another push.
+
+Workspace stops reading expired facts. Disconnecting also removes that machine's
+facts from project and receipt reads. Neither means the stored rows have been
+physically deleted. An existing seat plan is separate: it stays until the owner
+changes it, even when the tier fact that informed it expires.
+
+Directory references are currently unkeyed hashes of absolute working-directory
+paths. They are not raw paths, but someone who guesses a path can calculate its
+hash; unlike session identities, they are not device-keyed. Changing that identity
+scheme requires a coordinated CLI/Workspace migration and remains a product
+decision. No change to existing references is made by daily sync.
+
 ### The subscription tier
 
 So Workspace can cost Claude Code and Codex sessions at the plan that ran them,

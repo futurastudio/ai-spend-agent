@@ -455,6 +455,13 @@ export async function runCli(
     };
   }
 
+  if (args.sample && (args.command === "context" || args.command === "context-health")) {
+    return { exitCode: 1, stdout: "", stderr: "Context Health has no sample mode. No local evidence was read. Run npx aibill@latest --sample for an illustrative receipt, or remove --sample to inspect real context." };
+  }
+  if (args.sample && args.plan) {
+    return { exitCode: 1, stdout: "", stderr: "--plan cannot be combined with --sample. No local evidence was read. Remove --plan for the fixed illustrative receipt, or remove --sample to use your selected plan." };
+  }
+
   if (args.json && args.command !== "context" && args.command !== "context-health" &&
       args.command !== "glance" && args.command !== "verify" &&
       args.command !== "accountability") {
@@ -4543,6 +4550,7 @@ async function watchCommand(args: ParsedArgs): Promise<CliResult> {
     });
     const stamped = [
       `=== watch cycle @ ${snapshot.capturedAt} ===`,
+      ...(mode === "sample" ? ["DEMO SAMPLE · illustrative only"] : []),
       deltaHeadline,
       plainEnglish
     ].join("\n");
