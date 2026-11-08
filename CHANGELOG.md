@@ -6,7 +6,7 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
-## 0.9.18 (unreleased)
+## 0.9.18 (published on npm, 2026-11-08)
 
 - Count a Claude Code response once when it sits in more than one session
   file. Forking or handing off a conversation copies its earlier responses
