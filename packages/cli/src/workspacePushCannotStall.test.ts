@@ -512,7 +512,7 @@ describe("the command this CLI tells a person to type", () => {
   it("the help names every Workspace command with @latest", async () => {
     const help = (await runCli(["--help"])).stdout;
     const named = lines(help).filter(line => /\bworkspace (connect|push|status|disconnect)\b/.test(line));
-    expect(named).toHaveLength(7);
+    expect(named).toHaveLength(9);
     for (const line of named) expect(line.trimStart().startsWith("npx aibill@latest workspace "), line).toBe(true);
   });
 
@@ -703,7 +703,7 @@ describe("a command that was killed", { timeout: 60_000 }, () => {
     const runtime = { homeDirectory: fresh, interactive: true, workspaceNow: now, consentRead: async () => "y" };
     await mkdir(join(fresh, ".aibill"), { mode: 0o700 });
     await writeFile(lockPath(fresh), "", { mode: 0o600 });
-    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toEqual(["This machine has no completed local Workspace pairing. No logs or network were read.", LOCKED_STATUS]);
+    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toEqual(["This machine has no completed local Workspace pairing. No logs or network were read.", "Daily sync: off.", LOCKED_STATUS]);
     await rm(lockPath(fresh));
     expect((await runCli(["workspace", "connect"], runtime)).exitCode).toBe(0);
     await writeFile(lockPath(fresh), "", { mode: 0o600 });

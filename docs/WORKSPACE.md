@@ -54,9 +54,11 @@ run the same command with `npx aibill@latest`.
    Replace the placeholder with the exact response from Workspace. Confirm the
    displayed Workspace and enrollment policy. Treat that response bundle
    as sensitive; do not paste it into an issue or chat.
-3. Finish the all-repository sharing consent in Settings → Machines. Pairing
-   alone sends no local session facts. The current CLI flow does not offer a
-   per-push repository picker; read the scope and preview before consenting.
+3. Finish the all-repository sharing consent in Settings → Machines. After pairing,
+   the terminal offers to preview your first push immediately. Say yes when the
+   browser consent is complete, then review and approve the exact batch. Declining
+   reads and sends no session facts; you can run `workspace push` later. The CLI
+   does not offer a per-push repository picker.
 4. Inspect local pairing state:
 
    ```bash
@@ -75,8 +77,8 @@ run the same command with `npx aibill@latest`.
    A new push reads a bounded 30-day window ending at today’s UTC midnight.
    Only closed days within the grant’s authorized collection period are
    eligible. Review the exact payload, exclusions and missing components.
-   Confirming sends that batch. Connection, a normal receipt, statusline
-   refresh and the local `watch` command do not schedule Workspace pushes.
+   Confirming sends that batch. Daily uploads require the separate opt-in below;
+   a normal receipt, statusline refresh and local `watch` never enable them.
    A batch contains at most 256 changed facts and 262,144 bytes, so a successful
    push is not a promise that all eligible history has been uploaded. A batch carries
    whole days, oldest first, because Workspace reads what it holds of a day as that
@@ -85,6 +87,52 @@ run the same command with `npx aibill@latest`.
    says how many wait. A day with more changed facts than its batch can carry goes in
    part, and both lines name it. A retained batch is resent as it was signed and says
    nothing of what waits behind it. Run the push again and follow the next preview.
+
+## Optional daily uploads
+
+After pairing, run this in an interactive terminal:
+
+```bash
+npx aibill@latest workspace push --schedule daily
+```
+
+Review the scope and answer yes to authorize future batches without their individual
+previews. This is separate from the Workspace's all-repository sharing consent, which
+must also be complete. The command installs a user launchd agent on macOS or a cron
+entry on other systems with `crontab`, scheduled for 09:17 local time. It does not
+upload immediately; use `workspace push` for an immediate preview.
+
+Each run reads the last 30 closed UTC days and sends one bounded batch, plus a
+subscription-tier follow-up when Workspace first announces support. Large backlogs
+may need additional manual pushes. A machine must be available to run: macOS may
+run a missed job after wake, while cron does not catch up a missed time. No hourly
+or always-on sharing is implied.
+
+The setup retains a private copy of the exact installed CLI and its dependencies
+under `~/.aibill/workspace-sync/`, so deleting an npx cache does not break the job.
+The schedule uses the current absolute Node.js executable; **run the setup command
+again after updating aibill or replacing Node.js**. It does not download new code
+each day. No device token, private key, payload or project label appears in the
+launchd/cron entry. Windows scheduling is not supported yet.
+
+Standing consent is tied to this machine's current Workspace grant. Changing the
+grant invalidates it; an expired or disconnected connection cannot upload. A retained
+uncertain or refused batch stops unattended runs until you review `workspace push`
+in a terminal. An incomplete local scan also stops the upload. `workspace status`
+shows whether daily sync is authorized and when its last run completed or stopped.
+
+Set `AIBILL_NO_PLAN_TIER=1` when enabling the schedule to exclude subscription-tier
+facts from its new batches. Changing a shell variable later does not change an
+already-installed job; remove or reconfigure the schedule to change that choice.
+
+Remove the schedule and its standing consent anytime, without disconnecting:
+
+```bash
+npx aibill@latest workspace push --schedule none
+```
+
+Manual pushes continue to require an interactive terminal and approval of the exact
+payload. There is no general noninteractive `--yes` upload flag.
 
 ## What is shared
 

@@ -747,6 +747,15 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
       sessionFactDays: sessionFactDays(state.pending.envelope) } : null };
 }
 
+/** Non-secret identity for local standing consent; replacing/revising a grant invalidates it. */
+export async function workspaceScheduleBinding(home = homedir()): Promise<string | null> {
+  const path = await privateDirectory(home, false);
+  const state = await readState(path);
+  if (!state || state.disconnect) return null;
+  const { origin, grantId, keyId, grantRevision, connectionEpoch, collectionNotBefore, authorityStartsAt, expiresAt } = state.device;
+  return workspaceDomainHash("tilden:workspace-schedule:v1", { origin, grantId, keyId, grantRevision, connectionEpoch, collectionNotBefore, authorityStartsAt, expiresAt });
+}
+
 /** SQL's age limit: a batch signed longer ago than this is refused as `expired` unless the Workspace already holds it. */
 export const WORKSPACE_BATCH_MAX_AGE_MS = 10 * 60 * 1000;
 /** Response headers travel lower-cased, as Node delivers them; tests may omit them. */

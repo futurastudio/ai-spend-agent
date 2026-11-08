@@ -252,8 +252,9 @@ sharing consent in Workspace Settings → Machines, then use
 The browser is needed for setup; it does not need to stay open for later pushes
 while the machine’s grant and sharing consent remain valid.
 
-Shared activity includes eligible Claude Code/Codex session and token counts
-and project labels where available. Raw transcripts and dollar amounts stay out
+Shared activity includes eligible Claude Code/Codex session and token counts,
+project labels where available, hashed directory references and up to 1,024
+device-keyed session identities per daily fact. Raw transcripts and dollar amounts stay out
 of that upload; provider billing is connected separately. See the
 [setup and sharing guide](docs/WORKSPACE.md) for the supported dates, data fields
 and recovery steps.
@@ -273,8 +274,9 @@ and recovery steps.
 - **Provider sync:** an explicit read uses the local environment credential
   reference with that provider. aibill never sits in the inference path and
   never stores, prints, or proxies provider credentials.
-- **Workspace:** pairing is optional; each explicit push requires consent to
-  the outgoing facts. Project labels may be shared, and a push previews and can
+- **Workspace:** pairing is optional; each manual push requires consent to
+  the outgoing facts. `workspace push --schedule daily` separately opts in to
+  daily uploads without per-batch prompts; `--schedule none` removes that consent. Project labels may be shared, and a push previews and can
   send the subscription tier each agent is signed in with, in its own batch when
   no session fact changed (seven fields, never an account, email or token;
   `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
