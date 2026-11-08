@@ -6,6 +6,7 @@ import {
   type WorkspaceAcceptedPlans, type WorkspaceAggregate, type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport, type WorkspaceUnreportedPlan,
 } from "./workspaceConnect.js";
 import { authorizedWorkspaceSchedule, updateWorkspaceSchedule, workspaceScheduleStatus, WorkspaceScheduleError, type WorkspaceScheduleOptions } from "./workspaceSchedule.js";
+import { WorkspaceEnrollmentProjectError } from "./workspaceEnrollmentProject.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
 import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
@@ -283,6 +284,7 @@ type ParsedArgs = {
   workspaceAction?: string;
   workspaceCode?: string;
   workspaceRestart?: boolean;
+  workspacePrepared?: boolean;
   workspaceDisconnectRetry?: boolean;
   workspaceSchedule?: "daily" | "none";
   workspaceScheduled?: boolean;
@@ -379,6 +381,8 @@ export type CliRuntimeOptions = {
   workspaceLoadCalls?: () => Promise<Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>>;
   /** Test seam for the checkout lookup behind repository-named facts. */
   workspaceRepositoryRoot?: (directory: string) => string | undefined;
+  /** Test/embedding override for the real checkout confirmed during native pairing. */
+  workspaceDirectory?: string;
   /** Test/embedding override. Production always defaults to the OS home. */
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
@@ -1833,15 +1837,22 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         if (!await consent(args.workspaceRestart
           ? "Replace any unused connection request with a new private key and public request? The previous unused key will be removed; connected or uncertain exchanges cannot be restarted. No session facts are sent. [y/N] "
           : "Create a private device key, or display an existing unused connection request? No session facts are sent. [y/N] ")) return fail("Connection request unchanged. No new request was created.");
-        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory, { restart: args.workspaceRestart });
+        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory, { restart: args.workspaceRestart,
+          ...(args.workspacePrepared ? {} : { projectDirectory: runtime.workspaceDirectory ?? process.cwd(),
+            confirmProject: project => consent([`Reported repository: ${project.displayName}`, `Local checkout (stays here): ${JSON.stringify(project.localDirectory)}`,
+              `Directory hash: ${project.directoryRef}`, "Use this repository to identify this machine in Workspace? The public request shares its name and directory hash.",
+              "This does not permit session uploads or sharing other repositories. [y/N] "].join("\n")) }) });
         return ok([`${prepared.disposition === "reused" ? "Reused" : "New"} connection request: ${prepared.request.requestId.slice(-8)}`,
           ...(prepared.disposition === "reused" ? ["This is the same unfinished request. If it expired or was cancelled in the browser, run npx aibill@latest workspace connect --restart."] : []),
+          ...(prepared.request.schemaVersion === "2" ? [`Reported repository: ${prepared.request.project.displayName}`, `Directory hash: ${prepared.request.project.directoryRef}`]
+            : ["This request uses an administrator-prepared project and reader setup."]),
           `Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
           "Then run: npx aibill@latest workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
         now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,
         confirm: details => consent([`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}?`,
+          ...(details.project ? [`Reported repository: ${details.project.displayName}`, `Directory hash: ${details.project.directoryRef}`] : []),
           `Selected tenant: ${details.tenantId}`, `Reviewed source: ${details.localSourceInstanceRef}`, `Project: ${details.projectId}`, `Source project: ${details.sourceProjectRef}`,
           `Exact enrollment policy: ${workspaceCanonicalJson(details.policy)}`, "Sign this enrollment exchange? [y/N] "].join("\n")) });
       if (result.state !== "connected") return result.state === "cancelled" ? ok("Pairing exchange not sent.")
@@ -2036,7 +2047,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     }
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
-    if (error instanceof WorkspaceScheduleError) return fail(error.message);
+    if (error instanceof WorkspaceScheduleError || error instanceof WorkspaceEnrollmentProjectError) return fail(error.message);
     if (error instanceof WorkspaceStateFromNewerCli) {
       const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceRestart ? " --restart" : args.workspaceDisconnectRetry ? " --retry" : "";
       return fail(`This machine's Workspace state was written by a newer aibill: it carries keys this version does not know, so this version stopped and nothing was changed. Run npx aibill@latest workspace ${action}${flag}.`);
@@ -8629,17 +8640,18 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.parseErrors.push(`${arg} requires a value`);
       continue;
     }
-    if (command === "workspace" && ["--restart", "--retry", "--schedule", "--scheduled"].includes(arg)) {
+    if (command === "workspace" && ["--restart", "--prepared", "--retry", "--schedule", "--scheduled"].includes(arg)) {
       if (!onceOnly(arg)) continue;
       if (arg === "--restart" && parsed.workspaceAction === "connect" && !parsed.workspaceCode) parsed.workspaceRestart = true;
+      else if (arg === "--prepared" && parsed.workspaceAction === "connect" && !parsed.workspaceCode) parsed.workspacePrepared = true;
       else if (arg === "--retry" && parsed.workspaceAction === "disconnect") parsed.workspaceDisconnectRetry = true;
       else if (arg === "--scheduled" && parsed.workspaceAction === "push") parsed.workspaceScheduled = true;
       else if (arg === "--schedule" && parsed.workspaceAction === "push" && ["daily", "none"].includes(nextValue ?? "")) { parsed.workspaceSchedule = nextValue as "daily" | "none"; index++; }
-      else parsed.parseErrors.push("workspace accepts connect [response-bundle | --restart], push [--schedule daily|none], status, or disconnect [--retry]");
+      else parsed.parseErrors.push("workspace accepts connect [response-bundle | --restart | --prepared], push [--schedule daily|none], status, or disconnect [--retry]");
       continue;
     }
     if (command === "workspace" && !["--no-color", "--no-open", "--json", "--full"].includes(arg)) {
-      parsed.parseErrors.push("unsupported Workspace argument; use connect [response-bundle | --restart], push [--schedule daily|none], status, or disconnect [--retry]");
+      parsed.parseErrors.push("unsupported Workspace argument; use connect [response-bundle | --restart | --prepared], push [--schedule daily|none], status, or disconnect [--retry]");
       continue;
     }
     if (arg === "--sample") {
@@ -9261,7 +9273,8 @@ function helpText(telemetryDisclosure?: boolean): string {
     `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
     "",
     "Optional Workspace machine attribution (explicit consent, no provider calls):",
-    "  npx aibill@latest workspace connect            Prepare this machine's public pairing request",
+    "  npx aibill@latest workspace connect            Confirm this checkout and prepare a public pairing request",
+    "  npx aibill@latest workspace connect --prepared  Use an administrator-prepared project and reader setup",
     "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation",
     "  npx aibill@latest workspace connect <code>     Finish the browser-confirmed pairing",
     "  npx aibill@latest workspace push               Preview and send local session facts",

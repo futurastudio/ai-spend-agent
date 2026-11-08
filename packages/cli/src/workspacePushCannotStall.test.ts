@@ -488,7 +488,7 @@ describe("a lapsed connection says so", () => {
     } });
     expect(disconnected).toMatchObject({ exitCode: 0, stdout: "Workspace revoked this machine grant. Local pairing was removed." });
     await expect(lstat(m.statePath)).rejects.toThrow();
-    const request = await runCli(["workspace", "connect"], runtime);
+    const request = await runCli(["workspace", "connect", "--prepared"], runtime);
     expect(request.exitCode).toBe(0);
     expect(request.stdout).toContain("New connection request:");
     expect(request.stdout).toContain("Then run: npx aibill@latest workspace connect <response-bundle>");
@@ -512,7 +512,7 @@ describe("the command this CLI tells a person to type", () => {
   it("the help names every Workspace command with @latest", async () => {
     const help = (await runCli(["--help"])).stdout;
     const named = lines(help).filter(line => /\bworkspace (connect|push|status|disconnect)\b/.test(line));
-    expect(named).toHaveLength(9);
+    expect(named).toHaveLength(10);
     for (const line of named) expect(line.trimStart().startsWith("npx aibill@latest workspace "), line).toBe(true);
   });
 

@@ -35,13 +35,21 @@ run the same command with `npx aibill@latest`.
 
 ## Pair, review and push
 
-1. Use Node.js 22+ and open an interactive terminal. Start with:
+1. Use Node.js 22+ and open an interactive terminal inside the Git checkout you
+   want to report as this machine's initial repository. Start with:
 
    ```bash
    npx aibill@latest workspace connect
    ```
 
-2. Confirm preparation of the local device key and public request. Open
+2. Confirm preparation of the local device key, then separately confirm the
+   reported repository. The terminal shows its actual checkout directory locally.
+   The signed public request includes only its safe display name and directory
+   hash, alongside the device's public pairing fields. No raw path, remote URL,
+   file content, or session facts are included. A directory hash identifies a
+   local checkout; it does not prove which remote repository owns it.
+
+   Open
    [Settings → Machines](https://app.asktilden.com/settings/machines) in your
    invited Workspace. Follow the browser enrollment instructions using that
    public request. Review the Workspace and policy, then run the response
@@ -54,6 +62,16 @@ run the same command with `npx aibill@latest`.
    Replace the placeholder with the exact response from Workspace. Confirm the
    displayed Workspace and enrollment policy. Treat that response bundle
    as sensitive; do not paste it into an issue or chat.
+
+   Repository confirmation does not authorize uploads or all-repository sharing.
+   Fresh requests use version 2 and need Workspace support for repository
+   bootstrap. Release and Workspace activation must be coordinated; this local
+   implementation is not evidence that hosted self-service enrollment is active.
+   For an existing administrator-prepared project and reader setup, explicitly
+   use `workspace connect --prepared`. This creates the original version 1
+   request and does not require a local repository. Either version of an unfinished
+   request is reused unchanged until an explicit `--restart`; version 2 responses
+   cannot silently fall back to version 1.
 3. Finish the all-repository sharing consent in Settings → Machines. After pairing,
    the terminal offers to preview your first push immediately. Say yes when the
    browser consent is complete, then review and approve the exact batch. Declining
