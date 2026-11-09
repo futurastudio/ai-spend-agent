@@ -8,6 +8,17 @@ published (see its section).
 
 ## 0.9.19 (unreleased)
 
+- New `workspace connect` requests default to signed version 2 native enrollment.
+  After separate repository confirmation, a non-bare Git checkout supplies its
+  root's safe display name and directory hash. The public request does not include
+  the raw path, remote URLs, file contents, or session facts. The hash identifies
+  the local checkout, not its remote ownership. Existing administrator-prepared
+  setups remain available through explicit `workspace connect --prepared`, which
+  creates the original version 1 request without requiring a repository. Pending
+  requests of either version are reused unchanged until an explicit `--restart`;
+  version 2 never silently falls back to version 1. Publication requires
+  coordinated Workspace SQL146 installation and bootstrap-template activation;
+  this local CLI implementation does not establish hosted enrollment availability.
 - Finishing `workspace connect <response-bundle>` now offers the first upload in
   the same terminal. The browser's sharing consent must be complete; reading the
   local facts and sending the exact batch remain separate choices.
@@ -30,9 +41,9 @@ published (see its section).
   unsupported instead of silently ignoring it or reading real context.
 - Workspace sharing documentation now includes per-session hashes, policy-based
   retention, the distinction between read expiry and physical deletion, and the
-  limits of unkeyed directory references. No identity format, hosted retention
-  policy, provider admission, local MCP package, or Codex plugin changes in this
-  release. Hosted data delivery still depends on the Workspace connection and
+  limits of unkeyed directory references. No session identity format, hosted
+  retention policy, provider admission, local MCP package, or Codex plugin changes
+  in this release. Hosted data delivery still depends on the Workspace connection and
   permissions; this release makes no measured latency claim.
 
 ## 0.9.18 (published on npm, 2026-11-08)
