@@ -716,8 +716,13 @@ describe("detached delivery never holds exit (QA M3)", () => {
       });
 
       // (a) The parent-side call is non-blocking regardless of endpoint health.
+      // Keep the real detached spawn, but route this synthetic test to its own
+      // loopback server: the production sender's child has a baked-in URL.
+      const { spawn } = await import("node:child_process");
+      const spawnToLoopback = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => spawn(command,
+        [args[0]!, buildDetachedTelemetrySendScript(`http://127.0.0.1:${port}/api/telemetry`), args[2]!], options)) as typeof spawn;
       const spawnStarted = Date.now();
-      sendTelemetryDetached(stateFile);
+      sendTelemetryDetached(stateFile, { spawnImpl: spawnToLoopback });
       expect(Date.now() - spawnStarted).toBeLessThanOrEqual(50);
 
       // (b) End-to-end: a parent that fires the detached send at the HANGING

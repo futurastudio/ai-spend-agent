@@ -6,6 +6,7 @@ import { request as httpsRequest } from "node:https";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { AGENT_PLAN_FACT_SOURCES, AGENT_PLAN_TIER_IDS, dedupeCumulativeSessionCalls, type AgentPlanFact, type LocalAgentCall } from "@agent-finops/core";
+import { previewWorkspaceEnrollmentProject, validateWorkspaceEnrollmentProject, WorkspaceEnrollmentProjectError, type WorkspaceEnrollmentProject, type WorkspaceEnrollmentProjectPreview } from "./workspaceEnrollmentProject.js";
 
 export const WORKSPACE_ORIGIN = "https://app.asktilden.com";
 export const WORKSPACE_FACTS_PATH = "/api/workspace/local-session-facts";
@@ -1060,17 +1061,22 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
   });
 }
 
-export type WorkspaceEnrollmentRequest = {
+type WorkspaceEnrollmentRequestV1 = {
   schemaVersion: "1"; kind: "tilden_machine_enrollment_request"; origin: typeof WORKSPACE_ORIGIN;
   publicKey: string; keyId: string; requestId: string;
 };
+export type WorkspaceEnrollmentRequestV2 = Omit<WorkspaceEnrollmentRequestV1, "schemaVersion"> & {
+  schemaVersion: "2"; project: WorkspaceEnrollmentProject;
+  signature: { algorithm: "ed25519"; canonicalization: "jcs-v1"; value: string };
+};
+export type WorkspaceEnrollmentRequest = WorkspaceEnrollmentRequestV1 | WorkspaceEnrollmentRequestV2;
 export type WorkspaceEnrollmentIntent = {
   publicKey: string; keyId: string; requestId: string; localSourceInstanceRef: string;
   policyRevision: string; readerRevision: string; projectAdmissionRevision: string;
   collectionNotBefore: string; authorityStartsAt: string; grantExpiresAt: string;
 };
-export type WorkspaceEnrollmentResponse = {
-  schemaVersion: "1"; kind: "tilden_machine_enrollment_response"; origin: typeof WORKSPACE_ORIGIN;
+type WorkspaceEnrollmentResponseBody = {
+  kind: "tilden_machine_enrollment_response"; origin: typeof WORKSPACE_ORIGIN;
   intent: WorkspaceEnrollmentIntent;
   binding: { tenantId: string; policy: Record<string, Json>; projectId: string; sourceProjectRef: string };
   receipt: { state: "prepared"; challengeId: string; requestHash: string; grantId: string; deviceId: string;
@@ -1078,8 +1084,33 @@ export type WorkspaceEnrollmentResponse = {
     collectionNotBefore: string; authorityStartsAt: string; grantExpiresAt: string; nonce: string; pairingCode: string };
   confirmation: { state: "confirmed"; challengeId: string };
 };
+export type WorkspaceEnrollmentResponse = WorkspaceEnrollmentResponseBody & ({ schemaVersion: "1" }
+  | { schemaVersion: "2"; project: WorkspaceEnrollmentProject; nativeRequestHash: string });
 type WorkspaceEnrollmentState = { version: 1; request: WorkspaceEnrollmentRequest; privateKeyPem: string; state: "prepared" | "exchange_uncertain" };
 const ENROLLMENT_FILE = "workspace-enrollment.json";
+export function workspaceEnrollmentRequestProof(request: Omit<WorkspaceEnrollmentRequestV2, "signature">): string {
+  return workspaceCanonicalJson({ purpose: "tilden_machine_enrollment_request_v2", ...request });
+}
+export function workspaceEnrollmentRequestHash(request: WorkspaceEnrollmentRequestV2): string {
+  return workspaceDomainHash("tilden:machine-bootstrap-request:v2", request);
+}
+export function validateWorkspaceEnrollmentRequest(value: unknown): asserts value is WorkspaceEnrollmentRequest {
+  const version = value && typeof value === "object" && "schemaVersion" in value ? value.schemaVersion : undefined;
+  exactKeys(value, ["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId", ...(version === "2" ? ["project", "signature"] : [])]);
+  if (version !== "1" && version !== "2" || value.kind !== "tilden_machine_enrollment_request" || value.origin !== WORKSPACE_ORIGIN
+    || !bytes(value.publicKey, 32) || typeof value.keyId !== "string" || !REF.test(value.keyId)
+    || typeof value.requestId !== "string" || !REF.test(value.requestId)) throw Error("The native enrollment request is invalid.");
+  if (version === "2") {
+    validateWorkspaceEnrollmentProject(value.project);
+    exactKeys(value.signature, ["algorithm", "canonicalization", "value"]);
+    if (value.signature.algorithm !== "ed25519" || value.signature.canonicalization !== "jcs-v1" || !bytes(value.signature.value, 64))
+      throw Error("The native repository confirmation is invalid.");
+    const { signature, ...unsigned } = value as unknown as WorkspaceEnrollmentRequestV2;
+    if (!verify(null, Buffer.from(workspaceEnrollmentRequestProof(unsigned)),
+      createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: value.publicKey }, format: "jwk" }), Buffer.from(signature.value, "base64url")))
+      throw Error("The native repository confirmation is invalid.");
+  }
+}
 export function encodeWorkspaceBundle(value: WorkspaceEnrollmentRequest | WorkspaceEnrollmentResponse): string {
   return Buffer.from(workspaceCanonicalJson(value), "utf8").toString("base64url");
 }
@@ -1090,10 +1121,18 @@ function parseWorkspaceResponseBundle(code: string): WorkspaceEnrollmentResponse
   let value: unknown;
   try { value = JSON.parse(decoded.toString("utf8")); } catch { throw Error("The Workspace response bundle is invalid."); }
   if (Buffer.from(workspaceCanonicalJson(value as Json)).toString("base64url") !== code) throw Error("The Workspace response bundle is not canonical.");
-  exactKeys(value, ["schemaVersion", "kind", "origin", "intent", "binding", "receipt", "confirmation"]);
-  if (value.schemaVersion !== "1" || value.kind !== "tilden_machine_enrollment_response" || value.origin !== WORKSPACE_ORIGIN)
+  validateWorkspaceResponseShape(value);
+  return value as WorkspaceEnrollmentResponse;
+}
+function validateWorkspaceResponseShape(value: unknown): asserts value is WorkspaceEnrollmentResponse {
+  const version = value && typeof value === "object" && "schemaVersion" in value ? value.schemaVersion : undefined;
+  exactKeys(value, ["schemaVersion", "kind", "origin", "intent", "binding", "receipt", "confirmation", ...(version === "2" ? ["project", "nativeRequestHash"] : [])]);
+  if (version !== "1" && version !== "2" || value.kind !== "tilden_machine_enrollment_response" || value.origin !== WORKSPACE_ORIGIN)
     throw Error("The Workspace response bundle has a different origin or purpose.");
-  return value as unknown as WorkspaceEnrollmentResponse;
+  if (version === "2") {
+    validateWorkspaceEnrollmentProject(value.project);
+    if (typeof value.nativeRequestHash !== "string" || !HASH.test(value.nativeRequestHash)) throw Error("The native request commitment is invalid.");
+  }
 }
 async function readEnrollment(path: string): Promise<WorkspaceEnrollmentState | null> {
   let handle;
@@ -1105,11 +1144,8 @@ async function readEnrollment(path: string): Promise<WorkspaceEnrollmentState | 
       throw Error("Workspace enrollment is not a private regular file.");
     const state = JSON.parse(await handle.readFile("utf8")) as WorkspaceEnrollmentState;
     exactKeys(state, ["version", "request", "privateKeyPem", "state"]);
-    exactKeys(state.request, ["schemaVersion", "kind", "origin", "publicKey", "keyId", "requestId"]);
+    validateWorkspaceEnrollmentRequest(state.request);
     if (state.version !== 1 || !["prepared", "exchange_uncertain"].includes(state.state)
-      || state.request.schemaVersion !== "1" || state.request.kind !== "tilden_machine_enrollment_request"
-      || state.request.origin !== WORKSPACE_ORIGIN || !bytes(state.request.publicKey, 32)
-      || ![state.request.keyId, state.request.requestId].every(value => REF.test(value))
       || createPublicKey(state.privateKeyPem).export({ format: "jwk" }).x !== state.request.publicKey)
       throw Error("Workspace enrollment state is invalid.");
     return state;
@@ -1123,7 +1159,9 @@ export class WorkspaceEnrollmentRefusal extends Error {
   constructor(readonly reason: "connected" | "exchange_uncertain") { super("Workspace enrollment unavailable"); }
 }
 /** Generates native custody before displaying public enrollment material. No network call. */
-export async function beginWorkspaceEnrollment(home = homedir(), options: { restart?: boolean } = {}): Promise<{
+export async function beginWorkspaceEnrollment(home = homedir(), options: { restart?: boolean;
+  projectDirectory?: string; confirmProject?: (project: WorkspaceEnrollmentProjectPreview) => Promise<boolean>;
+} = {}): Promise<{
   request: WorkspaceEnrollmentRequest; bundle: string; disposition: "created" | "reused" | "restarted";
 }> {
   return withState(home, async (device, _save, path) => {
@@ -1131,9 +1169,23 @@ export async function beginWorkspaceEnrollment(home = homedir(), options: { rest
     const retained = await readEnrollment(path);
     if (retained?.state === "exchange_uncertain") throw new WorkspaceEnrollmentRefusal("exchange_uncertain");
     if (retained && !options.restart) return { request: retained.request, bundle: encodeWorkspaceBundle(retained.request), disposition: "reused" };
+    let project: WorkspaceEnrollmentProject | undefined;
+    if (options.projectDirectory !== undefined || options.confirmProject !== undefined) {
+      if (options.projectDirectory === undefined || !options.confirmProject) throw new WorkspaceEnrollmentProjectError("confirmation");
+      const preview = await previewWorkspaceEnrollmentProject(options.projectDirectory);
+      if (!await options.confirmProject(preview)) throw new WorkspaceEnrollmentProjectError("declined");
+      const after = await previewWorkspaceEnrollmentProject(options.projectDirectory);
+      if (workspaceCanonicalJson(preview) !== workspaceCanonicalJson(after)) throw new WorkspaceEnrollmentProjectError("changed");
+      project = { displayName: preview.displayName, directoryRef: preview.directoryRef, confirmation: "CONFIRM_REPOSITORY" };
+    }
     const pair = generateKeyPairSync("ed25519"), ref = () => `oref_${randomBytes(32).toString("base64url")}`;
-    const request: WorkspaceEnrollmentRequest = { schemaVersion: "1", kind: "tilden_machine_enrollment_request", origin: WORKSPACE_ORIGIN,
+    let request: WorkspaceEnrollmentRequest = { schemaVersion: "1", kind: "tilden_machine_enrollment_request", origin: WORKSPACE_ORIGIN,
       publicKey: pair.publicKey.export({ format: "jwk" }).x!, keyId: ref(), requestId: ref() };
+    if (project) {
+      const unsigned = { ...request, schemaVersion: "2" as const, project };
+      request = { ...unsigned, signature: { algorithm: "ed25519", canonicalization: "jcs-v1",
+        value: sign(null, Buffer.from(workspaceEnrollmentRequestProof(unsigned)), pair.privateKey).toString("base64url") } };
+    }
     await atomicPrivateJson(path, ENROLLMENT_FILE, { version: 1, request,
       privateKeyPem: pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), state: "prepared" });
     return { request, bundle: encodeWorkspaceBundle(request), disposition: retained ? "restarted" : "created" };
@@ -1141,6 +1193,12 @@ export async function beginWorkspaceEnrollment(home = homedir(), options: { rest
 }
 export function validateWorkspaceEnrollmentResponse(request: WorkspaceEnrollmentRequest, response: WorkspaceEnrollmentResponse, now: string): string {
   utcDay(now);
+  validateWorkspaceEnrollmentRequest(request);
+  validateWorkspaceResponseShape(response);
+  if (request.schemaVersion !== response.schemaVersion) throw Error("The response version does not match this native request. No downgrade is allowed.");
+  if (request.schemaVersion === "2" && (response.schemaVersion !== "2"
+    || workspaceCanonicalJson(response.project) !== workspaceCanonicalJson(request.project)
+    || response.nativeRequestHash !== workspaceEnrollmentRequestHash(request))) throw Error("The response does not match the reported repository and native request.");
   const { intent, binding, receipt, confirmation } = response;
   exactKeys(intent, ["publicKey", "keyId", "requestId", "localSourceInstanceRef", "policyRevision", "readerRevision", "projectAdmissionRevision", "collectionNotBefore", "authorityStartsAt", "grantExpiresAt"]);
   exactKeys(binding, ["tenantId", "policy", "projectId", "sourceProjectRef"]);
@@ -1170,7 +1228,8 @@ export function validateWorkspaceEnrollmentResponse(request: WorkspaceEnrollment
 /** Exchange is marked uncertain durably before dispatch and is never retried implicitly. */
 export async function finishWorkspaceEnrollment(options: { home?: string; bundle: string; now: string;
   confirm: (details: { origin: string; collectionNotBefore: string; grantExpiresAt: string;
-    localSourceInstanceRef: string; tenantId: string; projectId: string; sourceProjectRef: string; policy: Record<string, Json> }) => Promise<boolean>;
+    localSourceInstanceRef: string; tenantId: string; projectId: string; sourceProjectRef: string; policy: Record<string, Json>;
+    project?: WorkspaceEnrollmentProject }) => Promise<boolean>;
   transport?: WorkspaceExchangeTransport;
 }): Promise<{ state: "connected" | "cancelled" | "unconfirmed" }> {
   return withState(options.home ?? homedir(), async (device, save, path) => {
@@ -1181,7 +1240,8 @@ export async function finishWorkspaceEnrollment(options: { home?: string; bundle
     const proof = validateWorkspaceEnrollmentResponse(retained.request, response, options.now);
     if (!await options.confirm({ origin: WORKSPACE_ORIGIN, collectionNotBefore: response.intent.collectionNotBefore,
       grantExpiresAt: response.intent.grantExpiresAt, localSourceInstanceRef: response.intent.localSourceInstanceRef,
-      tenantId: response.binding.tenantId, projectId: response.binding.projectId, sourceProjectRef: response.binding.sourceProjectRef, policy: response.binding.policy })) return { state: "cancelled" };
+      tenantId: response.binding.tenantId, projectId: response.binding.projectId, sourceProjectRef: response.binding.sourceProjectRef, policy: response.binding.policy,
+      ...(response.schemaVersion === "2" ? { project: response.project } : {}) })) return { state: "cancelled" };
     const body = workspaceCanonicalJson({ challengeId: response.receipt.challengeId, nonce: response.receipt.nonce,
       signature: sign(null, Buffer.from(proof), retained.privateKeyPem).toString("base64url") });
     await atomicPrivateJson(path, ENROLLMENT_FILE, { ...retained, state: "exchange_uncertain" });
