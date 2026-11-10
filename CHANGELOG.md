@@ -31,23 +31,37 @@ published (see its section).
   a private copy of the installed CLI so an npx cache eviction does not break the
   job, and never puts device credentials or facts in the schedule entry. Run setup
   again after replacing Node.js or updating aibill. Windows scheduling is not
-  supported yet, and the command says so before asking anything. Manual pushes keep
-  their preview. A scheduled run sends one batch, reads session logs from the same
-  home directory that was paired and previewed, and stops on a retained batch, an
-  incomplete source read, or an expired connection; it does not guess or retry an
-  uncertain upload.
+  supported yet, a system with no `crontab` command cannot have one, and the command
+  says so before asking anything. It also waits for the first push Workspace accepts
+  from the machine. Manual pushes keep their preview. A scheduled run sends one
+  batch of session facts, with a tier-only follow-up when Workspace first announces
+  it takes subscription tier facts, and reads session logs from the same home
+  directory that was paired and previewed. It stops on an incomplete source read or
+  an expired connection.
+- **A daily upload recovers from a lost answer, and stops itself when refused.** A
+  scheduled run whose answer is lost (no network yet after a wake, a timeout, a
+  server error) retains its batch, and the next run sends those identical bytes
+  again, then goes on. A batch you approved in a terminal is never resent for you.
+  If Workspace refuses the machine (disconnected in Settings, access removed), the
+  run withdraws its own standing consent and logs the command that turns daily
+  upload on again; no later run reads or sends anything until you do.
 - **Daily upload can always be removed.** `workspace push --schedule none` withdraws
   the standing consent first, then removes the launchd agent or cron line, the
-  retained CLI copy, the log and its directory. `workspace disconnect` removes the
-  schedule too, or prints the removal command. A setup that fails part-way takes
+  retained CLI copy, the log and its directory, whatever the modes of those
+  directories are. Your other cron lines are kept byte for byte: the crontab is read
+  and written as bytes, so a line that is not UTF-8 or a missing final newline
+  survives. `workspace disconnect` removes the schedule too, or prints the removal
+  command. A setup that fails part-way takes
   back the launchd agent or cron line it wrote. A setup lock left by a closed
   terminal or a kill is named in the message and taken over once it is ten minutes
   old, instead of blocking setup and removal for good.
 - **A daily upload that stopped running is visible.** `workspace status` shows the
   schedule's authorization and last run, and says `NOT RUNNING` with the command to
   set it up again when no run has been recorded for 48 hours (for example after a
-  Node.js update, or on a system with no running cron service). Each run appends one
-  line to `~/.aibill/workspace-sync/daily.log`.
+  Node.js update, or on a system with no running cron service). It also reports
+  what is actually installed: a job left without consent, or consent whose job is
+  gone. Each run appends one line to `~/.aibill/workspace-sync/daily.log`, which
+  keeps its newest part once it passes 256 KB.
 - Workspace commands accept trailing display flags such as `--no-color` without
   rejecting the command. Unsupported `--sample` on a Workspace push still refuses
   before reading or sending real facts.

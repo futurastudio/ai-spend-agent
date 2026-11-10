@@ -58,9 +58,11 @@ account identities. Local provider records are not uploaded.
 Hosted provider connections are set up separately.
 
 Optional `npx aibill@latest workspace push --schedule daily` installs a daily
-macOS launchd or cron job after separate standing consent. Each run sends one
-bounded session batch and may follow it with announced tier facts; uncertain
-batches require a terminal review. `npx aibill@latest workspace push --schedule none`
+macOS launchd or cron job after separate standing consent, once Workspace has
+accepted a first push from the machine. Each run sends one bounded session batch
+and may follow it with announced tier facts. A run whose answer is lost sends the
+same batch again on the next run, and if Workspace refuses the machine, daily
+sync turns itself off. `npx aibill@latest workspace push --schedule none`
 removes daily sharing and everything it installed; `workspace disconnect` removes
 it too. The installed CLI is retained locally; run setup again
 after CLI or Node.js updates. Windows scheduling is not yet supported.

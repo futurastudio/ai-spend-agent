@@ -5,7 +5,10 @@ import {
   WorkspaceCallsExcluded, WorkspaceEnrollmentRefusal, WorkspaceFactsOverSessionBound, WorkspaceStateFromNewerCli, WorkspaceStateLocked,
   type WorkspaceAcceptedPlans, type WorkspaceAggregate, type WorkspaceEnvelope, type WorkspaceFact, type WorkspaceTransport, type WorkspaceExchangeTransport, type WorkspaceDisconnectTransport, type WorkspaceUnreportedPlan,
 } from "./workspaceConnect.js";
-import { authorizedWorkspaceSchedule, updateWorkspaceSchedule, workspaceScheduleLeftBehind, workspaceScheduleStatus, workspaceScheduleUnsupported, WorkspaceScheduleError, type WorkspaceScheduleOptions } from "./workspaceSchedule.js";
+import {
+  authorizedWorkspaceSchedule, rememberScheduledBatch, scheduledBatchIsOwn, updateWorkspaceSchedule, withdrawWorkspaceScheduleConsent, workspaceScheduleLeftBehind,
+  workspaceScheduleStatus, workspaceScheduleUnavailable, workspaceScheduleUnsupported, WorkspaceScheduleError, type WorkspaceScheduleOptions,
+} from "./workspaceSchedule.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
 import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
@@ -1806,8 +1809,10 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
   try {
     if (args.workspaceScheduled && !await authorizedWorkspaceSchedule(runtime.homeDirectory))
       return fail("Daily sync is not authorized for this connection. Run npx aibill@latest workspace push --schedule daily in a terminal to review and enable it.");
-    // Before any question: a system daily sync cannot run on is told so, not asked for consent first.
-    const scheduleUnsupported = args.workspaceSchedule ? workspaceScheduleUnsupported(runtime.workspaceScheduleOptions?.platform) : null;
+    // Before any question: a system daily sync cannot run on (Windows, or no crontab command) is told so, not asked for
+    // consent first. Removal is refused only where nothing could ever have been installed.
+    const scheduleUnsupported = args.workspaceSchedule === "daily" ? await workspaceScheduleUnavailable(runtime.workspaceScheduleOptions)
+      : args.workspaceSchedule ? workspaceScheduleUnsupported(runtime.workspaceScheduleOptions?.platform) : null;
     if (scheduleUnsupported) return fail(scheduleUnsupported);
     if (action === "push" && args.workspaceSchedule === "none") {
       if (!await consent("Remove daily sync? This stops unattended uploads and keeps the machine paired. [y/N] ")) return ok("Daily sync unchanged.");
@@ -1816,7 +1821,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (action === "status") {
       const status = await workspaceStatus(runtime.homeDirectory);
       const locked = await workspaceLockBlocks(runtime.homeDirectory) ? [`${WORKSPACE_LOCK_HOLDER} If none is running, delete that file before the next connect, push or disconnect.`] : [];
-      if (status.state === "not_connected") return ok(["This machine has no completed local Workspace pairing. No logs or network were read.", await workspaceScheduleStatus(runtime.homeDirectory, runtime.workspaceNow ?? workspaceClock.now()), ...locked].join("\n"));
+      if (status.state === "not_connected") return ok(["This machine has no completed local Workspace pairing. No logs or network were read.", await workspaceScheduleStatus(runtime.homeDirectory, runtime.workspaceNow ?? workspaceClock.now(), runtime.workspaceScheduleOptions), ...locked].join("\n"));
       if (status.state === "enrollment_pending") return ok([
         `Unfinished connection request: ${status.requestId.slice(-8)}`,
         status.enrollment === "prepared"
@@ -1834,7 +1839,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           ? `announced by this Workspace; sent beside changed session facts, or alone when never accepted, changed or over ${WORKSPACE_PLAN_REFRESH_DAYS} days old, unless ${AGENT_PLAN_TIER_OPT_OUT} is set`
           : "off until an accepted push announces them; none are read or sent"}`,
         ...workspaceTierReportLines(status.agentPlansAccepted), ...locked,
-        await workspaceScheduleStatus(runtime.homeDirectory, runtime.workspaceNow ?? workspaceClock.now()),
+        await workspaceScheduleStatus(runtime.homeDirectory, runtime.workspaceNow ?? workspaceClock.now(), runtime.workspaceScheduleOptions),
         "Status reads local pairing state only; it does not confirm current server grant authority."].join("\n"));
     }
     if (action === "connect") {
@@ -1899,16 +1904,22 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       WORKSPACE_ENDED_RECONNECT, WORKSPACE_DISCONNECT_COST, WORKSPACE_ENDED_CLOCK].join("\n"));
     if (args.workspaceSchedule === "daily") {
       if (status.pending) return fail("Resolve the retained batch with npx aibill@latest workspace push before enabling daily sync.");
+      // A pairing Workspace has never taken a push from may still have its sharing consent open in the browser. A
+      // schedule set up then would be refused on its first run, so it waits for one push a person saw accepted.
+      if (status.lastAcceptedAt === null) return fail("Daily sync can be enabled once Workspace has accepted a push from this machine. Run npx aibill@latest workspace push first, then this command again. Nothing was changed.");
       const binding = await workspaceScheduleBinding(runtime.homeDirectory);
       const includePlanTier = !process.env[AGENT_PLAN_TIER_OPT_OUT];
       if (!await consent(["Enable daily uploads without a per-batch prompt for this machine connection?",
-        "Each run reads the last 30 closed UTC days across all repositories and sends one bounded batch of supported local facts: project labels, hashed folder/session identities, counts and tokens; never prompts, full paths, raw session IDs or costs.",
+        "Each run reads the last 30 closed UTC days across all repositories and sends one bounded batch of supported local facts. Each fact carries a UTC day, the agent (Claude Code or Codex), the model, the project name, a hashed folder reference, hashed session identities, a session count and token counts; never prompts, full paths, raw session IDs or costs.",
         includePlanTier ? "Subscription-tier facts are included only after Workspace announces support; no account token or email is sent." : "Subscription-tier facts are excluded from this schedule.",
-        "A private copy of this installed CLI and a 09:17 local-time job will be kept on this machine. Uncertain batches need a terminal review. Run setup again after CLI or Node updates.",
+        "A private copy of this installed CLI and a 09:17 local-time job will be kept on this machine. A run whose answer is lost sends that same batch again on the next run; a batch Workspace refuses waits for a terminal; and if Workspace refuses this machine, daily sync turns itself off. Run setup again after CLI or Node updates.",
         "Remove anytime: npx aibill@latest workspace push --schedule none. Enable daily sync? [y/N] "].join("\n"))) return ok("Daily sync unchanged. No local facts were read or sent.");
       return ok(await updateWorkspaceSchedule({ home: runtime.homeDirectory, mode: "daily", now, includePlanTier, binding: binding ?? undefined, ...runtime.workspaceScheduleOptions }));
     }
-    if (args.workspaceScheduled && status.pending) return fail("Daily sync stopped for a retained batch. Run npx aibill@latest workspace push in a terminal to review it; nothing was read or sent.");
+    // A scheduled run that meets a retained batch: one a scheduled run sent, whose answer was lost, goes again below as
+    // the identical bytes. A batch Workspace refused waits for a terminal, and so does one a person approved there.
+    if (args.workspaceScheduled && status.pending?.state === "refused" && status.pending.refusal !== "expired")
+      return fail(`Daily sync stopped: Workspace refused a retained batch as ${status.pending.refusal}. Run npx aibill@latest workspace push in a terminal to review it; nothing was read or sent.`);
     // A CLI before this one kept a batch refused as expired and stopped here for good; prepareWorkspacePush drops it.
     const heldExpired = status.pending?.state === "refused" && status.pending.refusal === "expired";
     if (status.pending?.state === "refused" && !heldExpired) return fail("A retained batch was refused. No new envelope or nonce was created; resolve the refusal before pushing again.");
@@ -1957,7 +1968,13 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const confirmBatch = (retained: boolean, lead: string[] = []) => async (payload: string, coverage: WorkspaceAggregate) => {
       if (args.workspaceScheduled) {
         const current = await authorizedWorkspaceSchedule(runtime.homeDirectory);
-        return !retained && current !== null && current.binding === schedule?.binding && current.includePlanTier === schedule.includePlanTier;
+        if (current === null || current.binding !== schedule?.binding || current.includePlanTier !== schedule.includePlanTier) return false;
+        const { batchId } = JSON.parse(payload) as WorkspaceEnvelope;
+        // A retained batch goes again only if a scheduled run built it. A new one is remembered before it is sent, so a
+        // lost answer (no network yet after a wake, a 5xx) does not stop every later run until someone opens a terminal.
+        if (retained) return scheduledBatchIsOwn(runtime.homeDirectory, batchId);
+        await rememberScheduledBatch(runtime.homeDirectory, batchId);
+        return true;
       }
       // A batch carries at most 256 facts, so a first push after pairing often has more than one batch's worth. The one
       // preview lists the rest too, and the one yes covers all of it, so the recent days do not wait for another command.
@@ -2033,6 +2050,17 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       neverAccepted
         ? `Open ${WORKSPACE_ORIGIN}/settings/machines, finish the all-repository sharing consent for this machine, then run: npx aibill@latest workspace push. If it shows this machine disconnected or expired instead, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect.`
         : `Open ${WORKSPACE_ORIGIN}/settings/machines. If it asks for this machine's sharing consent, finish that and run npx aibill@latest workspace push. If it shows this machine disconnected or expired, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect.`].join("\n");
+    /**
+     * A 403 in a scheduled run. Nobody reads a schedule's answer, so it must not go on asking: it withdraws its own
+     * standing consent, and no later run reads the logs or sends anything until a person turns it on again.
+     */
+    const scheduleRefused = async () => {
+      const withdrawn = await withdrawWorkspaceScheduleConsent(runtime.homeDirectory);
+      return ["Workspace answered 403: it does not take pushes from this machine now (disconnected in Settings, access removed, or sharing consent not in effect).",
+        withdrawn ? "Daily sync turned itself off: its standing consent was withdrawn, so no later scheduled run reads or sends anything."
+          : "Daily sync could not withdraw its own standing consent. Turn it off with: npx aibill@latest workspace push --schedule none",
+        `Check ${WORKSPACE_ORIGIN}/settings/machines. Once this machine can push again, turn daily sync back on with: npx aibill@latest workspace push --schedule daily. Its scheduled job stays installed and does nothing until then; remove it with: npx aibill@latest workspace push --schedule none`].join("\n");
+    };
     const tierDropped = `Retained subscription tier batch dropped; nothing was sent. ${tierKept} The next workspace push sends any changed session facts and offers the tier again; set ${AGENT_PLAN_TIER_OPT_OUT}=1 to stop.`;
     const tierOptedOut = `Retained subscription tier batch dropped because ${AGENT_PLAN_TIER_OPT_OUT} is set. ${tierKept}`;
     const unknownOutcome = (coverage: WorkspaceAggregate | undefined, refusedMachine?: true) => [...(planOnly(coverage)
@@ -2050,7 +2078,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     const settled = (result: CliResult): CliResult => withUnreportedTiers(result, prepared.coverage);
     if (prepared.state === "unchanged") return settled(ok([...(heldExpired ? heldDroppedLines(now) : []), "No changed eligible local session facts to push.",
       ...(prepared.coverage?.tierAwaitsAnnouncement ? [tierWaits] : [])].join("\n")));
-    if (prepared.state === "cancelled") return settled(ok(planOnly(prepared.coverage) ? tierDeclined : "Not sent."));
+    if (prepared.state === "cancelled") return settled(args.workspaceScheduled && retainedBatch
+      ? fail("Daily sync stopped for a retained batch that no scheduled run sent. Run npx aibill@latest workspace push in a terminal to review it; nothing was read or sent.")
+      : ok(planOnly(prepared.coverage) ? tierDeclined : "Not sent."));
     // A no ends the command, like any no. The opt-out asked nothing, so the push goes on: nothing is retained now, so this runs once.
     if (prepared.state === "dropped") {
       if (!planFactsOptOut) return ok(tierDropped);
@@ -2060,6 +2090,16 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     if (prepared.state === "pending") return fail("A prior batch remains retained. No new envelope was created.");
     // A batch built by this command has never been dispatched, so a 403 on it proves Workspace stored nothing. A retained one may sit there already.
     const sent = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport, firstSend: !retainedBatch });
+    if (args.workspaceScheduled && sent.authorityRefused) return settled(fail(await scheduleRefused()));
+    // A scheduled run that resent its own retained batch goes on to today's batch in the same run, whether the resend
+    // landed or Workspace never held it (it is dropped then, and its facts are rebuilt into the new batch). Nothing is
+    // retained at this point, so this runs once.
+    if (args.workspaceScheduled && retainedBatch && (sent.state === "accepted" || sent.state === "refused" && sent.expiredSignedAt)) {
+      const resent = sent.state === "accepted" ? `Workspace accepted the batch an earlier scheduled run had retained (${sent.sessionFactCount ?? 0} local session facts).`
+        : "Workspace did not hold the batch an earlier scheduled run had retained, so it was dropped and its facts are rebuilt.";
+      const rest = await workspaceCommand(args, runtime);
+      return { ...rest, stdout: [resent, rest.stdout].filter(Boolean).join("\n") };
+    }
     if (sent.state === "refused" && sent.authorityRefused) {
       const words = sharingRefused(status.lastAcceptedAt === null);
       // Right after pairing this is the expected answer to an early yes: the pairing stands and the first push is still to do.
@@ -2108,6 +2148,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       if (followUp.state === "unchanged") return withUnreportedTiers(ok(accepted), followUp.coverage);
       if (followUp.state === "cancelled") return withUnreportedTiers(ok(`${accepted}\n${tierDeclined}`), followUp.coverage);
       const tier = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
+      if (args.workspaceScheduled && tier.authorityRefused) return withUnreportedTiers({ exitCode: 1, stdout: accepted, stderr: await scheduleRefused() }, followUp.coverage);
       return withUnreportedTiers(tier.state === "accepted" ? ok(`${accepted}\n${tierAccepted(followUp.coverage)}`)
         : tier.state === "refused" ? ok(`${accepted}\n${tierRefused}`)
           : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage, tier.authorityRefused) }, followUp.coverage);

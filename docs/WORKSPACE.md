@@ -92,18 +92,27 @@ run the same command with `npx aibill@latest`.
    names a day that Workspace holds only in part; the days that wait are absent from
    Workspace, not short. Run the push again and follow the next preview. A retained
    batch is resent as it was signed and says nothing of what waits behind it. A
-   scheduled run sends one batch per run.
+   scheduled run sends one batch of session facts per run, plus a tier-only follow-up when
+   Workspace first announces it takes subscription tier facts.
 
 ## Optional daily uploads
 
-After pairing, run this in an interactive terminal:
+After pairing, and after Workspace has accepted one push from this machine, run this in
+an interactive terminal:
 
 ```bash
 npx aibill@latest workspace push --schedule daily
 ```
 
+Before that first accepted push the command refuses and changes nothing, so a new
+pairing whose sharing consent is still open in the browser cannot have a schedule. It
+also refuses, before asking anything, on Windows and on a system with no `crontab`
+command.
+
 Review the scope and answer yes to authorize future batches without their individual
-previews. This is separate from the Workspace's all-repository sharing consent, which
+previews. The question names what each fact carries: a UTC day, the agent, the model,
+the project name, a hashed folder reference, hashed session identities, a session count
+and token counts. This is separate from the Workspace's all-repository sharing consent, which
 must also be complete. The command installs a user launchd agent on macOS or a cron
 entry on other systems with `crontab`, scheduled for 09:17 local time. It does not
 upload immediately; use `workspace push` for an immediate preview.
@@ -125,10 +134,31 @@ each day. No device token, private key, payload or project label appears in the
 launchd/cron entry. Windows scheduling is not supported yet.
 
 Standing consent is tied to this machine's current Workspace grant. Changing the
-grant invalidates it; an expired or disconnected connection cannot upload. A retained
-uncertain or refused batch stops unattended runs until you review `workspace push`
-in a terminal. An incomplete local scan also stops the upload. `workspace status`
-shows whether daily sync is authorized and when its last run completed or stopped.
+grant invalidates it; an expired or disconnected connection cannot upload. An
+incomplete local scan also stops the upload.
+
+- **A run whose answer is lost** (no network yet after a wake, a timeout, a server
+  error) retains its batch, and the next scheduled run sends those identical bytes
+  again before anything else. If Workspace holds the batch it answers with the same
+  receipt; if it never did, it refuses the batch as out of date, the batch is dropped,
+  and the same run rebuilds its facts into a new one. Only a batch a scheduled run
+  built is resent this way. A batch you approved in a terminal and whose outcome is
+  unknown stays yours to retry, and scheduled runs stop until you review
+  `workspace push`.
+- **A batch Workspace refuses** as `invalid`, `conflict` or `stale` stops scheduled
+  runs until you review `workspace push` in a terminal.
+- **If Workspace refuses this machine** (403: disconnected in Settings, access
+  removed, sharing consent not in effect), daily sync turns itself off. The run
+  withdraws its own standing consent, writes one line to the log with the command
+  that turns it on again, and no later run reads or sends anything. The scheduled job
+  stays installed and does nothing until you run `--schedule daily` again or remove it.
+
+`workspace status` shows whether daily sync is authorized, when its last run completed
+or stopped, and what is actually installed. Consent is read from this machine's
+private file and the job from the operating system's own schedule (the launch agent
+file, or the cron line for this home directory), so a job left without consent says
+`OFF, but its scheduled job is STILL INSTALLED`, and consent whose job is gone says
+`NOT INSTALLED`.
 
 A job that can no longer start is silent: Node.js was updated or moved, the retained
 copy was deleted, or the system has `crontab` but no running cron service. So
@@ -136,7 +166,8 @@ copy was deleted, or the system has `crontab` but no running cron service. So
 more than 48 hours, and prints the command that sets it up again. A machine that
 was off or asleep at 09:17 on those days shows the same line. Each run also appends
 one line (time, result, the CLI's own message) to
-`~/.aibill/workspace-sync/daily.log`, and whatever the job prints goes there too.
+`~/.aibill/workspace-sync/daily.log`, and whatever the job prints goes there too. The
+log keeps its newest part once it passes 256 KB, so it stays small over the years.
 
 Set `AIBILL_NO_PLAN_TIER=1` when enabling the schedule to exclude subscription-tier
 facts from its new batches. Changing a shell variable later does not change an
@@ -150,8 +181,12 @@ npx aibill@latest workspace push --schedule none
 
 Removal withdraws the standing consent first, then removes the launchd agent or the
 cron line, the retained CLI copy, the log and the `~/.aibill/workspace-sync`
-directory; other cron lines are left as they are. `workspace disconnect` removes the
-schedule too, and prints this command if it cannot. If a setup was interrupted (a
+directory. It works whatever the modes of those directories are, including ones a
+restore or a recursive `chmod` opened to other users, where setup refuses and names
+the directory. Other cron lines are kept byte for byte, including bytes that are not
+UTF-8 and a missing final newline: the crontab is read and written as bytes, and the
+job's own line is added first and taken away again whole. `workspace disconnect`
+removes the schedule too, and prints this command if it cannot. If a setup was interrupted (a
 closed terminal, a kill), its lock at `~/.aibill/workspace-sync/install.lock` is
 named in the message and is taken over automatically once it is ten minutes old;
 removal withdraws consent even while that lock is held. A setup that fails part-way
