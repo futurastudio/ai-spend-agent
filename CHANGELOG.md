@@ -8,20 +8,46 @@ published (see its section).
 
 ## 0.9.19 (unreleased)
 
-- Finishing `workspace connect <response-bundle>` now offers the first upload in
-  the same terminal. The browser's sharing consent must be complete; reading the
-  local facts and sending the exact batch remain separate choices.
-- `workspace push --schedule daily` adds an optional daily upload at 09:17 local
-  time using a user launchd agent on macOS or cron where available. Setup requires
-  explicit standing consent for this machine connection. It retains the installed
-  CLI locally, so an npx cache eviction does not break the job, and never puts
-  device credentials or fact payloads in the OS schedule. Run setup again after
-  replacing Node.js or updating aibill. Windows scheduling is not yet supported.
-  Manual pushes keep their exact-batch preview. Scheduled runs stop on a retained
-  batch, incomplete source read, or expired connection; they do not guess or retry
-  an uncertain upload. Remove the schedule with `workspace push --schedule none`;
-  `workspace status` reports its authorization and last run. Obsolete runtime
-  copies are removed after successful replacement or removal.
+- **First push right after pairing.** Finishing `workspace connect <response-bundle>`
+  now says that sharing consent is still to finish in the browser, and offers the
+  first push in the same terminal. The question waits 10 minutes; answer yes only
+  after the browser shows sharing is on. Reading the local facts and sending them
+  remain separate choices. A yes given too early is refused by Workspace: the
+  terminal says that sharing consent is not finished, nothing is stored, no batch
+  is retained, and `workspace push` works once the browser step is done.
+- **One push sends everything it previews.** A batch holds at most 256 facts, so a
+  first push often had to be repeated, oldest days first, before recent days showed
+  up. A manual `workspace push` now lists every changed fact in one preview, and one
+  yes sends them all, batch after batch in the same command. Each later batch may
+  hold only facts from that preview. If the command stops part-way, it says how many
+  facts landed and how many wait.
+- **A refused push no longer leaves a batch behind.** When Workspace answers 403 to a
+  new batch's first send, it has stored nothing, so the batch is dropped instead of
+  being retained as an unknown outcome. The resend of a retained batch is unchanged:
+  it stays retained, because an earlier send may have stored it.
+- **Optional daily upload.** `workspace push --schedule daily` adds an upload at 09:17
+  local time, using a user launchd agent on macOS or a cron line where `crontab`
+  exists. Setup requires explicit standing consent for this machine connection, keeps
+  a private copy of the installed CLI so an npx cache eviction does not break the
+  job, and never puts device credentials or facts in the schedule entry. Run setup
+  again after replacing Node.js or updating aibill. Windows scheduling is not
+  supported yet, and the command says so before asking anything. Manual pushes keep
+  their preview. A scheduled run sends one batch, reads session logs from the same
+  home directory that was paired and previewed, and stops on a retained batch, an
+  incomplete source read, or an expired connection; it does not guess or retry an
+  uncertain upload.
+- **Daily upload can always be removed.** `workspace push --schedule none` withdraws
+  the standing consent first, then removes the launchd agent or cron line, the
+  retained CLI copy, the log and its directory. `workspace disconnect` removes the
+  schedule too, or prints the removal command. A setup that fails part-way takes
+  back the launchd agent or cron line it wrote. A setup lock left by a closed
+  terminal or a kill is named in the message and taken over once it is ten minutes
+  old, instead of blocking setup and removal for good.
+- **A daily upload that stopped running is visible.** `workspace status` shows the
+  schedule's authorization and last run, and says `NOT RUNNING` with the command to
+  set it up again when no run has been recorded for 48 hours (for example after a
+  Node.js update, or on a system with no running cron service). Each run appends one
+  line to `~/.aibill/workspace-sync/daily.log`.
 - Workspace commands accept trailing display flags such as `--no-color` without
   rejecting the command. Unsupported `--sample` on a Workspace push still refuses
   before reading or sending real facts.

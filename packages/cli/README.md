@@ -61,9 +61,12 @@ Optional `npx aibill@latest workspace push --schedule daily` installs a daily
 macOS launchd or cron job after separate standing consent. Each run sends one
 bounded session batch and may follow it with announced tier facts; uncertain
 batches require a terminal review. `npx aibill@latest workspace push --schedule none`
-removes daily sharing. The installed CLI is retained locally; run setup again
+removes daily sharing and everything it installed; `workspace disconnect` removes
+it too. The installed CLI is retained locally; run setup again
 after CLI or Node.js updates. Windows scheduling is not yet supported.
-`npx aibill@latest workspace status` shows the schedule and its last run.
+`npx aibill@latest workspace status` shows the schedule and its last run, and says
+`NOT RUNNING` when no run has been recorded for 48 hours. A manual push with more
+than one batch of facts shows them all in one preview and sends them in one command.
 
 Shared facts include device-keyed session identities and unkeyed directory hashes.
 They expire from hosted reads after the machine policy's displayed retention

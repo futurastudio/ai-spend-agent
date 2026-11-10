@@ -55,9 +55,12 @@ run the same command with `npx aibill@latest`.
    displayed Workspace and enrollment policy. Treat that response bundle
    as sensitive; do not paste it into an issue or chat.
 3. Finish the all-repository sharing consent in Settings → Machines. After pairing,
-   the terminal offers to preview your first push immediately. Say yes when the
-   browser consent is complete, then review and approve the exact batch. Declining
-   reads and sends no session facts; you can run `workspace push` later. The CLI
+   the terminal says this step is left and offers to preview your first push; that
+   question waits 10 minutes. Answer yes only after the browser shows sharing is on,
+   then review and approve the exact facts. Declining, or not answering, reads and
+   sends no session facts; you can run `workspace push` later. A yes given before
+   sharing is on is refused by Workspace: the terminal says so, nothing is stored or
+   retained, and `workspace push` works as soon as the browser step is done. The CLI
    does not offer a per-push repository picker.
 4. Inspect local pairing state:
 
@@ -77,16 +80,19 @@ run the same command with `npx aibill@latest`.
    A new push reads a bounded 30-day window ending at today’s UTC midnight.
    Only closed days within the grant’s authorized collection period are
    eligible. Review the exact payload, exclusions and missing components.
-   Confirming sends that batch. Daily uploads require the separate opt-in below;
+   Confirming sends them. Daily uploads require the separate opt-in below;
    a normal receipt, statusline refresh and local `watch` never enable them.
-   A batch contains at most 256 changed facts and 262,144 bytes, so a successful
-   push is not a promise that all eligible history has been uploaded. A batch carries
-   whole days, oldest first, because Workspace reads what it holds of a day as that
-   day, so the days that wait are absent from Workspace, not short. When a new batch
-   holds only part of the changed facts, its preview says so and the accepted line
-   says how many wait. A day with more changed facts than its batch can carry goes in
-   part, and both lines name it. A retained batch is resent as it was signed and says
-   nothing of what waits behind it. Run the push again and follow the next preview.
+   A batch contains at most 256 changed facts and 262,144 bytes. When there are more,
+   which is common on a first push, the one preview shows the first batch exactly as
+   it is signed and then lists every other fact, and one yes sends all of them: the
+   same command sends batch after batch until none wait, each holding only facts
+   from that list. A batch carries whole days, oldest first, because Workspace reads
+   what it holds of a day as that day. If the command stops part-way (a lost reply, a
+   refusal), the accepted line says how many facts landed and how many wait, and
+   names a day that Workspace holds only in part; the days that wait are absent from
+   Workspace, not short. Run the push again and follow the next preview. A retained
+   batch is resent as it was signed and says nothing of what waits behind it. A
+   scheduled run sends one batch per run.
 
 ## Optional daily uploads
 
@@ -103,10 +109,13 @@ entry on other systems with `crontab`, scheduled for 09:17 local time. It does n
 upload immediately; use `workspace push` for an immediate preview.
 
 Each run reads the last 30 closed UTC days and sends one bounded batch, plus a
-subscription-tier follow-up when Workspace first announces support. Large backlogs
-may need additional manual pushes. A machine must be available to run: macOS may
+subscription-tier follow-up when Workspace first announces support. A large backlog
+goes faster with one manual push, which sends every batch in one command. A machine
+must be available to run: macOS may
 run a missed job after wake, while cron does not catch up a missed time. No hourly
-or always-on sharing is implied.
+or always-on sharing is implied. The run reads session logs from the same home
+directory the pairing was made in and previewed from, whatever home directory the
+operating system gives the job.
 
 The setup retains a private copy of the exact installed CLI and its dependencies
 under `~/.aibill/workspace-sync/`, so deleting an npx cache does not break the job.
@@ -121,6 +130,14 @@ uncertain or refused batch stops unattended runs until you review `workspace pus
 in a terminal. An incomplete local scan also stops the upload. `workspace status`
 shows whether daily sync is authorized and when its last run completed or stopped.
 
+A job that can no longer start is silent: Node.js was updated or moved, the retained
+copy was deleted, or the system has `crontab` but no running cron service. So
+`workspace status` says `NOT RUNNING` when no scheduled run has been recorded for
+more than 48 hours, and prints the command that sets it up again. A machine that
+was off or asleep at 09:17 on those days shows the same line. Each run also appends
+one line (time, result, the CLI's own message) to
+`~/.aibill/workspace-sync/daily.log`, and whatever the job prints goes there too.
+
 Set `AIBILL_NO_PLAN_TIER=1` when enabling the schedule to exclude subscription-tier
 facts from its new batches. Changing a shell variable later does not change an
 already-installed job; remove or reconfigure the schedule to change that choice.
@@ -130,6 +147,15 @@ Remove the schedule and its standing consent anytime, without disconnecting:
 ```bash
 npx aibill@latest workspace push --schedule none
 ```
+
+Removal withdraws the standing consent first, then removes the launchd agent or the
+cron line, the retained CLI copy, the log and the `~/.aibill/workspace-sync`
+directory; other cron lines are left as they are. `workspace disconnect` removes the
+schedule too, and prints this command if it cannot. If a setup was interrupted (a
+closed terminal, a kill), its lock at `~/.aibill/workspace-sync/install.lock` is
+named in the message and is taken over automatically once it is ten minutes old;
+removal withdraws consent even while that lock is held. A setup that fails part-way
+takes back the launchd agent or cron line it wrote.
 
 Manual pushes continue to require an interactive terminal and approval of the exact
 payload. There is no general noninteractive `--yes` upload flag.
@@ -351,12 +377,15 @@ That seat plan stays until the owner changes it.
   reason, without paths or contents. No facts are replaced or sent until those calls leave
   the 30-day window, and days that leave it meanwhile stay out of Workspace. Share the
   counts for help; do not delete logs or reconnect as a repair.
-- **Workspace answered 403:** it will not take a push from this machine right now, and the
-  CLI cannot tell why, so the outcome stays unknown and the batch stays retained. One more
-  line points at Settings → Machines. If it asks for this machine's sharing consent, finish
-  that and push again. If it shows this machine disconnected or expired, run
-  `npx aibill@latest workspace disconnect`, then `npx aibill@latest workspace connect`; that
-  disconnect removes the retained batch.
+- **Workspace answered 403:** it will not take a push from this machine right now. On a
+  new batch's first send, Workspace answered before storing anything, so the batch is
+  dropped, not retained, and nothing blocks the next push or daily sync. On a machine no
+  push was ever accepted from, the line says what is left: sharing consent is not finished
+  in the browser. Finish it in Settings → Machines and push again. If Settings shows this
+  machine disconnected or expired, run `npx aibill@latest workspace disconnect`, then
+  `npx aibill@latest workspace connect`. On the resend of a retained batch the outcome
+  stays unknown and the batch stays retained, because an earlier send may have stored it;
+  that disconnect removes it.
 - **Connection ended:** a connection has an end, and `workspace status` shows it. Past
   it, Workspace refuses every push, including a resend of a retained batch, before it
   can look for a replay. So `workspace push` stops with exit 1, reads no session facts
@@ -382,7 +411,8 @@ npx aibill@latest workspace disconnect
 ```
 
 The CLI asks for revocation and removes completed local pairing only after a
-matching receipt. If the outcome is uncertain, uploads are blocked and local
+matching receipt. If daily uploads were set up, the same command removes the schedule,
+or prints the command that does. If the outcome is uncertain, uploads are blocked and local
 keys remain. Follow the command’s guidance; `npx aibill@latest workspace disconnect --retry`
 requires confirmation to repeat the identical retained request. Abandoning an
 unused request removes its local key and does not claim remote revocation.
