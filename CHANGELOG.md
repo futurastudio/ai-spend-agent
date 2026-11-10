@@ -6,6 +6,75 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
+## 0.9.19 (unreleased)
+
+- **First push right after pairing.** Finishing `workspace connect <response-bundle>`
+  now says that sharing consent is still to finish in the browser, and offers the
+  first push in the same terminal. The question waits 10 minutes; answer yes only
+  after the browser shows sharing is on. Reading the local facts and sending them
+  remain separate choices. A yes given too early is refused by Workspace: the
+  terminal says that sharing consent is not finished, nothing is stored, no batch
+  is retained, and `workspace push` works once the browser step is done.
+- **One push sends everything it previews.** A batch holds at most 256 facts, so a
+  first push often had to be repeated, oldest days first, before recent days showed
+  up. A manual `workspace push` now lists every changed fact in one preview, and one
+  yes sends them all, batch after batch in the same command. Each later batch may
+  hold only facts from that preview. If the command stops part-way, it says how many
+  facts landed and how many wait.
+- **A refused push no longer leaves a batch behind.** When Workspace answers 403 to a
+  new batch's first send, it has stored nothing, so the batch is dropped instead of
+  being retained as an unknown outcome. The resend of a retained batch is unchanged:
+  it stays retained, because an earlier send may have stored it.
+- **Optional daily upload.** `workspace push --schedule daily` adds an upload at 09:17
+  local time, using a user launchd agent on macOS or a cron line where `crontab`
+  exists. Setup requires explicit standing consent for this machine connection, keeps
+  a private copy of the installed CLI so an npx cache eviction does not break the
+  job, and never puts device credentials or facts in the schedule entry. Run setup
+  again after replacing Node.js or updating aibill. Windows scheduling is not
+  supported yet, a system with no `crontab` command cannot have one, and the command
+  says so before asking anything. It also waits for the first push Workspace accepts
+  from the machine. Manual pushes keep their preview. A scheduled run sends one
+  batch of session facts, with a tier-only follow-up when Workspace first announces
+  it takes subscription tier facts, and reads session logs from the same home
+  directory that was paired and previewed. It stops on an incomplete source read or
+  an expired connection.
+- **A daily upload recovers from a lost answer, and stops itself when refused.** A
+  scheduled run whose answer is lost (no network yet after a wake, a timeout, a
+  server error) retains its batch, and the next run sends those identical bytes
+  again, then goes on. A batch you approved in a terminal is never resent for you.
+  If Workspace refuses the machine (disconnected in Settings, access removed), the
+  run withdraws its own standing consent and logs the command that turns daily
+  upload on again; no later run reads or sends anything until you do.
+- **Daily upload can always be removed.** `workspace push --schedule none` withdraws
+  the standing consent first, then removes the launchd agent or cron line, the
+  retained CLI copy, the log and its directory, whatever the modes of those
+  directories are. Your other cron lines are kept byte for byte: the crontab is read
+  and written as bytes, so a line that is not UTF-8 or a missing final newline
+  survives. `workspace disconnect` removes the schedule too, or prints the removal
+  command. A setup that fails part-way takes
+  back the launchd agent or cron line it wrote. A setup lock left by a closed
+  terminal or a kill is named in the message and taken over once it is ten minutes
+  old, instead of blocking setup and removal for good.
+- **A daily upload that stopped running is visible.** `workspace status` shows the
+  schedule's authorization and last run, and says `NOT RUNNING` with the command to
+  set it up again when no run has been recorded for 48 hours (for example after a
+  Node.js update, or on a system with no running cron service). It also reports
+  what is actually installed: a job left without consent, or consent whose job is
+  gone. Each run appends one line to `~/.aibill/workspace-sync/daily.log`, which
+  keeps its newest part once it passes 256 KB.
+- Workspace commands accept trailing display flags such as `--no-color` without
+  rejecting the command. Unsupported `--sample` on a Workspace push still refuses
+  before reading or sending real facts.
+- `watch --sample` labels its illustrative output before the first dollar amount.
+  `context --sample` and `--plan ... --sample` now explain that the combination is
+  unsupported instead of silently ignoring it or reading real context.
+- Workspace sharing documentation now includes per-session hashes, policy-based
+  retention, the distinction between read expiry and physical deletion, and the
+  limits of unkeyed directory references. No identity format, hosted retention
+  policy, provider admission, local MCP package, or Codex plugin changes in this
+  release. Hosted data delivery still depends on the Workspace connection and
+  permissions; this release makes no measured latency claim.
+
 ## 0.9.18 (published on npm, 2026-11-08)
 
 - Count a Claude Code response once when it sits in more than one session

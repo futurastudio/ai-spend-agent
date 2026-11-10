@@ -747,6 +747,15 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
       sessionFactDays: sessionFactDays(state.pending.envelope) } : null };
 }
 
+/** Non-secret identity for local standing consent; replacing/revising a grant invalidates it. */
+export async function workspaceScheduleBinding(home = homedir()): Promise<string | null> {
+  const path = await privateDirectory(home, false);
+  const state = await readState(path);
+  if (!state || state.disconnect) return null;
+  const { origin, grantId, keyId, grantRevision, connectionEpoch, collectionNotBefore, authorityStartsAt, expiresAt } = state.device;
+  return workspaceDomainHash("tilden:workspace-schedule:v1", { origin, grantId, keyId, grantRevision, connectionEpoch, collectionNotBefore, authorityStartsAt, expiresAt });
+}
+
 /** SQL's age limit: a batch signed longer ago than this is refused as `expired` unless the Workspace already holds it. */
 export const WORKSPACE_BATCH_MAX_AGE_MS = 10 * 60 * 1000;
 /** Response headers travel lower-cased, as Node delivers them; tests may omit them. */
@@ -979,7 +988,14 @@ export function workspacePushCapabilities(headers: WorkspaceTransportResult["hea
  * answers 403 before any of that, which stays an unknown outcome. Nothing is resent here,
  * so a clock that keeps being refused cannot loop: each new batch takes a new command and a yes.
  */
-export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport }): Promise<{
+export async function sendWorkspacePending(options: { home?: string; transport?: WorkspaceTransport;
+  /**
+   * Set only for a batch this command built and has never dispatched. A 403 is then the answer to this batch's one
+   * dispatch, given before the Workspace wrote anything, so the batch is dropped like an `expired` one instead of being
+   * retained as an unknown outcome. Without it a 403 may meet a batch an earlier dispatch already stored, and it stays retained.
+   */
+  firstSend?: boolean;
+}): Promise<{
   state: "accepted" | "refused" | "unconfirmed";
   /** The session facts in the accepted batch. Tier facts are not session facts: they are named, never counted here. */
   sessionFactCount?: number;
@@ -991,7 +1007,10 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
   expiredSignedAt?: string;
   /** With `expiredSignedAt`: the days of the session facts that left with it. */
   expiredSessionDays?: string[];
-  /** With `unconfirmed`: the Workspace answered 403, its answer when a machine's grant, consent or policy does not let it push. */
+  /**
+   * The Workspace answered 403, its answer when a machine's grant, consent or policy does not let it push. With
+   * `unconfirmed` the batch stays retained; with `refused` it was a first send, so nothing was stored and it was dropped.
+   */
   authorityRefused?: true;
 }> {
   return withState(options.home ?? homedir(), async (state, save) => {
@@ -1047,6 +1066,10 @@ export async function sendWorkspacePending(options: { home?: string; transport?:
         return { state: "refused" };
       }
     } catch { return { state: "unconfirmed" }; }
+    if (result.status === 403 && options.firstSend) {
+      await save(withoutBatch(dispatched, envelope));
+      return { state: "refused", authorityRefused: true };
+    }
     return { state: "unconfirmed", ...(result.status === 403 ? { authorityRefused: true as const } : {}) };
   });
 }

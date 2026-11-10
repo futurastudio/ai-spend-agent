@@ -245,15 +245,22 @@ that half lives in Tilden Workspace.
 ## Optional Workspace connection
 
 The CLI includes an optional client for an existing invited Workspace.
+The first-push offer and daily scheduling below are prepared for the unreleased
+0.9.19 version in this checkout; see the [changelog](CHANGELOG.md).
+Hosted provider collection and Workspace rollout are separate from this CLI release.
 
 To connect, run `npx aibill@latest workspace connect`, complete enrollment and
-sharing consent in Workspace Settings → Machines, then use
-`npx aibill@latest workspace push` to preview and share supported activity.
+sharing consent in Workspace Settings → Machines, and accept the first-push offer
+or run `npx aibill@latest workspace push` to preview and share supported activity.
+For optional daily uploads, run `npx aibill@latest workspace push --schedule daily`
+and review its separate standing-consent prompt. Remove them with
+`npx aibill@latest workspace push --schedule none`; manual pushes keep their preview.
 The browser is needed for setup; it does not need to stay open for later pushes
 while the machine’s grant and sharing consent remain valid.
 
-Shared activity includes eligible Claude Code/Codex session and token counts
-and project labels where available. Raw transcripts and dollar amounts stay out
+Shared activity includes eligible Claude Code/Codex session and token counts,
+project labels where available, hashed directory references and up to 1,024
+device-keyed session identities per daily fact. Raw transcripts and dollar amounts stay out
 of that upload; provider billing is connected separately. See the
 [setup and sharing guide](docs/WORKSPACE.md) for the supported dates, data fields
 and recovery steps.
@@ -273,13 +280,17 @@ and recovery steps.
 - **Provider sync:** an explicit read uses the local environment credential
   reference with that provider. aibill never sits in the inference path and
   never stores, prints, or proxies provider credentials.
-- **Workspace:** pairing is optional; each explicit push requires consent to
-  the outgoing facts. Project labels may be shared, and a push previews and can
+- **Workspace:** pairing is optional; each manual push requires consent to
+  the outgoing facts. `workspace push --schedule daily` separately opts in to
+  daily uploads without per-batch prompts; `--schedule none` removes that consent. Project labels may be shared, and a push previews and can
   send the subscription tier each agent is signed in with, in its own batch when
   no session fact changed (seven fields, never an account, email or token;
   `AIBILL_NO_PLAN_TIER=1` leaves it out). Device credentials stay
   in private local pairing state. Disconnect revokes future machine access;
-  previously accepted records follow hosted retention rules.
+  accepted facts expire from hosted reads after the retention period shown for
+  the machine's sharing policy in Settings → Machines. A later accepted revision
+  starts that fact's retention period again. Expiry from reads and disconnect do
+  not promise physical deletion; see the [sharing guide](docs/WORKSPACE.md#retention).
 - **Other explicit network actions:** `outcome github` asks the installed `gh`
   CLI for merged-PR evidence. The optional signup command sends the displayed
   email/ref payload only after confirmation. Normal HTTP metadata accompanies

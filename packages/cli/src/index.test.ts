@@ -131,6 +131,16 @@ describe("zero-key evidence-first receipt", () => {
     expect(result.stdout).not.toMatch(/tokens? (?:fell|reduced|saved) by/iu);
   });
 
+  it("refuses unsupported sample combinations instead of silently reading real evidence", async () => {
+    for (const args of [["context", "--sample"], ["context-health", "--sample", "--json"], ["--plan", "claude-max-20x", "--sample"]]) {
+      const result = await runCli(args);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("No local evidence was read");
+      expect(result.stderr).toContain("--sample");
+    }
+  });
+
   it("keeps explicit sample output deterministic and free of local plan or credential hints", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ai-spend-cli-capture-"));
     const priorKey = process.env.OPENAI_ADMIN_KEY;
@@ -242,7 +252,7 @@ describe("zero-key evidence-first receipt", () => {
     const result = await runCli(["--version"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/^0\.9\.18$/);
+    expect(result.stdout).toMatch(/^0\.9\.19$/);
     expect(result.stdout).not.toContain("DATA MODE");
     expect(result.stdout).not.toContain("YOUR USAGE");
 
@@ -6131,6 +6141,7 @@ describe("minimal CLI vertical slice", () => {
     expect(first.exitCode).toBe(0);
     expect(first.stdout).toContain("First watch snapshot");
     expect(first.stdout).toContain("Baseline AI spend is $87.00");
+    expect(first.stdout.indexOf("DEMO SAMPLE")).toBeLessThan(first.stdout.indexOf("$87.00"));
 
     const second = await runCli(["watch", "--sample", "--cycles", "1", "--path", dir]);
     expect(second.exitCode).toBe(0);

@@ -146,6 +146,10 @@ const CLOCK_OFF = "This machine's clock looks ahead of Workspace's, or more than
 const LOCKED = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file and run this command again.";
 const LOCKED_STATUS = "Another aibill Workspace command holds ~/.aibill/.workspace-device.lock, or one was killed and left it. If none is running, delete that file before the next connect, push or disconnect.";
 const MACHINE_REFUSED = `Workspace answered 403: it will not take a push from this machine right now. Open ${WORKSPACE_ORIGIN}/settings/machines. If it asks for this machine's sharing consent, finish that and push again. If it shows this machine disconnected or expired, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect; that disconnect removes this retained batch.`;
+/** A 403 on a batch's first send, on a machine no push was ever accepted from: the browser step is what is left. */
+const SHARING_NOT_ON = ["Workspace did not take this push (it answered 403) and has never accepted one from this machine: sharing consent is not finished for it in the browser.",
+  "Nothing was stored, so this machine dropped the batch instead of retaining it. Nothing blocks the next push or daily sync.",
+  `Open ${WORKSPACE_ORIGIN}/settings/machines, finish the all-repository sharing consent for this machine, then run: npx aibill@latest workspace push. If it shows this machine disconnected or expired instead, run npx aibill@latest workspace disconnect, then npx aibill@latest workspace connect.`];
 const windowLine = (start: string) => `What it held for days before ${start} has left the 30-day window a push reads and stays out of Workspace.`;
 const REBUILD_THE_REST = "Run npx aibill@latest workspace push to rebuild the rest of its session facts into a new batch, with a new preview; nothing goes without your yes.";
 const ANYTHING_NEWER = "Run npx aibill@latest workspace push to send anything newer, with a new preview; nothing goes without your yes.";
@@ -512,7 +516,7 @@ describe("the command this CLI tells a person to type", () => {
   it("the help names every Workspace command with @latest", async () => {
     const help = (await runCli(["--help"])).stdout;
     const named = lines(help).filter(line => /\bworkspace (connect|push|status|disconnect)\b/.test(line));
-    expect(named).toHaveLength(7);
+    expect(named).toHaveLength(9);
     for (const line of named) expect(line.trimStart().startsWith("npx aibill@latest workspace "), line).toBe(true);
   });
 
@@ -703,7 +707,7 @@ describe("a command that was killed", { timeout: 60_000 }, () => {
     const runtime = { homeDirectory: fresh, interactive: true, workspaceNow: now, consentRead: async () => "y" };
     await mkdir(join(fresh, ".aibill"), { mode: 0o700 });
     await writeFile(lockPath(fresh), "", { mode: 0o600 });
-    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toEqual(["This machine has no completed local Workspace pairing. No logs or network were read.", LOCKED_STATUS]);
+    expect(lines((await runCli(["workspace", "status"], runtime)).stdout)).toEqual(["This machine has no completed local Workspace pairing. No logs or network were read.", "Daily sync: off.", LOCKED_STATUS]);
     await rm(lockPath(fresh));
     expect((await runCli(["workspace", "connect"], runtime)).exitCode).toBe(0);
     await writeFile(lockPath(fresh), "", { mode: 0o600 });
@@ -809,56 +813,80 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
   });
   const sessionFacts = (body: string) => parse(body).facts.filter(isWorkspaceSessionFact);
   const size = (body: string) => Buffer.byteLength(body);
-  const wholeDays = (held: number, of: number) => `This batch holds ${held} of ${of} changed local session facts, in whole days, oldest first, as many as one batch can carry. The next push previews the rest.`;
-  const partDay = (held: number, of: number, day: string) => `This batch holds ${held} of ${of} changed local session facts, because ${day} has more of them than this batch can carry. The next push previews the rest; until it lands, Workspace reads only part of that day.`;
+  const heldLine = (held: number, of: number) => `That batch holds ${held} of ${of} changed local session facts: one batch carries at most 256 facts and 262,144 bytes, oldest days first.`;
+  const restLine = (rest: number) => `A yes also sends the other ${rest}, in further batches of this same command. Each is signed like the batch above and holds only facts from this exact list:`;
+  const acceptedIn = (facts: number, batches: number) => `Workspace accepted ${facts} local session facts in ${batches} batches. These are attribution inputs, not billed costs.`;
   /** Two names a byte count and a character count disagree on, then one they agree on. */
   const names = ["\u00e9", "\u{1F600}", "p"];
 
-  it("gets a preview, and the batch stops at the last whole day that fits; the next preview carries the rest until none are left", async () => {
+  it("gets one preview that lists every fact, and one yes sends them all in the same command: each batch holds whole days, oldest first", async () => {
     const m = await machine();
-    const calls = heavy(19, 9, 25);
-    const total = 19 * 9;
+    const calls = heavy(19, 9, 25), total = 19 * 9;
+    const run = await m.push(calls);
+    expect(run.exitCode).toBe(0);
+    expect(run.messages).toHaveLength(1);
+    expect(run.sent.length).toBeGreaterThan(1);
+    // The one preview: the first batch exactly as sent, then every other fact exactly as the later batches carry it.
+    const preview = lines(run.messages[0]!), first = sessionFacts(run.sent[0]!).length;
+    expect(preview).toContain(run.sent[0]!);
+    expect(preview).toContain(heldLine(first, total));
+    const listed = JSON.parse(preview[preview.indexOf(restLine(total - first)) + 1]!) as WorkspaceFact[];
+    const exact = (facts: WorkspaceFact[]) => facts.map(fact => workspaceCanonicalJson(fact as never)).sort();
+    expect(exact(listed)).toEqual(exact(run.sent.slice(1).flatMap(sessionFacts)));
+    expect(run.messages[0]!.endsWith(`Send all ${total} facts? [y/N] `)).toBe(true);
     const seen = new Set<string>();
-    let pushes = 0, sent = 0, previous = 0, newest = "";
-    for (;;) {
-      const run = await m.push(calls);
-      pushes++;
-      if (!run.sent.length) {
-        expect(run.messages).toEqual([]);
-        expect(lines(run.stdout)[0]).toBe(IDLE);
-        break;
-      }
-      expect(run.exitCode).toBe(0);
-      expect(run.sent).toHaveLength(1);
-      expect(run.messages).toHaveLength(1);
-      const body = run.sent[0]!, facts = sessionFacts(body);
+    let newest = "";
+    for (const body of run.sent) {
       expect(size(body)).toBeLessThanOrEqual(MAX_BYTES);
-      for (const fact of facts) { expect(seen.has(`${fact.day}/${fact.model}`)).toBe(false); seen.add(`${fact.day}/${fact.model}`); }
-      sent += facts.length;
-      const waiting = total - sent;
-      const accepted = lines(run.stdout);
-      expect(accepted[0]).toBe(`Workspace accepted ${facts.length} local session facts. These are attribution inputs, not billed costs.`);
-      if (waiting) {
-        expect(accepted).toContain(`${waiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`);
-        expect(lines(run.messages[0]!)).toContain(wholeDays(facts.length, total - previous));
-      } else {
-        expect(run.stdout).not.toContain("more changed local session facts wait");
-        expect(run.messages[0]).not.toContain("as many as one batch can carry");
-      }
-      // Whole days, oldest first: every day this batch touches goes whole, and nothing older is left behind.
+      // Whole days, oldest first: every day a batch touches goes whole, and nothing older is left behind.
       const perDay = new Map<string, number>();
-      for (const fact of facts) perDay.set(fact.day, (perDay.get(fact.day) ?? 0) + 1);
+      for (const fact of sessionFacts(body)) { expect(seen.has(`${fact.day}/${fact.model}`)).toBe(false); seen.add(`${fact.day}/${fact.model}`); perDay.set(fact.day, (perDay.get(fact.day) ?? 0) + 1); }
       expect([...perDay.values()].every(count => count === 9)).toBe(true);
-      expect([...perDay.keys()].every(day => day >= newest)).toBe(true);
-      newest = [...perDay.keys()].sort().at(-1) ?? newest;
-      previous = sent;
-      expect(pushes).toBeLessThan(10);
+      expect([...perDay.keys()].every(day => day > newest)).toBe(true);
+      newest = [...perDay.keys()].sort().at(-1)!;
     }
-    expect(pushes).toBeGreaterThan(2);
     expect(seen.size).toBe(total);
+    expect(lines(run.stdout)).toEqual([acceptedIn(total, run.sent.length)]);
     const state = await m.read();
     expect(Object.keys(state.facts)).toHaveLength(total);
     expect(state.pending).toBeNull();
+    expect(m.server.rows.size).toBe(total);
+    const idle = await m.push(calls);
+    expect(idle.messages).toEqual([]);
+    expect(lines(idle.stdout)[0]).toBe(IDLE);
+  });
+
+  it("a later batch whose answer is lost stops the command there: what landed is said, that batch is retained, and nothing else goes", async () => {
+    const m = await machine();
+    const moment = "2026-09-29T12:00:00.000Z", calls = heavy(27, 12, 1);
+    m.server.script = ["pass", "lost_before_commit"];
+    const run = await m.push(calls, { at: moment, serverAt: moment });
+    expect(run.exitCode).toBe(1);
+    expect(run.sent).toHaveLength(2);
+    expect(lines(run.stdout)).toEqual(["Workspace accepted 252 local session facts. These are attribution inputs, not billed costs.", "72 more changed local session facts wait. Run npx aibill@latest workspace push to preview them."]);
+    expect(run.stderr).toBe(UNKNOWN_OUTCOME);
+    expect((await m.read()).pending?.state).toBe("uncertain");
+    // The retry is the identical batch, asked for on its own, and it lands.
+    const retry = await m.push(calls, { at: moment, serverAt: moment, load: unexpectedRead });
+    expect(retry.sent).toEqual([run.sent[1]]);
+    expect(m.server.rows.size).toBe(324);
+  });
+
+  it("a later batch never carries a fact the preview did not list: a no from the check stops it unsent", async () => {
+    const m = await machine();
+    const moment = "2026-09-29T12:00:00.000Z", calls = heavy(27, 12, 1);
+    // The folders' checkouts change under the command after its preview, so the facts that wait would go out under other names.
+    let reads = 0;
+    m.server.clock = moment;
+    const result = await runCli(["workspace", "push"], { homeDirectory: m.home, interactive: true, workspaceNow: moment, consentRead: async () => "y", workspaceTransport: m.server.transport,
+      workspaceLoadCalls: async () => { reads++; return loaded(calls)(); },
+      workspaceRepositoryRoot: directory => m.server.requests.length ? `${directory}-renamed` : undefined });
+    expect(reads).toBe(1);
+    expect(m.server.requests).toHaveLength(1);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("The facts that wait no longer match the preview you approved, so they were not sent under that yes.");
+    expect(lines(result.stdout)[1]).toBe("72 more changed local session facts wait. Run npx aibill@latest workspace push to preview them.");
+    expect((await m.read()).pending).toBeNull();
   });
 
   it("fills a batch to the last byte the bound allows and not one past it, when one day alone passes it", async () => {
@@ -907,13 +935,13 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
     const envelope = parse(lines(counted.messages[0]!).find(line => line.startsWith("{"))!);
     expect(envelope.facts).toHaveLength(256);
     expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
-    expect(lines(counted.messages[0]!)).toContain(partDay(255, 300, "2026-09-18"));
+    expect(lines(counted.messages[0]!)).toContain(heldLine(255, 300));
   });
 
   describe("what Workspace reads between one batch and the next", () => {
     const daysOf = (body: string) => { const days = new Map<string, number>(); for (const fact of sessionFacts(body)) days.set(fact.day, (days.get(fact.day) ?? 0) + 1); return days; };
 
-    it("cut by bytes: whole days, oldest first, and the days that wait are absent, not short", async () => {
+    it("cut by bytes: whole days, oldest first, and the same command sends the days that waited, whole", async () => {
       const m = await machine();
       const run = await m.push(heavy(24, 9, 20), { at: "2026-09-29T12:00:00.000Z", serverAt: "2026-09-29T12:00:00.000Z" });
       const days = daysOf(run.sent[0]!), held = sessionFacts(run.sent[0]!).length;
@@ -922,13 +950,13 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
       expect([...days.values()].every(count => count === 9)).toBe(true);
       expect([...days.keys()]).toEqual([...days.keys()].sort());
       expect([...days.keys()][0]).toBe("2026-09-01");
-      expect(lines(run.messages[0]!)).toContain(wholeDays(held, 216));
-      expect(lines(run.stdout)).toContain(`${216 - held} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.`);
-      const rest = await m.push(heavy(24, 9, 20), { at: "2026-09-29T12:00:00.000Z", serverAt: "2026-09-29T12:00:00.000Z" });
-      expect(sessionFacts(rest.sent[0]!)).toHaveLength(216 - held);
-      expect([...daysOf(rest.sent[0]!).values()].every(count => count === 9)).toBe(true);
-      expect(rest.stdout).not.toContain("wait");
-      expect(rest.messages[0]).not.toContain("This batch holds");
+      expect(lines(run.messages[0]!)).toContain(heldLine(held, 216));
+      expect(run.messages).toHaveLength(1);
+      expect(run.sent).toHaveLength(2);
+      expect(sessionFacts(run.sent[1]!)).toHaveLength(216 - held);
+      expect([...daysOf(run.sent[1]!).values()].every(count => count === 9)).toBe(true);
+      expect(lines(run.stdout)).toEqual([acceptedIn(216, 2)]);
+      expect((await m.push(heavy(24, 9, 20), { at: "2026-09-29T12:00:00.000Z", serverAt: "2026-09-29T12:00:00.000Z" })).sent).toEqual([]);
     });
 
     it("cut by count: the same, and a batch that fits whole is not cut", async () => {
@@ -936,29 +964,33 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
       const moment = "2026-09-29T12:00:00.000Z";
       const calls = heavy(27, 12, 1);
       const run = await m.push(calls, { at: moment, serverAt: moment });
-      expect(sessionFacts(run.sent[0]!)).toHaveLength(252);
-      expect(lines(run.messages[0]!)).toContain(wholeDays(252, 324));
-      const rest = await m.push(calls, { at: moment, serverAt: moment });
-      expect(sessionFacts(rest.sent[0]!)).toHaveLength(72);
-      expect(rest.messages[0]).not.toContain("This batch holds");
+      expect(run.sent.map(body => sessionFacts(body).length)).toEqual([252, 72]);
+      expect(lines(run.messages[0]!)).toContain(heldLine(252, 324));
+      expect(run.stdout).not.toContain("wait");
       expect((await m.push(calls, { at: moment, serverAt: moment })).sent).toEqual([]);
       expect(m.server.rows.size).toBe(324);
     });
 
-    it("a day that alone passes the bound goes in part, named before the yes and after it, and the next batch starts with what is left of it", async () => {
+    it("a day that alone passes the bound goes in two batches of the same command, and the second starts with what is left of it", async () => {
       const m = await machine();
       const big = Array.from({ length: 300 }, (_, index) => ({ ...call, sessionId: `big-${index}`, callId: `big-${index}`, model: `gpt-5.${index}` }));
       const small = Array.from({ length: 3 }, (_, index) => ({ ...call, sessionId: `small-${index}`, callId: `small-${index}`, model: `gpt-4.${index}`, timestamp: "2026-09-19T10:00:00.000Z", startedAt: "2026-09-19T10:00:00.000Z" }));
       const calls = [...small, ...big];
-      const first = await m.push(calls);
-      expect(new Set(sessionFacts(first.sent[0]!).map(fact => fact.day))).toEqual(new Set(["2026-09-18"]));
-      expect(lines(first.messages[0]!)).toContain(partDay(256, 303, "2026-09-18"));
-      expect(lines(first.stdout)).toContain("47 more changed local session facts wait. Run npx aibill@latest workspace push to preview them. Until they land, Workspace reads only part of 2026-09-18.");
-      const second = await m.push(calls);
-      expect(sessionFacts(second.sent[0]!).filter(fact => fact.day === "2026-09-18")).toHaveLength(44);
-      expect(sessionFacts(second.sent[0]!).filter(fact => fact.day === "2026-09-19")).toHaveLength(3);
-      expect(second.messages[0]).not.toContain("This batch holds");
+      const run = await m.push(calls);
+      expect(new Set(sessionFacts(run.sent[0]!).map(fact => fact.day))).toEqual(new Set(["2026-09-18"]));
+      expect(lines(run.messages[0]!)).toContain(heldLine(256, 303));
+      expect(sessionFacts(run.sent[1]!).filter(fact => fact.day === "2026-09-18")).toHaveLength(44);
+      expect(sessionFacts(run.sent[1]!).filter(fact => fact.day === "2026-09-19")).toHaveLength(3);
+      expect(run.stdout).toBe(acceptedIn(303, 2));
       expect(m.server.rows.size).toBe(303);
+    });
+
+    it("a day in part that is cut off there is named: the answer to its second batch is lost", async () => {
+      const m = await machine();
+      const big = Array.from({ length: 300 }, (_, index) => ({ ...call, sessionId: `big-${index}`, callId: `big-${index}`, model: `gpt-5.${index}` }));
+      m.server.script = ["pass", "lost_before_commit"];
+      const run = await m.push(big);
+      expect(lines(run.stdout)).toContain("44 more changed local session facts wait. Run npx aibill@latest workspace push to preview them. Until they land, Workspace reads only part of 2026-09-18.");
     });
 
     it("the tier facts beside it are counted, and the cut still falls between days", async () => {
@@ -968,7 +1000,9 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
       const envelope = parse(run.sent[0]!);
       expect(envelope.facts.filter(isWorkspaceAgentPlanFact)).toHaveLength(1);
       expect(envelope.facts.filter(isWorkspaceSessionFact)).toHaveLength(252);
-      expect(lines(run.messages[0]!)).toContain(wholeDays(252, 324));
+      expect(lines(run.messages[0]!)).toContain(heldLine(252, 324));
+      // The tier rode in the batch whose preview showed it; the later batches hold session facts and nothing else.
+      expect(run.sent.slice(1).map(body => parse(body).facts.every(isWorkspaceSessionFact))).toEqual([true]);
     });
 
     it("a cut that falls exactly between two days keeps both sides of it", async () => {
@@ -976,7 +1010,7 @@ describe("a heavy machine", { timeout: 90_000 }, () => {
       const moment = "2026-09-29T12:00:00.000Z";
       const run = await m.push(heavy(20, 16, 1), { at: moment, serverAt: moment });
       expect(sessionFacts(run.sent[0]!)).toHaveLength(256);
-      expect(lines(run.messages[0]!)).toContain(wholeDays(256, 320));
+      expect(lines(run.messages[0]!)).toContain(heldLine(256, 320));
       expect(run.stdout).not.toContain("reads only part");
     });
 
@@ -1197,26 +1231,47 @@ describe("what the way back costs", () => {
 describe("a Workspace that will not take a push from this machine", () => {
   const denied: Scripted = { reply: { status: 403, body: { state: "unavailable", retry: "same_envelope_only" } } };
 
-  it("stays an unknown outcome, retained, and says where to look: consent or a disconnect", async () => {
+  it("on a batch's first send it is dropped, not retained: nothing was stored, and a machine no push was accepted from is told consent is not finished", async () => {
     const m = await machine();
     m.server.script = [denied];
     const run = await m.push([call]);
     expect(run.exitCode).toBe(1);
-    expect(lines(run.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
-    expect((await m.read()).pending?.state).toBe("uncertain");
+    expect(lines(run.stderr)).toEqual(SHARING_NOT_ON);
+    const state = await m.read();
+    expect(state.pending).toBeNull();
+    expect(state.device.sequence).toBe("1");
+    expect(state.facts).toEqual({});
+    // Consent finished in the browser: the next push rebuilds the same fact under a new preview, and it lands.
+    const again = await m.push([call]);
+    expect(again).toMatchObject({ exitCode: 0, stdout: SESSIONS_ACCEPTED });
+    expect(again.messages).toHaveLength(1);
+    expect(m.server.rows.size).toBe(1);
+    // Once a push has been accepted the words stop pointing at consent alone.
     m.server.script = [denied];
-    const again = await m.push([], { load: unexpectedRead });
-    expect(again.sent).toEqual(run.sent);
-    expect(lines(again.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
+    const later = await m.push([call, { ...call, sessionId: "another", callId: "another" }]);
+    expect(lines(later.stderr)[0]).toBe("Workspace answered 403: it will not take a push from this machine right now.");
+    expect((await m.read()).pending).toBeNull();
   });
 
-  it("the Workspace's refusal words on a 403 are not a refusal: the batch stays retained", async () => {
+  it("on the resend of a retained batch it stays an unknown outcome, retained: an earlier send may have stored it", async () => {
+    const m = await machine();
+    m.server.script = ["lost_after_commit"];
+    const lost = await m.push([call]);
+    expect(lost).toMatchObject({ exitCode: 1, stderr: UNKNOWN_OUTCOME });
+    m.server.script = [denied];
+    const again = await m.push([], { load: unexpectedRead });
+    expect(again.sent).toEqual(lost.sent);
+    expect(lines(again.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
+    expect((await m.read()).pending?.state).toBe("uncertain");
+  });
+
+  it("the Workspace's refusal words on a 403 are not read: the 403 is the answer, and the batch is not kept as refused", async () => {
     const m = await machine();
     m.server.script = [{ reply: { status: 403, body: { state: "refused", reason: "expired" } } }];
     const run = await m.push([call]);
-    expect(lines(run.stderr)).toEqual([UNKNOWN_OUTCOME, MACHINE_REFUSED]);
-    expect((await m.read()).pending?.state).toBe("uncertain");
-    expect((await m.read()).device.sequence).toBe("0");
+    expect(lines(run.stderr)).toEqual(SHARING_NOT_ON);
+    expect((await m.read()).pending).toBeNull();
+    expect((await m.read()).device.sequence).toBe("1");
   });
 
   it("names nothing of the kind on any other answer", async () => {
@@ -1241,12 +1296,12 @@ describe("a Workspace that will not take a push from this machine", () => {
     expect((await m.read()).facts).not.toEqual({});
   });
 
-  it("says so for a batch of tier facts alone, with the words that batch has", async () => {
+  it("drops a batch of tier facts alone the same way on its first send", async () => {
     const m = await machine({ capability: true, planFiles: true });
     m.server.script = [denied];
     const run = await m.push([]);
-    expect(lines(run.stderr)[1]).toBe(MACHINE_REFUSED);
-    expect(run.stderr).toContain("The exact signed subscription tier batch is retained.");
+    expect(lines(run.stderr)).toEqual(SHARING_NOT_ON);
+    expect((await m.read()).pending).toBeNull();
   });
 });
 
@@ -1414,7 +1469,7 @@ describe("one folder and day, one row", () => {
       onePerPlace(m);
     });
 
-    it("a heavy machine, root and four sub-folders over 27 days, arrives as itself, and the count of what waits is what the next push sends", async () => {
+    it("a heavy machine, root and four sub-folders over 27 days, arrives as itself in one command of several batches", async () => {
       const { root } = await checkout("code", "repo");
       const folders = [root, ...[0, 1, 2, 3].map(index => join(root, "packages", `p${index}`))];
       for (const folder of folders) await mkdir(folder, { recursive: true });
@@ -1422,17 +1477,12 @@ describe("one folder and day, one row", () => {
         session(`${day}-${index}-${sessionIndex}`, folder, `2026-09-${String(day + 1).padStart(2, "0")}`)))).flat();
       const m = await machine();
       const moment = "2026-09-29T12:00:00.000Z";
-      let waiting: number | undefined, pushes = 0;
-      for (;;) {
-        const run = await m.push(calls, { at: moment, serverAt: moment });
-        if (!run.sent.length) break;
-        const held = parse(run.sent[0]!).facts.filter(isWorkspaceSessionFact).length;
-        if (waiting !== undefined) expect(held).toBe(waiting);
-        const line = /^(\d+) more changed local session facts wait/m.exec(run.stdout);
-        waiting = line ? Number(line[1]) : undefined;
-        expect(++pushes).toBeLessThan(5);
-      }
-      expect(pushes).toBeGreaterThan(1);
+      const run = await m.push(calls, { at: moment, serverAt: moment });
+      expect(run.exitCode).toBe(0);
+      expect(run.messages).toHaveLength(1);
+      expect(run.sent.length).toBeGreaterThan(1);
+      expect(run.stdout).not.toContain("wait");
+      expect((await m.push(calls, { at: moment, serverAt: moment })).sent).toEqual([]);
       expect(rows(m)).toHaveLength(135);
       expect(rows(m).reduce((sum, fact) => sum + Number(fact.sessionCount), 0)).toBe(2835);
       onePerPlace(m);
