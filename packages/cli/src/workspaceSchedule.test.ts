@@ -41,12 +41,17 @@ afterEach(async () => { vi.restoreAllMocks(); await Promise.all(homes.splice(0).
 describe("daily Workspace sync consent and OS jobs", () => {
   it("does not scan, send, or install without interactive standing consent", async () => {
     const { home } = await machine(), load = vi.fn(), os = cron();
+    // The platform is named, so this runs the same way on every machine that runs the tests.
+    const on: WorkspaceScheduleOptions = { platform: "linux", command: os.command };
     for (const argv of [["workspace", "push", "--scheduled"], ["workspace", "push", "--schedule", "daily"]]) {
-      const result = await runCli(argv, { homeDirectory: home, workspaceLoadCalls: load, workspaceScheduleOptions: { command: os.command } });
+      const result = await runCli(argv, { homeDirectory: home, workspaceLoadCalls: load, workspaceScheduleOptions: on });
       expect(result.exitCode).toBe(1);
     }
-    const declined = await runCli(["workspace", "push", "--schedule", "daily"], { homeDirectory: home, interactive: true, consentRead: async () => "n", workspaceNow: now, workspaceLoadCalls: load, workspaceScheduleOptions: { command: os.command } });
-    expect(declined.stdout).toContain("unchanged"); expect(load).not.toHaveBeenCalled(); expect(os.command).not.toHaveBeenCalled();
+    expect(os.command).not.toHaveBeenCalled();
+    const declined = await runCli(["workspace", "push", "--schedule", "daily"], { homeDirectory: home, interactive: true, consentRead: async () => "n", workspaceNow: now, workspaceLoadCalls: load, workspaceScheduleOptions: on });
+    expect(declined.stdout).toContain("unchanged"); expect(load).not.toHaveBeenCalled();
+    // Before the question it asks only whether a crontab command exists, by reading; a no writes nothing.
+    expect(os.command.mock.calls.map(call => call[1][0])).toEqual(["-l"]); expect(os.value()).toBe("5 1 * * * /usr/bin/true # existing-job\n");
     expect(await readWorkspaceSchedule(home)).toBeNull();
   });
   it("keeps unrelated cron jobs, installs idempotently, removes consent before removing the job", async () => {
