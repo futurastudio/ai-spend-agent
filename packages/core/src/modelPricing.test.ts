@@ -17,6 +17,10 @@ describe("model pricing coverage", () => {
   it("uses current published prices for Claude 5 model IDs", () => {
     expect(estimateTokenCostUsd("claude-fable-5", usage)).toBe(15);
     expect(estimateTokenCostUsd("claude-mythos-5", usage)).toBe(15);
+    // 1M input and 100K output at $8 / $40, reviewed 2026-11-13: not the Fable 5 total above.
+    expect(estimateTokenCostUsd("claude-fable-5-2", usage)).toBe(12);
+    expect(estimateTokenCostUsd("claude-mythos-5-2", usage)).toBe(12);
+    expect(estimateTokenCostUsd("claude-fable-5-1", usage)).toBe(15);
     expect(estimateTokenCostUsd("claude-opus-5", usage)).toBe(7.5);
     expect(estimateTokenCostUsd("claude-opus-5-5", usage)).toBe(6);
     expect(estimateTokenCostUsd("claude-opus-5-5", {

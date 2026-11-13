@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-07";
+export const PRICING_TABLE_AS_OF = "2026-11-13";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -60,6 +60,15 @@ type PricingRule = PricingRates & {
 
 const pricingRules: PricingRule[] = [
   // Anthropic
+  // Reviewed 2026-11-13: platform.claude.com/docs/en/about-claude/pricing.
+  // Retained evidence: provider-contracts/model-pricing-2026-11-13.json.
+  // Fable/Mythos 5.2, released 2026-11-09, are priced below 5.1: $8 / $40, with
+  // 5m writes at $10, 1h writes at $16 and cache reads at $0.20 per MTok. The IDs
+  // are new, so no dated change is needed: no usage under them predates these
+  // rates. Exact IDs and a dated snapshot only, and before the Fable 5 and
+  // Mythos 5 prefixes below, which priced both at the Fable 5 rates until this
+  // review ($10 / $50, cache reads at $1).
+  { match: /^claude-(?:fable|mythos)-5-2(?:-\d{8})?$/i, inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.2 },
   // Reviewed 2026-09-20: platform.claude.com/docs/en/about-claude/pricing.
   // Fable/Mythos 5.1 keep base/write rates; cache reads are $0.25 per MTok.
   { match: /^claude-(?:fable|mythos)-5-1$/i, inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25 },
