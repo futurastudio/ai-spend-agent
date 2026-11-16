@@ -136,7 +136,9 @@ npx aibill@latest workspace push --schedule daily
 Before that first accepted push the command refuses and changes nothing, so a new
 pairing whose sharing consent is still open in the browser cannot have a schedule. It
 also refuses, before asking anything, on Windows and on a system with no `crontab`
-command.
+command. Setup and removal change the system's scheduler only for your account's own
+home directory: run with a different `HOME`, they refuse and leave the scheduled job
+as it is.
 
 Review the scope and answer yes to authorize future batches without their individual
 previews. The question names what each fact carries: a UTC day, the agent, the model,

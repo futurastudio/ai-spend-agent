@@ -32,6 +32,12 @@ published (see its section).
   a no installs nothing. It is asked once. Later pushes from a terminal end with one
   line that names the command while daily sync is off. Nothing is asked by a
   scheduled run, on Windows, or on a system with no `crontab` command.
+- **Daily sync is set up and removed only for your account's own home directory.**
+  A user has one scheduled job, whatever `HOME` a command runs with. A command run
+  with a different `HOME` (a scratch home, a sandbox) now refuses to change the
+  system's scheduler and says so; before, it could replace or remove the real daily
+  job, or install one pointing into that other directory. On removal, standing
+  consent kept under that other directory is still withdrawn.
 
 ## 0.9.19 (unreleased)
 

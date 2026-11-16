@@ -485,6 +485,30 @@ describe("scheduled upload authority", () => {
       "Remove anytime: npx aibill@latest workspace push --schedule none. Enable daily sync? [y/N] "]);
     expect(result.stdout.split("\n")[0]).toBe("Paired."); expect(result.stdout).toContain("Daily sync installed for 09:17 local time");
   });
+  it("the system's own scheduler is never changed for a home directory that is not the account's own", async () => {
+    // No stand-in command here: this is the path a real terminal takes. A scratch home is not this account's home, so
+    // neither setup nor removal may reach launchctl or crontab, on any platform: both stop with this refusal before any
+    // command is run, and leave nothing behind for a scheduler to find.
+    for (const platform of ["darwin", "linux"] as const) {
+      const { home } = await machine(), sync = join(home, ".aibill", "workspace-sync");
+      await expect(updateWorkspaceSchedule({ home, mode: "daily", now, includePlanTier: false, binding: (await workspaceScheduleBinding(home))!, platform, stageRuntime: fakeRuntime }))
+        .rejects.toThrow("Daily sync belongs to your account's own home directory");
+      expect(await lstat(sync).catch(() => null)).toBeNull(); expect(await lstat(join(home, "Library")).catch(() => null)).toBeNull();
+      // Consent that an earlier release left under such a home is withdrawn by removal, and the system's job is still left alone.
+      await mkdir(sync, { mode: 0o700 });
+      await writeFile(join(sync, "consent.json"), JSON.stringify({ version: 1, binding: await workspaceScheduleBinding(home), includePlanTier: false, installedAt: now }), { mode: 0o600 });
+      expect(await authorizedWorkspaceSchedule(home)).not.toBeNull();
+      await expect(updateWorkspaceSchedule({ home, mode: "none", now, includePlanTier: false, platform })).rejects.toThrow("Standing consent kept under that directory was removed. The scheduled job on this system was not changed.");
+      expect(await authorizedWorkspaceSchedule(home)).toBeNull();
+    }
+    // Through the command: a yes to the question at the end of a first push ends in the same refusal, and the push stands.
+    const { home } = await machine({ accepted: false });
+    const result = await runCli(["workspace", "push"], { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true, consentRead: async () => "y",
+      workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting, workspaceScheduleOptions: { platform: "darwin", stageRuntime: fakeRuntime } });
+    expect(result.exitCode).toBe(0); expect(result.stdout).toContain("Workspace accepted 1 local session facts");
+    expect(result.stdout).toContain("The push above stands. Daily sync was not set up: Daily sync belongs to your account's own home directory");
+    expect(await readWorkspaceSchedule(home)).toBeNull(); expect(await lstat(join(home, "Library")).catch(() => null)).toBeNull();
+  });
   it("a scheduled run Workspace refuses withdraws its own consent, logs how to turn it on again, and the next run sends nothing", async () => {
     const { home } = await machine(), os = cron(), on = { platform: "linux" as const, command: os.command };
     await install(home, os.command);
