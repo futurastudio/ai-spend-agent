@@ -1796,6 +1796,8 @@ const WORKSPACE_FIRST_PUSH_WAIT_MS = 10 * 60 * 1000;
 /** One command sends every batch its one preview showed. A bound on the loop, far above what 30 days can hold. */
 const WORKSPACE_PUSH_MAX_BATCHES = 64;
 const WORKSPACE_DAILY_SETUP = "npx aibill@latest workspace push --schedule daily";
+/** Printed with a request that reports a repository: what to do where the Workspace takes only requests an administrator prepared for. */
+const WORKSPACE_PREPARED_INSTEAD = "If that page answers that self-service machine setup is not on for the workspace, it takes only a request an administrator prepared for: run npx aibill@latest workspace connect --prepared --restart, which replaces the request above, and paste the one it prints.";
 /**
  * What standing consent to daily uploads covers, in the same words wherever it is asked: on `--schedule daily` and at
  * the end of a machine's first push. It names what a run reads, what each fact carries and never carries, what is kept
@@ -1887,7 +1889,12 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           ...(prepared.disposition === "reused" && prepared.request.schemaVersion === "1" && !args.workspacePrepared
             ? ["This kept request is the administrator-prepared kind and reports no repository. To replace it with one that reports this repository, run npx aibill@latest workspace connect --restart inside that Git checkout."] : []),
           `Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
-          "Then run: npx aibill@latest workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
+          "Then run: npx aibill@latest workspace connect <response-bundle>",
+          // This command cannot know whether the Workspace prepares machines itself: it makes no network call. Where it does
+          // not, the page refuses a request that reports a repository, and the way on is the other kind of request. The
+          // one above is kept until it is replaced, so the command names --restart.
+          ...(prepared.request.schemaVersion === "2" ? [WORKSPACE_PREPARED_INSTEAD] : []),
+          "The private device key stays on this machine. No session facts were sent."].join("\n"));
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
         now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,

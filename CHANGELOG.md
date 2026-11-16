@@ -15,7 +15,9 @@ published (see its section).
   machine; nobody has to admit the machine beforehand. The request carries no path,
   remote URL, file content or session fact, and confirming the repository does not
   permit any upload. This needs a Workspace with self-service machine setup turned
-  on; where it is off, the page says so and the request can be kept.
+  on. Where it is off, the page refuses such a request, so the terminal prints, with
+  every request that reports a repository, the command that replaces it with the
+  prepared kind: `workspace connect --prepared --restart`.
 - **`workspace connect --prepared`** creates the earlier kind of request, for a
   machine an administrator has prepared a project and reader for. It reports no
   repository and needs no Git checkout.

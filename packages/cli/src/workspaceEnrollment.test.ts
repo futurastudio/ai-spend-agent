@@ -217,6 +217,24 @@ describe("explicit native repository confirmation", () => {
     expect(same.stdout).toContain("Reused connection request"); expect(same.stdout).not.toContain("kind");
   });
 
+  it("a request that reports a repository says what to do where the Workspace does not prepare machines itself; the prepared kind does not", async () => {
+    const yes = { interactive: true, consentRead: async () => "y" };
+    const f = await fixture();
+    const pointer = "If that page answers that self-service machine setup is not on for the workspace, it takes only a request an administrator prepared for: run npx aibill@latest workspace connect --prepared --restart, which replaces the request above, and paste the one it prints.";
+    const reported = await runCli(["workspace", "connect"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.repository });
+    const lines = reported.stdout.split("\n");
+    // After the command that finishes pairing, before the closing line: the usual path first, the other one named once.
+    expect(lines.filter(line => line === pointer)).toHaveLength(1);
+    expect(lines.indexOf(pointer)).toBe(lines.indexOf("Then run: npx aibill@latest workspace connect <response-bundle>") + 1);
+    expect(lines.at(-1)).toBe("The private device key stays on this machine. No session facts were sent.");
+    // Shown again with the kept request, and the command it names does replace that request with the prepared kind.
+    expect((await runCli(["workspace", "connect"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.repository })).stdout).toContain(pointer);
+    const prepared = await runCli(["workspace", "connect", "--prepared", "--restart"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.home });
+    expect(prepared.exitCode).toBe(0); expect(prepared.stdout).toContain("New connection request");
+    expect(prepared.stdout).toContain("administrator-prepared project and reader setup"); expect(prepared.stdout).not.toContain("self-service machine setup");
+    expect(JSON.parse(await readFile(join(f.home, ".aibill", "workspace-enrollment.json"), "utf8")).request.schemaVersion).toBe("1");
+  });
+
   it("prepares a v2 request through the terminal flow without logs, transport, or upload consent", async () => {
     const f = await fixture(), prompts: string[] = [];
     const load = vi.fn(async () => { throw Error("must not scan logs"); }), transport = vi.fn(async () => { throw Error("must not send"); });

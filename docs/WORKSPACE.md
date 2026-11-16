@@ -66,11 +66,13 @@ run the same command with `npx aibill@latest`.
    Repository confirmation does not authorize uploads or all-repository sharing.
    A request that reports a repository needs no setup by an administrator: the
    Workspace prepares the machine's connection when you choose Pair this machine.
-   If Settings → Machines answers that self-service machine setup is not enabled
-   there yet, keep the request and ask the Workspace owner. Where an administrator
-   has prepared a project and reader for this machine in advance, use
-   `workspace connect --prepared` instead: it creates a request that reports no
-   repository and does not need a Git checkout. An unfinished request of either
+   If Settings → Machines answers that self-service machine setup is not on for
+   the workspace, it takes only a request an administrator prepared for. The
+   terminal names the command with every request that reports a repository:
+   `workspace connect --prepared --restart` replaces the kept request with one
+   that reports no repository and needs no Git checkout. Use
+   `workspace connect --prepared` from the start where an administrator has
+   prepared a project and reader for this machine in advance. An unfinished request of either
    kind is kept and shown again unchanged, and the terminal says so when it is not
    the kind the command asked for; only `--restart` replaces it. A response of one
    kind is never accepted for a request of the other.
