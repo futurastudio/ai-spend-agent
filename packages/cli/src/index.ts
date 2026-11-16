@@ -1799,6 +1799,12 @@ const WORKSPACE_DAILY_SETUP = "npx aibill@latest workspace push --schedule daily
 /** Printed with a request that reports a repository: what to do where the Workspace takes only requests an administrator prepared for. */
 const WORKSPACE_PREPARED_INSTEAD = "If that page answers that self-service machine setup is not on for the workspace, it takes only a request an administrator prepared for: run npx aibill@latest workspace connect --prepared --restart, which replaces the request above, and paste the one it prints.";
 /**
+ * The command that replaces an unused request with one of the same kind. A request of the administrator-prepared kind
+ * ("1") keeps --prepared: without it, run inside a Git checkout, the new request would report that repository, which a
+ * Workspace without self-service machine setup refuses.
+ */
+const workspaceRestartCommand = (schemaVersion: "1" | "2") => `npx aibill@latest workspace connect${schemaVersion === "1" ? " --prepared" : ""} --restart`;
+/**
  * What standing consent to daily uploads covers, in the same words wherever it is asked: on `--schedule daily` and at
  * the end of a machine's first push. It names what a run reads, what each fact carries and never carries, what is kept
  * on this machine, when a run stops by itself, and how to remove it. The last line is the question.
@@ -1851,7 +1857,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       if (status.state === "enrollment_pending") return ok([
         `Unfinished connection request: ${status.requestId.slice(-8)}`,
         status.enrollment === "prepared"
-          ? "No native exchange was attempted. Run npx aibill@latest workspace connect to display this request again, or npx aibill@latest workspace connect --restart to replace an expired or cancelled request."
+          ? `No native exchange was attempted. Run npx aibill@latest workspace connect${status.schemaVersion === "1" ? " --prepared" : ""} to display this request again, or ${workspaceRestartCommand(status.schemaVersion)} to replace an expired or cancelled request${status.schemaVersion === "1" ? " with another of the administrator-prepared kind" : ""}.`
           : `The exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`,
         ...locked, "No logs or network were read."
       ].join("\n"));
@@ -1879,7 +1885,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
               `Directory hash: ${project.directoryRef}`, "Use this repository to identify this machine in Workspace? The public request shares its name and directory hash.",
               "This does not permit session uploads or sharing other repositories. [y/N] "].join("\n")) }) });
         return ok([`${prepared.disposition === "reused" ? "Reused" : "New"} connection request: ${prepared.request.requestId.slice(-8)}`,
-          ...(prepared.disposition === "reused" ? ["This is the same unfinished request. If it expired or was cancelled in the browser, run npx aibill@latest workspace connect --restart."] : []),
+          ...(prepared.disposition === "reused" ? [`This is the same unfinished request. If it expired or was cancelled in the browser, run ${workspaceRestartCommand(prepared.request.schemaVersion)}.`] : []),
           ...(prepared.request.schemaVersion === "2" ? [`Reported repository: ${prepared.request.project.displayName}`, `Directory hash: ${prepared.request.project.directoryRef}`]
             : ["This request uses an administrator-prepared project and reader setup."]),
           // A kept request is shown again as it is, whatever this command asked for: its key and its kind never change
@@ -2225,7 +2231,9 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
     if (error instanceof WorkspaceScheduleError || error instanceof WorkspaceEnrollmentProjectError) return fail(error.message);
     if (error instanceof WorkspaceStateFromNewerCli) {
-      const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceRestart ? " --restart" : args.workspaceDisconnectRetry ? " --retry" : "";
+      // The command is named again as it was given: --prepared is kept, or it would ask for the other kind of request.
+      const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceDisconnectRetry ? " --retry"
+        : `${args.workspacePrepared ? " --prepared" : ""}${args.workspaceRestart ? " --restart" : ""}`;
       return fail(`This machine's Workspace state was written by a newer aibill: it carries keys this version does not know, so this version stopped and nothing was changed. Run npx aibill@latest workspace ${action}${flag}.`);
     }
     if (error instanceof WorkspaceStateLocked) return fail(`${WORKSPACE_LOCK_HOLDER} If none is running, delete that file and run this command again.`);
@@ -9451,7 +9459,7 @@ function helpText(telemetryDisclosure?: boolean): string {
     "Optional Workspace machine attribution (explicit consent, no provider calls):",
     "  npx aibill@latest workspace connect            Confirm this checkout and prepare a public pairing request",
     "  npx aibill@latest workspace connect --prepared  Use an administrator-prepared project and reader setup",
-    "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation",
+    "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation (with --prepared for the prepared kind)",
     "  npx aibill@latest workspace connect <code>     Finish the browser-confirmed pairing",
     "  npx aibill@latest workspace push               Preview and send local session facts",
     "  npx aibill@latest workspace push --schedule daily  Opt in to one bounded upload daily",

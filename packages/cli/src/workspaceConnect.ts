@@ -715,6 +715,8 @@ async function withState<T>(home: string, callback: (state: WorkspaceState | nul
 
 export type WorkspaceStatus = { state: "not_connected" } | {
   state: "enrollment_pending"; enrollment: "prepared" | "exchange_uncertain"; requestId: string;
+  /** "1" is the administrator-prepared kind: only `connect --prepared --restart` replaces it with a request of the same kind. */
+  schemaVersion: WorkspaceEnrollmentRequest["schemaVersion"];
 } | {
   state: "connected"; origin: string; expiresAt: string; lastAcceptedAt: string | null; acknowledgedFacts: number;
   disconnect: "uncertain" | "revoked" | null; capabilities: WorkspaceCapabilities; agentPlansAccepted: WorkspaceAcceptedPlans;
@@ -737,7 +739,8 @@ export async function workspaceStatus(home = homedir()): Promise<WorkspaceStatus
   const state = await readState(path);
   if (!state) {
     const enrollment = await readEnrollment(path);
-    return enrollment ? { state: "enrollment_pending", enrollment: enrollment.state, requestId: enrollment.request.requestId }
+    return enrollment ? { state: "enrollment_pending", enrollment: enrollment.state, requestId: enrollment.request.requestId,
+      schemaVersion: enrollment.request.schemaVersion }
       : { state: "not_connected" };
   }
   return { state: "connected", origin: state.device.origin, expiresAt: state.device.expiresAt, lastAcceptedAt: state.lastAcceptedAt,

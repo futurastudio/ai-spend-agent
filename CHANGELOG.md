@@ -25,6 +25,11 @@ published (see its section).
   shown again unchanged until `--restart`. When it is not the kind the command asked
   for, the terminal now says which kind it is and the exact command that replaces it.
   A response for one kind is refused for a request of the other.
+- **An expired request is replaced by one of the same kind.** For a request of the
+  administrator-prepared kind, `workspace status` and the kept request now name
+  `workspace connect --prepared --restart`. A plain `--restart` run inside a Git
+  checkout makes a request that reports the repository, which a Workspace without
+  self-service machine setup refuses.
 - **The first push ends by offering the daily upload.** When Workspace accepts a
   machine's first push, the same terminal asks whether to upload every day from now
   on. It is the standing consent of `workspace push --schedule daily`, in the same

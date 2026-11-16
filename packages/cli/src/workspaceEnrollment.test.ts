@@ -235,6 +235,41 @@ describe("explicit native repository confirmation", () => {
     expect(JSON.parse(await readFile(join(f.home, ".aibill", "workspace-enrollment.json"), "utf8")).request.schemaVersion).toBe("1");
   });
 
+  it("an expired request of the administrator-prepared kind is replaced with the same kind, as status and the kept request say", async () => {
+    const prompts: string[] = [];
+    const yes = { interactive: true, consentRead: async (message: string) => { prompts.push(message); return "y"; } };
+    // Run inside a Git checkout, where a plain --restart would make a request that reports the repository.
+    const f = await fixture(), enrollment = join(f.home, ".aibill", "workspace-enrollment.json");
+    const runtime = { ...yes, homeDirectory: f.home, workspaceDirectory: f.repository };
+    const first = await runCli(["workspace", "connect", "--prepared"], runtime);
+    expect(first.exitCode).toBe(0);
+    const before = JSON.parse(await readFile(enrollment, "utf8")).request;
+    expect(before.schemaVersion).toBe("1");
+    // The browser closes the request (expired or cancelled); the CLI cannot see that, so both of its answers name the way on.
+    const restart = "npx aibill@latest workspace connect --prepared --restart";
+    const status = await runCli(["workspace", "status"], runtime);
+    expect(status.stdout).toContain(`Run npx aibill@latest workspace connect --prepared to display this request again, or ${restart} to replace an expired or cancelled request with another of the administrator-prepared kind.`);
+    expect(status.stdout).not.toContain("workspace connect --restart");
+    const kept = await runCli(["workspace", "connect", "--prepared"], runtime);
+    expect(kept.stdout).toContain(`This is the same unfinished request. If it expired or was cancelled in the browser, run ${restart}.`);
+    expect(kept.stdout).not.toContain("workspace connect --restart");
+    // That command replaces it with a new request of the same kind, asking only whether to replace it.
+    prompts.length = 0;
+    const replaced = await runCli(["workspace", "connect", "--prepared", "--restart"], runtime);
+    expect(replaced.exitCode).toBe(0); expect(prompts).toHaveLength(1); expect(prompts[0]).toContain("Replace any unused connection request");
+    const after = JSON.parse(await readFile(enrollment, "utf8")).request;
+    expect(after.schemaVersion).toBe("1"); expect(after.requestId).not.toBe(before.requestId);
+    expect(replaced.stdout).toContain(`New connection request: ${after.requestId.slice(-8)}`);
+    expect(replaced.stdout).toContain("administrator-prepared project and reader setup"); expect(replaced.stdout).not.toContain("Reported repository");
+    // Why the command keeps --prepared: without it, the same place makes the other kind.
+    expect((await runCli(["workspace", "connect", "--restart"], runtime)).exitCode).toBe(0);
+    expect(JSON.parse(await readFile(enrollment, "utf8")).request.schemaVersion).toBe("2");
+    // A request that reports a repository is still replaced by a plain --restart, and status names that.
+    const reported = await runCli(["workspace", "status"], runtime);
+    expect(reported.stdout).toContain("Run npx aibill@latest workspace connect to display this request again, or npx aibill@latest workspace connect --restart to replace an expired or cancelled request.");
+    expect(reported.stdout).not.toContain("--prepared");
+  });
+
   it("prepares a v2 request through the terminal flow without logs, transport, or upload consent", async () => {
     const f = await fixture(), prompts: string[] = [];
     const load = vi.fn(async () => { throw Error("must not scan logs"); }), transport = vi.fn(async () => { throw Error("must not send"); });

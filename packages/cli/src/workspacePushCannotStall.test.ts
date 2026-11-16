@@ -597,6 +597,10 @@ describe("a state file a newer aibill wrote", () => {
     await writeFile(path, written, { mode: 0o600 });
     expect(await runCli(["workspace", "status"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("status") });
     expect(await runCli(["workspace", "connect"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect") });
+    // The command is named back as it was given: dropping --prepared would ask for the other kind of request.
+    expect(await runCli(["workspace", "connect", "--prepared"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --prepared") });
+    expect(await runCli(["workspace", "connect", "--prepared", "--restart"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --prepared --restart") });
+    expect(await runCli(["workspace", "connect", "--restart"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --restart") });
     expect(await readFile(path, "utf8")).toBe(written);
   });
 

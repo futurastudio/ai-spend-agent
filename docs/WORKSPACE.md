@@ -390,7 +390,11 @@ That seat plan stays until the owner changes it.
 
 - **Unused request expired or cancelled:** `npx aibill@latest workspace connect --restart`
   explicitly replaces only an unused request. It cannot reset an uncertain
-  exchange or a connected machine.
+  exchange or a connected machine. For a request of the administrator-prepared
+  kind, add `--prepared` (`workspace connect --prepared --restart`): run inside a
+  Git checkout without it, the new request would report that repository, which a
+  Workspace without self-service machine setup refuses. `workspace status` and a
+  kept request name the command for the kind you hold.
 - **Enrollment outcome unknown:** inspect Settings → Machines. Follow the
   recovery instructions; do not replay the response bundle or create another
   enrollment to bypass uncertainty.
