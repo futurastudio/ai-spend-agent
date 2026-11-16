@@ -64,14 +64,16 @@ run the same command with `npx aibill@latest`.
    as sensitive; do not paste it into an issue or chat.
 
    Repository confirmation does not authorize uploads or all-repository sharing.
-   Fresh requests use version 2 and need Workspace support for repository
-   bootstrap. Release and Workspace activation must be coordinated; this local
-   implementation is not evidence that hosted self-service enrollment is active.
-   For an existing administrator-prepared project and reader setup, explicitly
-   use `workspace connect --prepared`. This creates the original version 1
-   request and does not require a local repository. Either version of an unfinished
-   request is reused unchanged until an explicit `--restart`; version 2 responses
-   cannot silently fall back to version 1.
+   A request that reports a repository needs no setup by an administrator: the
+   Workspace prepares the machine's connection when you choose Pair this machine.
+   If Settings → Machines answers that self-service machine setup is not enabled
+   there yet, keep the request and ask the Workspace owner. Where an administrator
+   has prepared a project and reader for this machine in advance, use
+   `workspace connect --prepared` instead: it creates a request that reports no
+   repository and does not need a Git checkout. An unfinished request of either
+   kind is kept and shown again unchanged, and the terminal says so when it is not
+   the kind the command asked for; only `--restart` replaces it. A response of one
+   kind is never accepted for a request of the other.
 3. Finish the all-repository sharing consent in Settings → Machines. After pairing,
    the terminal says this step is left and offers to preview your first push; that
    question waits 10 minutes. Answer yes only after the browser shows sharing is on,
@@ -80,6 +82,14 @@ run the same command with `npx aibill@latest`.
    sharing is on is refused by Workspace: the terminal says so, nothing is stored or
    retained, and `workspace push` works as soon as the browser step is done. The CLI
    does not offer a per-push repository picker.
+
+   When Workspace accepts this machine's first push, the same terminal ends with
+   one more question: upload every day from now on? Workspace sees a later day only
+   when this machine pushes again. The question is the standing consent described
+   under [Optional daily uploads](#optional-daily-uploads), in the same words, and a
+   yes runs the same setup. A no installs nothing. It is asked once: later pushes
+   from a terminal end with one line that names the command while daily sync is off.
+   It is not asked on Windows or on a system with no `crontab` command.
 4. Inspect local pairing state:
 
    ```bash
@@ -115,7 +125,8 @@ run the same command with `npx aibill@latest`.
 
 ## Optional daily uploads
 
-After pairing, and after Workspace has accepted one push from this machine, run this in
+The first push Workspace accepts from a machine ends by offering this. To turn it on
+at any other time, after Workspace has accepted one push from this machine, run this in
 an interactive terminal:
 
 ```bash

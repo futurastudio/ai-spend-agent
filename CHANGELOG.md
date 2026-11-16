@@ -6,6 +6,33 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
+## 0.9.20 (unreleased)
+
+- **A machine connects without an administrator.** `workspace connect`, run inside
+  a Git checkout, now asks you to confirm that repository and puts its name and a
+  hash of its folder path into the signed public request. With that, Settings →
+  Machines can prepare the machine's connection itself when you choose Pair this
+  machine; nobody has to admit the machine beforehand. The request carries no path,
+  remote URL, file content or session fact, and confirming the repository does not
+  permit any upload. This needs a Workspace with self-service machine setup turned
+  on; where it is off, the page says so and the request can be kept.
+- **`workspace connect --prepared`** creates the earlier kind of request, for a
+  machine an administrator has prepared a project and reader for. It reports no
+  repository and needs no Git checkout.
+- **A kept request is never passed off as another kind.** An unfinished request is
+  shown again unchanged until `--restart`. When it is not the kind the command asked
+  for, the terminal now says which kind it is and the exact command that replaces it.
+  A response for one kind is refused for a request of the other.
+- **The first push ends by offering the daily upload.** When Workspace accepts a
+  machine's first push, the same terminal asks whether to upload every day from now
+  on. It is the standing consent of `workspace push --schedule daily`, in the same
+  words: it names what each fact carries (a UTC day, the agent, the model, the
+  project name, a hashed folder reference, hashed session identities, a session count
+  and token counts) and what it never carries. A yes installs the same per-user job;
+  a no installs nothing. It is asked once. Later pushes from a terminal end with one
+  line that names the command while daily sync is off. Nothing is asked by a
+  scheduled run, on Windows, or on a system with no `crontab` command.
+
 ## 0.9.19 (unreleased)
 
 - **First push right after pairing.** Finishing `workspace connect <response-bundle>`

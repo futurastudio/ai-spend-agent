@@ -190,6 +190,33 @@ describe("explicit native repository confirmation", () => {
       expect((await runCli(args, runtime)).exitCode).toBe(1);
   });
 
+  it("a kept request of the other kind is shown as it is, named, and replaced only by --restart", async () => {
+    const yes = { interactive: true, consentRead: async () => "y" };
+    // A repository request is kept; --prepared neither changes it nor passes it off as the kind that was asked for.
+    const f = await fixture(), enrollment = join(f.home, ".aibill", "workspace-enrollment.json");
+    const first = await runCli(["workspace", "connect"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.repository });
+    expect(first.exitCode).toBe(0); expect(first.stdout).not.toContain("the other kind");
+    const kept = await readFile(enrollment, "utf8");
+    const asked = await runCli(["workspace", "connect", "--prepared"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.home });
+    expect(asked.exitCode).toBe(0); expect(await readFile(enrollment, "utf8")).toBe(kept);
+    expect(asked.stdout).toContain("Reused connection request");
+    expect(asked.stdout).toContain("Reported repository: actual-repository");
+    expect(asked.stdout).toContain("this kept request is the other kind: it reports a repository");
+    expect(asked.stdout).toContain("npx aibill@latest workspace connect --prepared --restart");
+    expect(asked.stdout).not.toContain("administrator-prepared project and reader setup");
+    const replaced = await runCli(["workspace", "connect", "--prepared", "--restart"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.home });
+    expect(replaced.exitCode).toBe(0); expect(replaced.stdout).toContain("New connection request");
+    expect(JSON.parse(await readFile(enrollment, "utf8")).request.schemaVersion).toBe("1");
+    // The other way round: an administrator-prepared request is kept, and a plain connect says so and how to replace it.
+    const plain = await runCli(["workspace", "connect"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.repository });
+    expect(plain.exitCode).toBe(0); expect(plain.stdout).toContain("administrator-prepared kind and reports no repository");
+    expect(plain.stdout).toContain("npx aibill@latest workspace connect --restart");
+    expect(JSON.parse(await readFile(enrollment, "utf8")).request.schemaVersion).toBe("1");
+    // The same kind as asked for carries neither line.
+    const same = await runCli(["workspace", "connect", "--prepared"], { ...yes, homeDirectory: f.home, workspaceDirectory: f.home });
+    expect(same.stdout).toContain("Reused connection request"); expect(same.stdout).not.toContain("kind");
+  });
+
   it("prepares a v2 request through the terminal flow without logs, transport, or upload consent", async () => {
     const f = await fixture(), prompts: string[] = [];
     const load = vi.fn(async () => { throw Error("must not scan logs"); }), transport = vi.fn(async () => { throw Error("must not send"); });

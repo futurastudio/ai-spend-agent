@@ -399,6 +399,92 @@ describe("scheduled upload authority", () => {
     expect((await runCli(["workspace", "push"], { ...runtime, workspaceTransport: accepting })).stdout).toContain("Workspace accepted 1 local session facts");
     expect((await runCli(["workspace", "push", "--schedule", "daily"], runtime)).stdout).toContain("Daily sync installed");
   });
+  it("the first push Workspace accepts ends with the daily-sync question, in the words of --schedule daily, and a yes installs it", async () => {
+    const { home } = await machine({ accepted: false }), os = cron(), prompts: string[] = [], answers = ["y", "y"];
+    const on = { platform: "linux" as const, command: os.command, stageRuntime: fakeRuntime };
+    const first = await runCli(["workspace", "push"], { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true,
+      consentRead: async prompt => { prompts.push(prompt); return answers.shift(); }, workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting, workspaceScheduleOptions: on });
+    expect(first.exitCode).toBe(0); expect(first.stderr).toBe("");
+    expect(prompts).toHaveLength(2); expect(prompts[0]).toContain("Exact outgoing local facts");
+    // Asked only after the batch was accepted, and it says why and exactly what standing consent covers.
+    const offer = prompts[1]!.split("\n");
+    expect(offer[0]).toBe("That was this machine's first push. Workspace sees later days only when this machine pushes again.");
+    for (const carried of ["a UTC day", "the agent (Claude Code or Codex)", "the model", "the project name", "a hashed folder reference", "hashed session identities", "a session count and token counts", "never prompts, full paths, raw session IDs or costs"])
+      expect(prompts[1]).toContain(carried);
+    expect(prompts[1]).toContain("09:17 local-time job"); expect(prompts[1]).toContain("Remove anytime: npx aibill@latest workspace push --schedule none");
+    expect(offer.at(-1)).toContain("Enable daily sync? [y/N] ");
+    // The same words as the command a person would otherwise have to find.
+    const direct: string[] = [], other = await machine();
+    await runCli(["workspace", "push", "--schedule", "daily"], { homeDirectory: other.home, interactive: true, workspaceNow: now, consentRead: async prompt => { direct.push(prompt); return "n"; }, workspaceScheduleOptions: on });
+    expect(offer.slice(1).join("\n")).toBe(direct[0]);
+    expect(first.stdout).toContain("Workspace accepted 1 local session facts"); expect(first.stdout).toContain("Daily sync installed for 09:17 local time");
+    expect(first.stdout.indexOf("Workspace accepted")).toBeLessThan(first.stdout.indexOf("Daily sync installed"));
+    expect(os.value().split("aibill-workspace-daily-v1")).toHaveLength(2); expect(await authorizedWorkspaceSchedule(home)).not.toBeNull();
+    // A scheduled run then goes without a prompt, and a later terminal push says nothing more about daily sync.
+    const later = await runCli(["workspace", "push"], { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true, consentRead: async () => "y", workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting, workspaceScheduleOptions: on });
+    expect(later.stdout).not.toContain("Daily sync");
+  });
+  it("a no installs nothing and names the command; later pushes name it in one line and never ask again", async () => {
+    const { home } = await machine({ accepted: false }), os = cron(), prompts: string[] = [], answers = ["y", "n"];
+    const on = { platform: "linux" as const, command: os.command, stageRuntime: fakeRuntime };
+    const base = { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true, workspaceTransport: accepting, workspaceScheduleOptions: on };
+    const first = await runCli(["workspace", "push"], { ...base, consentRead: async prompt => { prompts.push(prompt); return answers.shift(); }, workspaceLoadCalls: async () => loaded() });
+    expect(first.exitCode).toBe(0); expect(prompts).toHaveLength(2);
+    expect(first.stdout).toContain("Workspace accepted 1 local session facts");
+    expect(first.stdout).toContain("Daily sync not turned on. Nothing was installed. Turn it on any time with: npx aibill@latest workspace push --schedule daily");
+    expect(os.command.mock.calls.every(call => call[1][0] === "-l")).toBe(true); expect(await readWorkspaceSchedule(home)).toBeNull();
+    // The next day's push: one more fact, one line, no second question.
+    const next = { ...loaded(), calls: [{ ...loaded().calls[0]!, callId: "two", sessionId: "another-session", timestamp: "2026-11-06T10:00:00.000Z", startedAt: "2026-11-06T10:00:00.000Z" }] };
+    const asked: string[] = [];
+    const second = await runCli(["workspace", "push"], { ...base, consentRead: async prompt => { asked.push(prompt); return "y"; }, workspaceLoadCalls: async () => next });
+    expect(second.exitCode).toBe(0); expect(asked).toHaveLength(1); expect(asked[0]).toContain("Exact outgoing local facts");
+    expect(second.stdout.split("\n").at(-1)).toBe("Daily sync is off, so Workspace sees later days only when this machine pushes again. Turn it on with: npx aibill@latest workspace push --schedule daily");
+    expect(await readWorkspaceSchedule(home)).toBeNull();
+  });
+  it("the question is never asked by a scheduled run, an embedded caller, a refused push, or where the system cannot run a schedule", async () => {
+    const os = cron(), on = { platform: "linux" as const, command: os.command, stageRuntime: fakeRuntime };
+    const run = async (extra: Record<string, unknown>, argv = ["workspace", "push"]) => {
+      const { home } = await machine({ accepted: false }), prompts: string[] = [];
+      const result = await runCli(argv, { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true, consentRead: async (prompt: string) => { prompts.push(prompt); return "y"; },
+        workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting, workspaceScheduleOptions: on, ...extra });
+      return { result, prompts, home };
+    };
+    // Without the terminal entrypoint's flag (an embedding, every other test): the push is as it was before.
+    const embedded = await run({ workspaceDailyOffer: undefined });
+    expect(embedded.prompts).toHaveLength(1); expect(embedded.result.stdout).toBe("Workspace accepted 1 local session facts. These are attribution inputs, not billed costs.");
+    // A push Workspace refused: nothing was accepted, so nothing is offered.
+    const denied = await run({ workspaceTransport: async () => ({ status: 403, body: { state: "unavailable", retry: "same_envelope_only" } }) });
+    expect(denied.result.exitCode).toBe(1); expect(denied.prompts).toHaveLength(1); expect(denied.result.stdout + denied.result.stderr).not.toContain("Daily sync");
+    // Windows, and a system with no crontab command: no question about something that would then be refused.
+    const windows = await run({ workspaceScheduleOptions: { platform: "win32" as const } });
+    expect(windows.prompts).toHaveLength(1); expect(windows.result.stdout).not.toContain("Daily sync");
+    const noCron = await run({ workspaceScheduleOptions: { platform: "linux" as const, command: async () => { throw Object.assign(new Error("spawn crontab ENOENT"), { code: "ENOENT" }); } } });
+    expect(noCron.prompts).toHaveLength(1); expect(noCron.result.stdout).not.toContain("Daily sync");
+    expect(os.command).not.toHaveBeenCalledWith("crontab", ["-"], expect.anything());
+  });
+  it("a setup that fails after a yes leaves the accepted push standing and says how to try again", async () => {
+    const { home } = await machine({ accepted: false });
+    const failing: ScheduleCommand = async (_command, args) => ({ code: args[0] === "-l" ? 0 : 2, stdout: "" });
+    const result = await runCli(["workspace", "push"], { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true, consentRead: async () => "y",
+      workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting, workspaceScheduleOptions: { platform: "linux", command: failing, stageRuntime: fakeRuntime } });
+    expect(result.exitCode).toBe(0); expect(result.stdout).toContain("Workspace accepted 1 local session facts");
+    expect(result.stdout).toContain("The push above stands. Daily sync was not set up: The daily cron entry could not be installed. No daily uploads were authorized.");
+    expect(result.stdout).toContain("Try again with: npx aibill@latest workspace push --schedule daily");
+    expect(await readWorkspaceSchedule(home)).toBeNull();
+    expect(JSON.parse(await readFile(join(home, ".aibill", "workspace-device.json"), "utf8")).lastAcceptedAt).toBe(now);
+  });
+  it("pairing, the first push and the daily-sync question run as one command", async () => {
+    vi.spyOn(workspace, "finishWorkspaceEnrollment").mockResolvedValue({ state: "connected" });
+    const { home } = await machine({ accepted: false }), os = cron(), prompts: string[] = [];
+    const result = await runCli(["workspace", "connect", "synthetic-response"], { homeDirectory: home, interactive: true, workspaceNow: now, workspaceDailyOffer: true,
+      consentRead: async prompt => { prompts.push(prompt); return "y"; }, workspaceLoadCalls: async () => loaded(), workspaceTransport: accepting,
+      workspaceScheduleOptions: { platform: "linux", command: os.command, stageRuntime: fakeRuntime } });
+    expect(result.exitCode).toBe(0);
+    expect(prompts.map(prompt => prompt.split("\n").at(-1))).toEqual(["Sharing is on in the browser, preview the first push now? [y/N] ",
+      "Machine tokens remain separate from provider-reported tokens and billed costs. Send this batch? [y/N] ",
+      "Remove anytime: npx aibill@latest workspace push --schedule none. Enable daily sync? [y/N] "]);
+    expect(result.stdout.split("\n")[0]).toBe("Paired."); expect(result.stdout).toContain("Daily sync installed for 09:17 local time");
+  });
   it("a scheduled run Workspace refuses withdraws its own consent, logs how to turn it on again, and the next run sends nothing", async () => {
     const { home } = await machine(), os = cron(), on = { platform: "linux" as const, command: os.command };
     await install(home, os.command);
