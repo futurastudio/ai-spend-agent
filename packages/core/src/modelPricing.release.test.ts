@@ -8,6 +8,67 @@ const reviewedEvidence = JSON.parse(readFileSync(new URL("../../../provider-cont
 const geminiEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-04.json", import.meta.url), "utf8"));
 const solEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-06.json", import.meta.url), "utf8"));
 const standardTablesEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-07.json", import.meta.url), "utf8"));
+const fableEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-13.json", import.meta.url), "utf8"));
+
+describe("2026-11-13 reviewed Claude Fable 5.2 and Claude Mythos 5.2 prices", () => {
+  type Row = { id: string; quote: string; input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number };
+  const added = fableEvidence.models as Row[];
+  const kept = fableEvidence.stillOnThisPage as Row[];
+  // One million tokens of one component. No date: these rules carry no dated change.
+  const price = (model: string, component: Partial<TokenUsage>) =>
+    estimateTokenCostUsd(model, { inputTokens: 0, outputTokens: 0, ...component });
+  const expectRow = (model: string, row: Row) => {
+    expect(price(model, { inputTokens: 1_000_000 })).toBe(row.input);
+    expect(price(model, { outputTokens: 1_000_000 })).toBe(row.output);
+    expect(price(model, { cacheReadTokens: 1_000_000 })).toBe(row.cacheRead);
+    expect(price(model, { cacheWrite5mTokens: 1_000_000 })).toBe(row.cacheWrite5m);
+    expect(price(model, { cacheWrite1hTokens: 1_000_000 })).toBe(row.cacheWrite1h);
+  };
+
+  it("is the review date of the price table", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(fableEvidence.retrievedAt);
+  });
+
+  it("records the two IDs Anthropic released on 2026-11-09, each with the line that prices it", () => {
+    expect(added.map((row) => row.id)).toEqual(["claude-fable-5-2", "claude-mythos-5-2"]);
+    expect(fableEvidence.released).toBe("2026-11-09");
+    for (const row of [...added, ...kept]) {
+      for (const rate of [row.input, row.output]) expect(row.quote, row.id).toContain("$" + rate + " / MTok");
+    }
+    for (const url of fableEvidence.sources as string[]) {
+      expect(fableEvidence.pageNormalizedSha256[url], url).toMatch(/^[a-f0-9]{64}$/);
+    }
+  });
+
+  it.each(added.map((row): [string, Row] => [row.id, row]))("%s matches the retained rates, with no prompt tier and no dated change", (model, row) => {
+    expect(promptTierThreshold(model)).toBeUndefined();
+    expectRow(model, row);
+    // Without a date a rule that carries a dated change is unpriced, so this also shows there is none.
+    expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBe(row.input + row.output);
+    // The page prints cache hits at 0.025x input, and writes at the usual 1.25x and 2x.
+    expect(row.cacheRead).toBe(row.input * 0.025);
+    expect(row.cacheWrite5m).toBe(row.input * 1.25);
+    expect(row.cacheWrite1h).toBe(row.input * 2);
+  });
+
+  it.each(["CLAUDE-FABLE-5-2", "claude-fable-5-2-20261109", "claude-mythos-5-2-20261109"])("%s prices as its exact ID does", (model) => {
+    // The dated IDs are synthetic: they exercise snapshot matching, not availability.
+    expectRow(model, added[0]);
+  });
+
+  it("no longer prices the new IDs at the Claude Fable 5 rates", () => {
+    const fable5 = kept.find((row) => row.id === "claude-fable-5")!;
+    for (const { id } of added) {
+      expect(findPricingRule(id)).not.toBe(findPricingRule(fable5.id));
+      expect(price(id, { inputTokens: 1_000_000 })).toBeLessThan(fable5.input);
+      expect(price(id, { cacheReadTokens: 1_000_000 })).toBe(fable5.cacheRead / 5);
+    }
+  });
+
+  it.each(kept.map((row): [string, Row] => [row.id, row]))("%s keeps the row the page still prints for it", (model, row) => {
+    expectRow(model, row);
+  });
+});
 
 describe("2026-11-07 reviewed OpenAI standard tables", () => {
   type Row = {
@@ -23,10 +84,6 @@ describe("2026-11-07 reviewed OpenAI standard tables", () => {
     if (rate === null) expect(cached, `${model} prints a dash for cached input`).toBeUndefined();
     else expect(cached).toBe(rate);
   };
-
-  it("is the review date of the price table", () => {
-    expect(PRICING_TABLE_AS_OF).toBe(standardTablesEvidence.retrievedAt);
-  });
 
   it("lists every row of the two tables once, except GPT-5.6 Sol, whose re-check stays on its own evidence", () => {
     const ids = rows.map((row) => row.id);

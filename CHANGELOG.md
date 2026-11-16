@@ -74,6 +74,18 @@ published (see its section).
   policy, provider admission, local MCP package, or Codex plugin changes in this
   release. Hosted data delivery still depends on the Workspace connection and
   permissions; this release makes no measured latency claim.
+- Price Claude Fable 5.2 and Claude Mythos 5.2 (`claude-fable-5-2`,
+  `claude-mythos-5-2`) at the rates Anthropic published with their release on
+  2026-11-09: $8 input and $40 output per million tokens, cache writes at $10
+  (5 minutes) and $16 (1 hour), cache reads at $0.20. Both IDs used to fall
+  through to the Claude Fable 5 rule, which priced them at $10 and $50 with cache
+  reads at $1, so an estimate for a session on either model was 25% too high on
+  input, output and cache writes and five times too high on cache reads. Claude
+  Fable 5.1, Claude Mythos 5.1 and Claude Fable 5 keep the rows Anthropic still
+  prints for them. Batch and fast mode prices are not applied, as before. These
+  are API-equivalent estimates of local usage; provider-reported cost and
+  invoices are unaffected. `PRICING_TABLE_AS_OF` moves to 2026-11-13, with
+  evidence in `provider-contracts/model-pricing-2026-11-13.json`.
 
 ## 0.9.18 (published on npm, 2026-11-08)
 
