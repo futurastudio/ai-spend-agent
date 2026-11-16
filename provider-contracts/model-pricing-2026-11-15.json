@@ -1,0 +1,545 @@
+{
+  "retrievedAt": "2026-11-15",
+  "fetchedAt": "2026-11-16T04:36:40Z",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No Batch, fast mode, regional or negotiated adjustments. This additive evidence records the review of 2026-11-15, which looked for models priced through a rule that did not name them. It found three: every Grok 4.x model took the rates of a model xAI no longer lists, kimi-k3.1-pro and kimi-k3.1-pro-highspeed took Kimi K3's rates, and before the 2026-11-13 review Claude Fable 5.2 took Claude Fable 5's. models lists each row added or corrected, with the line that prices it. anthropicModelTable is every row of Anthropic's model table as printed that day; the Claude rules now name those versions and no others, so a later version counts as missing until a review prices it. namedIds lists every other ID a rule names without a row here, so the version check knows them. notPricedOnPurpose lists models the pages name that stay unpriced, each with its reason. retrievedAt is the review's date in the Americas; fetchedAt is the UTC instant the pages were read. pageNormalizedSha256 is the SHA-256 of each page's text as scripts/provider-contract-lib.mjs normalizes it. Kimi's page is rendered by script, so its quotes are the table cells as its source carries them. xAI bills a request at the long-context rates once its prompt reaches 200k tokens, read here as 200,000, so the tier starts above 199,999. Earlier evidence files are retained unchanged. These rows were read on 2026-11-15 and read again from the providers' pages on 2026-11-18 (reverified). effectiveFrom is the release date or month the provider's own release notes give; xAI's notes give months only. A row with no published date says so in effectiveFromNote.",
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://aistudio.google.com/docs/pricing.md",
+    "https://platform.kimi.ai/docs/pricing/chat",
+    "https://docs.x.ai/developers/models.md",
+    "https://developers.openai.com/api/docs/pricing.md",
+    "https://aistudio.google.com/docs/changelog.md",
+    "https://docs.x.ai/developers/release-notes.md"
+  ],
+  "pageNormalizedSha256": {
+    "https://platform.claude.com/docs/en/about-claude/pricing": "2bc14facdfb0e45596212495694ec418e4e115fd289aa6d9c14cec86246a712e",
+    "https://aistudio.google.com/docs/pricing.md": "533faa5e5f4363665acf3e0f274ebf0a809419da37f2410bc1a4183b92ee6d18",
+    "https://platform.kimi.ai/docs/pricing/chat": "ca5f1338789afea5b07a955b7a1ec71f71ced1fa159a655eef7f3d48194cb6f7",
+    "https://docs.x.ai/developers/models.md": "dac0c739ae32e7357d3e62e7bf9d3be8062093f356fdae281c8336baaf331b8f",
+    "https://developers.openai.com/api/docs/pricing.md": "db8d536418f3654e46b868386a337b6f29b725b787f52b612655bf2fbc993640",
+    "https://aistudio.google.com/docs/changelog.md": "c64e2bd96cd8cf263f198ccde4e924063d909978ac128875530014a9abb807d6",
+    "https://docs.x.ai/developers/release-notes.md": "e45cdda08182c05013f43337ae8ccac1fbab3a285b4166ae7c1bb5417cbbd4d8"
+  },
+  "contextSuffix": {
+    "suffix": "[1m]",
+    "rule": "Taken off a model ID before a rule is looked up: it selects a context window, not another model.",
+    "quotes": [
+      "Claude 4.6 and later models (except Claude Haiku 5.5) and Claude Mythos Preview include the full 1M token context window at standard pricing.",
+      "All K3 series models support a 1,048,576-token context window."
+    ]
+  },
+  "models": [
+    {
+      "id": "gemini-4-carbon",
+      "source": "https://aistudio.google.com/docs/pricing.md",
+      "quote": "Input price * Not available * $2.00 through November 30, 2026. $4.00 starting December 1, 2026. --- * Output price (including thinking tokens) * Not available * $10.00 through November 30, 2026. $20.00 starting December 1, 2026. --- * Context caching price * Not available * $0.10 through November 30, 2026. $0.20 starting December 1, 2026. Implicit caching only (explicit caching is not supported).",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "scheduledRates": [
+        {
+          "from": "2026-12-01",
+          "input": 4,
+          "output": 20,
+          "cacheRead": 0.2
+        }
+      ],
+      "effectiveFrom": "2026-11-10",
+      "effectiveFromSource": "https://aistudio.google.com/docs/changelog.md",
+      "effectiveFromQuote": "November 10, 2026 ... Gemini 4 Carbon (gemini-4-carbon) generally available (GA)"
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "source": "https://aistudio.google.com/docs/pricing.md",
+      "quote": "Input price * Free of charge * $1.50 --- * Output price (including thinking tokens) * Free of charge * $7.50 --- * Context caching price * Free of charge * $0.075 Implicit caching only (explicit caching is not supported).",
+      "input": 1.5,
+      "output": 7.5,
+      "cacheRead": 0.075,
+      "effectiveFrom": "2026-11-12",
+      "effectiveFromSource": "https://aistudio.google.com/docs/changelog.md",
+      "effectiveFromQuote": "November 12, 2026 ... Gemini 4 Hydrogen (gemini-4-hydrogen) generally available (GA)"
+    },
+    {
+      "id": "kimi-k3.1-pro",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k3.1-pro | $2.00 / MTok | $10.00 / MTok | $0.20 / MTok | $2.00 / MTok | $4.00 / MTok (Model, Input, Output, Cached input, 5m writes, 1h writes)",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 2,
+      "cacheWrite1h": 4,
+      "pricedBefore": {
+        "rule": "^kimi-k3",
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3
+      },
+      "effectiveFrom": null,
+      "effectiveFromNote": "Kimi publishes no release date for K3.1 Pro (its quickstart says only that it has launched); its rates are as printed on 2026-11-15 and 2026-11-18."
+    },
+    {
+      "id": "kimi-k3.1-pro-highspeed",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k3.1-pro-highspeed | $4.00 / MTok | $20.00 / MTok | $0.20 / MTok | $4.00 / MTok | $8.00 / MTok",
+      "input": 4,
+      "output": 20,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 4,
+      "cacheWrite1h": 8,
+      "pricedBefore": {
+        "rule": "^kimi-k3",
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3
+      },
+      "effectiveFrom": null,
+      "effectiveFromNote": "Kimi publishes no release date for K3.1 Pro; its rates are as printed on 2026-11-15 and 2026-11-18."
+    },
+    {
+      "id": "kimi-k3",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k3 | $3.00 / MTok | $15.00 / MTok | $0.30 / MTok | $3.00 / MTok | $6.00 / MTok",
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3,
+      "cacheWrite5m": 3,
+      "cacheWrite1h": 6,
+      "pricedBefore": {
+        "rule": "^kimi-k3",
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3,
+        "cacheWrite5m": 3.75
+      },
+      "effectiveFrom": null,
+      "effectiveFromNote": "Only the cache-write rates change here, to the 1x and 2x of input the page prints; the page names no date for them, so they apply to all usage."
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k2.7-code | $0.95 / MTok | $4.00 / MTok | $0.19 / MTok (Model, Input, Output, Cached input)",
+      "input": 0.95,
+      "output": 4,
+      "cacheRead": 0.19,
+      "effectiveFrom": null,
+      "effectiveFromNote": "Unchanged rates; the rule now names the exact ID."
+    },
+    {
+      "id": "kimi-k2.7-code-highspeed",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k2.7-code-highspeed | $1.90 / MTok | $8.00 / MTok | $0.38 / MTok",
+      "input": 1.9,
+      "output": 8,
+      "cacheRead": 0.38,
+      "effectiveFrom": null,
+      "effectiveFromNote": "Unchanged rates; the rule now names the exact ID."
+    },
+    {
+      "id": "kimi-k2.6",
+      "source": "https://platform.kimi.ai/docs/pricing/chat",
+      "quote": "kimi-k2.6 | $0.95 / MTok | $4.00 / MTok | $0.16 / MTok",
+      "input": 0.95,
+      "output": 4,
+      "cacheRead": 0.16,
+      "effectiveFrom": null,
+      "effectiveFromNote": "Unchanged rates; the rule now names the exact ID."
+    },
+    {
+      "id": "grok-4.7",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.7 (< 200k prompt tokens) | 500k | $2.00 | $0.50 | $6.00 | | grok-4.7 (>= 200k prompt tokens) | 500k | $4.00 | $1.00 | $12.00 |",
+      "input": 2,
+      "cacheRead": 0.5,
+      "output": 6,
+      "abovePromptTokens": 199999,
+      "aboveInput": 4,
+      "aboveCacheRead": 1,
+      "aboveOutput": 12,
+      "effectiveFrom": "2026-09",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "September (2026): Grok 4.7 ... Pricing is $2 / $0.50 / $6 per 1M tokens (input / cached input / output) below 200k prompt tokens, and $4 / $1 / $12 above."
+    },
+    {
+      "id": "grok-4.6",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.6 (< 200k prompt tokens) | 500k | $2.00 | $0.50 | $6.00 | | grok-4.6 (>= 200k prompt tokens) | 500k | $4.00 | $1.00 | $12.00 |",
+      "input": 2,
+      "cacheRead": 0.5,
+      "output": 6,
+      "abovePromptTokens": 199999,
+      "aboveInput": 4,
+      "aboveCacheRead": 1,
+      "aboveOutput": 12,
+      "effectiveFrom": "2026-08",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "August (2026): Grok 4.6 ... Pricing is $2 / $0.50 / $6 per 1M tokens (input / cached input / output) below 200k"
+    },
+    {
+      "id": "grok-4.5",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.5 (< 200k prompt tokens) | 500k | $2.00 | $0.30 | $6.00 | | grok-4.5 (>= 200k prompt tokens) | 500k | $4.00 | $0.60 | $12.00 |",
+      "input": 2,
+      "cacheRead": 0.3,
+      "output": 6,
+      "abovePromptTokens": 199999,
+      "aboveInput": 4,
+      "aboveCacheRead": 0.6,
+      "aboveOutput": 12,
+      "effectiveFrom": "2026-07",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "July (2026): Grok 4.5 ... Priced at $2 / 1M input tokens and $6 / 1M output tokens"
+    },
+    {
+      "id": "grok-4.3",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.3 (< 200k prompt tokens) | 1M | $1.25 | $0.20 | $2.50 | | grok-4.3 (>= 200k prompt tokens) | 1M | $2.50 | $0.40 | $5.00 |",
+      "input": 1.25,
+      "cacheRead": 0.2,
+      "output": 2.5,
+      "abovePromptTokens": 199999,
+      "aboveInput": 2.5,
+      "aboveCacheRead": 0.4,
+      "aboveOutput": 5,
+      "effectiveFrom": null,
+      "effectiveFromNote": "xAI's release notes have no entry for Grok 4.3; its rates are as printed on the models page on 2026-11-15 and 2026-11-18."
+    },
+    {
+      "id": "grok-4.20-0309-reasoning",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.20-0309-reasoning (< 200k prompt tokens) | 1M | $1.25 | $0.20 | $2.50 | | grok-4.20-0309-reasoning (>= 200k prompt tokens) | 1M | $2.50 | $0.40 | $5.00 |",
+      "input": 1.25,
+      "cacheRead": 0.2,
+      "output": 2.5,
+      "abovePromptTokens": 199999,
+      "aboveInput": 2.5,
+      "aboveCacheRead": 0.4,
+      "aboveOutput": 5,
+      "effectiveFrom": "2026-03",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "March (2026): Grok 4.20 and Grok 4.20 Multi-agent are live"
+    },
+    {
+      "id": "grok-4.20-0309-non-reasoning",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.20-0309-non-reasoning (< 200k prompt tokens) | 1M | $1.25 | $0.20 | $2.50 | | grok-4.20-0309-non-reasoning (>= 200k prompt tokens) | 1M | $2.50 | $0.40 | $5.00 |",
+      "input": 1.25,
+      "cacheRead": 0.2,
+      "output": 2.5,
+      "abovePromptTokens": 199999,
+      "aboveInput": 2.5,
+      "aboveCacheRead": 0.4,
+      "aboveOutput": 5,
+      "effectiveFrom": "2026-03",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "March (2026): Grok 4.20 and Grok 4.20 Multi-agent are live"
+    },
+    {
+      "id": "grok-4.20-multi-agent-0309",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-4.20-multi-agent-0309 (< 200k prompt tokens) | 1M | $1.25 | $0.20 | $2.50 | | grok-4.20-multi-agent-0309 (>= 200k prompt tokens) | 1M | $2.50 | $0.40 | $5.00 |",
+      "input": 1.25,
+      "cacheRead": 0.2,
+      "output": 2.5,
+      "abovePromptTokens": 199999,
+      "aboveInput": 2.5,
+      "aboveCacheRead": 0.4,
+      "aboveOutput": 5,
+      "effectiveFrom": "2026-03",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "March (2026): Grok 4.20 and Grok 4.20 Multi-agent are live"
+    },
+    {
+      "id": "grok-build-0.1",
+      "source": "https://docs.x.ai/developers/models.md",
+      "quote": "| grok-build-0.1 (< 200k prompt tokens) | 256k | $1.00 | $0.20 | $2.00 | | grok-build-0.1 (>= 200k prompt tokens) | 256k | $2.00 | $0.40 | $4.00 |",
+      "input": 1,
+      "cacheRead": 0.2,
+      "output": 2,
+      "abovePromptTokens": 199999,
+      "aboveInput": 2,
+      "aboveCacheRead": 0.4,
+      "aboveOutput": 4,
+      "effectiveFrom": "2026-05",
+      "effectiveFromSource": "https://docs.x.ai/developers/release-notes.md",
+      "effectiveFromQuote": "May (2026): Grok Build 0.1 ... Currently in early access."
+    }
+  ],
+  "grokPricedBefore": {
+    "rule": "^grok-4|^grok-3$",
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3
+  },
+  "longContextQuote": "Models listed with two rows use long context pricing: requests whose prompt reaches the listed token threshold are billed at the higher rate for all tokens in the request.",
+  "anthropicModelTable": [
+    {
+      "id": "claude-fable-5-2",
+      "quote": "Claude Fable 5.2 For demanding reasoning and long-horizon agentic work $8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok",
+      "input": 8,
+      "output": 40,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 10,
+      "cacheWrite1h": 16,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "quote": "Claude Opus 5.5 For long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
+      "input": 4,
+      "output": 20,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 5,
+      "cacheWrite1h": 8,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "quote": "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite5m": 2.5,
+      "cacheWrite1h": 4,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-mythos-5-2",
+      "quote": "Claude Mythos 5.2 $8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok",
+      "input": 8,
+      "output": 40,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 10,
+      "cacheWrite1h": 16,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-fable-5-1",
+      "quote": "Claude Fable 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 0.25,
+      "cacheWrite5m": 12.5,
+      "cacheWrite1h": 20,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-mythos-5-1",
+      "quote": "Claude Mythos 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 0.25,
+      "cacheWrite5m": 12.5,
+      "cacheWrite1h": 20,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-fable-5",
+      "quote": "Claude Fable 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 1,
+      "cacheWrite5m": 12.5,
+      "cacheWrite1h": 20,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-mythos-5",
+      "quote": "Claude Mythos 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
+      "input": 10,
+      "output": 50,
+      "cacheRead": 1,
+      "cacheWrite5m": 12.5,
+      "cacheWrite1h": 20,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-5",
+      "quote": "Claude Opus 5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4-8",
+      "quote": "Claude Opus 4.8 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4-7",
+      "quote": "Claude Opus 4.7 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4-6",
+      "quote": "Claude Opus 4.6 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4-5",
+      "quote": "Claude Opus 4.5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheWrite5m": 6.25,
+      "cacheWrite1h": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4-1",
+      "quote": "Claude Opus 4.1 $15 / MTok $75 / MTok $18.75 / MTok $30 / MTok $1.50 / MTok",
+      "input": 15,
+      "output": 75,
+      "cacheRead": 1.5,
+      "cacheWrite5m": 18.75,
+      "cacheWrite1h": 30,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-opus-4",
+      "quote": "Claude Opus 4 $15 / MTok $75 / MTok $18.75 / MTok $30 / MTok $1.50 / MTok",
+      "input": 15,
+      "output": 75,
+      "cacheRead": 1.5,
+      "cacheWrite5m": 18.75,
+      "cacheWrite1h": 30,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "quote": "Claude Sonnet 5 $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 2.5,
+      "cacheWrite1h": 4,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "quote": "Claude Sonnet 4.6 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3,
+      "cacheWrite5m": 3.75,
+      "cacheWrite1h": 6,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "quote": "Claude Sonnet 4.5 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3,
+      "cacheWrite5m": 3.75,
+      "cacheWrite1h": 6,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-sonnet-4",
+      "quote": "Claude Sonnet 4 $3 / MTok $15 / MTok $3.75 / MTok $6 / MTok $0.30 / MTok",
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3,
+      "cacheWrite5m": 3.75,
+      "cacheWrite1h": 6,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "quote": "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok",
+      "input": 1,
+      "output": 5,
+      "cacheRead": 0.1,
+      "cacheWrite5m": 1.25,
+      "cacheWrite1h": 2,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    }
+  ],
+  "namedIds": [
+    "claude-sonnet-4-0",
+    "claude-opus-4-0",
+    "claude-3-7-sonnet",
+    "claude-3-5-sonnet",
+    "claude-3-5-haiku",
+    "grok-4",
+    "grok-3",
+    "grok-3-mini",
+    "kimi-k2",
+    "kimi-k2-instruct",
+    "deepseek-chat",
+    "deepseek-v3",
+    "deepseek-reasoner",
+    "deepseek-r1"
+  ],
+  "notPricedOnPurpose": [
+    {
+      "id": "gemini-decision-1",
+      "source": "https://aistudio.google.com/docs/pricing.md",
+      "why": "A classification model behind the Decisions API with no output tokens; no coding agent this tool reads can run it."
+    },
+    {
+      "id": "gpt-6-cyber",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "why": "Gated behind OpenAI's Daybreak program; the page now prints both context tiers ($20 / $100 / $2 and $40 / $150 / $4), so it can be priced once a reader is known to meet it."
+    },
+    {
+      "id": "gpt-5.6-cyber",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "why": "Gated, and the page prints dashes for its long-context row, which does not say what a long request costs."
+    },
+    {
+      "id": "gpt-5.5-cyber-preview",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "why": "The new name of gpt-5.5-cyber; gated, and the page prints dashes for its long-context row."
+    },
+    {
+      "id": "gpt-5.1-mini",
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.1-mini",
+      "why": "No OpenAI page lists it: its model page answers 404. The gpt-5-mini rule used to take it."
+    },
+    {
+      "id": "gpt-5.2-codex-max",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "why": "No OpenAI page lists it. The gpt-5.2 rule was a prefix and used to take it."
+    },
+    {
+      "id": "gpt-5.2-codex-mini",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "why": "No OpenAI page lists it. The gpt-5.2 rule was a prefix and used to take it."
+    }
+  ],
+  "reverified": {
+    "at": "2026-11-18T22:07:11Z",
+    "result": "Every rate quoted in models and anthropicModelTable is printed unchanged on these copies.",
+    "pageNormalizedSha256": {
+      "https://platform.claude.com/docs/en/about-claude/pricing": "a4eb0871016888c90e66ade4179327ea86301fd7a80a51a09e411e62b081723d",
+      "https://aistudio.google.com/docs/pricing.md": "a1ecb1dbe720878297b284410a8c372c643991e7be773fcaf06ac12230a72eed",
+      "https://platform.kimi.ai/docs/pricing/chat": "9dfc0dbcf05146ae34d85e46fd4a1d621e262fe638608be51e4d470eae68e7e5",
+      "https://docs.x.ai/developers/models.md": "ddd7d966c2593e91a0ce3be79eb27b18e925b23121913c07706e18f43a23cc80",
+      "https://developers.openai.com/api/docs/pricing.md": "69012bc8917d96c5402373aa5e16935c7eff7c5d4a1ce51a46d260304bb6d472"
+    },
+    "stillUnlisted": {
+      "https://developers.openai.com/api/docs/models/gpt-5.1-mini": "answers 404 on 2026-11-18"
+    }
+  }
+}

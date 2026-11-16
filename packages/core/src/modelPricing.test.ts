@@ -85,10 +85,10 @@ describe("model pricing coverage", () => {
   });
 
   it.each(["claude-sonnet-5-50", "claude-sonnet-5-5-preview", "claude-sonnet-5-5-20261001-extra"])(
-    "%s does not inherit the Sonnet 5.5 discount",
+    "%s takes neither the Sonnet 5.5 discount nor the Sonnet 5 rates",
     (model) => {
-      // Preserve the existing fallback; do not broaden the new version-specific rule.
-      expect(findPricingRule(model)).toBe(findPricingRule("claude-sonnet-5"));
+      // Until the 2026-11-15 review these fell back to the Sonnet 5 prefix. No rule names them, so they count as missing.
+      expect(findPricingRule(model)).toBeUndefined();
     }
   );
 
@@ -556,12 +556,15 @@ describe("model pricing coverage", () => {
       expect(estimateTokenCostUsd(model, oneM({ cacheReadTokens: 1_000_000 }))).toBe(cached);
     });
 
-    it("prices gpt-5.1 at its published rates, and its -codex and -mini variants keep their own rules", () => {
+    it("prices gpt-5.1 at its published rates, and its -codex variant keeps its own rule", () => {
       expect(estimateTokenCostUsd("gpt-5.1", oneM({ inputTokens: 1_000_000 }))).toBe(1.25);
       expect(estimateTokenCostUsd("gpt-5.1", oneM({ outputTokens: 1_000_000 }))).toBe(10);
       expect(estimateTokenCostUsd("gpt-5.1", oneM({ cacheReadTokens: 1_000_000 }))).toBe(0.125);
       expect(estimateTokenCostUsd("gpt-5.1-codex", usage)).toBeCloseTo(2.25, 2);
-      expect(estimateTokenCostUsd("gpt-5.1-mini", usage)).toBeCloseTo(0.45, 2);
+      // No OpenAI page lists gpt-5.1-mini (its model page is a 404, reviewed 2026-11-15). The gpt-5-mini
+      // rule used to take it; it counts as missing now. gpt-5.1-codex-mini is a real model with its own rule.
+      expect(estimateTokenCostUsd("gpt-5.1-mini", usage)).toBeUndefined();
+      expect(estimateTokenCostUsd("gpt-5-mini", usage)).toBeCloseTo(0.45, 2);
     });
 
     // Both sides of the 272K request tier: a prompt of exactly 272,000 tokens stays on the base
