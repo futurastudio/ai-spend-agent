@@ -6,7 +6,7 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
-## 0.9.19 (unreleased)
+## 0.9.19 (published on npm, 2026-11-18)
 
 - **First push right after pairing.** Finishing `workspace connect <response-bundle>`
   now says that sharing consent is still to finish in the browser, and offers the
