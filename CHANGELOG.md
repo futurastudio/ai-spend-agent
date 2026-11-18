@@ -6,6 +6,17 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
+## 0.9.20 (unreleased)
+
+- Price GPT-6.2 Astra (`gpt-6.2-astra`: $8 input, $40 output, $0.40 cached
+  input per million tokens; $16, $60 and $0.80 for prompts over 272,000 tokens),
+  GPT-6.2 Sol (`gpt-6.2-sol`: $2, $10 and $0.10; $4, $15 and $0.20 over 272,000
+  tokens) and Gemini 4 Neon (`gemini-4-neon`: $3, $15 and $0.15), which their
+  providers' pricing pages listed by 2026-11-18. Usage on them used to count as
+  missing. Batch, fast mode and ultrafast prices are not applied, as before.
+  `PRICING_TABLE_AS_OF` moves to 2026-11-18, with evidence in
+  `provider-contracts/model-pricing-2026-11-18.json`.
+
 ## 0.9.19 (published on npm, 2026-11-18)
 
 - **First push right after pairing.** Finishing `workspace connect <response-bundle>`

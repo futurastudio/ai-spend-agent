@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-13";
+export const PRICING_TABLE_AS_OF = "2026-11-18";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -148,6 +148,29 @@ const pricingRules: PricingRule[] = [
     abovePromptTokens: {
       threshold: 272_000,
       inputPerM: 0.2, outputPerM: 0.75, cacheReadPerM: 0.02
+    }
+  },
+  // Reviewed 2026-11-18: developers.openai.com/api/docs/pricing.md and each model's
+  // page. Retained evidence: provider-contracts/model-pricing-2026-11-18.json.
+  // OpenAI added GPT-6.2 Astra and GPT-6.2 Sol to the standard table on 2026-11-17;
+  // until this review both counted as missing. Each page lists one model ID and no
+  // snapshot. "For requests with more than 272K input tokens, input and cache rates
+  // double and output costs 1.5 times the short-context rate for the full request."
+  // Ultrafast (3x, then 6x from 2027-03-01), Batch and fast mode are not applied.
+  {
+    match: /^gpt-6\.2-astra$/i,
+    inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.4,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 16, outputPerM: 60, cacheReadPerM: 0.8
+    }
+  },
+  {
+    match: /^gpt-6\.2-sol$/i,
+    inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 4, outputPerM: 15, cacheReadPerM: 0.2
     }
   },
   // OpenAI (newer and more specific families must precede the GPT-5 fallback).
@@ -346,6 +369,11 @@ const pricingRules: PricingRule[] = [
     cacheReadPerM: 0.1,
     scheduledRates: [{ from: "2026-12-01", inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 }]
   },
+  // Reviewed 2026-11-18: https://aistudio.google.com/docs/pricing.md. Retained
+  // evidence: provider-contracts/model-pricing-2026-11-18.json. Gemini 4 Neon joined
+  // the page on 2026-11-18: paid tier only, one input rate for every modality, no
+  // prompt-size tier and no dated change; caching is implicit only.
+  { match: /^gemini-4-neon$/i, inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.15 },
   // Reviewed 2026-11-04: https://aistudio.google.com/docs/pricing.md (the Gemini
   // Developer API docs moved there from ai.google.dev). Retained evidence:
   // provider-contracts/model-pricing-2026-11-04.json. Gemini 2.5 Pro is

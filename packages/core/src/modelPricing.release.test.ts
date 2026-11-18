@@ -9,6 +9,55 @@ const geminiEvidence = JSON.parse(readFileSync(new URL("../../../provider-contra
 const solEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-06.json", import.meta.url), "utf8"));
 const standardTablesEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-07.json", import.meta.url), "utf8"));
 const fableEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-13.json", import.meta.url), "utf8"));
+const newModelsEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-18.json", import.meta.url), "utf8"));
+
+describe("2026-11-18 reviewed GPT-6.2 Astra, GPT-6.2 Sol and Gemini 4 Neon prices", () => {
+  type Row = {
+    id: string; quote: string; input: number; output: number; cacheRead: number;
+    abovePromptTokens?: number; aboveInput?: number; aboveOutput?: number; aboveCacheRead?: number;
+  };
+  const rows = newModelsEvidence.models as Row[];
+  const reviewed = newModelsEvidence.retrievedAt as string;
+  // One million tokens of one component, with the request tier fixed by the given prompt.
+  const price = (model: string, component: Partial<TokenUsage>, tierPromptTokens: number) =>
+    estimateTokenCostsUsd(model, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], reviewed);
+
+  it("is the review date of the price table", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(reviewed);
+  });
+
+  it("records the three IDs once, each with the line that prices it, and hashes every page it cites", () => {
+    expect(rows.map((row) => row.id)).toEqual(["gpt-6.2-astra", "gpt-6.2-sol", "gemini-4-neon"]);
+    for (const row of rows) {
+      for (const rate of [row.input, row.output, row.cacheRead]) expect(row.quote, `${row.id} ${rate}`).toContain(`$${rate.toFixed(2)}`);
+    }
+    for (const url of newModelsEvidence.sources as string[]) {
+      expect(newModelsEvidence.pageNormalizedSha256[url], url).toMatch(/^[a-f0-9]{64}$/);
+    }
+  });
+
+  it.each(rows.map((row): [string, Row] => [row.id, row]))("%s matches the retained rates on both sides of any tier", (model, row) => {
+    const threshold = row.abovePromptTokens;
+    expect(promptTierThreshold(model, reviewed)).toBe(threshold);
+    const base = threshold ?? 1_000_000;
+    expect(price(model, { inputTokens: 1_000_000 }, base)).toBe(row.input);
+    expect(price(model, { outputTokens: 1_000_000 }, base)).toBe(row.output);
+    expect(price(model, { cacheReadTokens: 1_000_000 }, base)).toBe(row.cacheRead);
+    // No dated change: usage with no date is priced too (100K input tokens stay below any tier).
+    expect(estimateTokenCostUsd(model, { inputTokens: 100_000, outputTokens: 0 })).toBeCloseTo(row.input / 10, 4);
+    if (threshold === undefined) return;
+    expect(price(model, { inputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveInput);
+    expect(price(model, { outputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveOutput);
+    expect(price(model, { cacheReadTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveCacheRead);
+  });
+
+  it.each(["gpt-6.2-astra-law", "gpt-6.2-terra", "gpt-6.2-astra-2026-11-17", "gpt-6.3-sol", "gemini-4-neon-preview", "gemini-4.1-neon"])(
+    "%s, which no page prices at these rates, stays unpriced",
+    (model) => {
+      expect(findPricingRule(model)).toBeUndefined();
+    }
+  );
+});
 
 describe("2026-11-13 reviewed Claude Fable 5.2 and Claude Mythos 5.2 prices", () => {
   type Row = { id: string; quote: string; input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number };
@@ -24,10 +73,6 @@ describe("2026-11-13 reviewed Claude Fable 5.2 and Claude Mythos 5.2 prices", ()
     expect(price(model, { cacheWrite5mTokens: 1_000_000 })).toBe(row.cacheWrite5m);
     expect(price(model, { cacheWrite1hTokens: 1_000_000 })).toBe(row.cacheWrite1h);
   };
-
-  it("is the review date of the price table", () => {
-    expect(PRICING_TABLE_AS_OF).toBe(fableEvidence.retrievedAt);
-  });
 
   it("records the two IDs Anthropic released on 2026-11-09, each with the line that prices it", () => {
     expect(added.map((row) => row.id)).toEqual(["claude-fable-5-2", "claude-mythos-5-2"]);
@@ -386,7 +431,7 @@ describe("0.9.12 reviewed standard-price fixtures", () => {
     expect(canPriceTokenUsageAtScope(model, { inputTokens: 400_000, outputTokens: 40_000 }, "aggregate")).toBe(false);
     expect(estimateTokenCostUsd(model, { inputTokens: 300_000, outputTokens: 20_000 })).toBe(aggregate);
   });
-  it.each(["gpt-6-preview", "gpt-6-astra-future", "gpt-6.2-sol", "codex-auto-review"])("%s has no invented price", model => {
+  it.each(["gpt-6-preview", "gpt-6-astra-future", "gpt-6.3-sol", "codex-auto-review"])("%s has no invented price", model => {
     expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBeUndefined();
   });
 });

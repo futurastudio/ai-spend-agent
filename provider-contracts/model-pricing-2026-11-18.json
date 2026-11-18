@@ -1,0 +1,61 @@
+{
+  "retrievedAt": "2026-11-18",
+  "fetchedAt": "2026-11-18T20:44:35Z",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "basis": "Standard API-equivalent estimates, not subscription charges, provider-reported spending or invoices. No Batch, Flex, fast mode, ultrafast, regional or negotiated adjustments. This additive evidence records three models the pricing pages listed by 2026-11-18 that the table did not price, so usage on them counted as missing: GPT-6.2 Astra and GPT-6.2 Sol, added to OpenAI's standard table on 2026-11-17, and Gemini 4 Neon, added to Google's page on 2026-11-18. Each OpenAI model page lists one model ID and no snapshot, and says: for requests with more than 272K input tokens, input and cache rates double and output costs 1.5 times the short-context rate for the full request; the standard table prints those long-context rates. The tables' cache-write columns are not compared, as in model-pricing-2026-11-07.json. Gemini 4 Neon is paid tier only, prints one input rate for every modality and no prompt-size tier, and caches implicitly only. The rates are flat and carry no dated change: no usage under these IDs predates them. pageNormalizedSha256 is the SHA-256 of each page's text as scripts/provider-contract-lib.mjs normalizes it. Earlier evidence files are retained unchanged.",
+  "sources": [
+    "https://developers.openai.com/api/docs/pricing.md",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md",
+    "https://aistudio.google.com/docs/pricing.md",
+    "https://aistudio.google.com/docs/models/gemini-4-neon.md"
+  ],
+  "pageNormalizedSha256": {
+    "https://developers.openai.com/api/docs/pricing.md": "69012bc8917d96c5402373aa5e16935c7eff7c5d4a1ce51a46d260304bb6d472",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md": "5fb4443271222181cb6859cb1caf711ff94fd660366d4710f94495716d38aaf6",
+    "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md": "cb04f9958345f3aaae0476867997b167f30d7111c4a0620596de27261033e48e",
+    "https://aistudio.google.com/docs/pricing.md": "a1ecb1dbe720878297b284410a8c372c643991e7be773fcaf06ac12230a72eed",
+    "https://aistudio.google.com/docs/models/gemini-4-neon.md": "1fb8dac397cf3de02d6eb8f0f12c2c5c75f6206506b231705973687b2018bd15"
+  },
+  "longContextQuote": "Short context: ≤272K input tokens. Long context: >272K input tokens.",
+  "models": [
+    {
+      "id": "gpt-6.2-astra",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "modelPage": "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
+      "quote": "| gpt-6.2-astra | $8.00 | $40.00 | $0.40 | $10.00 | $20.00 | $16.00 | $60.00 | $0.80 | $20.00 | $40.00 |",
+      "modelPageQuote": "| Input | $8 | 1M tokens | | Cached input | $0.4 | 1M tokens | | Cache writes | $10 | 1M tokens | | Output | $40 | 1M tokens |",
+      "input": 8,
+      "output": 40,
+      "cacheRead": 0.4,
+      "abovePromptTokens": 272000,
+      "aboveInput": 16,
+      "aboveOutput": 60,
+      "aboveCacheRead": 0.8
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "source": "https://developers.openai.com/api/docs/pricing.md",
+      "modelPage": "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md",
+      "quote": "| gpt-6.2-sol | $2.00 | $10.00 | $0.10 | $2.50 | $5.00 | $4.00 | $15.00 | $0.20 | $5.00 | $10.00 |",
+      "modelPageQuote": "| Input | $2 | 1M tokens | | Cached input | $0.1 | 1M tokens | | Cache writes | $2.5 | 1M tokens | | Output | $10 | 1M tokens |",
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "abovePromptTokens": 272000,
+      "aboveInput": 4,
+      "aboveOutput": 15,
+      "aboveCacheRead": 0.2
+    },
+    {
+      "id": "gemini-4-neon",
+      "source": "https://aistudio.google.com/docs/pricing.md",
+      "modelPage": "https://aistudio.google.com/docs/models/gemini-4-neon.md",
+      "quote": "Input price * Not available * $3.00 --- * Output price (including thinking tokens) * Not available * $15.00 --- * Context caching price * Not available * $0.15 Implicit caching only (explicit caching is not supported).",
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.15
+    }
+  ]
+}
