@@ -39,9 +39,9 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Usage endpoints other than the connector's explicitly fetched surfaces
 - Official sources:
   - [contract](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage) — alert class `financial_schema`; semantic `b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4`; reviewed content `7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `96a56c1d5c7d918f413c5327732fa3b56874ac69fa6577c69fa176ba62ba9e1a`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `5321df3a7f26da11ed5224da90b82fd75bc3efa20af8bf21e9d2394efa8e2b1f`
-  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `0aa12312dcf584303d1e0b47c2211861b5b2eccdc152cc0747d335595b9d799b`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `74393b228a984b831f118aaa09aebad2d6bdb6740f6d2c705904604a370bc1e8`; reviewed content `8b3b3079759f0d2c189f1a05393887726370a67020da3f46692436eefc790c6a`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `51e3ec9d4fe9739e2ba067323f912cb993a8b02abf6b19273d3122ab03695f33`; reviewed content `64022399ac6e446ee8b6ae57f3f6414cdcd50d9ae90974f9aa80e3d7049def33`
+  - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `1b7ee2332adecf9def3775a7d01e614058f4cf0daec9c514373c8d2a425a36af`; reviewed content `7d5e84f4fbcd69fc151b05ef6de3ea2b1e8274429a9d2881545239ec3520901e`
   - [pricing](https://developers.openai.com/api/docs/pricing.md) — semantic `3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d`; reviewed content `6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce`
 
 ## Anthropic Platform Usage and Cost Admin API
@@ -139,7 +139,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
 - Official sources:
   - [contract](https://geminicli.com/docs/cli/session-management/) — semantic `053af142b8dc4997dbabef687cf7ce941ad14140d68742f8ada0f31ba1e5f65b`; reviewed content `6b5ef480a198018651c45495c1f53a6f79a1ab06dc965fb785d1a3611246d0f2`
   - [pricing](https://aistudio.google.com/docs/pricing.md) — semantic `665d980cd862011c605a98e29c13d48d6c6f0547bdbbabe195178a32c9674134`; reviewed content `a26a233c11b0048ab31ba37a500ad301d54c22cf0845b447f50bf10b3a175c27`
-  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `019167495bdcd15da760f215dbb4c37fa58b93ac5b733938544ed13f45d1080e`
+  - [reconciliation](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery) — semantic `e3b2895bda58878db2a9db2f5a3de62ab49f9af07399ef9c3591caa72680440e`; reviewed content `75e6c515044006456215b332d4592db15ccea8ce98ea5458aa418a360166b9d8`
 
 ## Cursor Admin API spending and usage events
 
@@ -194,8 +194,8 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - Tax, contract true-ups, credits and invoice payment settlement
   - Included-credit pools are plan context: a Copilot access organization has none, so discountAmount can be zero from the first credit
 - Official sources:
-  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `c6e469aa310c47a9a80d6287a9e1238c8abe32707f0093e14b87439c9ed2c8b8`
-  - [pricing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing) — semantic `14f47855c7926d2e38d31f306eb7285bc248cb1b5112bbe8b66428708f20c9af`; reviewed content `9521ba0fd031ef7cffc209d02da9f9b05654bfaa8ebe0f5d7e462afe514ee98f`
+  - [contract](https://docs.github.com/en/rest/billing/usage) — semantic `6a4e0c43b3cd6d412f6ca89c4d9a8b1c91699281a9d67610b365e4c490396a3c`; reviewed content `46eb30cba08cc1ea0b873166929dc6a450bd221f3407dc18ee977d57dddf98f9`
+  - [pricing](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing) — semantic `14f47855c7926d2e38d31f306eb7285bc248cb1b5112bbe8b66428708f20c9af`; reviewed content `c01e2e93e01f2be905c1f708e563796892f35f1ff6fa44d7cd99e502cb62c16c`
 
 ## Drift behavior
 
