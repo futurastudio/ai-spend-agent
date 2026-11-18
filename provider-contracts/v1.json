@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-11-06",
+  "reviewedAt": "2026-11-18",
   "defaultReviewCadenceDays": 14,
   "statusVocabulary": [
     "current",
@@ -56,8 +56,8 @@
             "OrganizationUsageCompletionsResult",
             "The numeric value of the cost"
           ],
-          "semanticSha256": "b653e28a1271dba1cdcb8f50e6bfd95d05b4d05b910b550d057b1a879673b0f4",
-          "contentSha256": "7dcbc78cc57efe3cb26c21e4f45ba4630aad803d317b6039099a1d2ad2b25b2e"
+          "semanticSha256": "1ab1ee83eccaceecab948dc98550c9113497fe161a7c0b60014f80a2aba5fbee",
+          "contentSha256": "113f4a38d5fec3f213286b5b19ec868df5fa61ea6feeeeb685a7f56e779c56d6"
         },
         {
           "kind": "pricing",
@@ -114,8 +114,8 @@
             "charged a 10% uplift for models released on or after March 5, 2026",
             "promotional pricing is available until November 30, 2026"
           ],
-          "semanticSha256": "3699c6a00c62cf35b7d7ca1716dd43a0262eacf26f920833236a5dd56c06b64d",
-          "contentSha256": "6968f154711d25807407e13ae0ff3cd5fcdd914798f785412a784e71a513f3ce"
+          "semanticSha256": "5b4b3a1a078110e473ce15b990b5329e4095ead7716ea1f3376ce01168f027fa",
+          "contentSha256": "69012bc8917d96c5402373aa5e16935c7eff7c5d4a1ce51a46d260304bb6d472"
         }
       ]
     },
@@ -169,8 +169,8 @@
             "reported as decimal strings in lowest units (cents)",
             "Priority Tier costs use a different billing model and are not included in the cost endpoint"
           ],
-          "semanticSha256": "e63c8cac8705feb389ba7335f010bb2aa99b73914ba8c2620228a40c14af6797",
-          "contentSha256": "e7f7f2ad1e11beaa4a8c64b45a561d506eb45d6ad5408c280f4fef41132cc6f9"
+          "semanticSha256": "6493d65a404cdef1674b16ff053617aea2779c038a4c741bd5929d7944275f7e",
+          "contentSha256": "ed5920d59eb530e5d0c346731aa6ae54f60f3ce58bc89ca42b5a35e9d4b4f039"
         },
         {
           "kind": "contract",
@@ -183,8 +183,8 @@
             "The Usage and Cost Analytics API is in beta",
             "Migrate from the Usage and Cost API"
           ],
-          "semanticSha256": "ac73794c732b77194f55d85be507329c7f8e816a1dfebb30825cbf9ba4859b30",
-          "contentSha256": "ff0ccb808ee291b7f5474ce26349f77b5677dae6da192dacb6b5e5d7bc39d808"
+          "semanticSha256": "637659924b54acf1e56760c2ecd45e5bf778a5003220626da40d093fbe2aaaaa",
+          "contentSha256": "49f20570a5f296f46948ad4d3ac45555fdc505397d75c0d8e1eca40b5fd0abf0"
         },
         {
           "kind": "contract-cost-report",
@@ -197,8 +197,8 @@
             "context_window",
             "token_type"
           ],
-          "semanticSha256": "cead7c2245d82f0b7f60a0dfe01390c412c6e09b360a288d89d6c159f13b4abd",
-          "contentSha256": "b02508af61aeaddeebdc50fa01e5835427ee25dae1630836b331e4b6af9b03d7"
+          "semanticSha256": "59cf8ba76a7f3d6a317273494fa6e81b9333bc642c44793fc26e754828ea6b02",
+          "contentSha256": "1d1226599d8373fc97b731eb11e703198dc9add7f52e6cc345b8a8a4ab271cb5"
         },
         {
           "kind": "contract-usage-messages",
@@ -212,8 +212,8 @@
             "cache_read_input_tokens",
             "uncached_input_tokens"
           ],
-          "semanticSha256": "6c718a86d49a55d881dc2e26d57775330e872e94913c450f17a006e8b61394a0",
-          "contentSha256": "c9753eaf5cc8c26920a95d457483ab82963fca745b4c500d8d54204540f36ae8"
+          "semanticSha256": "e9da35088f634b8a4e6bc8fd5c22105fe7b940e96c1cdb4216bdcaf765182e72",
+          "contentSha256": "038bbbedb3e836135d4f346104e8ec16d244e5ee8160f972eea7d195456e0d3c"
         },
         {
           "kind": "contract-claude-code",
@@ -229,8 +229,8 @@
             "tool_actions",
             "subscription_type"
           ],
-          "semanticSha256": "9806b7ee41ef3bfea69353fb3b9110189b0e488e5fd90814109599c0e9c50072",
-          "contentSha256": "dac9b35cc763e908b0423e3d0e87aedeec0260be8e487b9e9039b5f13ba31fe0"
+          "semanticSha256": "fe5bbe3201b1c86ba74fd3a1b32e183647241aa43777e6c8713dd3b585686028",
+          "contentSha256": "17412e4253a7fd4d6bf39311d42272e38c81f71fffd38698676e0e1a6d387859"
         },
         {
           "kind": "pricing",
@@ -243,9 +243,13 @@
             "Claude Mythos 5",
             "Claude Opus 5 $5 / MTok $25 / MTok $6.25 / MTok $10 / MTok $0.50 / MTok",
             "Claude Sonnet 5 $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.20 / MTok",
-            "Claude Fable 5.1 for demanding reasoning and long-horizon agentic work $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+            "Claude Fable 5.2 for demanding reasoning and long-horizon agentic work $8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok",
+            "Claude Mythos 5.2",
+            "$8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok Claude Fable 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+            "$10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok Claude Fable 5 $10 / MTok",
             "Claude Mythos 5.1",
-            "On Claude Fable 5.1 and Claude Mythos 5.1, a cache hit costs 2.5% of the standard input price ($0.25 USD per million tokens).",
+            "Claude Fable 5.2 and Claude Mythos 5.2 0.025x $0.20 USD",
+            "Claude Fable 5.1 and Claude Mythos 5.1 0.025x $0.25 USD",
             "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
             "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
             "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
@@ -254,8 +258,8 @@
             "Claude Haiku 4.5 $1 / MTok $5 / MTok $1.25 / MTok $2 / MTok $0.10 / MTok",
             "include the full 1M token context window at standard pricing"
           ],
-          "semanticSha256": "9fee3d1943df2f37ff877659fff7625fa20ef52ff37cd3846da182c760eff09e",
-          "contentSha256": "d85a2888918259e3f5c175984453251212bebc4bea94336ae62a3e094754c11c"
+          "semanticSha256": "b96de10a0c580631ceaa118a7bea72fe019b91ad73e26ad940227dbfd8fb5fcd",
+          "contentSha256": "9948a9cacc44cfd06885a0030d44ac824759748c3207c403582467106679d92f"
         }
       ]
     },
@@ -310,8 +314,8 @@
             "see zero counts rather than a null object",
             "Individual fields inside these objects can be null"
           ],
-          "semanticSha256": "aecb6a57a18c5c93b398958a74589e7b708b80bae6eb25ceb1027208c89b9d05",
-          "contentSha256": "20d098fc6f9afab16aa3c2b6d2f7f469b54f525ca30b9834258173130e53e7a9"
+          "semanticSha256": "5f2584e1efcc2a93ff97d3634524571dc694e7b0c71b6739d46eebbe456149f2",
+          "contentSha256": "8d856be9bea2e19c8078a4fc0af85ab7e519727e974d331bf0533dde63784d6c"
         }
       ]
     },
@@ -390,8 +394,8 @@
             "$2.00 through November 30, 2026",
             "$4.00 starting December 1, 2026"
           ],
-          "semanticSha256": "665d980cd862011c605a98e29c13d48d6c6f0547bdbbabe195178a32c9674134",
-          "contentSha256": "a26a233c11b0048ab31ba37a500ad301d54c22cf0845b447f50bf10b3a175c27"
+          "semanticSha256": "2b99befbf3b3288e7f3e333f368222c7b031e88d9d5c33cfb2a967ecd9cecb11",
+          "contentSha256": "a1ecb1dbe720878297b284410a8c372c643991e7be773fcaf06ac12230a72eed"
         },
         {
           "kind": "reconciliation",
@@ -448,8 +452,8 @@
             "chargedCents",
             "reconcile event-level costs"
           ],
-          "semanticSha256": "04d3bf84bc2e3c85d07003d4eaeb298186a2625b28069688d4e51e86d25d1c59",
-          "contentSha256": "831eb22c2dc583e1f28312c7050214603005ffbd3c041df92cbf0196b22ae829"
+          "semanticSha256": "233b242ccdb49fafc375cfdd958c7632f3368f1882d8af46a5d352dd7440ad97",
+          "contentSha256": "03b643dd1433fbe1401e60c7b107c5e16347c69b646c04197b0d7b727f9deb07"
         },
         {
           "kind": "pricing",
@@ -468,7 +472,7 @@
             "Opting in to regional data residency incurs a 10% uplift"
           ],
           "semanticSha256": "bc2e9bb767fd34f16b1876e811af4e644955705568d8193d38ebeb61864b0369",
-          "contentSha256": "b0973c96bcd848bbac86f2a99d2daab4823fd1d10b718974feee14c1ee659af6"
+          "contentSha256": "f408a3bac0d849ff4f8f2de9ac09c08719d40ed0a3699720bc48e10febafb4ab"
         }
       ]
     },
