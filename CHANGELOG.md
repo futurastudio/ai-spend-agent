@@ -86,6 +86,16 @@ published (see its section).
   are API-equivalent estimates of local usage; provider-reported cost and
   invoices are unaffected. `PRICING_TABLE_AS_OF` moves to 2026-11-13, with
   evidence in `provider-contracts/model-pricing-2026-11-13.json`.
+- Re-review the registered provider documentation pages, on 2026-11-18, and
+  pin their current content, so the exact-ref provider gate that a release tag
+  runs passes again. All nineteen pages were read against the copies reviewed
+  on 2026-11-06; eighteen had changed. The markers on Anthropic's pricing page
+  now name Claude Fable 5.2 and Claude Mythos 5.2, whose rates the entry above
+  prices. OpenAI's pricing page now lists `gpt-6.2-astra` and `gpt-6.2-sol`,
+  and Google's lists Gemini 4 Carbon, Hydrogen and Neon; usage on a model the
+  estimator has no rule for counts as missing, never as another model's price.
+  Nothing the CLI prices or reports changes with this entry. The review is
+  `docs/sources/provider-contract-review-2026-11-18.md`.
 
 ## 0.9.18 (published on npm, 2026-11-08)
 

@@ -342,16 +342,20 @@ test("every rate the Anthropic pricing page publishes for a priced model sits in
   const contracts = await readProviderContracts();
   const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "anthropic-platform")
     .resources.find((entry) => entry.kind === "pricing");
-  // The standard table as published on 2026-11-06, in page order. A rate no window covers is
-  // a real price change the checker would file as noise: Haiku 4.5 and Opus 4.5 were, until now.
+  // The standard table as published on 2026-11-18, in page order. A rate no window covers is
+  // a real price change the checker would file as noise: Haiku 4.5 and Opus 4.5 were, until
+  // 2026-11-06. Claude Fable 5.2 and Claude Mythos 5.2 joined the table on 2026-11-09 at their
+  // own rates, and Claude Fable 5.1 moved down to the additional models at the rates it had.
   const rows = [
-    "Claude Fable 5.1 for demanding reasoning and long-horizon agentic work $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
+    "Claude Fable 5.2 for demanding reasoning and long-horizon agentic work $8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok",
     "Claude Opus 5.5 for long-running agentic coding and knowledge work $4 / MTok $20 / MTok $5 / MTok $8 / MTok $0.20 / MTok",
     "Claude Sonnet 5.5 The best combination of speed and intelligence $2 / MTok $10 / MTok $2.50 / MTok $4 / MTok $0.10 / MTok",
     "Claude Haiku 5.5 for high-volume, latency-sensitive tasks such as classification, extraction, and routing",
     "$0.10 / MTok for prompts up to 100,000 tokens $0.50 / MTok $0.125 / MTok $0.20 / MTok $0.01 / MTok",
     "$0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok $0.625 / MTok $1 / MTok $0.05 / MTok",
     "Additional models",
+    "Claude Mythos 5.2 $8 / MTok $40 / MTok $10 / MTok $16 / MTok $0.20 / MTok",
+    "Claude Fable 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
     "Claude Mythos 5.1 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $0.25 / MTok",
     "Claude Fable 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
     "Claude Mythos 5 $10 / MTok $50 / MTok $12.50 / MTok $20 / MTok $1 / MTok",
