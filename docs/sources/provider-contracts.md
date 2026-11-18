@@ -78,7 +78,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - [contract-cost-report](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve) — semantic `59cf8ba76a7f3d6a317273494fa6e81b9333bc642c44793fc26e754828ea6b02`; reviewed content `1d1226599d8373fc97b731eb11e703198dc9add7f52e6cc345b8a8a4ab271cb5`
   - [contract-usage-messages](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_messages) — semantic `e9da35088f634b8a4e6bc8fd5c22105fe7b940e96c1cdb4216bdcaf765182e72`; reviewed content `038bbbedb3e836135d4f346104e8ec16d244e5ee8160f972eea7d195456e0d3c`
   - [contract-claude-code](https://platform.claude.com/docs/en/api/beta/organization/usage_report/retrieve_claude_code) — semantic `fe5bbe3201b1c86ba74fd3a1b32e183647241aa43777e6c8713dd3b585686028`; reviewed content `17412e4253a7fd4d6bf39311d42272e38c81f71fffd38698676e0e1a6d387859`
-  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `b96de10a0c580631ceaa118a7bea72fe019b91ad73e26ad940227dbfd8fb5fcd`; reviewed content `9948a9cacc44cfd06885a0030d44ac824759748c3207c403582467106679d92f`
+  - [pricing](https://platform.claude.com/docs/en/about-claude/pricing) — semantic `b96de10a0c580631ceaa118a7bea72fe019b91ad73e26ad940227dbfd8fb5fcd`; reviewed content `a4eb0871016888c90e66ade4179327ea86301fd7a80a51a09e411e62b081723d`
 
 ## Claude Enterprise Analytics
 

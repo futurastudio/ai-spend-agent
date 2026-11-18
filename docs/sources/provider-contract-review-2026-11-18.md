@@ -38,6 +38,10 @@ One claim the estimator depends on moved: Anthropic replaced Claude Fable 5.1 wi
 - [Cursor models and pricing](https://cursor.com/docs/models-and-pricing). The model table lists Claude Fable 5.2 ($8, $10, $0.2, $40) in place of Claude Fable 5.1, and adds Gemini 4 Carbon and Gemini 4 Hydrogen. Every reviewed plan and Cursor Token Rate marker is present.
 - The Cloud Billing export page changed its "Last updated" date and one navigation entry. The GitHub REST billing and Copilot billing pages changed only in navigation.
 
+## Later the same evening
+
+At about 21:40 UTC Anthropic reworded three passages of its pricing page, after the review above was pinned. The data-residency paragraph now lists, platform by platform, where the 1.1x multiplier applies, with the same platforms and the same multiplier as before. The web search price is still "$10 USD per 1,000 searches", in a reworded sentence. The Claude Managed Agents section adds that Claude Models on Google Cloud (Anthropic managed) also bills usage in Claude consumption units. No rate, marker or semantic fingerprint moved, and the estimator applies neither the multiplier nor the web search charge. The page's content fingerprint is re-pinned to the reworded copy.
+
 ## Re-pin
 
 Eighteen pages are re-pinned from fetches on November 18, each equal to the copy that was read. Six of them changed only in navigation and were re-pinned under the standing OK for content-only moves; the other twelve moved a marker window or a figure. `reviewedAt` is 2026-11-18. The Anthropic pricing page is the only one whose markers changed.
