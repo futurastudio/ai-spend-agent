@@ -7,7 +7,7 @@
  * matched top-down; first match wins. Unknown models return undefined so
  * callers can label the record "missing" instead of inventing a number.
  */
-export const PRICING_TABLE_AS_OF = "2026-11-13";
+export const PRICING_TABLE_AS_OF = "2026-11-18";
 
 export type TokenUsage = {
   /** Billable, uncached input tokens. */
@@ -71,18 +71,26 @@ const pricingRules: PricingRule[] = [
   { match: /^claude-(?:fable|mythos)-5-2(?:-\d{8})?$/i, inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.2 },
   // Reviewed 2026-09-20: platform.claude.com/docs/en/about-claude/pricing.
   // Fable/Mythos 5.1 keep base/write rates; cache reads are $0.25 per MTok.
-  { match: /^claude-(?:fable|mythos)-5-1$/i, inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25 },
-  { match: /^claude-fable-5/i, inputPerM: 10, outputPerM: 50 },
-  { match: /^claude-mythos-5/i, inputPerM: 10, outputPerM: 50 },
+  { match: /^claude-(?:fable|mythos)-5-1(?:-\d{8})?$/i, inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25 },
+  // Reviewed 2026-11-15, and re-read 2026-11-18, against every row of the model table on
+  // platform.claude.com/docs/en/about-claude/pricing. Retained evidence:
+  // provider-contracts/model-pricing-2026-11-15.json. Each Claude rule names the
+  // versions it prices and takes at most a dated snapshot after them. Until this
+  // review seven of them were prefixes, so a later version took its family's older
+  // rates without a word: that is how Claude Fable 5.2 was priced at the Claude
+  // Fable 5 rates for four days. A version no rule names now counts as missing.
+  { match: /^claude-(?:fable|mythos)-5(?:-\d{8})?$/i, inputPerM: 10, outputPerM: 50 },
   // Reviewed 2026-10-06: platform.claude.com/docs/en/about-claude/pricing.
   // Opus 5.5 has lower base/write rates and a 5% cache-read rate.
-  { match: /^claude-opus-5-5$/i, inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 },
-  { match: /^claude-opus-5/i, inputPerM: 5, outputPerM: 25 },
+  // A dated snapshot is the same model: until the 2026-11-15 review "claude-opus-5-5-<date>" missed
+  // this rule and took the Claude Opus 5 rates below.
+  { match: /^claude-opus-5-5(?:-\d{8})?$/i, inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 },
+  { match: /^claude-opus-5(?:-\d{8})?$/i, inputPerM: 5, outputPerM: 25 },
   // Reviewed 2026-10-08: https://platform.claude.com/docs/en/about-claude/pricing.
   // Retained evidence: provider-contracts/model-pricing-2026-10-08.json.
   // Sonnet 5.5 keeps base/write rates; exact and dated IDs use 5% cache reads.
   { match: /^claude-sonnet-5-5(?:-\d{8})?$/i, inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1 },
-  { match: /^claude-sonnet-5/i, inputPerM: 2, outputPerM: 10 },
+  { match: /^claude-sonnet-5(?:-\d{8})?$/i, inputPerM: 2, outputPerM: 10 },
   // Reviewed 2026-10-18: https://platform.claude.com/docs/en/about-claude/pricing.
   // Retained evidence: provider-contracts/model-pricing-2026-10-18.json.
   // Haiku 5.5 is priced per request by prompt length: a prompt over 100,000
@@ -98,12 +106,14 @@ const pricingRules: PricingRule[] = [
       cacheReadPerM: 0.05, cacheWrite5mPerM: 0.625, cacheWrite1hPerM: 1
     }
   },
-  { match: /^claude-opus-4-[5-9]/i, inputPerM: 5, outputPerM: 25 },
+  // Claude Opus 4.5 to 4.8, the four the page prints at these rates.
+  { match: /^claude-opus-4-(?:5|6|7|8)(?:-\d{8})?$/i, inputPerM: 5, outputPerM: 25 },
   // Exact and dated IDs of Opus 4 and 4.1: the deprecations page lists claude-opus-4-20250514
   // and claude-opus-4-1-20250805. Both models are retired; older transcripts still carry them.
   { match: /^claude-opus-4(-[01])?(-\d{8})?$/i, inputPerM: 15, outputPerM: 75 },
-  { match: /^claude-sonnet-4/i, inputPerM: 3, outputPerM: 15 },
-  { match: /^claude-haiku-4/i, inputPerM: 1, outputPerM: 5 },
+  // Claude Sonnet 4, 4.5 and 4.6 (and the "4-0" alias), and Claude Haiku 4.5.
+  { match: /^claude-sonnet-4-(?:0|5|6)(?:-\d{8})?$|^claude-sonnet-4(?:-\d{8})?$/i, inputPerM: 3, outputPerM: 15 },
+  { match: /^claude-haiku-4-5(?:-\d{8})?$/i, inputPerM: 1, outputPerM: 5 },
   { match: /^claude-3-7-sonnet|^claude-3-5-sonnet/i, inputPerM: 3, outputPerM: 15 },
   { match: /^claude-3-5-haiku/i, inputPerM: 0.8, outputPerM: 4 },
   // Standard API-equivalent prices reviewed 2026-10-07. Evidence and scope:
@@ -148,6 +158,29 @@ const pricingRules: PricingRule[] = [
     abovePromptTokens: {
       threshold: 272_000,
       inputPerM: 0.2, outputPerM: 0.75, cacheReadPerM: 0.02
+    }
+  },
+  // Reviewed 2026-11-18: developers.openai.com/api/docs/pricing.md and each model's
+  // page. Retained evidence: provider-contracts/model-pricing-2026-11-18.json.
+  // OpenAI added GPT-6.2 Astra and GPT-6.2 Sol to the standard table on 2026-11-17;
+  // until this review both counted as missing. Each page lists one model ID and no
+  // snapshot. "For requests with more than 272K input tokens, input and cache rates
+  // double and output costs 1.5 times the short-context rate for the full request."
+  // Ultrafast (3x, then 6x from 2027-03-01), Batch and fast mode are not applied.
+  {
+    match: /^gpt-6\.2-astra$/i,
+    inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.4,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 16, outputPerM: 60, cacheReadPerM: 0.8
+    }
+  },
+  {
+    match: /^gpt-6\.2-sol$/i,
+    inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.1,
+    abovePromptTokens: {
+      threshold: 272_000,
+      inputPerM: 4, outputPerM: 15, cacheReadPerM: 0.2
     }
   },
   // OpenAI (newer and more specific families must precede the GPT-5 fallback).
@@ -295,7 +328,9 @@ const pricingRules: PricingRule[] = [
   // Before the gpt-5.2 prefix below, which priced this model and its dated snapshot
   // at 1/12 of the published rates until the 2026-11-07 review.
   { match: /^gpt-5\.2-pro(?:-|$)/i, inputPerM: 21, outputPerM: 168, cacheReadPerM: null },
-  { match: /^gpt-5\.2(?:-codex)?/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
+  // The four IDs OpenAI's docs name at these rates, and a dated snapshot (reviewed 2026-11-15).
+  // As a prefix this rule also priced gpt-5.2-codex-max and gpt-5.2-codex-mini, which no page lists.
+  { match: /^gpt-5\.2(?:-codex|-chat-latest|-\d{4}-\d{2}-\d{2})?$/i, inputPerM: 1.75, outputPerM: 14, cacheReadPerM: 0.175 },
   { match: /^gpt-5\.1$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
   // developers.openai.com/api/docs/models/gpt-5.1-codex-mini, reviewed 2026-11-07. A prefix
   // on the rule below priced this model at 5x its published rates until that review.
@@ -303,7 +338,9 @@ const pricingRules: PricingRule[] = [
   // The IDs OpenAI prices at these rates, and no others: gpt-5-codex-mini is named on the
   // deprecations page and no page prints a rate for it, so it counts as missing.
   { match: /^gpt-5-codex$|^gpt-5\.1-codex(?:-max)?$/i, inputPerM: 1.25, outputPerM: 10, cacheReadPerM: 0.125 },
-  { match: /^gpt-5(?:\.1)?-mini/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
+  // gpt-5-mini and its dated snapshot. The rule used to take gpt-5.1-mini as well, an ID no OpenAI
+  // page lists (reviewed 2026-11-15); it counts as missing now.
+  { match: /^gpt-5-mini(?:-\d{4}-\d{2}-\d{2})?$/i, inputPerM: 0.25, outputPerM: 2, cacheReadPerM: 0.025 },
   // developers.openai.com/api/docs/models/gpt-5-nano, 2026-08-25. Before 0.9.6
   // this fell through to the ^gpt-5 fallback and billed at $1.25/$10 — 25x the
   // real rate in both directions. No published long-context tier.
@@ -346,6 +383,26 @@ const pricingRules: PricingRule[] = [
     cacheReadPerM: 0.1,
     scheduledRates: [{ from: "2026-12-01", inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 }]
   },
+  // Reviewed 2026-11-18: https://aistudio.google.com/docs/pricing.md. Retained
+  // evidence: provider-contracts/model-pricing-2026-11-18.json. Gemini 4 Neon joined
+  // the page on 2026-11-18, the day Google released it: paid tier only, one input
+  // rate for every modality, no prompt-size tier and no dated change; caching is
+  // implicit only.
+  { match: /^gemini-4-neon$/i, inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.15 },
+  // Reviewed 2026-11-15 and re-read 2026-11-18: https://aistudio.google.com/docs/pricing.md.
+  // Retained evidence: provider-contracts/model-pricing-2026-11-15.json. Gemini 4
+  // Carbon (released 2026-11-10) and Gemini 4 Hydrogen (2026-11-12) counted as
+  // missing. Carbon is paid-tier only and prints the same rates as Argon, with
+  // the same doubling from 2026-12-01. Hydrogen prints one flat rate. Both have
+  // one input rate for every modality and implicit caching only, as Argon does.
+  {
+    match: /^gemini-4-carbon$/i,
+    inputPerM: 2,
+    outputPerM: 10,
+    cacheReadPerM: 0.1,
+    scheduledRates: [{ from: "2026-12-01", inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2 }]
+  },
+  { match: /^gemini-4-hydrogen$/i, inputPerM: 1.5, outputPerM: 7.5, cacheReadPerM: 0.075 },
   // Reviewed 2026-11-04: https://aistudio.google.com/docs/pricing.md (the Gemini
   // Developer API docs moved there from ai.google.dev). Retained evidence:
   // provider-contracts/model-pricing-2026-11-04.json. Gemini 2.5 Pro is
@@ -375,25 +432,69 @@ const pricingRules: PricingRule[] = [
   // Until modality is explicit, returning undefined is safer than silently
   // applying the text/image/video rate to a potentially multimodal request.
   // DeepSeek (official API list prices)
-  { match: /^deepseek-chat|^deepseek-v3/i, inputPerM: 0.27, outputPerM: 1.1 },
-  { match: /^deepseek-reasoner|^deepseek-r1/i, inputPerM: 0.55, outputPerM: 2.19 },
+  // Exact IDs since the 2026-11-15 review. DeepSeek's pricing page lists only its V4 models now
+  // (unpriced below: their rates change by time of day), so these rates cannot be re-read; they stay
+  // for older transcripts, and no later version can take them.
+  { match: /^deepseek-chat$|^deepseek-v3$/i, inputPerM: 0.27, outputPerM: 1.1 },
+  { match: /^deepseek-reasoner$|^deepseek-r1$/i, inputPerM: 0.55, outputPerM: 2.19 },
   // Moonshot / Kimi (official list prices, platform.kimi.ai/docs/pricing/*,
   // fetched 2026-08-25; cache-hit input is a distinct published rate). Order
   // matters: k2.7-code-highspeed before its k2.7-code prefix, dot families
   // before the legacy K2 rule.
-  // ^kimi-k3 also covers the Anthropic-style "kimi-k3[1m]" context suffix.
-  { match: /^kimi-k3/i, inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3 },
-  { match: /^kimi-k2\.7-code-highspeed/i, inputPerM: 1.9, outputPerM: 8, cacheReadPerM: 0.38 },
-  { match: /^kimi-k2\.7-code/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.19 },
-  { match: /^kimi-k2\.6/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.16 },
+  // Reviewed 2026-11-15 and re-read 2026-11-18: platform.kimi.ai/docs/pricing/chat.
+  // Retained evidence: provider-contracts/model-pricing-2026-11-15.json. Kimi
+  // publishes no release date for K3.1 Pro; the page lists
+  // kimi-k3.1-pro and kimi-k3.1-pro-highspeed, which the `^kimi-k3` prefix priced
+  // at K3's rates: 50% too high for the first, 25% too low for the second. It
+  // also prints cache writes for the K3 series at 1x input for 5 minutes and 2x
+  // for 1 hour, where this table's default charged 1.25x for 5 minutes. Exact IDs
+  // only. The Anthropic-style "kimi-k3[1m]" suffix is taken off before a rule is
+  // looked up (see findPricingRule): every K3 model has one 1,048,576-token window.
+  { match: /^kimi-k3\.1-pro-highspeed$/i, inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheWrite5mPerM: 4, cacheWrite1hPerM: 8 },
+  { match: /^kimi-k3\.1-pro$/i, inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheWrite5mPerM: 2, cacheWrite1hPerM: 4 },
+  { match: /^kimi-k3$/i, inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3, cacheWrite1hPerM: 6 },
+  { match: /^kimi-k2\.7-code-highspeed$/i, inputPerM: 1.9, outputPerM: 8, cacheReadPerM: 0.38 },
+  { match: /^kimi-k2\.7-code$/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.19 },
+  { match: /^kimi-k2\.6$/i, inputPerM: 0.95, outputPerM: 4, cacheReadPerM: 0.16 },
   // Legacy K2 (kimi-k2, kimi-k2-*) and moonshot-v1-* (sunset 2026-08-31 —
   // still prices past transcripts). Deliberately does NOT match the dot
   // families above: 0.9.3's `^kimi-k2` prefix silently priced kimi-k2.7-code
   // at these old K2 rates (~$0.60/$2.50 vs the real $0.95/$4.00).
   { match: /^kimi-k2(?:$|-)|^moonshot/i, inputPerM: 0.6, outputPerM: 2.5 },
-  // xAI / Grok (official API list prices)
-  { match: /^grok-4|^grok-3$/i, inputPerM: 3, outputPerM: 15 },
-  { match: /^grok-3-mini/i, inputPerM: 0.3, outputPerM: 0.5 },
+  // xAI / Grok. Reviewed 2026-11-15 and re-read 2026-11-18: docs.x.ai/developers/models
+  // ("Text API pricing"). Retained evidence: provider-contracts/model-pricing-2026-11-15.json.
+  // xAI's release notes date Grok 4.20 to March 2026, Grok Build 0.1 to May, Grok 4.5
+  // to July, Grok 4.6 to August and Grok 4.7 to September, each at these rates.
+  // A `^grok-4` prefix priced every Grok 4.x model at $3 / $15, the rates of a
+  // model the page no longer lists: 50% too high on input and 2.5 times on output
+  // for Grok 4.5 to 4.7, and 2.4 and 6 times for Grok 4.3 and the 4.20 models.
+  // xAI bills the whole request at the long-context rates once its prompt
+  // "reaches" 200k tokens, so the tier here starts above 199,999. Cached input is
+  // a published rate on every row. Exact IDs only.
+  {
+    match: /^grok-4\.(?:6|7)$/i,
+    inputPerM: 2, outputPerM: 6, cacheReadPerM: 0.5,
+    abovePromptTokens: { threshold: 199_999, inputPerM: 4, outputPerM: 12, cacheReadPerM: 1 }
+  },
+  {
+    match: /^grok-4\.5$/i,
+    inputPerM: 2, outputPerM: 6, cacheReadPerM: 0.3,
+    abovePromptTokens: { threshold: 199_999, inputPerM: 4, outputPerM: 12, cacheReadPerM: 0.6 }
+  },
+  {
+    match: /^grok-4\.3$|^grok-4\.20-0309-(?:reasoning|non-reasoning)$|^grok-4\.20-multi-agent-0309$/i,
+    inputPerM: 1.25, outputPerM: 2.5, cacheReadPerM: 0.2,
+    abovePromptTokens: { threshold: 199_999, inputPerM: 2.5, outputPerM: 5, cacheReadPerM: 0.4 }
+  },
+  {
+    match: /^grok-build-0\.1$/i,
+    inputPerM: 1, outputPerM: 2, cacheReadPerM: 0.2,
+    abovePromptTokens: { threshold: 199_999, inputPerM: 2, outputPerM: 4, cacheReadPerM: 0.4 }
+  },
+  // grok-4, grok-3 and grok-3-mini are no longer on xAI's page. Their last
+  // published rates stay for older transcripts, under exact IDs.
+  { match: /^grok-4$|^grok-3$/i, inputPerM: 3, outputPerM: 15 },
+  { match: /^grok-3-mini$/i, inputPerM: 0.3, outputPerM: 0.5 },
   // Open-weight models with NO canonical price (llama, qwen, mistral, glm):
   // hosting rates vary several-fold by provider, so we deliberately return
   // undefined -> costConfidence "missing" instead of inventing a number.
@@ -423,7 +524,13 @@ const pricingRules: PricingRule[] = [
 ];
 
 export function findPricingRule(model: string): PricingRule | undefined {
-  return pricingRules.find((rule) => rule.match.test(model));
+  // Claude Code writes a model picked with a 1M-token context as "<id>[1m]", and an
+  // Anthropic-compatible endpoint echoes that string back into the transcript. It
+  // selects a context window, not another model, so the ID before it is what is
+  // priced. Without this an exact rule did not match "claude-opus-5-5[1m]" and a
+  // family prefix priced it at an older version's rates.
+  const id = model.replace(/\[1m\]$/i, "");
+  return pricingRules.find((rule) => rule.match.test(id));
 }
 
 /**

@@ -9,6 +9,162 @@ const geminiEvidence = JSON.parse(readFileSync(new URL("../../../provider-contra
 const solEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-06.json", import.meta.url), "utf8"));
 const standardTablesEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-07.json", import.meta.url), "utf8"));
 const fableEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-13.json", import.meta.url), "utf8"));
+const newModelsEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-18.json", import.meta.url), "utf8"));
+const rowsEvidence = JSON.parse(readFileSync(new URL("../../../provider-contracts/model-pricing-2026-11-15.json", import.meta.url), "utf8"));
+
+describe("2026-11-18 reviewed GPT-6.2 Astra, GPT-6.2 Sol and Gemini 4 Neon prices", () => {
+  type Row = {
+    id: string; quote: string; input: number; output: number; cacheRead: number;
+    abovePromptTokens?: number; aboveInput?: number; aboveOutput?: number; aboveCacheRead?: number;
+  };
+  const rows = newModelsEvidence.models as Row[];
+  const reviewed = newModelsEvidence.retrievedAt as string;
+  // One million tokens of one component, with the request tier fixed by the given prompt.
+  const price = (model: string, component: Partial<TokenUsage>, tierPromptTokens: number) =>
+    estimateTokenCostsUsd(model, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], reviewed);
+
+  it("is the review date of the price table", () => {
+    expect(PRICING_TABLE_AS_OF).toBe(reviewed);
+  });
+
+  it("records the three IDs once, each with the line that prices it, and hashes every page it cites", () => {
+    expect(rows.map((row) => row.id)).toEqual(["gpt-6.2-astra", "gpt-6.2-sol", "gemini-4-neon"]);
+    for (const row of rows) {
+      for (const rate of [row.input, row.output, row.cacheRead]) expect(row.quote, `${row.id} ${rate}`).toContain(`$${rate.toFixed(2)}`);
+    }
+    for (const url of newModelsEvidence.sources as string[]) {
+      expect(newModelsEvidence.pageNormalizedSha256[url], url).toMatch(/^[a-f0-9]{64}$/);
+    }
+  });
+
+  it.each(rows.map((row) => [row.id, row as Row & { effectiveFrom: string; effectiveFromSource: string }] as const))(
+    "%s is dated from its provider's changelog and priced at these rates from that day",
+    (model, row) => {
+      expect(row.effectiveFrom <= reviewed, row.effectiveFrom).toBe(true);
+      expect(row.effectiveFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(newModelsEvidence.sources).toContain(row.effectiveFromSource);
+      const onTheDay = estimateTokenCostsUsd(model, [{ inputTokens: 1_000_000, outputTokens: 0 }], [1], row.effectiveFrom);
+      expect(onTheDay).toBe(row.input);
+    }
+  );
+
+  it.each(rows.map((row): [string, Row] => [row.id, row]))("%s matches the retained rates on both sides of any tier", (model, row) => {
+    const threshold = row.abovePromptTokens;
+    expect(promptTierThreshold(model, reviewed)).toBe(threshold);
+    const base = threshold ?? 1_000_000;
+    expect(price(model, { inputTokens: 1_000_000 }, base)).toBe(row.input);
+    expect(price(model, { outputTokens: 1_000_000 }, base)).toBe(row.output);
+    expect(price(model, { cacheReadTokens: 1_000_000 }, base)).toBe(row.cacheRead);
+    // No dated change: usage with no date is priced too (100K input tokens stay below any tier).
+    expect(estimateTokenCostUsd(model, { inputTokens: 100_000, outputTokens: 0 })).toBeCloseTo(row.input / 10, 4);
+    if (threshold === undefined) return;
+    expect(price(model, { inputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveInput);
+    expect(price(model, { outputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveOutput);
+    expect(price(model, { cacheReadTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveCacheRead);
+  });
+
+  it.each(["gpt-6.2-astra-law", "gpt-6.2-terra", "gpt-6.2-astra-2026-11-17", "gpt-6.3-sol", "gemini-4-neon-preview", "gemini-4.1-neon"])(
+    "%s, which no page prices at these rates, stays unpriced",
+    (model) => {
+      expect(findPricingRule(model)).toBeUndefined();
+    }
+  );
+});
+
+describe("2026-11-15 reviewed rows, re-verified 2026-11-18: models that a rule priced without naming them, and models that were missing", () => {
+  type Row = {
+    id: string; quote: string; input: number; output: number; cacheRead: number; cacheWrite5m?: number; cacheWrite1h?: number;
+    abovePromptTokens?: number; aboveInput?: number; aboveOutput?: number; aboveCacheRead?: number;
+    scheduledRates?: { from: string; input: number; output: number; cacheRead: number }[];
+    pricedBefore?: { rule: string; input: number; output: number; cacheRead: number };
+  };
+  const rows = rowsEvidence.models as Row[];
+  const claudeRows = rowsEvidence.anthropicModelTable as Row[];
+  const notPriced = rowsEvidence.notPricedOnPurpose as { id: string; why: string }[];
+  const reviewed = rowsEvidence.retrievedAt as string;
+  // One million tokens of one component, with the request tier fixed by the given prompt, on the given day.
+  const price = (model: string, component: Partial<TokenUsage>, tierPromptTokens = 1, day = reviewed) =>
+    estimateTokenCostsUsd(model, [{ inputTokens: 0, outputTokens: 0, ...component }], [tierPromptTokens], day);
+
+  it("was read again from the providers' pages on 2026-11-18, and dates every row or says why it cannot", () => {
+    const again = rowsEvidence.reverified as { at: string; pageNormalizedSha256: Record<string, string> };
+    expect(again.at.startsWith("2026-11-18")).toBe(true);
+    for (const [url, hash] of Object.entries(again.pageNormalizedSha256)) expect(hash, url).toMatch(/^[a-f0-9]{64}$/);
+    for (const row of rows as (Row & { effectiveFrom: string | null; effectiveFromSource?: string; effectiveFromNote?: string })[]) {
+      if (row.effectiveFrom === null) {
+        expect(row.effectiveFromNote, row.id).toMatch(/\S/);
+        continue;
+      }
+      // A date, or a month where the provider's notes give only the month.
+      expect(row.effectiveFrom, row.id).toMatch(/^\d{4}-\d{2}(?:-\d{2})?$/);
+      expect(row.effectiveFrom <= "2026-11-15", row.id).toBe(true);
+      expect(rowsEvidence.sources, row.id).toContain(row.effectiveFromSource);
+    }
+  });
+
+  it("names a row once, quotes its rates from the page and hashes every page it cites", () => {
+    const ids = [...rows, ...claudeRows].map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const row of rows) {
+      for (const rate of [row.input, row.output, row.cacheRead]) expect(row.quote, `${row.id} $${rate}`).toMatch(new RegExp(`\\$${String(rate).replace(".", "\\.")}0*(?![0-9])`));
+    }
+    for (const row of claudeRows) expect(row.quote, row.id).toContain(`$${row.input} / MTok $${row.output} / MTok`);
+    for (const url of rowsEvidence.sources as string[]) expect(rowsEvidence.pageNormalizedSha256[url], url).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each(rows.map((row): [string, Row] => [row.id, row]))("%s matches its quoted line, on both sides of any prompt tier and any dated change", (model, row) => {
+    const threshold = row.abovePromptTokens;
+    expect(promptTierThreshold(model, reviewed)).toBe(threshold);
+    const base = threshold ?? 1;
+    expect(price(model, { inputTokens: 1_000_000 }, base)).toBe(row.input);
+    expect(price(model, { outputTokens: 1_000_000 }, base)).toBe(row.output);
+    expect(price(model, { cacheReadTokens: 1_000_000 }, base)).toBe(row.cacheRead);
+    if (row.cacheWrite5m !== undefined) expect(price(model, { cacheWrite5mTokens: 1_000_000 }, base)).toBe(row.cacheWrite5m);
+    if (row.cacheWrite1h !== undefined) expect(price(model, { cacheWrite1hTokens: 1_000_000 }, base)).toBe(row.cacheWrite1h);
+    if (threshold !== undefined) {
+      // xAI bills the long-context rates once a prompt reaches 200,000 tokens: one token past 199,999.
+      expect(price(model, { inputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveInput);
+      expect(price(model, { outputTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveOutput);
+      expect(price(model, { cacheReadTokens: 1_000_000 }, threshold + 1)).toBe(row.aboveCacheRead);
+    }
+    for (const change of row.scheduledRates ?? []) {
+      const dayBefore = new Date(Date.parse(`${change.from}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+      expect(price(model, { inputTokens: 1_000_000 }, base, dayBefore)).toBe(row.input);
+      expect(price(model, { inputTokens: 1_000_000 }, base, change.from)).toBe(change.input);
+      expect(price(model, { outputTokens: 1_000_000 }, base, change.from)).toBe(change.output);
+      expect(price(model, { cacheReadTokens: 1_000_000 }, base, change.from)).toBe(change.cacheRead);
+      // A rule with a dated change never prices usage that carries no date.
+      expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 0 })).toBeUndefined();
+    }
+  });
+
+  it("no longer prices these models at the rates of the rule that used to reach them", () => {
+    const grokBefore = rowsEvidence.grokPricedBefore as { input: number; output: number };
+    for (const row of rows.filter((entry) => entry.id.startsWith("grok-4."))) {
+      expect(price(row.id, { inputTokens: 1_000_000 }), row.id).toBeLessThan(grokBefore.input);
+      expect(price(row.id, { outputTokens: 1_000_000 }), row.id).toBeLessThan(grokBefore.output);
+    }
+    for (const row of rows.filter((entry) => entry.pricedBefore && entry.id !== "kimi-k3")) {
+      expect(price(row.id, { inputTokens: 1_000_000 }), row.id).not.toBe(row.pricedBefore!.input);
+      expect(findPricingRule(row.id)).not.toBe(findPricingRule("kimi-k3"));
+    }
+    // Kimi K3 keeps its base rates; its 5-minute cache write is the published 1x input, not this table's 1.25x default.
+    expect(price("kimi-k3", { cacheWrite5mTokens: 1_000_000 })).toBe(3);
+  });
+
+  it.each(claudeRows.map((row): [string, Row] => [row.id, row]))("%s costs what Anthropic's model table prints for it", (model, row) => {
+    expect(price(model, { inputTokens: 1_000_000 })).toBe(row.input);
+    expect(price(model, { outputTokens: 1_000_000 })).toBe(row.output);
+    expect(price(model, { cacheReadTokens: 1_000_000 })).toBe(row.cacheRead);
+    expect(price(model, { cacheWrite5mTokens: 1_000_000 })).toBe(row.cacheWrite5m);
+    expect(price(model, { cacheWrite1hTokens: 1_000_000 })).toBe(row.cacheWrite1h);
+  });
+
+  it.each(notPriced.map((row): [string, string] => [row.id, row.why]))("%s counts as missing: %s", (model) => {
+    expect(findPricingRule(model)).toBeUndefined();
+    expect(estimateTokenCostUsd(model, { inputTokens: 1_000, outputTokens: 1_000 }, reviewed)).toBeUndefined();
+  });
+});
 
 describe("2026-11-13 reviewed Claude Fable 5.2 and Claude Mythos 5.2 prices", () => {
   type Row = { id: string; quote: string; input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number };
@@ -24,10 +180,6 @@ describe("2026-11-13 reviewed Claude Fable 5.2 and Claude Mythos 5.2 prices", ()
     expect(price(model, { cacheWrite5mTokens: 1_000_000 })).toBe(row.cacheWrite5m);
     expect(price(model, { cacheWrite1hTokens: 1_000_000 })).toBe(row.cacheWrite1h);
   };
-
-  it("is the review date of the price table", () => {
-    expect(PRICING_TABLE_AS_OF).toBe(fableEvidence.retrievedAt);
-  });
 
   it("records the two IDs Anthropic released on 2026-11-09, each with the line that prices it", () => {
     expect(added.map((row) => row.id)).toEqual(["claude-fable-5-2", "claude-mythos-5-2"]);
@@ -386,7 +538,7 @@ describe("0.9.12 reviewed standard-price fixtures", () => {
     expect(canPriceTokenUsageAtScope(model, { inputTokens: 400_000, outputTokens: 40_000 }, "aggregate")).toBe(false);
     expect(estimateTokenCostUsd(model, { inputTokens: 300_000, outputTokens: 20_000 })).toBe(aggregate);
   });
-  it.each(["gpt-6-preview", "gpt-6-astra-future", "gpt-6.2-sol", "codex-auto-review"])("%s has no invented price", model => {
+  it.each(["gpt-6-preview", "gpt-6-astra-future", "gpt-6.3-sol", "codex-auto-review"])("%s has no invented price", model => {
     expect(estimateTokenCostUsd(model, { inputTokens: 1_000_000, outputTokens: 1_000_000 })).toBeUndefined();
   });
 });

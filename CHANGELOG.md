@@ -6,6 +6,51 @@ release tags identify the Git source for tagged npm releases; 0.5.6 is the
 historical untagged exception, and `v0.9.16` is a tag that was never
 published (see its section).
 
+## 0.9.20 (unreleased)
+
+- Price GPT-6.2 Astra (`gpt-6.2-astra`: $8 input, $40 output, $0.40 cached
+  input per million tokens; $16, $60 and $0.80 for prompts over 272,000 tokens),
+  GPT-6.2 Sol (`gpt-6.2-sol`: $2, $10 and $0.10; $4, $15 and $0.20 over 272,000
+  tokens) and Gemini 4 Neon (`gemini-4-neon`: $3, $15 and $0.15), which their
+  providers' pricing pages listed by 2026-11-18. Usage on them used to count as
+  missing. Batch, fast mode and ultrafast prices are not applied, as before.
+  `PRICING_TABLE_AS_OF` moves to 2026-11-18, with evidence in
+  `provider-contracts/model-pricing-2026-11-18.json`.
+- Like Claude Fable 5.2 before 0.9.19, three more models were priced through a
+  rule that did not name them, each at an older model's rates:
+  - **Grok 4.x.** A `grok-4` prefix charged $3 input and $15 output per million
+    tokens for every Grok 4 model. xAI prints $2 and $6 for `grok-4.5`,
+    `grok-4.6` and `grok-4.7` and $1.25 and $2.50 for `grok-4.3` and the
+    `grok-4.20` models, each doubling once a prompt reaches 200k tokens, with
+    cached input at its own rate. `grok-build-0.1`, which counted as missing, is
+    priced at $1 and $2.
+  - **Kimi K3.1.** A `kimi-k3` prefix charged K3's $3 and $15 for
+    `kimi-k3.1-pro` (published at $2 and $10) and `kimi-k3.1-pro-highspeed`
+    (published at $4 and $20). Cache writes on the K3 series now use the
+    published 1x input for 5 minutes and 2x for 1 hour; 5-minute writes on
+    `kimi-k3` were charged 1.25x.
+  - **`gpt-5.1-mini`, `gpt-5.2-codex-max`, `gpt-5.2-codex-mini`.** No OpenAI page
+    lists these IDs, and two rules priced them anyway. They count as missing.
+- Price Gemini 4 Carbon (`gemini-4-carbon`: $2 input, $10 output, $0.10 cached,
+  doubling from 2026-12-01 as Gemini 4 Argon does) and Gemini 4 Hydrogen
+  (`gemini-4-hydrogen`: $1.50, $7.50, $0.075). Both counted as missing.
+- **A model version no rule names now counts as missing instead of taking its
+  family's older price.** Every Claude rule names the versions it prices (with a
+  dated snapshot), as the GPT rules already did; the Kimi, Grok and DeepSeek
+  rules name exact IDs. `claude-fable-5-3` or `claude-opus-5-6`, when they exist,
+  will show as missing until a review prices them. A missing price is visible; a
+  wrong one is not. A new test builds the next versions of every priced model
+  and fails if any rule prices one.
+- A model ID that ends in the `[1m]` context suffix is priced as the model before
+  the suffix, and a dated snapshot as the model it is a snapshot of.
+  `claude-opus-5-5[1m]` and `claude-opus-5-5-<date>` used to miss the Claude Opus
+  5.5 rule and take the Claude Opus 5 rates, 25% higher.
+- These are API-equivalent estimates of local usage; provider-reported cost and
+  invoices are unaffected. The rows above were read on 2026-11-15 and read
+  again on 2026-11-18, with evidence in
+  `provider-contracts/model-pricing-2026-11-15.json`; each carries the release
+  date its provider gives, or says that none is published.
+
 ## 0.9.19 (published on npm, 2026-11-18)
 
 - **First push right after pairing.** Finishing `workspace connect <response-bundle>`
