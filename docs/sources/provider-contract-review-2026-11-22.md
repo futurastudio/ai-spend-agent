@@ -2,7 +2,7 @@
 
 The scheduled provider contract monitor holds eight open issues: #159 to #161 for three Anthropic reference pages, #168 to #171 for four OpenAI pages, and the digest #152. All nineteen registered pages were re-read on November 22 against the copies reviewed on November 18. Twelve changed; seven did not.
 
-No rate, field or rule the CLI depends on moved. Every change is formatting, site navigation, guidance the CLI does not read, or a model the estimator does not price. This review re-pins the twelve pages and replaces one marker on each of the three GPT-5.6 model pages, so that a change to OpenAI's site navigation stops opening pricing alerts.
+No rate, field or rule the CLI depends on moved. Every change is formatting, site navigation, guidance the CLI does not read, or a model the estimator does not price. This review re-pins the twelve pages and replaces one marker on each of the three GPT-5.6 model pages, so that a change to OpenAI's site navigation stops opening pricing alerts. It also adds one marker to OpenAI's pricing page, on the GPT-6.2 Astra row.
 
 ## What moved, page by page
 
@@ -43,12 +43,16 @@ A marker's claim is the text from 120 characters before its first match to 240 c
 
 Each new marker matches once, in the page body: its window runs from the end of the supported-tools list, through the snapshot list and the cloud provider model ids, to the opening of the rate-limits section. It still identifies the page as that model's, and it moves if OpenAI adds a dated snapshot or a provider model id. None of the new windows differs between the November 18 copies and today's pages, so this navigation change would not have opened the three pricing alerts. The other markers on each page (the rates line, the promotion line on Sol, the long-context rule and the cache-write rule) are unchanged and already sat in the body.
 
+## Marker added on the OpenAI pricing page
+
+The CLI has priced `gpt-6.2-astra` and `gpt-6.2-sol` since #167, but eight of the ten figures on the GPT-6.2 Astra standard row sat outside every marker window: the windows around the table heading and the `gpt-6-astra` row left characters 486 to 656 unwatched, and the row starts at 572. The new marker, `| gpt-6.2-astra | $8.00 | $40.00 | $0.40 |`, matches once, at character 572 in the standard table (the batch, fast and ultrafast tables repeat the model name with other rates), and its window covers both GPT-6.2 rows whole, so all 162 figures in the two standard tables now sit inside a window. The page itself is the copy pinned above; only its semantic fingerprint changes.
+
 ## Dated follow-up: GPT-5.6 Sol on December 1, 2026
 
 The GPT-5.6 Sol promotion ends on November 30, 2026, and OpenAI still names no rate for afterwards. The price table schedules $5 input, $0.50 cached input and $30 output per million tokens from 2026-12-01, the rates published before the promotion. That is an inference, not a published price. The model page and the pricing page must be re-read on 2026-12-01, and the table and its evidence corrected if OpenAI prints anything else; a release test fails from 2026-12-02 until that re-check is recorded.
 
 ## Re-pin
 
-Twelve pages are re-pinned from fetches on November 22 at about 21:25 UTC, each equal to the copy that was read. Six changed only outside their marker windows. Six have a new semantic fingerprint: the three Anthropic references, whose windows moved, and the three GPT-5.6 pages, whose first marker was replaced. `reviewedAt` is 2026-11-22. No claim text changed, and the three GPT-5.6 pages are the only ones whose markers changed.
+Twelve pages are re-pinned from fetches on November 22 at about 21:25 UTC, each equal to the copy that was read. Six changed only outside their marker windows. Six have a new semantic fingerprint: the three Anthropic references, whose windows moved, and the three GPT-5.6 pages, whose first marker was replaced. `reviewedAt` is 2026-11-22. No claim text changed. Markers changed on four pages: the three GPT-5.6 pages and, by the one addition, OpenAI's pricing page, whose semantic fingerprint is new for that reason alone.
 
 No connector, rate or estimate changes in this review.

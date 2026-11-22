@@ -101,6 +101,7 @@
           "url": "https://developers.openai.com/api/docs/pricing.md",
           "requiredMarkers": [
             "### Standard pricing data",
+            "| gpt-6.2-astra | $8.00 | $40.00 | $0.40 |",
             "| gpt-6-astra | $10.00 | $50.00 | $1.00 |",
             "| gpt-6-luna | $0.10 | $0.50 | $0.01 |",
             "| gpt-5.6-sol | $4.00 | $20.00 | $0.40 |",
@@ -114,7 +115,7 @@
             "charged a 10% uplift for models released on or after March 5, 2026",
             "promotional pricing is available until November 30, 2026"
           ],
-          "semanticSha256": "5b4b3a1a078110e473ce15b990b5329e4095ead7716ea1f3376ce01168f027fa",
+          "semanticSha256": "ea6b0bae2543e8f4d16b53940d69b576b665134026e55bb31a7a6d80cbf5ccde",
           "contentSha256": "39d15ce194934a664327d288b761be69c88e3f0a5eb0a2065836a8d9ca61f7fa"
         }
       ]

@@ -42,7 +42,7 @@ These contracts are the reviewed financial rulebook for each provider source. Th
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — semantic `3b66db01ad2b5fb010afc5a713479e50960433865452d31a247b3319cd6e14a5`; reviewed content `23f838357e6c9cc36bb6e188b2cfa424401e80c50bfb0bce5694980f43a7de12`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra) — semantic `7ce26dc481aeeff79aa62832c71946695e0715388fbad6d0984ea953c58b0ae4`; reviewed content `c57d221db1f4c09f214d0a5524155af830382b48b80b883adb6cb7d5dcc6101f`
   - [pricing](https://developers.openai.com/api/docs/models/gpt-5.6-luna) — semantic `3a3189247a254789e291642b9d52d265daf582def6971dc10cea3a18bf831d22`; reviewed content `6e11fb247ee317c911c81258739cb41a4bbfba5b159f77c3c4f5df12d6791fe5`
-  - [pricing](https://developers.openai.com/api/docs/pricing.md) — semantic `5b4b3a1a078110e473ce15b990b5329e4095ead7716ea1f3376ce01168f027fa`; reviewed content `39d15ce194934a664327d288b761be69c88e3f0a5eb0a2065836a8d9ca61f7fa`
+  - [pricing](https://developers.openai.com/api/docs/pricing.md) — semantic `ea6b0bae2543e8f4d16b53940d69b576b665134026e55bb31a7a6d80cbf5ccde`; reviewed content `39d15ce194934a664327d288b761be69c88e3f0a5eb0a2065836a8d9ca61f7fa`
 
 ## Anthropic Platform Usage and Cost Admin API
 
