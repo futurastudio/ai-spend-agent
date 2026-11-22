@@ -1937,7 +1937,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
           ? "This native request has never attempted exchange. Destroy its unused private pairing key so it can no longer complete enrollment? Cancel any browser challenge in Settings as well. [y/N] "
           : action === "retry_revoke"
             ? "Repeat the identical retained disconnect request once? If already revoked, Tilden returns that outcome; otherwise this revokes the same grant. No session facts are sent. Local pairing is removed only after a matching receipt. [y/N] "
-            : `Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${WORKSPACE_DISCONNECT_COST} If this machine was already disconnected in the browser, that has already happened. [y/N] `) });
+            : `Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${WORKSPACE_DISCONNECT_COST} If this machine's activity was already removed in the browser, that has already happened; if the machine was only stopped there, its activity still counts until this disconnect. [y/N] `) });
       return result.state === "retry_not_pending" ? fail("No uncertain disconnect is retained. Run npx aibill@latest workspace disconnect without --retry to start a new disconnect.")
         : result.state === "revoked" ? ok(["Workspace revoked this machine grant. Local pairing was removed.", ...await scheduleRemovedWithPairing()].join("\n"))
         : result.state === "abandoned" ? ok("Unused native pairing key removed. No remote revocation was claimed. Run npx aibill@latest workspace connect to start a new request.")
