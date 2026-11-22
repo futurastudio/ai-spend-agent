@@ -50,6 +50,15 @@ published (see its section).
   again on 2026-11-18, with evidence in
   `provider-contracts/model-pricing-2026-11-15.json`; each carries the release
   date its provider gives, or says that none is published.
+- Re-review the registered provider documentation pages, on 2026-11-22, and
+  pin their current content. All nineteen pages were read against the copies
+  reviewed on 2026-11-18; twelve had changed, in formatting, site navigation
+  or models the estimator does not price. The first marker on each GPT-5.6
+  model page now anchors in the page body instead of its title, so a change to
+  OpenAI's navigation no longer opens three pricing alerts. GPT-5.6 Sol's
+  promotion ends on 2026-11-30, and its page is to be read again on
+  2026-12-01. Nothing the CLI prices or reports changes with this entry. The
+  review is `docs/sources/provider-contract-review-2026-11-22.md`.
 
 ## 0.9.19 (published on npm, 2026-11-18)
 
