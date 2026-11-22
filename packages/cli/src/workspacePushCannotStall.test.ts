@@ -1216,7 +1216,7 @@ describe("what the way back costs", () => {
     const asked: string[] = [];
     const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async (message: string) => { asked.push(message); return "n"; } });
     expect(run.exitCode).toBe(1);
-    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} If this machine's activity was already removed in the browser, that has already happened; if the machine was only stopped there, its activity still counts until this disconnect. [y/N] `]);
+    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} If what this machine pushed was already removed or discarded in the browser, that has already happened. If it still counts, because an owner or admin only disconnected the machine or because your membership or role changed, this disconnect removes it. [y/N] `]);
   });
 
   it("the connection ending while a batch is on its way: the refusal says so, and promises no rebuild it could not land", async () => {

@@ -46,10 +46,11 @@ published (see its section).
   job, or install one pointing into that other directory. On removal, standing
   consent kept under that other directory is still withdrawn.
 - **The disconnect question says what a disconnect still removes.** It used to say that
-  a machine already disconnected in the browser had lost its activity already. A
-  Workspace can now stop a machine's uploads and keep what it pushed, so the question
-  says: activity removed in the browser is already gone; where the machine was only
-  stopped, its activity still counts until this disconnect.
+  a machine already disconnected in the browser had lost what it pushed already. A
+  Workspace can now disconnect a machine and keep what it pushed, and keeps it too when
+  a person's membership or role changes. The question now says: what was removed or
+  discarded in the browser is already gone; what still counts is removed by this
+  disconnect.
 - Price GPT-6.2 Astra (`gpt-6.2-astra`: $8 input, $40 output, $0.40 cached
   input per million tokens; $16, $60 and $0.80 for prompts over 272,000 tokens),
   GPT-6.2 Sol (`gpt-6.2-sol`: $2, $10 and $0.10; $4, $15 and $0.20 over 272,000
