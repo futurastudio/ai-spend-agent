@@ -383,8 +383,11 @@ test("every standard OpenAI rate on the pricing page sits inside a semantic wind
   const contracts = await readProviderContracts();
   const { requiredMarkers } = contracts.contracts.find((entry) => entry.id === "openai-platform")
     .resources.find((entry) => entry.url.endsWith("/api/docs/pricing.md"));
-  // The two standard tables as published on 2026-11-06, in page order, with their long-context columns.
+  // The two standard tables as published on 2026-11-22, in page order, with their long-context columns.
+  // OpenAI added the two GPT-6.2 rows on 2026-11-17; the rest reads as it did on 2026-11-06.
   const longContext = [
+    "| gpt-6.2-astra | $8.00 | $40.00 | $0.40 | $10.00 | $20.00 | $16.00 | $60.00 | $0.80 | $20.00 | $40.00 |",
+    "| gpt-6.2-sol | $2.00 | $10.00 | $0.10 | $2.50 | $5.00 | $4.00 | $15.00 | $0.20 | $5.00 | $10.00 |",
     "| gpt-6-astra | $10.00 | $50.00 | $1.00 | $12.50 | $25.00 | $20.00 | $75.00 | $2.00 | $25.00 | $50.00 |",
     "| gpt-6.1-sol | $2.00 | $10.00 | $0.10 | $2.50 | $5.00 | $4.00 | $15.00 | $0.20 | $5.00 | $10.00 |",
     "| gpt-6.1-terra | $1.00 | $5.00 | $0.05 | $1.25 | $2.50 | $2.00 | $7.50 | $0.10 | $2.50 | $5.00 |",
