@@ -9,6 +9,7 @@ import {
   authorizedWorkspaceSchedule, rememberScheduledBatch, scheduledBatchIsOwn, updateWorkspaceSchedule, withdrawWorkspaceScheduleConsent, workspaceScheduleLeftBehind,
   workspaceScheduleStatus, workspaceScheduleUnavailable, workspaceScheduleUnsupported, WorkspaceScheduleError, type WorkspaceScheduleOptions,
 } from "./workspaceSchedule.js";
+import { WorkspaceEnrollmentProjectError } from "./workspaceEnrollmentProject.js";
 import { resolveCheckoutRoot, resolveRepositoryRoot } from "./repositoryRoot.js";
 import { workspaceClock } from "./lib/clock.js";
 import { randomUUID } from "node:crypto";
@@ -286,6 +287,7 @@ type ParsedArgs = {
   workspaceAction?: string;
   workspaceCode?: string;
   workspaceRestart?: boolean;
+  workspacePrepared?: boolean;
   workspaceDisconnectRetry?: boolean;
   workspaceSchedule?: "daily" | "none";
   workspaceScheduled?: boolean;
@@ -384,6 +386,15 @@ export type CliRuntimeOptions = {
   workspaceLoadCalls?: () => Promise<Awaited<ReturnType<typeof loadLocalAgentFinancialUsage>>>;
   /** Test seam for the checkout lookup behind repository-named facts. */
   workspaceRepositoryRoot?: (directory: string) => string | undefined;
+  /** Test/embedding override for the real checkout confirmed during native pairing. */
+  workspaceDirectory?: string;
+  /**
+   * Set ONLY by the foreground terminal entrypoint. After the first push Workspace accepts from this machine, the
+   * command asks once whether to upload every day; after later terminal pushes it names the command while daily sync
+   * is off. Embedded callers, the scheduled runner and tests leave it unset, so an injected "yes to everything" can
+   * never reach the operating system's scheduler by way of a push.
+   */
+  workspaceDailyOffer?: boolean;
   /** Test/embedding override. Production always defaults to the OS home. */
   homeDirectory?: string;
   /** Test/embedding override. Packed production reads the built runtime asset. */
@@ -1784,6 +1795,27 @@ const WORKSPACE_LOCK_HOLDER = "Another aibill Workspace command holds ~/.aibill/
 const WORKSPACE_FIRST_PUSH_WAIT_MS = 10 * 60 * 1000;
 /** One command sends every batch its one preview showed. A bound on the loop, far above what 30 days can hold. */
 const WORKSPACE_PUSH_MAX_BATCHES = 64;
+const WORKSPACE_DAILY_SETUP = "npx aibill@latest workspace push --schedule daily";
+/** Printed with a request that reports a repository: what to do where the Workspace takes only requests an administrator prepared for. */
+const WORKSPACE_PREPARED_INSTEAD = "If that page answers that self-service machine setup is not on for the workspace, it takes only a request an administrator prepared for: run npx aibill@latest workspace connect --prepared --restart, which replaces the request above, and paste the one it prints.";
+/**
+ * The command that replaces an unused request with one of the same kind. A request of the administrator-prepared kind
+ * ("1") keeps --prepared: without it, run inside a Git checkout, the new request would report that repository, which a
+ * Workspace without self-service machine setup refuses.
+ */
+const workspaceRestartCommand = (schemaVersion: "1" | "2") => `npx aibill@latest workspace connect${schemaVersion === "1" ? " --prepared" : ""} --restart`;
+/**
+ * What standing consent to daily uploads covers, in the same words wherever it is asked: on `--schedule daily` and at
+ * the end of a machine's first push. It names what a run reads, what each fact carries and never carries, what is kept
+ * on this machine, when a run stops by itself, and how to remove it. The last line is the question.
+ */
+function workspaceDailyConsentLines(includePlanTier: boolean): string[] {
+  return ["Enable daily uploads without a per-batch prompt for this machine connection?",
+    "Each run reads the last 30 closed UTC days across all repositories and sends one bounded batch of supported local facts. Each fact carries a UTC day, the agent (Claude Code or Codex), the model, the project name, a hashed folder reference, hashed session identities, a session count and token counts; never prompts, full paths, raw session IDs or costs.",
+    includePlanTier ? "Subscription-tier facts are included only after Workspace announces support; no account token or email is sent." : "Subscription-tier facts are excluded from this schedule.",
+    "A private copy of this installed CLI and a 09:17 local-time job will be kept on this machine. A run whose answer is lost sends that same batch again on the next run; a batch Workspace refuses waits for a terminal; and if Workspace refuses this machine, daily sync turns itself off. Run setup again after CLI or Node updates.",
+    "Remove anytime: npx aibill@latest workspace push --schedule none. Enable daily sync? [y/N] "];
+}
 
 /**
  * `aibill signup <email> [--ref <token>]` — the explicit, deliberate path to
@@ -1825,7 +1857,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       if (status.state === "enrollment_pending") return ok([
         `Unfinished connection request: ${status.requestId.slice(-8)}`,
         status.enrollment === "prepared"
-          ? "No native exchange was attempted. Run npx aibill@latest workspace connect to display this request again, or npx aibill@latest workspace connect --restart to replace an expired or cancelled request."
+          ? `No native exchange was attempted. Run npx aibill@latest workspace connect${status.schemaVersion === "1" ? " --prepared" : ""} to display this request again, or ${workspaceRestartCommand(status.schemaVersion)} to replace an expired or cancelled request${status.schemaVersion === "1" ? " with another of the administrator-prepared kind" : ""}.`
           : `The exchange outcome is unknown. Local keys remain. Do not restart or replay; reconcile this machine at ${WORKSPACE_ORIGIN}/settings/machines.`,
         ...locked, "No logs or network were read."
       ].join("\n"));
@@ -1847,15 +1879,33 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
         if (!await consent(args.workspaceRestart
           ? "Replace any unused connection request with a new private key and public request? The previous unused key will be removed; connected or uncertain exchanges cannot be restarted. No session facts are sent. [y/N] "
           : "Create a private device key, or display an existing unused connection request? No session facts are sent. [y/N] ")) return fail("Connection request unchanged. No new request was created.");
-        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory, { restart: args.workspaceRestart });
+        const prepared = await beginWorkspaceEnrollment(runtime.homeDirectory, { restart: args.workspaceRestart,
+          ...(args.workspacePrepared ? {} : { projectDirectory: runtime.workspaceDirectory ?? process.cwd(),
+            confirmProject: project => consent([`Reported repository: ${project.displayName}`, `Local checkout (stays here): ${JSON.stringify(project.localDirectory)}`,
+              `Directory hash: ${project.directoryRef}`, "Use this repository to identify this machine in Workspace? The public request shares its name and directory hash.",
+              "This does not permit session uploads or sharing other repositories. [y/N] "].join("\n")) }) });
         return ok([`${prepared.disposition === "reused" ? "Reused" : "New"} connection request: ${prepared.request.requestId.slice(-8)}`,
-          ...(prepared.disposition === "reused" ? ["This is the same unfinished request. If it expired or was cancelled in the browser, run npx aibill@latest workspace connect --restart."] : []),
+          ...(prepared.disposition === "reused" ? [`This is the same unfinished request. If it expired or was cancelled in the browser, run ${workspaceRestartCommand(prepared.request.schemaVersion)}.`] : []),
+          ...(prepared.request.schemaVersion === "2" ? [`Reported repository: ${prepared.request.project.displayName}`, `Directory hash: ${prepared.request.project.directoryRef}`]
+            : ["This request uses an administrator-prepared project and reader setup."]),
+          // A kept request is shown again as it is, whatever this command asked for: its key and its kind never change
+          // without --restart. So when it is the other kind, the words say which one it is and how to replace it.
+          ...(prepared.disposition === "reused" && prepared.request.schemaVersion === "2" && args.workspacePrepared
+            ? ["You asked for an administrator-prepared request, and this kept request is the other kind: it reports a repository. To replace it, run npx aibill@latest workspace connect --prepared --restart."] : []),
+          ...(prepared.disposition === "reused" && prepared.request.schemaVersion === "1" && !args.workspacePrepared
+            ? ["This kept request is the administrator-prepared kind and reports no repository. To replace it with one that reports this repository, run npx aibill@latest workspace connect --restart inside that Git checkout."] : []),
           `Open ${WORKSPACE_ORIGIN}/settings/machines, paste this public request and confirm enrollment:`, prepared.bundle,
-          "Then run: npx aibill@latest workspace connect <response-bundle>", "The private device key stays on this machine. No session facts were sent."].join("\n"));
+          "Then run: npx aibill@latest workspace connect <response-bundle>",
+          // This command cannot know whether the Workspace prepares machines itself: it makes no network call. Where it does
+          // not, the page refuses a request that reports a repository, and the way on is the other kind of request. The
+          // one above is kept until it is replaced, so the command names --restart.
+          ...(prepared.request.schemaVersion === "2" ? [WORKSPACE_PREPARED_INSTEAD] : []),
+          "The private device key stays on this machine. No session facts were sent."].join("\n"));
       }
       const result = await finishWorkspaceEnrollment({ home: runtime.homeDirectory, bundle: args.workspaceCode,
         now: runtime.workspaceNow ?? workspaceClock.now(), transport: runtime.workspaceExchangeTransport,
         confirm: details => consent([`Pair with ${details.origin} for local facts from ${details.collectionNotBefore}, grant ending ${details.grantExpiresAt}?`,
+          ...(details.project ? [`Reported repository: ${details.project.displayName}`, `Directory hash: ${details.project.directoryRef}`] : []),
           `Selected tenant: ${details.tenantId}`, `Reviewed source: ${details.localSourceInstanceRef}`, `Project: ${details.projectId}`, `Source project: ${details.sourceProjectRef}`,
           `Exact enrollment policy: ${workspaceCanonicalJson(details.policy)}`, "Sign this enrollment exchange? [y/N] "].join("\n")) });
       if (result.state !== "connected") return result.state === "cancelled" ? ok("Pairing exchange not sent.")
@@ -1909,11 +1959,7 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       if (status.lastAcceptedAt === null) return fail("Daily sync can be enabled once Workspace has accepted a push from this machine. Run npx aibill@latest workspace push first, then this command again. Nothing was changed.");
       const binding = await workspaceScheduleBinding(runtime.homeDirectory);
       const includePlanTier = !process.env[AGENT_PLAN_TIER_OPT_OUT];
-      if (!await consent(["Enable daily uploads without a per-batch prompt for this machine connection?",
-        "Each run reads the last 30 closed UTC days across all repositories and sends one bounded batch of supported local facts. Each fact carries a UTC day, the agent (Claude Code or Codex), the model, the project name, a hashed folder reference, hashed session identities, a session count and token counts; never prompts, full paths, raw session IDs or costs.",
-        includePlanTier ? "Subscription-tier facts are included only after Workspace announces support; no account token or email is sent." : "Subscription-tier facts are excluded from this schedule.",
-        "A private copy of this installed CLI and a 09:17 local-time job will be kept on this machine. A run whose answer is lost sends that same batch again on the next run; a batch Workspace refuses waits for a terminal; and if Workspace refuses this machine, daily sync turns itself off. Run setup again after CLI or Node updates.",
-        "Remove anytime: npx aibill@latest workspace push --schedule none. Enable daily sync? [y/N] "].join("\n"))) return ok("Daily sync unchanged. No local facts were read or sent.");
+      if (!await consent(workspaceDailyConsentLines(includePlanTier).join("\n"))) return ok("Daily sync unchanged. No local facts were read or sent.");
       return ok(await updateWorkspaceSchedule({ home: runtime.homeDirectory, mode: "daily", now, includePlanTier, binding: binding ?? undefined, ...runtime.workspaceScheduleOptions }));
     }
     // A scheduled run that meets a retained batch: one a scheduled run sent, whose answer was lost, goes again below as
@@ -2072,6 +2118,32 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
     // Whatever became of the batch: nothing here depends on it, and nothing else tells the person.
     const withUnreportedTiers = (result: CliResult, coverage: WorkspaceAggregate | undefined): CliResult =>
       coverage?.unreportedPlans?.length ? { ...result, stdout: [result.stdout, ...coverage.unreportedPlans.map(workspaceUnreportedTierLine)].filter(Boolean).join("\n") } : result;
+    /**
+     * The end of a terminal push Workspace accepted. Workspace sees a later day only when this machine pushes again, so
+     * the first accepted push ends with one question: upload every day from now on? It is the same standing consent,
+     * in the same words, as `--schedule daily`, and a yes runs that same setup. Later terminal pushes end with one line
+     * that names the command while daily sync is off. Whatever happens here, the push it follows stands.
+     */
+    const withDailySync = async (result: CliResult): Promise<CliResult> => {
+      if (!runtime.workspaceDailyOffer || args.workspaceScheduled || result.exitCode !== 0) return result;
+      const add = (...lines: string[]): CliResult => ({ ...result, stdout: [result.stdout, ...lines].filter(Boolean).join("\n") });
+      try {
+        if (await workspaceScheduleUnavailable(runtime.workspaceScheduleOptions) || await authorizedWorkspaceSchedule(runtime.homeDirectory)) return result;
+        const after = await workspaceStatus(runtime.homeDirectory);
+        // Daily sync needs a pairing with an accepted push and nothing retained: the rule `--schedule daily` applies.
+        if (after.state !== "connected" || after.disconnect || after.pending || after.lastAcceptedAt === null) return result;
+        const pointer = `Daily sync is off, so Workspace sees later days only when this machine pushes again. Turn it on with: ${WORKSPACE_DAILY_SETUP}`;
+        if (status.lastAcceptedAt !== null) return add(pointer);
+        const binding = await workspaceScheduleBinding(runtime.homeDirectory), includePlanTier = !process.env[AGENT_PLAN_TIER_OPT_OUT];
+        if (!await consent(["That was this machine's first push. Workspace sees later days only when this machine pushes again.",
+          ...workspaceDailyConsentLines(includePlanTier)].join("\n"))) return add(`Daily sync not turned on. Nothing was installed. Turn it on any time with: ${WORKSPACE_DAILY_SETUP}`);
+        try {
+          return add(await updateWorkspaceSchedule({ home: runtime.homeDirectory, mode: "daily", now: runtime.workspaceNow ?? workspaceClock.now(), includePlanTier, binding: binding ?? undefined, ...runtime.workspaceScheduleOptions }));
+        } catch (error) {
+          return add(`The push above stands. Daily sync was not set up${error instanceof WorkspaceScheduleError ? `: ${error.message}` : "."}`, `Try again with: ${WORKSPACE_DAILY_SETUP}`);
+        }
+      } catch { return result; }
+    };
     const prepared = await prepareWorkspacePush({ home: runtime.homeDirectory, calls: loaded?.calls ?? [], generatedAt: now,
       resolveRepositoryRoot: runtime.workspaceRepositoryRoot ?? resolveRepositoryRoot, planFactsOptOut,
       readAgentPlanFacts: readPlans(now), confirm: confirmBatch(retainedBatch, heldExpired ? [...heldDroppedLines(now), "This is a new batch:"] : []) });
@@ -2138,28 +2210,30 @@ async function workspaceCommand(args: ParsedArgs, runtime: CliRuntimeOptions): P
       ...(waiting ? [`${waiting} more changed local session facts wait. Run npx aibill@latest workspace push to preview them.${partDay
         ? ` Until they land, Workspace reads only part of ${partDay}.` : ""}`] : [])].join("\n");
     if (stopped) return settled({ exitCode: 1, stdout: accepted, stderr: stopped });
-    if (!announced || planFactsOptOut) return settled(ok(accepted));
+    if (!announced || planFactsOptOut) return withDailySync(settled(ok(accepted)));
     // The ACCEPT that first announced the capability: the tier goes in this same command, in its
     // own previewed batch, and whatever happens to it the accepted line above stays true.
     try {
       const at = runtime.workspaceNow ?? workspaceClock.now();
       const followUp = await prepareWorkspacePlanFacts({ home: runtime.homeDirectory, generatedAt: at, planFactsOptOut, readAgentPlanFacts: readPlans(at),
         confirm: confirmBatch(false, ["Workspace accepted that batch and announced it takes subscription tier facts. One more batch to review:"]) });
-      if (followUp.state === "unchanged") return withUnreportedTiers(ok(accepted), followUp.coverage);
-      if (followUp.state === "cancelled") return withUnreportedTiers(ok(`${accepted}\n${tierDeclined}`), followUp.coverage);
+      if (followUp.state === "unchanged") return withDailySync(withUnreportedTiers(ok(accepted), followUp.coverage));
+      if (followUp.state === "cancelled") return withDailySync(withUnreportedTiers(ok(`${accepted}\n${tierDeclined}`), followUp.coverage));
       const tier = await sendWorkspacePending({ home: runtime.homeDirectory, transport: runtime.workspaceTransport });
       if (args.workspaceScheduled && tier.authorityRefused) return withUnreportedTiers({ exitCode: 1, stdout: accepted, stderr: await scheduleRefused() }, followUp.coverage);
-      return withUnreportedTiers(tier.state === "accepted" ? ok(`${accepted}\n${tierAccepted(followUp.coverage)}`)
+      return withDailySync(withUnreportedTiers(tier.state === "accepted" ? ok(`${accepted}\n${tierAccepted(followUp.coverage)}`)
         : tier.state === "refused" ? ok(`${accepted}\n${tierRefused}`)
-          : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage, tier.authorityRefused) }, followUp.coverage);
+          : { exitCode: 1, stdout: accepted, stderr: unknownOutcome(followUp.coverage, tier.authorityRefused) }, followUp.coverage));
     } catch {
       return { exitCode: 1, stdout: accepted, stderr: "The subscription tier batch stopped safely. Local state was not reset; run npx aibill@latest workspace status, then npx aibill@latest workspace push." };
     }
   } catch (error) {
     // Never echo remote payloads, raw argument bundles, tokens or filesystem contents.
-    if (error instanceof WorkspaceScheduleError) return fail(error.message);
+    if (error instanceof WorkspaceScheduleError || error instanceof WorkspaceEnrollmentProjectError) return fail(error.message);
     if (error instanceof WorkspaceStateFromNewerCli) {
-      const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceRestart ? " --restart" : args.workspaceDisconnectRetry ? " --retry" : "";
+      // The command is named again as it was given: --prepared is kept, or it would ask for the other kind of request.
+      const flag = args.workspaceCode ? " <response-bundle>" : args.workspaceDisconnectRetry ? " --retry"
+        : `${args.workspacePrepared ? " --prepared" : ""}${args.workspaceRestart ? " --restart" : ""}`;
       return fail(`This machine's Workspace state was written by a newer aibill: it carries keys this version does not know, so this version stopped and nothing was changed. Run npx aibill@latest workspace ${action}${flag}.`);
     }
     if (error instanceof WorkspaceStateLocked) return fail(`${WORKSPACE_LOCK_HOLDER} If none is running, delete that file and run this command again.`);
@@ -8750,17 +8824,18 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.parseErrors.push(`${arg} requires a value`);
       continue;
     }
-    if (command === "workspace" && ["--restart", "--retry", "--schedule", "--scheduled"].includes(arg)) {
+    if (command === "workspace" && ["--restart", "--prepared", "--retry", "--schedule", "--scheduled"].includes(arg)) {
       if (!onceOnly(arg)) continue;
       if (arg === "--restart" && parsed.workspaceAction === "connect" && !parsed.workspaceCode) parsed.workspaceRestart = true;
+      else if (arg === "--prepared" && parsed.workspaceAction === "connect" && !parsed.workspaceCode) parsed.workspacePrepared = true;
       else if (arg === "--retry" && parsed.workspaceAction === "disconnect") parsed.workspaceDisconnectRetry = true;
       else if (arg === "--scheduled" && parsed.workspaceAction === "push") parsed.workspaceScheduled = true;
       else if (arg === "--schedule" && parsed.workspaceAction === "push" && ["daily", "none"].includes(nextValue ?? "")) { parsed.workspaceSchedule = nextValue as "daily" | "none"; index++; }
-      else parsed.parseErrors.push("workspace accepts connect [response-bundle | --restart], push [--schedule daily|none], status, or disconnect [--retry]");
+      else parsed.parseErrors.push("workspace accepts connect [response-bundle | --restart | --prepared], push [--schedule daily|none], status, or disconnect [--retry]");
       continue;
     }
     if (command === "workspace" && !["--no-color", "--no-open", "--json", "--full"].includes(arg)) {
-      parsed.parseErrors.push("unsupported Workspace argument; use connect [response-bundle | --restart], push [--schedule daily|none], status, or disconnect [--retry]");
+      parsed.parseErrors.push("unsupported Workspace argument; use connect [response-bundle | --restart | --prepared], push [--schedule daily|none], status, or disconnect [--retry]");
       continue;
     }
     if (arg === "--sample") {
@@ -9382,8 +9457,9 @@ function helpText(telemetryDisclosure?: boolean): string {
     `  ${actionRuntimeCommand("accountability")}    Answer owner → outcome → approval → measured-result for this project`,
     "",
     "Optional Workspace machine attribution (explicit consent, no provider calls):",
-    "  npx aibill@latest workspace connect            Prepare this machine's public pairing request",
-    "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation",
+    "  npx aibill@latest workspace connect            Confirm this checkout and prepare a public pairing request",
+    "  npx aibill@latest workspace connect --prepared  Use an administrator-prepared project and reader setup",
+    "  npx aibill@latest workspace connect --restart  Replace an unused request after browser expiry or cancellation (with --prepared for the prepared kind)",
     "  npx aibill@latest workspace connect <code>     Finish the browser-confirmed pairing",
     "  npx aibill@latest workspace push               Preview and send local session facts",
     "  npx aibill@latest workspace push --schedule daily  Opt in to one bounded upload daily",
@@ -9557,6 +9633,8 @@ export async function runMain(): Promise<void> {
       interactive,
       ...(telemetry?.disclosureActive === true ? { telemetryDisclosure: true } : {}),
       ...(interactive ? {
+        // Only a person at a terminal is asked whether to upload every day.
+        workspaceDailyOffer: true,
         prompt: async (question: string) => {
           if (!promptInterface) {
             const { createInterface } = await import("node:readline/promises");

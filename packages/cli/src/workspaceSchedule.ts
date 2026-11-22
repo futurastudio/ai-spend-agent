@@ -4,7 +4,7 @@ import { chmod, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm,
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { workspaceScheduleBinding } from "./workspaceConnect.js";
@@ -314,10 +314,35 @@ async function removeWorkspaceSchedule(home: string, platform: NodeJS.Platform, 
   if (!await lstat(root).catch(() => null)) return `Daily sync removed: its scheduled job, the retained CLI copy, its log and its standing consent are gone from this machine. No unattended upload is authorized. ${keeps}`;
   return `Daily sync removed: its scheduled job is gone from this machine, so nothing runs and nothing uploads. Some files are still in ${root}, which is not a plain directory of yours that can be changed, or holds other files; delete it by hand. ${keeps}`;
 }
+/**
+ * The home directory the operating system gives this user's account, whatever `HOME` says; null where the account has
+ * no entry to read (some containers), and then there is nothing to compare with.
+ */
+function accountHome(): string | null {
+  try { return userInfo().homedir || null; } catch { return null; }
+}
+/**
+ * A user has one launchd agent of this label and one crontab, whatever home a command runs with. So the system's own
+ * scheduler is changed only for the account's own home directory: a command run with another `HOME` (a scratch home, a
+ * test, a sandbox) would otherwise replace or remove the real daily job, or install one that points into a directory
+ * that is not the person's. An injected `command` is a stand-in, not the system's scheduler, and is not held to this.
+ */
+async function foreignHome(home: string): Promise<string | null> {
+  const own = accountHome();
+  if (own === null) return null;
+  const real = (path: string) => realpath(resolve(path)).catch(() => resolve(path));
+  return await real(home) === await real(own) ? null : own;
+}
 export async function updateWorkspaceSchedule(options: { home?: string; mode: "daily" | "none"; now: string; includePlanTier: boolean; binding?: string } & WorkspaceScheduleOptions): Promise<string> {
   const home = options.home ?? homedir(), platform = options.platform ?? process.platform;
   const unsupported = workspaceScheduleUnsupported(platform);
   if (unsupported) throw new WorkspaceScheduleError(unsupported);
+  const own = options.command ? null : await foreignHome(home);
+  if (own !== null) {
+    // Standing consent kept under this other home is still withdrawn on removal: nothing may upload unattended from it.
+    const withdrawn = options.mode === "none" && await withdrawWorkspaceScheduleConsent(home);
+    throw new WorkspaceScheduleError(`Daily sync belongs to your account's own home directory (${own}), and this command ran with another one (${home}). ${withdrawn ? "Standing consent kept under that directory was removed. " : ""}The scheduled job on this system was not changed. Run the command again without a changed HOME.`);
+  }
   const command = options.command ?? execute;
   if (options.mode === "none") return removeWorkspaceSchedule(home, platform, command);
   const root = await rootFor(home), lock = join(root, "install.lock"), consentFile = join(root, "consent.json");
