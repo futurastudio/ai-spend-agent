@@ -245,11 +245,14 @@ that half lives in Tilden Workspace.
 ## Optional Workspace connection
 
 The CLI includes an optional client for an existing invited Workspace.
-The first-push offer and daily scheduling below are prepared for the unreleased
-0.9.19 version in this checkout; see the [changelog](CHANGELOG.md).
+Confirming the repository in `workspace connect`, described below, is prepared for the
+unreleased 0.9.20 version in this checkout; see the [changelog](CHANGELOG.md).
 Hosted provider collection and Workspace rollout are separate from this CLI release.
 
-To connect, run `npx aibill@latest workspace connect`, complete enrollment and
+To connect, run `npx aibill@latest workspace connect`. Inside a Git checkout it asks you
+to confirm that repository, so a Workspace with self-service machine setup can prepare
+the connection itself; `workspace connect --prepared` makes the earlier kind of request,
+for a machine an administrator prepared. Then complete enrollment and
 sharing consent in Workspace Settings → Machines, and accept the first-push offer
 or run `npx aibill@latest workspace push` to preview and share supported activity.
 For optional daily uploads, run `npx aibill@latest workspace push --schedule daily`

@@ -45,7 +45,9 @@ each number’s financial label and coverage.
 
 Use the free CLI on its own, or keep working locally and connect it to your
 invited [Tilden Workspace](https://asktilden.com/docs/workspace) for a shared
-spending review. Start with `npx aibill@latest workspace connect`, complete the
+spending review. Start with `npx aibill@latest workspace connect` (inside a Git
+checkout it asks you to confirm that repository; `--prepared` is for a machine an
+administrator prepared), complete the
 browser enrollment and sharing consent, then accept the first-push offer or run
 `npx aibill@latest workspace push` to preview and approve a share. The browser
 does not need to stay open for later pushes while the machine’s grant and
