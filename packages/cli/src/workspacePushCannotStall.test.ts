@@ -492,7 +492,7 @@ describe("a lapsed connection says so", () => {
     } });
     expect(disconnected).toMatchObject({ exitCode: 0, stdout: "Workspace revoked this machine grant. Local pairing was removed." });
     await expect(lstat(m.statePath)).rejects.toThrow();
-    const request = await runCli(["workspace", "connect"], runtime);
+    const request = await runCli(["workspace", "connect", "--prepared"], runtime);
     expect(request.exitCode).toBe(0);
     expect(request.stdout).toContain("New connection request:");
     expect(request.stdout).toContain("Then run: npx aibill@latest workspace connect <response-bundle>");
@@ -516,7 +516,7 @@ describe("the command this CLI tells a person to type", () => {
   it("the help names every Workspace command with @latest", async () => {
     const help = (await runCli(["--help"])).stdout;
     const named = lines(help).filter(line => /\bworkspace (connect|push|status|disconnect)\b/.test(line));
-    expect(named).toHaveLength(9);
+    expect(named).toHaveLength(10);
     for (const line of named) expect(line.trimStart().startsWith("npx aibill@latest workspace "), line).toBe(true);
   });
 
@@ -597,6 +597,10 @@ describe("a state file a newer aibill wrote", () => {
     await writeFile(path, written, { mode: 0o600 });
     expect(await runCli(["workspace", "status"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("status") });
     expect(await runCli(["workspace", "connect"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect") });
+    // The command is named back as it was given: dropping --prepared would ask for the other kind of request.
+    expect(await runCli(["workspace", "connect", "--prepared"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --prepared") });
+    expect(await runCli(["workspace", "connect", "--prepared", "--restart"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --prepared --restart") });
+    expect(await runCli(["workspace", "connect", "--restart"], runtime)).toMatchObject({ exitCode: 1, stderr: newerState("connect --restart") });
     expect(await readFile(path, "utf8")).toBe(written);
   });
 
@@ -1212,7 +1216,7 @@ describe("what the way back costs", () => {
     const asked: string[] = [];
     const run = await runCli(["workspace", "disconnect"], { homeDirectory: m.home, interactive: true, workspaceNow: now, consentRead: async (message: string) => { asked.push(message); return "n"; } });
     expect(run.exitCode).toBe(1);
-    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} If this machine was already disconnected in the browser, that has already happened. [y/N] `]);
+    expect(asked).toEqual([`Revoke this machine's Workspace grant and remove its local pairing after the accepted receipt? This cannot be undone. ${DISCONNECT_COST} If what this machine pushed was already removed or discarded in the browser, that has already happened. If it still counts, because an owner or admin only disconnected the machine or because your membership or role changed, this disconnect removes it. [y/N] `]);
   });
 
   it("the connection ending while a batch is on its way: the refusal says so, and promises no rebuild it could not land", async () => {

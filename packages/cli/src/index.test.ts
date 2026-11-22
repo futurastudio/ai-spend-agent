@@ -427,7 +427,7 @@ describe("zero-key evidence-first receipt", () => {
     await expect(readFile(enrollmentPath)).rejects.toMatchObject({ code: "ENOENT" });
     const replacement = await beginWorkspaceEnrollment(home);
     expect(replacement.request.requestId).not.toBe(prepared.request.requestId);
-    const restarted = await runCli(["workspace", "connect", "--restart"], { ...runtime,
+    const restarted = await runCli(["workspace", "connect", "--restart", "--prepared"], { ...runtime,
       workspaceExchangeTransport: unusedTransport, workspaceDisconnectTransport: unusedTransport });
     expect(restarted.exitCode).toBe(0);
     const newRequest = await beginWorkspaceEnrollment(home);

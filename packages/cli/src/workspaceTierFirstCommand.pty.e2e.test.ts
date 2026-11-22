@@ -124,11 +124,23 @@ describe("workspace push on a terminal", () => {
     expect(output).not.toContain("Workspace accepted the subscription tier");
     child.stdin.write("y\r");
 
+    // Prompt three: this was the machine's first accepted push, so the terminal asks once about uploading every day.
+    // It waits for its own answer too, and a no installs nothing.
+    await waitFor("That was this machine's first push.");
+    await waitFor("Enable daily sync? [y/N]");
+    await sleep(1_300);
+    expect(await sent()).toHaveLength(2);
+    expect(output).not.toContain("Workspace accepted the subscription tier");
+    child.stdin.write("n\r");
+
     await waitFor("Workspace accepted the subscription tier for claude_code (claude_max_20x), codex (chatgpt_pro).");
     const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
     expect(await exit).toBe(0);
     clearTimeout(timer);
     expect(output).toContain("Workspace accepted 1 local session facts.");
+    expect(output).toContain("Daily sync not turned on. Nothing was installed. Turn it on any time with: npx aibill@latest workspace push --schedule daily");
+    expect(count(output, "Enable daily sync? [y/N]")).toBe(1);
+    expect(existsSync(join(home, "Library"))).toBe(false); expect(existsSync(join(home, ".aibill", "workspace-sync"))).toBe(false);
     expect(count(output, "Send this exact batch again? [y/N]")).toBe(1);
     expect(count(output, "Send this batch? [y/N]")).toBe(1);
 
